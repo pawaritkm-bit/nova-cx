@@ -14,6 +14,11 @@
   .center-col{ display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%;
     text-align:center; padding:24px; }
 
+  /* ---- wizard step (แสดงทีละขั้น) ---- */
+  .wizard-step{ display:none; }
+  .wizard-step.active{ display:block; animation:stepIn .2s ease; }
+  @keyframes stepIn{ from{ opacity:0; transform:translateY(6px);} to{ opacity:1; transform:none; } }
+
   /* ---- การ์ดผู้ดูแล (Form B) ---- */
   .team-card{ display:flex; align-items:center; gap:12px; padding:10px; border:1px solid var(--line);
     border-radius:12px; background:#fff; margin-bottom:8px; }
@@ -112,11 +117,12 @@
         <div class="offline-banner" id="offlineBanner">⚠ เน็ตหลุด — คำตอบถูกเก็บไว้ในเครื่อง จะส่งให้เมื่อกลับมาออนไลน์</div>
 
         <p style="font-size:12px; color:var(--muted-2); margin:0 0 6px;" id="formMeta"></p>
+        <p style="font-size:12px; color:var(--blue-600); font-weight:700; margin:0 0 10px;" id="stepMeta"></p>
         <div id="sectionsMount"></div>
       </div>
       <div class="liff-footer" style="display:flex; gap:8px;">
-        <button class="btn btn-ghost" style="flex:0 0 auto;" onclick="backToConsent()">← ย้อนกลับ</button>
-        <button class="btn btn-primary" style="flex:1;" onclick="goReview()">ตรวจก่อนส่ง →</button>
+        <button class="btn btn-ghost" style="flex:0 0 auto;" id="btnBack" onclick="prevStep()">← ย้อนกลับ</button>
+        <button class="btn btn-primary" style="flex:1;" id="btnNext" onclick="nextStep()">ถัดไป →</button>
       </div>
     </div>
 
@@ -182,6 +188,10 @@ const rateLabels = {1:'ไม่พอใจมาก',2:'ไม่พอใจ'
 /* ---- ชนิดแบบประเมิน (กำหนดจาก URL param เท่านั้น — ลูกค้าไม่เลือกเอง) ---- */
 let CURRENT_EVAL = 'office';   // office | accountant | sales
 let CURRENT_CASE = 'won';      // won | lost (เฉพาะ sales)
+
+/* ---- wizard step state ---- */
+let STEPS = [];    // [[unit,...], ...]  แต่ละ element = 1 ขั้น
+let stepIdx = 0;
 function currentFormCode(){
   if(CURRENT_EVAL==='office')     return 'A';
   if(CURRENT_EVAL==='accountant') return 'B';
@@ -245,24 +255,73 @@ function buildSurvey(){
   document.getElementById('formMeta').textContent =
     `แบบประเมิน ${form.code} · ${form.name} · ${form.tag}`;
 
+  STEPS = buildSteps(form);
+  stepIdx = 0;
+
   const mount = document.getElementById('sectionsMount');
   mount.innerHTML='';
-  form.sections.forEach(sec=>{
-    let el;
-    switch(sec.type){
-      case 'ref':      el=renderRef(sec); break;
-      case 'ratings':  el=renderRatings(sec); break;
-      case 'multi':    el=renderMulti(sec); break;
-      case 'single':   el=renderSingle(sec); break;
-      case 'nps':      el=renderNps(sec); break;
-      case 'open':     el=renderOpen(sec); break;
-      case 'contact':  el=renderContact(sec); break;
-      case 'roster':   el=renderRoster(sec); break;
-      case 'intro':    el=renderIntro(sec); break;
-    }
-    if(el) mount.appendChild(el);
+  STEPS.forEach((units,i)=>{
+    const stepDiv=document.createElement('div');
+    stepDiv.className='wizard-step'; stepDiv.dataset.step=i;
+    units.forEach(u=>{ const el=unitToEl(u); if(el) stepDiv.appendChild(el); });
+    mount.appendChild(stepDiv);
   });
+  showStep(0);
 }
+
+/* ---- แบ่ง sections เป็น "ขั้น" (ส่วนละ 1 ขั้น; ratings ยาว >8 ข้อ ซอย 5+5) ---- */
+function buildSteps(form){
+  const steps=[];
+  form.sections.forEach(sec=>{
+    if(sec.type==='ratings' && sec.items.length>8){
+      const half=Math.ceil(sec.items.length/2);
+      steps.push([{type:'ratingsSlice', sec, from:0, to:half, part:1, parts:2}]);
+      steps.push([{type:'ratingsSlice', sec, from:half, to:sec.items.length, part:2, parts:2}]);
+    } else {
+      steps.push([{type:'section', sec}]);
+    }
+  });
+  return steps;
+}
+
+/* ---- แปลง 1 unit เป็น element ---- */
+function unitToEl(u){
+  if(u.type==='ratingsSlice'){
+    return renderRatings(u.sec, u.sec.items.slice(u.from,u.to), u.part, u.parts);
+  }
+  const sec=u.sec;
+  switch(sec.type){
+    case 'ref':      return renderRef(sec);
+    case 'ratings':  return renderRatings(sec);
+    case 'multi':    return renderMulti(sec);
+    case 'single':   return renderSingle(sec);
+    case 'nps':      return renderNps(sec);
+    case 'open':     return renderOpen(sec);
+    case 'contact':  return renderContact(sec);
+    case 'roster':   return renderRoster(sec);
+    case 'intro':    return renderIntro(sec);
+  }
+  return null;
+}
+
+/* ---- แสดงขั้นที่ i + ปรับ footer/progress ---- */
+function showStep(i){
+  stepIdx=Math.max(0, Math.min(i, STEPS.length-1));
+  document.querySelectorAll('.wizard-step').forEach(s=>{
+    s.classList.toggle('active', (+s.dataset.step)===stepIdx);
+  });
+  const isLast = stepIdx===STEPS.length-1;
+  const btnNext=document.getElementById('btnNext');
+  btnNext.textContent = isLast ? 'ตรวจก่อนส่ง →' : 'ถัดไป →';
+  btnNext.onclick = isLast ? goReview : nextStep;
+  const btnBack=document.getElementById('btnBack');
+  btnBack.textContent = stepIdx===0 ? '← ย้อนกลับ' : '← ก่อนหน้า';
+  btnBack.onclick = stepIdx===0 ? backToConsent : prevStep;
+  document.querySelectorAll('.liff-body').forEach(b=>b.scrollTop=0);
+  updateProgress();
+}
+function nextStep(){ if(stepIdx<STEPS.length-1) showStep(stepIdx+1); else goReview(); }
+function prevStep(){ if(stepIdx>0) showStep(stepIdx-1); else backToConsent(); }
 
 function elFrom(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstElementChild; }
 
@@ -277,12 +336,14 @@ function renderRef(sec){
   return wrap;
 }
 
-/* ---- ratings (1-5 + conditional follow-up) ---- */
-function renderRatings(sec){
+/* ---- ratings (1-5 + conditional follow-up) — รองรับซอยเป็นตอน (part/parts) ---- */
+function renderRatings(sec, items, part, parts){
+  items = items || sec.items;
   const wrap=document.createElement('div');
-  let html=`<h3 style="color:var(--navy-800); margin-top:8px;">${sec.title}</h3>`;
+  const partTag = (parts>1) ? ` <span style="font-size:12px; color:var(--muted); font-weight:400;">(ตอนที่ ${part}/${parts})</span>` : '';
+  let html=`<h3 style="color:var(--navy-800); margin-top:8px;">${sec.title}${partTag}</h3>`;
   if(sec.hint) html+=`<p style="font-size:12px; color:var(--muted); margin-top:-4px;">${sec.hint}</p>`;
-  sec.items.forEach(q=>{
+  items.forEach(q=>{
     let btns='';
     for(let i=1;i<=5;i++){
       btns+=`<button class="rate-btn" data-q="${q.code}" data-v="${i}" onclick="pickRate('${q.code}',${i},this)">
@@ -481,24 +542,14 @@ setInterval(()=>{
 }, 15000);
 
 function updateProgress(){
-  const form=currentForm();
-  let total=0, done=0;
-  form.sections.forEach(sec=>{
-    if(sec.type==='ratings'){
-      sec.items.forEach(q=>{ total++; if(state.ratings[q.code]!=null) done++; });
-    } else if(sec.type==='multi'){
-      total++; if(state.multi[sec.id] && state.multi[sec.id].size>0) done++;
-    } else if(sec.type==='single'){
-      total++; if(state.single[sec.id]!=null) done++;
-    } else if(sec.type==='nps'){
-      total++; if(state.nps!=null) done++;
-    }
-  });
-  if(total===0) total=1;
-  const pct=Math.round(done/total*100);
-  document.getElementById('progFill').style.width=pct+'%';
-  const mins=Math.max(1, Math.ceil((total-done)*0.4));
-  document.getElementById('progTime').textContent = pct>=100 ? 'พร้อมส่ง' : `เหลือ ~${mins} นาที`;
+  const total = STEPS.length || 1;
+  const cur   = stepIdx + 1;
+  const pct   = Math.round(cur/total*100);
+  document.getElementById('progFill').style.width = pct+'%';
+  document.getElementById('stepMeta').textContent = `ขั้น ${cur}/${total}`;
+  const remain = total - cur;
+  const mins = Math.max(1, Math.ceil(remain*0.4) + (remain>0?1:0));
+  document.getElementById('progTime').textContent = cur>=total ? 'พร้อมส่ง' : `เหลือ ~${mins} นาที`;
 }
 
 /* ============================================================
