@@ -250,6 +250,33 @@
         เปิดในแท็บใหม่ (ไม่หลุดจากหลังบ้าน) • มุมมองลูกค้าจะเห็นแบบประเมินเดียวตาม param ไม่มีตัวสลับชนิด
       </p>
     </div>
+
+    <!-- ตั้งค่ารางวัลเมื่อทำแบบประเมินครบ -->
+    <div class="card" style="margin-top:16px;">
+      <div class="section-title">🎁 รางวัลเมื่อทำแบบประเมินครบ <span class="mock-tag">mock — ไม่บันทึกจริง</span></div>
+
+      <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-weight:700; color:var(--navy-800);">
+        <input type="checkbox" id="rwEnabled" checked onchange="rwToggle()" style="width:18px; height:18px;">
+        เปิดใช้รางวัลเมื่อทำแบบประเมินครบ
+      </label>
+
+      <div id="rwFields" style="margin-top:12px;">
+        <label class="field-label" style="margin-top:0;">ประเภทรางวัล</label>
+        <select id="rwType" onchange="rwPreview()">
+          <option value="discount">ส่วนลด (%)</option>
+          <option value="points">แต้มสะสม (แต้ม)</option>
+        </select>
+        <label class="field-label">ค่า</label>
+        <input id="rwValue" value="5" oninput="rwPreview()" placeholder="เช่น 5">
+        <p style="font-size:13px; color:var(--muted); margin:10px 0 0;">
+          ตัวอย่างที่ลูกค้าจะเห็น: <b id="rwPreview" style="color:var(--navy-800);">คูปองส่วนลด 5%</b></p>
+      </div>
+
+      <div class="note-box" style="margin-top:14px; background:var(--amber-bg); color:var(--navy-900);">
+        🎗️ รางวัลให้<b>เมื่อทำครบเท่านั้น ไม่ผูกกับคะแนน</b> (กันบิดเบือนคะแนน — ทุกคนที่ทำครบได้เท่ากันไม่ว่าให้คะแนนเท่าไร) ·
+        บริษัท<b>ตั้งค่าเอง</b> ไม่ใช่ AI รับปากลูกค้า
+      </div>
+    </div>
   </div>
 
   <p style="text-align:center; color:var(--muted); margin-top:34px; font-size:13px;">
@@ -494,11 +521,27 @@ function saveBinding(){
   alert('(ต้นแบบ) บันทึกการผูกผู้ดูแลแล้ว — ในระบบจริงจะเขียนลง customer_assignments พร้อม valid_from/valid_to');
 }
 
+/* ---- ตั้งค่ารางวัล (mock) ---- */
+function rwPreview(){
+  const type=document.getElementById('rwType').value;
+  const val=(document.getElementById('rwValue').value||'').trim()||'0';
+  document.getElementById('rwPreview').textContent =
+    type==='points' ? ('สะสม '+val+' แต้ม') : ('คูปองส่วนลด '+val+'%');
+}
+function rwToggle(){
+  const on=document.getElementById('rwEnabled').checked;
+  const f=document.getElementById('rwFields');
+  f.style.opacity = on ? '1' : '.45';
+  f.style.pointerEvents = on ? 'auto' : 'none';
+}
+
 /* ---- init ---- */
 renderTeams();
 fillNewTeamForm();
 renderBindTable();
 fillBindForm();
+rwPreview();
+rwToggle();
 </script>
 </body>
 </html>
