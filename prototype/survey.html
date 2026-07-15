@@ -6,13 +6,41 @@
 <title>NOVA-CX — LIFF Survey (ต้นแบบมือถือ)</title>
 <link rel="stylesheet" href="assets/nova.css">
 <style>
-  body{ display:flex; flex-direction:column; align-items:center; padding:24px 12px; gap:14px; }
+  body{ display:flex; flex-direction:column; align-items:center; padding:20px 12px; gap:12px; }
   .toolbar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:center; }
   .toolbar a{ font-size:13px; }
   .screen{ display:none; }
   .screen.active{ display:block; }
   .center-col{ display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%;
     text-align:center; padding:24px; }
+
+  /* ---- ตัวสลับหมวดประเมิน (3 หมวดหลัก) ---- */
+  .eval-switch{ display:inline-flex; background:#fff; border:1px solid var(--line); border-radius:14px;
+    padding:5px; gap:4px; box-shadow:var(--shadow-sm); flex-wrap:wrap; justify-content:center; }
+  .eval-switch button{ border:none; background:none; padding:10px 16px; border-radius:10px; cursor:pointer;
+    font-family:inherit; font-size:14px; font-weight:700; color:var(--muted); transition:all .12s; }
+  .eval-switch button.active{ background:var(--navy-800); color:#fff; }
+  /* ---- ตัวสลับกรณีเซลล์ Won/Lost ---- */
+  .case-switch{ display:inline-flex; background:#eef2f8; border:1px dashed var(--muted-2); border-radius:12px;
+    padding:4px; gap:4px; }
+  .case-switch button{ border:none; background:none; padding:8px 14px; border-radius:9px; cursor:pointer;
+    font-family:inherit; font-size:13px; font-weight:700; color:var(--muted); }
+  .case-switch button.active{ background:var(--blue-600); color:#fff; }
+
+  /* ---- การ์ดผู้ดูแล (Form B) ---- */
+  .team-card{ display:flex; align-items:center; gap:12px; padding:10px; border:1px solid var(--line);
+    border-radius:12px; background:#fff; margin-bottom:8px; }
+  .team-card .tc-info{ flex:1; }
+  .team-card .tc-role{ font-size:11px; font-weight:700; color:var(--blue-600); }
+  .team-card .tc-nick{ font-weight:700; color:var(--navy-800); }
+  .team-card .tc-pos{ font-size:12px; color:var(--muted); }
+  /* ---- Do Not Contact badge ---- */
+  .dnc-badge{ margin-top:10px; display:flex; align-items:center; gap:8px; background:var(--red-bg);
+    color:var(--red); border:1px solid var(--red); border-radius:10px; padding:10px 12px;
+    font-size:13px; font-weight:700; }
+  .open-q{ margin-bottom:12px; }
+  .open-q label{ display:block; font-size:14px; font-weight:600; margin-bottom:4px; }
+  .sub-label{ font-size:13px; font-weight:600; color:var(--muted); margin:12px 0 6px; }
 </style>
 </head>
 <body>
@@ -20,6 +48,18 @@
 <div class="toolbar">
   <a class="btn btn-ghost" href="index.html" style="min-height:38px; padding:6px 14px;">← กลับหน้ารวม</a>
   <span class="badge badge-mock">ต้นแบบ • ไม่ต่อ backend • ข้อมูล mock</span>
+</div>
+
+<!-- ตัวสลับ 3 หมวดหลัก (ตามผู้ถูกประเมิน) -->
+<div class="eval-switch" id="evalSwitch">
+  <button data-eval="office">🏢 ประเมินสำนักงานบัญชี</button>
+  <button data-eval="accountant">🧮 ประเมินนักบัญชี</button>
+  <button data-eval="sales">🤝 ประเมินเซลล์</button>
+</div>
+<!-- ตัวเลือกย่อยของเซลล์ (Won / Lost) -->
+<div class="case-switch" id="caseSwitch" style="display:none;">
+  <button data-case="won">ขายได้ (Won)</button>
+  <button data-case="lost">ขายไม่ได้ (Lost)</button>
 </div>
 
 <!-- ===================== PHONE FRAME ===================== -->
@@ -40,8 +80,6 @@
         <div id="loaderMount"></div>
         <div class="nova-loading-text" id="loadText">น้อง NOVA กำลังเตรียมแบบประเมิน…</div>
         <div class="nova-loading-sub">ขอเวลาแป๊บเดียวนะคะ</div>
-
-        <!-- Fallback เมื่อโหลด > 5 วิ (จำลอง) -->
         <div id="loadFallback" style="margin-top:24px; display:none;">
           <div class="nova-loading-sub" style="color:var(--amber); margin-bottom:10px;">
             โหลดนานกว่าปกติ ลองใหม่อีกครั้งได้เลยค่ะ
@@ -84,11 +122,9 @@
       </div>
     </div>
 
-    <!-- ============ SCREEN 3: SURVEY (FORM A) ============ -->
+    <!-- ============ SCREEN 3: SURVEY (สร้างแบบไดนามิกตามหมวด) ============ -->
     <div class="screen" id="s-survey">
       <div class="liff-body" id="surveyBody">
-
-        <!-- progress -->
         <div class="progress-wrap">
           <div class="progress-track"><div class="progress-fill" id="progFill"></div></div>
           <span class="progress-time" id="progTime">~2 นาที</span>
@@ -96,40 +132,8 @@
         <div class="autosave" id="autosave">✓ บันทึกอัตโนมัติแล้ว</div>
         <div class="offline-banner" id="offlineBanner">⚠ เน็ตหลุด — คำตอบถูกเก็บไว้ในเครื่อง จะส่งให้เมื่อกลับมาออนไลน์</div>
 
-        <p style="font-size:12px; color:var(--muted-2); margin:0 0 4px;">แบบประเมิน A · สำนักงานบัญชี · รอบทุก 3 เดือน</p>
-
-        <!-- ส่วน 1: ข้อมูลอ้างอิง (auto-fill read-only) -->
-        <h3 style="color:var(--navy-800);">ข้อมูลอ้างอิง <span class="ref-lock">🔒 กรอกให้แล้ว</span></h3>
-        <div class="ref-card">
-          <div class="ref-row"><span class="k">รหัสลูกค้า</span><span class="v">FN-10428</span></div>
-          <div class="ref-row"><span class="k">ชื่อกิจการ</span><span class="v">บจก. สยามเทรดดิ้ง</span></div>
-          <div class="ref-row"><span class="k">ประเภทบริการ</span><span class="v">ทำบัญชี + ยื่นภาษี</span></div>
-          <div class="ref-row"><span class="k">ทีมที่ดูแล</span><span class="v">ทีมบัญชี A (คุณแนน)</span></div>
-          <div class="ref-row"><span class="k">รอบประเมิน</span><span class="v">ไตรมาส 2/2569</span></div>
-        </div>
-        <p style="font-size:12px; color:var(--muted); margin-top:6px;">
-          ข้อมูลนี้ดึงมาให้อัตโนมัติ ไม่ต้องกรอกซ้ำ — หากไม่ถูกต้องแจ้งทีมดูแลได้ค่ะ</p>
-
-        <!-- ส่วน 2: คะแนน 1-5 (แสดงตัวอย่าง 3 ข้อ จาก 10 ข้อจริง) -->
-        <h3 style="color:var(--navy-800); margin-top:22px;">ความพึงพอใจภาพรวม</h3>
-        <p style="font-size:12px; color:var(--muted); margin-top:-4px;">
-          ให้คะแนน 1 (ไม่พอใจมาก) ถึง 5 (พอใจมาก) — <span class="mock-tag">ต้นแบบแสดง 3 ข้อ จาก 10 ข้อจริง</span></p>
-
-        <div id="ratingQuestions"></div>
-
-        <!-- ส่วน 3: ปัญหาที่พบ (multi-select) -->
-        <div class="q-block">
-          <div class="q-title">ปัญหาที่เคยพบ (เลือกได้หลายข้อ)</div>
-          <div class="chips" id="problemChips"></div>
-        </div>
-
-        <!-- ส่วน 5: NPS -->
-        <div class="q-block">
-          <div class="q-title">คุณจะแนะนำ Finovas ให้เพื่อน/คนรู้จักมากน้อยแค่ไหน?</div>
-          <div class="nps" id="npsRow"></div>
-          <div class="nps-legend"><span>0 ไม่แนะนำเลย</span><span>10 แนะนำแน่นอน</span></div>
-        </div>
-
+        <p style="font-size:12px; color:var(--muted-2); margin:0 0 6px;" id="formMeta"></p>
+        <div id="sectionsMount"></div>
       </div>
       <div class="liff-footer" style="display:flex; gap:8px;">
         <button class="btn btn-ghost" style="flex:0 0 auto;" onclick="backToConsent()">← ย้อนกลับ</button>
@@ -161,6 +165,9 @@
           <p style="font-size:13px; color:var(--muted); margin:4px 0 0;">
             เราส่งต่อเรื่องให้ผู้รับผิดชอบแล้ว จะติดต่อกลับตามช่องทางที่คุณเลือกโดยเร็วค่ะ</p>
         </div>
+        <div class="dnc-badge" id="dncNote" style="display:none; width:100%; margin-top:14px;">
+          🚫 บันทึก "Do Not Contact" แล้ว — หยุด Automation การขายทันที เราจะไม่รบกวนคุณอีกค่ะ
+        </div>
         <button class="btn btn-ghost" style="margin-top:20px;" onclick="restart()">↻ ดูต้นแบบใหม่อีกครั้ง</button>
       </div>
     </div>
@@ -173,25 +180,81 @@
 </p>
 
 <script src="assets/mascot.js"></script>
+<script src="assets/questions.js"></script>
 <script>
 /* ============================================================
-   State machine ของ LIFF Survey (ต้นแบบ — ไม่ต่อ backend)
+   NOVA-CX Survey — state machine + render engine (ต้นแบบ mock)
+   3 หมวดหลัก: office=สำนักงาน(A) / accountant=นักบัญชี(B) / sales=เซลล์(C won, D lost)
    ============================================================ */
-const state = { ratings:{}, problems:new Set(), nps:null, wantContact:false, followups:{} };
+const state = {};
+function resetState(){
+  state.ratings   = {};
+  state.followups = {};
+  state.multi     = {};   // { secId: Set }
+  state.single    = {};   // { secId: value }
+  state.open      = {};   // { questionId: text }
+  state.nps       = null;
+  state.audience  = null;
+  state.dnc       = false;
+}
+resetState();
 
-// mascot mounts
+const rateLabels = {1:'ไม่พอใจมาก',2:'ไม่พอใจ',3:'เฉยๆ',4:'พอใจ',5:'พอใจมาก'};
+
+/* ---- หมวดปัจจุบัน ---- */
+let CURRENT_EVAL = 'office';   // office | accountant | sales
+let CURRENT_CASE = 'won';      // won | lost (เฉพาะ sales)
+function currentFormCode(){
+  if(CURRENT_EVAL==='office')     return 'A';
+  if(CURRENT_EVAL==='accountant') return 'B';
+  return CURRENT_CASE==='lost' ? 'D' : 'C';
+}
+function currentForm(){ return NOVA_FORMS[currentFormCode()]; }
+
+/* ---- mascot mounts ---- */
 document.getElementById('loaderMount').innerHTML  = NOVA.loaderScene();
 document.getElementById('consentMascot').innerHTML= NOVA.profile(64);
 document.getElementById('confirmMascot').innerHTML= NOVA.full(150);
 
-// ---- screen switching ----
+/* ---- screen switching ---- */
 function show(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
-  document.querySelector('.liff-body') && document.querySelectorAll('.liff-body').forEach(b=>b.scrollTop=0);
+  document.querySelectorAll('.liff-body').forEach(b=>b.scrollTop=0);
 }
 
-// ---- Loading text rotation + fallback ----
+/* ============================================================
+   ตัวสลับหมวด (3 หมวด + Won/Lost ของเซลล์)
+   ============================================================ */
+function updateSwitchUI(){
+  document.querySelectorAll('#evalSwitch button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.eval===CURRENT_EVAL);
+  });
+  const cs=document.getElementById('caseSwitch');
+  cs.style.display = CURRENT_EVAL==='sales' ? 'inline-flex' : 'none';
+  document.querySelectorAll('#caseSwitch button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.case===CURRENT_CASE);
+  });
+}
+document.querySelectorAll('#evalSwitch button').forEach(b=>{
+  b.onclick=()=>{ CURRENT_EVAL=b.dataset.eval; openCurrentForm(); };
+});
+document.querySelectorAll('#caseSwitch button').forEach(b=>{
+  b.onclick=()=>{ CURRENT_CASE=b.dataset.case; openCurrentForm(); };
+});
+
+/* เปิดฟอร์มปัจจุบัน (ใช้ตอนกดสลับหมวด — ข้าม loading เพื่อรีวิวไว) */
+function openCurrentForm(){
+  resetState();
+  buildSurvey();
+  updateSwitchUI();
+  updateProgress();
+  show('s-survey');
+}
+
+/* ============================================================
+   Loading + fallback (คงของเดิม)
+   ============================================================ */
 const loadMsgs = [
   "น้อง NOVA กำลังเตรียมแบบประเมิน…",
   "ขอเวลาจัดเอกสารแป๊บหนึ่งนะคะ",
@@ -211,67 +274,82 @@ function startLoading(){
   msgIdx=0; document.getElementById('loadText').textContent=loadMsgs[0];
   clearInterval(loadTimer); clearTimeout(fallbackTimer);
   loadTimer=setInterval(rotateMsg,1600);
-  // demo=loading → ค้างที่โหลดแล้วโชว์ fallback หลัง 5 วิ
   fallbackTimer=setTimeout(()=>{ document.getElementById('loadFallback').style.display='block'; }, 5000);
   if(!demoLoading){
     setTimeout(()=>{ clearInterval(loadTimer); clearTimeout(fallbackTimer); show('s-consent'); }, 2600);
   }
 }
 function retryLoad(){ startLoading(); }
-startLoading();
 
-// ---- Consent ----
+/* ---- Consent ---- */
 function goConsent(ok){
   if(!ok){ alert('(ต้นแบบ) ถ้าไม่ยินยอม จะปิดแบบประเมินและแจ้งว่าเคารพการตัดสินใจ ไม่ส่งซ้ำในรอบนี้'); return; }
-  buildSurvey(); show('s-survey'); updateProgress();
+  resetState(); buildSurvey(); updateProgress(); show('s-survey');
 }
 function backToConsent(){ show('s-consent'); }
 
-// ---- Build survey (Form A subset) ----
-const ratingQs = [
-  { code:'overall', text:'1. ความพึงพอใจภาพรวมต่อสำนักงานบัญชี' },
-  { code:'accuracy', text:'2. ความถูกต้องของงานบัญชี/ภาษี' },
-  { code:'speed',    text:'3. ความรวดเร็วในการให้บริการ' }
-];
-const rateLabels = {1:'ไม่พอใจมาก',2:'ไม่พอใจ',3:'เฉยๆ',4:'พอใจ',5:'พอใจมาก'};
-const problemOpts = [
-  'ติดต่อยาก','ตอบช้า','ไม่ทราบสถานะงาน','ส่งเอกสารซ้ำ','งานล่าช้า',
-  'งานผิด/แก้หลายครั้ง','อธิบายไม่เข้าใจ','ค่าบริการไม่เหมาะสม','ยังไม่พบปัญหา'
-];
-
+/* ============================================================
+   RENDER ENGINE — สร้าง section ตามชนิด
+   ============================================================ */
 function buildSurvey(){
-  // ratings
-  const rc = document.getElementById('ratingQuestions'); rc.innerHTML='';
-  ratingQs.forEach(q=>{
-    const block=document.createElement('div'); block.className='q-block';
+  const form = currentForm();
+  document.getElementById('formMeta').textContent =
+    `แบบประเมิน ${form.code} · ${form.name} · ${form.tag}`;
+  updateSwitchUI();
+
+  const mount = document.getElementById('sectionsMount');
+  mount.innerHTML='';
+  form.sections.forEach(sec=>{
+    let el;
+    switch(sec.type){
+      case 'ref':      el=renderRef(sec); break;
+      case 'ratings':  el=renderRatings(sec); break;
+      case 'multi':    el=renderMulti(sec); break;
+      case 'single':   el=renderSingle(sec); break;
+      case 'nps':      el=renderNps(sec); break;
+      case 'open':     el=renderOpen(sec); break;
+      case 'contact':  el=renderContact(sec); break;
+      case 'audience': el=renderAudience(sec); break;
+      case 'intro':    el=renderIntro(sec); break;
+    }
+    if(el) mount.appendChild(el);
+  });
+  applyAudience();
+}
+
+function elFrom(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstElementChild; }
+
+/* ---- ref (auto-fill) ---- */
+function renderRef(sec){
+  const wrap=document.createElement('div');
+  const rows=sec.rows.map(r=>`<div class="ref-row"><span class="k">${r[0]}</span><span class="v">${r[1]}</span></div>`).join('');
+  wrap.innerHTML=`
+    <h3 style="color:var(--navy-800);">${sec.title} <span class="ref-lock">${sec.lock||''}</span></h3>
+    <div class="ref-card">${rows}</div>
+    ${sec.note?`<p style="font-size:12px; color:var(--muted); margin-top:6px;">${sec.note}</p>`:''}`;
+  return wrap;
+}
+
+/* ---- ratings (1-5 + conditional follow-up) ---- */
+function renderRatings(sec){
+  const wrap=document.createElement('div');
+  wrap.className='rate-section';
+  wrap.dataset.secid=sec.id;
+  if(sec.showFor) wrap.dataset.showfor=JSON.stringify(sec.showFor);
+  let html=`<h3 style="color:var(--navy-800); margin-top:8px;">${sec.title}</h3>`;
+  if(sec.hint) html+=`<p style="font-size:12px; color:var(--muted); margin-top:-4px;">${sec.hint}</p>`;
+  sec.items.forEach(q=>{
     let btns='';
     for(let i=1;i<=5;i++){
       btns+=`<button class="rate-btn" data-q="${q.code}" data-v="${i}" onclick="pickRate('${q.code}',${i},this)">
                 <span class="num">${i}</span><span class="lbl">${rateLabels[i]}</span></button>`;
     }
-    block.innerHTML=`<div class="q-title">${q.text}</div><div class="rating">${btns}</div>
-                     <div id="fu-${q.code}"></div>`;
-    rc.appendChild(block);
+    html+=`<div class="q-block"><div class="q-title">${q.text}</div>
+            <div class="rating">${btns}</div><div id="fu-${q.code}"></div></div>`;
   });
-  // problems (chips)
-  const pc=document.getElementById('problemChips'); pc.innerHTML='';
-  problemOpts.forEach(opt=>{
-    const excl = opt==='ยังไม่พบปัญหา';
-    const c=document.createElement('button');
-    c.className='chip'+(excl?' exclusive':''); c.textContent=opt;
-    c.onclick=()=>toggleProblem(opt,excl,c);
-    pc.appendChild(c);
-  });
-  // NPS
-  const np=document.getElementById('npsRow'); np.innerHTML='';
-  for(let i=0;i<=10;i++){
-    const b=document.createElement('button'); b.className='nps-btn'; b.textContent=i;
-    b.onclick=()=>{ state.nps=i; document.querySelectorAll('.nps-btn').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); flashSave(); updateProgress(); };
-    np.appendChild(b);
-  }
+  wrap.innerHTML=html;
+  return wrap;
 }
-
-// ---- Rating + conditional follow-up ----
 function pickRate(code,val,el){
   state.ratings[code]=val;
   el.parentElement.querySelectorAll('.rate-btn').forEach(b=>b.classList.remove('sel'));
@@ -285,7 +363,7 @@ function renderFollowup(code,val){
   if(val>=4){ cls+=' pos';
     body=`<b>ดีใจที่คุณพอใจค่ะ 😊</b> จุดไหนที่เราทำได้ดี?
       <textarea rows="2" placeholder="เช่น ตอบเร็ว อธิบายเข้าใจง่าย…" oninput="state.followups['${code}']=this.value"></textarea>`;
-  } else if(val===3){ cls+='';
+  } else if(val===3){
     body=`มีเรื่องไหนที่อยากให้เราปรับปรุงไหมคะ?
       <textarea rows="2" placeholder="บอกได้เลยค่ะ…" oninput="state.followups['${code}']=this.value"></textarea>`;
   } else { cls+=' neg';
@@ -298,32 +376,174 @@ function renderFollowup(code,val){
   mount.innerHTML=`<div class="${cls}">${body}</div>`;
 }
 
-// ---- Problem multi-select (exclusive "ยังไม่พบปัญหา") ----
-function toggleProblem(opt,excl,el){
-  const chips=document.querySelectorAll('#problemChips .chip');
+/* ---- multi-select (chips + exclusive option) ---- */
+function renderMulti(sec){
+  state.multi[sec.id]=new Set();
+  const wrap=document.createElement('div'); wrap.className='q-block';
+  wrap.innerHTML=`<div class="q-title">${sec.title}</div><div class="chips" id="chips-${sec.id}"></div>`;
+  const box=wrap.querySelector('#chips-'+sec.id);
+  sec.options.forEach(opt=>{
+    const excl = sec.exclusive && opt===sec.exclusive;
+    const c=document.createElement('button');
+    c.className='chip'+(excl?' exclusive':''); c.textContent=opt;
+    c.onclick=()=>toggleMulti(sec.id, opt, excl, c);
+    box.appendChild(c);
+  });
+  return wrap;
+}
+function toggleMulti(secId,opt,excl,el){
+  const set=state.multi[secId];
+  const chips=document.querySelectorAll('#chips-'+secId+' .chip');
   if(excl){
     const nowSel=!el.classList.contains('sel');
-    state.problems.clear();
+    set.clear();
     chips.forEach(c=>{ c.classList.remove('sel'); if(!c.classList.contains('exclusive')) c.classList.toggle('dimmed',nowSel); });
-    if(nowSel){ el.classList.add('sel'); state.problems.add(opt); }
+    if(nowSel){ el.classList.add('sel'); set.add(opt); }
   } else {
-    // ถ้ามี exclusive อยู่ ให้ปลดก่อน
     const exEl=[...chips].find(c=>c.classList.contains('exclusive'));
-    if(exEl && exEl.classList.contains('sel')){ exEl.classList.remove('sel'); state.problems.delete('ยังไม่พบปัญหา'); }
+    if(exEl && exEl.classList.contains('sel')){ exEl.classList.remove('sel'); set.delete(exEl.textContent); }
     chips.forEach(c=>c.classList.remove('dimmed'));
     el.classList.toggle('sel');
-    if(el.classList.contains('sel')) state.problems.add(opt); else state.problems.delete(opt);
+    if(el.classList.contains('sel')) set.add(opt); else set.delete(opt);
   }
   flashSave(); updateProgress();
 }
 
-// ---- Autosave banner + fake offline ----
+/* ---- single-select (chips) + Do Not Contact handling ---- */
+function renderSingle(sec){
+  const wrap=document.createElement('div'); wrap.className='q-block';
+  wrap.innerHTML=`<div class="q-title">${sec.title}</div><div class="chips" id="chips-${sec.id}"></div>
+    <div id="dnc-${sec.id}"></div>`;
+  const box=wrap.querySelector('#chips-'+sec.id);
+  sec.options.forEach(opt=>{
+    const c=document.createElement('button'); c.className='chip'; c.textContent=opt;
+    c.onclick=()=>pickSingle(sec, opt, c);
+    box.appendChild(c);
+  });
+  return wrap;
+}
+function pickSingle(sec,opt,el){
+  state.single[sec.id]=opt;
+  el.parentElement.querySelectorAll('.chip').forEach(c=>c.classList.remove('sel'));
+  el.classList.add('sel');
+  // Do Not Contact
+  if(sec.dncOption){
+    const isDnc = opt===sec.dncOption;
+    state.dnc = isDnc;
+    document.getElementById('dnc-'+sec.id).innerHTML = isDnc
+      ? `<div class="dnc-badge">🚫 บันทึก "Do Not Contact" — เราจะหยุดติดต่อเพื่อการขายทันทีค่ะ</div>` : '';
+  }
+  flashSave(); updateProgress();
+}
+
+/* ---- NPS 0-10 ---- */
+function renderNps(sec){
+  const wrap=document.createElement('div'); wrap.className='q-block';
+  wrap.innerHTML=`<div class="q-title">${sec.text}</div><div class="nps" id="nps-${sec.id}"></div>
+    <div class="nps-legend"><span>${sec.low}</span><span>${sec.high}</span></div>`;
+  const box=wrap.querySelector('#nps-'+sec.id);
+  for(let i=0;i<=10;i++){
+    const b=document.createElement('button'); b.className='nps-btn'; b.textContent=i;
+    b.onclick=()=>{ state.nps=i; box.querySelectorAll('.nps-btn').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); flashSave(); updateProgress(); };
+    box.appendChild(b);
+  }
+  return wrap;
+}
+
+/* ---- open questions (textarea) ---- */
+function renderOpen(sec){
+  const wrap=document.createElement('div'); wrap.className='q-block';
+  let html=`<div class="q-title">${sec.title}</div>`;
+  sec.questions.forEach(q=>{
+    html+=`<div class="open-q"><label>${q.text}</label>
+      <textarea class="txtin" rows="2" placeholder="${q.ph||'บอกได้เลยค่ะ…'}"
+        oninput="state.open['${q.id}']=this.value"></textarea></div>`;
+  });
+  wrap.innerHTML=html;
+  return wrap;
+}
+
+/* ---- contact back (level + channels + time) ---- */
+function renderContact(sec){
+  const C=NOVA_CONTACT;
+  const wrap=document.createElement('div'); wrap.className='q-block';
+  wrap.innerHTML=`<div class="q-title">${sec.title}</div>
+    <div class="sub-label">ต้องการให้ใครติดต่อกลับ?</div><div class="chips" id="chips-${sec.id}_level"></div>
+    <div class="sub-label">ช่องทางที่สะดวก (เลือกได้หลายช่อง)</div><div class="chips" id="chips-${sec.id}_ch"></div>
+    <div class="sub-label">ช่วงเวลาที่สะดวก</div><div class="chips" id="chips-${sec.id}_time"></div>`;
+  // level (single)
+  const lv=wrap.querySelector('#chips-'+sec.id+'_level');
+  C.levels.forEach(opt=>{
+    const c=document.createElement('button'); c.className='chip'; c.textContent=opt;
+    c.onclick=()=>{ state.single[sec.id+'_level']=opt; lv.querySelectorAll('.chip').forEach(x=>x.classList.remove('sel')); c.classList.add('sel'); flashSave(); updateProgress(); };
+    lv.appendChild(c);
+  });
+  // channels (multi)
+  state.multi[sec.id+'_ch']=new Set();
+  const ch=wrap.querySelector('#chips-'+sec.id+'_ch');
+  C.channels.forEach(opt=>{
+    const c=document.createElement('button'); c.className='chip'; c.textContent=opt;
+    c.onclick=()=>{ const s=state.multi[sec.id+'_ch']; c.classList.toggle('sel'); if(c.classList.contains('sel'))s.add(opt);else s.delete(opt); flashSave(); };
+    ch.appendChild(c);
+  });
+  // time (single)
+  const tm=wrap.querySelector('#chips-'+sec.id+'_time');
+  C.times.forEach(opt=>{
+    const c=document.createElement('button'); c.className='chip'; c.textContent=opt;
+    c.onclick=()=>{ state.single[sec.id+'_time']=opt; tm.querySelectorAll('.chip').forEach(x=>x.classList.remove('sel')); c.classList.add('sel'); flashSave(); };
+    tm.appendChild(c);
+  });
+  return wrap;
+}
+
+/* ---- audience (Form B) : เลือกผู้ถูกประเมิน + การ์ดผู้ดูแล ---- */
+function renderAudience(sec){
+  const wrap=document.createElement('div'); wrap.className='q-block';
+  let cards=sec.team.map(m=>`
+    <div class="team-card">
+      ${NOVA.profile(44)}
+      <div class="tc-info"><div class="tc-role">${m.role}</div>
+        <div class="tc-nick">${m.nick}</div><div class="tc-pos">${m.pos}</div></div>
+    </div>`).join('');
+  wrap.innerHTML=`<div class="q-title">${sec.title}</div>
+    ${sec.note?`<p style="font-size:12px; color:var(--muted); margin-top:-4px;">${sec.note}</p>`:''}
+    <div class="chips" id="chips-${sec.id}" style="margin-bottom:12px;"></div>
+    <div class="sub-label">ผู้ดูแลของคุณ</div>${cards}`;
+  const box=wrap.querySelector('#chips-'+sec.id);
+  state.audience = sec.defaultVal || sec.options[0];
+  sec.options.forEach(opt=>{
+    const c=document.createElement('button'); c.className='chip'+(opt===state.audience?' sel':''); c.textContent=opt;
+    c.onclick=()=>{ state.audience=opt; box.querySelectorAll('.chip').forEach(x=>x.classList.remove('sel')); c.classList.add('sel'); applyAudience(); flashSave(); updateProgress(); };
+    box.appendChild(c);
+  });
+  return wrap;
+}
+/* แสดง/ซ่อน rating sections ตามผู้ถูกประเมินที่เลือก */
+function applyAudience(){
+  document.querySelectorAll('.rate-section').forEach(sec=>{
+    if(!sec.dataset.showfor) return;
+    const list=JSON.parse(sec.dataset.showfor);
+    sec.style.display = list.includes(state.audience) ? '' : 'none';
+  });
+}
+
+/* ---- intro (Form D opening message) ---- */
+function renderIntro(sec){
+  const wrap=document.createElement('div');
+  wrap.innerHTML=`<div class="followup" style="display:flex; gap:12px; align-items:center; border-left-color:var(--sky-400);">
+    <div style="flex-shrink:0;">${NOVA.profile(48)}</div>
+    <div style="font-size:14px;">${sec.text}</div></div>`;
+  return wrap;
+}
+
+/* ============================================================
+   Autosave / offline / progress
+   ============================================================ */
 let saveTimer;
 function flashSave(){
   const el=document.getElementById('autosave'); el.classList.add('show');
   clearTimeout(saveTimer); saveTimer=setTimeout(()=>el.classList.remove('show'),1600);
 }
-// จำลอง offline ทุกๆ ~14 วิ โผล่ banner สั้นๆ (โชว์ว่า UX รองรับเน็ตหลุด)
 setInterval(()=>{
   if(document.getElementById('s-survey').classList.contains('active')){
     const b=document.getElementById('offlineBanner'); b.style.display='flex';
@@ -331,46 +551,98 @@ setInterval(()=>{
   }
 }, 15000);
 
-// ---- Progress ----
 function updateProgress(){
-  const total = ratingQs.length + 2; // ratings + problems + nps
-  let done = Object.keys(state.ratings).length;
-  if(state.problems.size>0) done++;
-  if(state.nps!==null) done++;
-  const pct = Math.round(done/total*100);
+  const form=currentForm();
+  let total=0, done=0;
+  form.sections.forEach(sec=>{
+    if(sec.type==='ratings'){
+      if(sec.showFor && !sec.showFor.includes(state.audience)) return;
+      sec.items.forEach(q=>{ total++; if(state.ratings[q.code]!=null) done++; });
+    } else if(sec.type==='multi'){
+      total++; if(state.multi[sec.id] && state.multi[sec.id].size>0) done++;
+    } else if(sec.type==='single'){
+      total++; if(state.single[sec.id]!=null) done++;
+    } else if(sec.type==='nps'){
+      total++; if(state.nps!=null) done++;
+    }
+  });
+  if(total===0) total=1;
+  const pct=Math.round(done/total*100);
   document.getElementById('progFill').style.width=pct+'%';
-  const mins = Math.max(1, Math.ceil((total-done)*0.6));
+  const mins=Math.max(1, Math.ceil((total-done)*0.4));
   document.getElementById('progTime').textContent = pct>=100 ? 'พร้อมส่ง' : `เหลือ ~${mins} นาที`;
 }
 
-// ---- Review ----
-function goReview(){
-  const list=document.getElementById('reviewList'); list.innerHTML='';
-  ratingQs.forEach(q=>{
-    const v=state.ratings[q.code];
-    list.appendChild(reviewRow(q.text, v?`${v} — ${rateLabels[v]}`:'(ยังไม่ตอบ)'));
-  });
-  const probs = state.problems.size? [...state.problems].join(', ') : '(ไม่ได้เลือก)';
-  list.appendChild(reviewRow('ปัญหาที่พบ', probs));
-  list.appendChild(reviewRow('คะแนนแนะนำ (NPS)', state.nps!==null? state.nps+'/10':'(ยังไม่ตอบ)'));
-  list.appendChild(reviewRow('ขอให้ติดต่อกลับ', state.wantContact?'ใช่':'ไม่'));
-  show('s-review');
-}
+/* ============================================================
+   Review — สรุปคำตอบทุก section
+   ============================================================ */
 function reviewRow(q,a){
   const d=document.createElement('div'); d.className='review-item';
   d.innerHTML=`<span class="rq">${q}</span><span class="ra">${a} <span class="edit" onclick="show('s-survey')">แก้</span></span>`;
   return d;
 }
+function goReview(){
+  const form=currentForm();
+  const list=document.getElementById('reviewList'); list.innerHTML='';
+  form.sections.forEach(sec=>{
+    if(sec.type==='audience'){
+      list.appendChild(reviewRow('ประเมิน', state.audience||'(ยังไม่เลือก)'));
+    } else if(sec.type==='ratings'){
+      if(sec.showFor && !sec.showFor.includes(state.audience)) return;
+      sec.items.forEach(q=>{
+        const v=state.ratings[q.code];
+        list.appendChild(reviewRow(q.text, v?`${v} — ${rateLabels[v]}`:'(ยังไม่ตอบ)'));
+      });
+    } else if(sec.type==='multi'){
+      const s=state.multi[sec.id];
+      list.appendChild(reviewRow(sec.title, (s&&s.size)?[...s].join(', '):'(ไม่ได้เลือก)'));
+    } else if(sec.type==='single'){
+      list.appendChild(reviewRow(sec.title, state.single[sec.id]||'(ยังไม่ตอบ)'));
+    } else if(sec.type==='nps'){
+      list.appendChild(reviewRow('คะแนนแนะนำ (NPS)', state.nps!=null?state.nps+'/10':'(ยังไม่ตอบ)'));
+    } else if(sec.type==='open'){
+      sec.questions.forEach(q=>{
+        const v=state.open[q.id];
+        if(v && v.trim()) list.appendChild(reviewRow(q.text, v));
+      });
+    } else if(sec.type==='contact'){
+      list.appendChild(reviewRow('ให้ติดต่อกลับ', state.single[sec.id+'_level']||'(ยังไม่เลือก)'));
+      const ch=state.multi[sec.id+'_ch'];
+      if(ch&&ch.size) list.appendChild(reviewRow('ช่องทาง', [...ch].join(', ')));
+      if(state.single[sec.id+'_time']) list.appendChild(reviewRow('ช่วงเวลา', state.single[sec.id+'_time']));
+    }
+  });
+  show('s-review');
+}
 
-// ---- Submit ----
+/* ============================================================
+   Submit / restart
+   ============================================================ */
 function submitSurvey(){
-  document.getElementById('contactBackNote').style.display = state.wantContact?'block':'none';
+  const wantContact = !!state.wantContact ||
+    (Object.keys(state.single).some(k=>k.endsWith('_level') && state.single[k] && state.single[k]!=='ไม่ต้องติดต่อกลับ'));
+  document.getElementById('contactBackNote').style.display = wantContact?'block':'none';
+  document.getElementById('dncNote').style.display = state.dnc?'flex':'none';
   show('s-confirm');
 }
-function restart(){
-  state.ratings={}; state.problems=new Set(); state.nps=null; state.wantContact=false; state.followups={};
-  show('s-loading'); startLoading();
-}
+function restart(){ resetState(); show('s-loading'); startLoading(); }
+
+/* ============================================================
+   เริ่มต้น — อ่าน query param (?eval=/&case= หรือ legacy ?form=)
+   ============================================================ */
+(function init(){
+  const ev=params.get('eval'), cs=params.get('case'), legacy=(params.get('form')||'').toUpperCase();
+  if(ev && ['office','accountant','sales'].includes(ev)) CURRENT_EVAL=ev;
+  if(cs && ['won','lost'].includes(cs)) CURRENT_CASE=cs;
+  if(!ev && legacy){
+    if(legacy==='A') CURRENT_EVAL='office';
+    else if(legacy==='B') CURRENT_EVAL='accountant';
+    else if(legacy==='C'){ CURRENT_EVAL='sales'; CURRENT_CASE='won'; }
+    else if(legacy==='D'){ CURRENT_EVAL='sales'; CURRENT_CASE='lost'; }
+  }
+  updateSwitchUI();
+  startLoading();
+})();
 </script>
 </body>
 </html>
