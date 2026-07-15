@@ -18,7 +18,7 @@ app/                 Next.js App Router (landing + /api/health)
 lib/                 supabase client (server/client) + env helper
 middleware.ts        refresh session พนักงาน (Supabase Auth)
 supabase/
-  migrations/        DDL 16 ไฟล์ (0001–0016) — 41 ตาราง + RLS/RBAC + hardening
+  migrations/        DDL 17 ไฟล์ (0001–0017) — 41 ตาราง + RLS/RBAC + hardening
   seed.sql           demo data (1 tenant, 7 role, แบบประเมิน A/B/C/D)
 tests/               vitest: unit (env/health/zod) + RLS/permission (ต้องมี DB)
 .github/workflows/   CI (typecheck + lint + test + build)
@@ -120,7 +120,10 @@ DATABASE_URL="postgres://postgres:...@db.<ref>.supabase.co:5432/postgres" npm te
   - `audit_logs`/`case_activity_logs` กัน spoof: authenticated ตั้ง `actor_user_id` เป็นคนอื่นไม่ได้ + มี `log_audit()`/`log_case_activity()` (SECURITY DEFINER)
   - `tenants` แก้ไขได้เฉพาะ admin/executive
 - helper functions เป็น SECURITY DEFINER + fixed `search_path` (กัน hijack) + revoke execute จาก public
+- **scope ครอบตารางลูกครบ (0014 + 0018):** case_activity_logs / case_assignments / follow_up_tasks (ผ่าน `case_id`), sales_status_history (ผ่าน `opportunity_id`), customer_assignments (`customer_id`), audit_logs อ่านได้เฉพาะ privileged
+- **⚠️ M2 LIFF note:** 0013 revoke สิทธิ์ตารางจาก `anon` → หน้า survey สาธารณะผ่าน LIFF **ห้ามอ่าน/เขียนด้วย anon key ตรง** ต้องผ่าน API server (service-role หรือ token-scoped endpoint) เท่านั้น มิฉะนั้นฟอร์มพังเพราะ RLS/GRANT
 - **หมายเหตุ RBAC (M1):** `role_permissions` เป็น catalog แต่ RLS ยัง enforce ด้วย role-code (hardcode ใน helper) — ยอมรับได้สำหรับ M1, เฟสถัดไปขับ policy ด้วย catalog
+- **ERD note (0017):** `sales_leads.customer_id` **nullable** — ผูก customer เมื่อ lead convert เป็นลูกค้า (Won); Lost/ยังไม่ convert = null. มี `owner_employee_id` (เซลล์เจ้าของ) ใช้ทำ RLS scope per-lead: `is_privileged() OR sales_lead OR owner OR can_access_customer(customer_id)`
 
 ## Cron / Monitoring (E12)
 - `vercel.json` ตั้ง Vercel Cron เรียก `/api/cron/health-ping` รายวัน → อัปเดต `cron_health.last_run_at` (โครง cron last-run alert)

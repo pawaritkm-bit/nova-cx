@@ -125,6 +125,22 @@ describe.skipIf(!hasDb)("RLS / permission (ต้องมี DATABASE_URL)", ()
     }
   });
 
+  it("case_activity_logs — นักบัญชีอ่าน timeline เคสของลูกค้าที่ไม่ได้ดูแลไม่ได้ (0018 cross-scope)", async () => {
+    const sql =
+      "select id from public.case_activity_logs where case_id = 'e0000000-0000-0000-0000-000000000003'";
+    const acc = await asUser(AUTH.accountantT1, sql);
+    expect(acc.length).toBe(0);
+    const exec = await asUser(AUTH.executiveT1, sql);
+    expect(exec.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("audit_logs — พนักงานทั่วไปอ่านไม่ได้ (0018 privileged-only)", async () => {
+    const acc = await asUser(AUTH.accountantT1, "select id from public.audit_logs");
+    expect(acc.length).toBe(0);
+    const exec = await asUser(AUTH.executiveT1, "select id from public.audit_logs");
+    expect(exec.length).toBeGreaterThanOrEqual(1);
+  });
+
   it("นักบัญชีแก้ไข tenant ไม่ได้ (MEDIUM#5 — เฉพาะ admin/exec)", async () => {
     // update ต้องไม่กระทบแถวใด (RLS restrictive กัน) → rowCount = 0
     await client.query("begin");

@@ -34,3 +34,17 @@ on conflict (id) do nothing;
 insert into public.customer_assignments (tenant_id, customer_id, employee_id, role, valid_from, valid_to) values
   ('22222222-2222-2222-2222-222222222222','7a000000-0000-0000-0000-000000000001','3a000000-0000-0000-0000-000000000002','member','2025-01-01',null)
 on conflict do nothing;
+
+-- ---------- Case + activity บนลูกค้า cust3 (ไม่มีผู้ดูแล) — ทดสอบ cross-scope ----------
+insert into public.complaint_cases (id, tenant_id, case_no, customer_id, type, level, status) values
+  ('e0000000-0000-0000-0000-000000000003','11111111-1111-1111-1111-111111111111','CASE-T1-003','70000000-0000-0000-0000-000000000003','complaint','high','new')
+on conflict (id) do nothing;
+
+insert into public.case_activity_logs (id, tenant_id, case_id, action, note) values
+  ('ea000000-0000-0000-0000-000000000003','11111111-1111-1111-1111-111111111111','e0000000-0000-0000-0000-000000000003','created','บันทึกภายในเคส (ไม่ควรหลุด scope)')
+on conflict (id) do nothing;
+
+-- ---------- audit log tenant#1 (ทดสอบ privileged-only read) ----------
+insert into public.audit_logs (id, tenant_id, action, resource, resource_id) values
+  ('ad000000-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111','test.seed','audit_logs',null)
+on conflict (id) do nothing;
