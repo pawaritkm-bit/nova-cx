@@ -27,20 +27,9 @@
   .team-card .tc-role{ font-size:11px; font-weight:700; color:var(--blue-600); }
   .team-card .tc-nick{ font-weight:700; color:var(--navy-800); }
   .team-card .tc-pos{ font-size:12px; color:var(--muted); }
-  /* ---- Do Not Contact badge ---- */
-  .dnc-badge{ margin-top:10px; display:flex; align-items:center; gap:8px; background:var(--red-bg);
-    color:var(--red); border:1px solid var(--red); border-radius:10px; padding:10px 12px;
-    font-size:13px; font-weight:700; }
   .open-q{ margin-bottom:12px; }
   .open-q label{ display:block; font-size:14px; font-weight:600; margin-bottom:4px; }
   .sub-label{ font-size:13px; font-weight:600; color:var(--muted); margin:12px 0 6px; }
-  /* การ์ดรางวัลในหน้ายืนยัน (ให้เพราะทำครบ ไม่ผูกกับคะแนน) */
-  .reward-card{ margin-top:16px; width:100%; text-align:left; border:1.5px dashed var(--amber);
-    background:var(--amber-bg); border-radius:14px; padding:14px 16px; }
-  .reward-card .rw-head{ font-weight:800; color:#92400e; font-size:15px; }
-  .reward-card .rw-code{ display:inline-block; margin-top:8px; font-weight:800; letter-spacing:1px;
-    background:#fff; border:1px dashed var(--amber); color:#92400e; border-radius:8px; padding:6px 12px; font-size:16px; }
-  .reward-card .rw-fair{ font-size:12px; color:var(--muted); margin-top:8px; }
 </style>
 </head>
 <body>
@@ -141,21 +130,10 @@
         <h2 style="color:var(--navy-800); margin-top:10px;">ขอบคุณมากค่ะ 🙏</h2>
         <p style="color:var(--text);">น้อง NOVA รับเรื่องเรียบร้อยแล้ว<br>ความคิดเห็นของคุณช่วยให้เราดูแลคุณได้ดีขึ้นค่ะ</p>
 
-        <div class="reward-card" id="rewardCard">
-          <div class="rw-head">🎁 ขอบคุณที่สละเวลาทำแบบประเมินจนครบ!</div>
-          <div style="font-size:14px; color:var(--text); margin-top:4px;">
-            รับ <b>คูปองส่วนลด 5%</b> สำหรับบริการรอบถัดไป (หรือสะสม 50 แต้ม) — ใช้โค้ดนี้ได้เลยค่ะ</div>
-          <div class="rw-code" id="rewardCode">NOVA0000</div>
-          <div class="rw-fair">🎗️ มอบให้<b>ทุกท่านที่ทำแบบประเมินครบ</b> ไม่ว่าให้คะแนนมากหรือน้อย — รางวัลไม่ผูกกับคะแนน เพื่อความเป็นธรรมค่ะ</div>
-        </div>
-
         <div class="card" id="contactBackNote" style="margin-top:14px; text-align:left; display:none; width:100%;">
           <b style="color:var(--navy-800);">✓ ทีมจะติดต่อกลับ</b>
           <p style="font-size:13px; color:var(--muted); margin:4px 0 0;">
             เราส่งต่อเรื่องให้ผู้รับผิดชอบแล้ว จะติดต่อกลับตามช่องทางที่คุณเลือกโดยเร็วค่ะ</p>
-        </div>
-        <div class="dnc-badge" id="dncNote" style="display:none; width:100%; margin-top:14px;">
-          🚫 บันทึก "Do Not Contact" แล้ว — หยุด Automation การขายทันที เราจะไม่รบกวนคุณอีกค่ะ
         </div>
         <button class="btn btn-ghost" style="margin-top:20px;" onclick="restart()">↻ ดูต้นแบบใหม่อีกครั้ง</button>
       </div>
@@ -183,7 +161,6 @@ function resetState(){
   state.single    = {};   // { secId: value }
   state.open      = {};   // { questionId: text }
   state.nps       = null;
-  state.dnc       = false;
 }
 resetState();
 
@@ -418,11 +395,10 @@ function toggleMulti(secId,opt,excl,el){
   flashSave(); updateProgress();
 }
 
-/* ---- single-select (chips) + Do Not Contact handling ---- */
+/* ---- single-select (chips) ---- */
 function renderSingle(sec){
   const wrap=document.createElement('div'); wrap.className='q-block';
-  wrap.innerHTML=`<div class="q-title">${sec.title}</div><div class="chips" id="chips-${sec.id}"></div>
-    <div id="dnc-${sec.id}"></div>`;
+  wrap.innerHTML=`<div class="q-title">${sec.title}</div><div class="chips" id="chips-${sec.id}"></div>`;
   const box=wrap.querySelector('#chips-'+sec.id);
   sec.options.forEach(opt=>{
     const c=document.createElement('button'); c.className='chip'; c.textContent=opt;
@@ -435,13 +411,6 @@ function pickSingle(sec,opt,el){
   state.single[sec.id]=opt;
   el.parentElement.querySelectorAll('.chip').forEach(c=>c.classList.remove('sel'));
   el.classList.add('sel');
-  // Do Not Contact
-  if(sec.dncOption){
-    const isDnc = opt===sec.dncOption;
-    state.dnc = isDnc;
-    document.getElementById('dnc-'+sec.id).innerHTML = isDnc
-      ? `<div class="dnc-badge">🚫 บันทึก "Do Not Contact" — เราจะหยุดติดต่อเพื่อการขายทันทีค่ะ</div>` : '';
-  }
   flashSave(); updateProgress();
 }
 
@@ -565,9 +534,6 @@ function submitSurvey(){
   const wantContact = !!state.wantContact ||
     (Object.keys(state.single).some(k=>k.endsWith('_level') && state.single[k] && state.single[k]!=='ไม่ต้องติดต่อกลับ'));
   document.getElementById('contactBackNote').style.display = wantContact?'block':'none';
-  document.getElementById('dncNote').style.display = state.dnc?'flex':'none';
-  // รางวัล (mock) — ให้เพราะทำครบเสมอ ไม่เกี่ยวกับคะแนนที่ให้
-  document.getElementById('rewardCode').textContent = 'NOVA' + Math.floor(1000 + Math.random()*9000);
   show('s-confirm');
 }
 function restart(){ resetState(); show('s-loading'); startLoading(); }

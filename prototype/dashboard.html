@@ -28,7 +28,6 @@
   .st-done{ background:var(--green-bg); color:#166534; }
   .st-noreply{ background:var(--amber-bg); color:#92400e; }
   .st-autoremind{ background:#fef3c7; color:#92400e; border:1px solid #f59e0b; }
-  .st-dnc{ background:var(--red-bg); color:var(--red); }
   .st-called{ background:var(--green-bg); color:#166534; margin-top:4px; }
   .dlv-call{ border:1px solid var(--blue-500); background:#fff; color:var(--blue-600);
     font-family:inherit; font-size:12px; font-weight:700; padding:6px 10px; border-radius:8px; cursor:pointer; white-space:nowrap; }
@@ -458,7 +457,7 @@
     salesLost:  { txt:'🤝 เซล (Lost)',   oa:'sale' }
   };
   const TODAY = '15/07/2569';
-  // st: autoremind | responded | noreply | dnc
+  // st: autoremind | responded | noreply
   //   noreply     = ยังไม่ประเมิน (รวมส่งแล้ว/เปิดอ่านแล้ว — ไม่แยก)
   //   autoremind  = ยังไม่ประเมิน แต่ระบบเตือน LINE อัตโนมัติไปแล้ว 1 ครั้ง (หลัง 1 วัน) — ไม่มีเตือนซ้ำด้วยมือ
   //   called (บันทึกในหน้า) = นักบัญชีโทรตามเองแล้ว (คนละช่องกับเตือน LINE)
@@ -469,13 +468,12 @@
     { co:'หจก. บ้านสวนฟาร์ม',       kind:'accountant', date:'01/07/2569', round:'ก.ค. 2569', st:'autoremind', tel:'086-555-7788' },
     { co:'บจก. ภูผาการช่าง',        kind:'office',     date:'01/07/2569', round:'Q2/2569',    st:'responded', tel:'081-888-4455' },
     { co:'บจก. เอ็นเทคโซลูชั่น',    kind:'accountant', date:'01/07/2569', round:'ก.ค. 2569', st:'noreply',    tel:'090-222-3344' },
-    { co:'หจก. สมหวังค้าไม้',       kind:'accountant', date:'01/07/2569', round:'ก.ค. 2569', st:'dnc',        tel:'—' }
+    { co:'หจก. สมหวังค้าไม้',       kind:'accountant', date:'01/07/2569', round:'ก.ค. 2569', st:'noreply',    tel:'082-777-9900' }
   ];
   const ST_BADGE = {
     autoremind: { cls:'st-autoremind', txt:'🔔 เตือนอัตโนมัติแล้ว' },
     responded:  { cls:'st-done',       txt:'✅ ประเมินแล้ว' },
-    noreply:    { cls:'st-noreply',    txt:'🟠 ยังไม่ประเมิน' },
-    dnc:        { cls:'st-dnc',        txt:'🔴 ขอไม่รับ (DNC)' }
+    noreply:    { cls:'st-noreply',    txt:'🟠 ยังไม่ประเมิน' }
   };
   const PENDING = ['noreply','autoremind'];   // ยังไม่ประเมิน (โทรตามได้)
   let dlvFilter = 'all';
