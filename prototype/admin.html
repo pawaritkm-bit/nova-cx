@@ -41,6 +41,8 @@
     background:var(--blue-bg); color:var(--navy-800); }
   .pill.gray{ background:#eef2f8; color:var(--muted); }
   .pill.old{ background:#f1f5f9; color:var(--muted-2); text-decoration:line-through; }
+  .pill.oa-care{ background:var(--blue-bg); color:var(--navy-800); }
+  .pill.oa-sale{ background:#dcfce7; color:#166534; }
 
   .hist{ font-size:12.5px; color:var(--muted); }
   .hist .h-row{ padding:6px 0; border-bottom:1px dashed var(--line); }
@@ -94,6 +96,29 @@
     </div>
 
     <div class="team-grid" id="teamGrid"></div>
+
+    <!-- สร้างทีมบัญชีใหม่ -->
+    <div class="card" style="margin-top:16px; border:1.5px dashed var(--blue-500); background:#f5f9ff;">
+      <div class="section-title">＋ สร้างทีมบัญชีใหม่ <span class="mock-tag">mock — ไม่บันทึกจริง</span></div>
+      <p style="font-size:13px; color:var(--muted); margin-top:0;">
+        เปิดทีมใหม่พร้อมกำหนดหัวหน้าทีม (และลูกทีมเริ่มต้นถ้ามี) — ทีมใหม่จะมีปุ่มจัดการเหมือนทีมอื่น</p>
+      <button class="btn btn-primary" onclick="toggleForm('newteam')">＋ สร้างทีมบัญชีใหม่</button>
+
+      <div class="inline-form" id="form-newteam" style="margin-top:12px;">
+        <label class="field-label" style="margin-top:0;">ชื่อทีม</label>
+        <input id="ntName" placeholder="เช่น ทีมบัญชี C">
+        <label class="field-label">หัวหน้าทีม (เลือกจากพนักงาน หรือพิมพ์ชื่อเพิ่ม)</label>
+        <select id="ntLead"></select>
+        <input id="ntLeadCustom" placeholder="หรือพิมพ์ชื่อหัวหน้าทีมใหม่ (เว้นว่างถ้าเลือกจากรายการ)">
+        <label class="field-label">ลูกทีมเริ่มต้น (ออปชัน — คั่นชื่อด้วยเครื่องหมาย , )</label>
+        <input id="ntMembers" placeholder="เช่น มิว, โบ๊ท (เว้นว่างได้)">
+        <label class="field-label">มีผลตั้งแต่</label>
+        <input id="ntFrom" placeholder="มีผลตั้งแต่" value="">
+        <button class="btn btn-primary" onclick="createTeam()">สร้างทีม</button>
+        <p style="font-size:12px; color:var(--muted); margin:8px 0 0;">
+          mock — ระบบจริงบันทึกลง <code>teams</code> + <code>team_members</code> แบบ effective-dated (เก็บประวัติ)</p>
+      </div>
+    </div>
 
     <div class="card" style="margin-top:16px;">
       <div class="section-title">🕓 ประวัติการเปลี่ยนแปลงโครงสร้างทีม (effective-dated)</div>
@@ -169,6 +194,7 @@
     <div class="note-box" style="margin-bottom:16px; background:var(--amber-bg); color:var(--navy-900);">
       <b>⚙️ กติกาการส่งอัตโนมัติ</b>
       <ul style="margin:8px 0 0; padding-left:18px; line-height:1.85;">
+        <li>ระบบเชื่อม <b>2 LINE OA</b>: <span class="pill oa-care">💙 OA Care</span> (ประเมินสำนักงาน + พนักงานทีมบัญชี) และ <span class="pill oa-sale">🤝 OA Sale</span> (ประเมินเซล ขายได้/ขายไม่ได้) — ลูกค้าจะได้รับแบบประเมินผ่าน OA ที่ตรงกับเรื่องนั้น</li>
         <li>หลังลูกค้าแอด LINE OA เป็นเพื่อน → ระบบส่งแบบประเมินเข้าแชทให้อัตโนมัติ (เริ่มที่<b>สำนักงาน</b>) แล้วเข้ารอบส่งต่อไป</li>
         <li><b>สำนักงาน</b> = ทุก 3 เดือน · <b>นักบัญชี</b> = ทุกต้นเดือน · <b>เซล</b> = ครั้งเดียวจบต่อ 1 ดีล (ไม่วนซ้ำ)</li>
         <li>แบบประเมิน<b>สำนักงาน</b> = ส่งเข้า<b>กลุ่ม LINE</b> (มีนักบัญชี+ลูกค้า) ทุก 3 เดือน — ประเมินภาพรวมสำนักงาน</li>
@@ -186,7 +212,7 @@
           </tr></thead>
           <tbody>
             <tr>
-              <td><b>🏢 สำนักงานบัญชี</b></td>
+              <td><b>🏢 สำนักงานบัญชี</b><br><span class="pill oa-care">💙 OA Care</span></td>
               <td>👥 <b>กลุ่ม LINE</b> (นักบัญชี+ลูกค้าอยู่ด้วยกัน)</td>
               <td>ส่งอัตโนมัติทุก 3 เดือน <span class="pill">วนซ้ำ</span></td>
               <td><code>survey.html?eval=office</code></td>
@@ -194,7 +220,7 @@
                      href="survey.html?eval=office" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
             </tr>
             <tr>
-              <td><b>🧮 นักบัญชี (ทีมที่ดูแล)</b></td>
+              <td><b>🧮 นักบัญชี (ทีมที่ดูแล)</b><br><span class="pill oa-care">💙 OA Care</span></td>
               <td>🔒 <b>แชตส่วนตัวลูกค้า (1:1)</b> โดยตรง</td>
               <td>ส่งอัตโนมัติทุกเดือน — ต้นเดือน <span class="pill">วนซ้ำ</span></td>
               <td><code>survey.html?eval=accountant</code></td>
@@ -202,7 +228,7 @@
                      href="survey.html?eval=accountant" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
             </tr>
             <tr>
-              <td><b>🤝 เซล (ขายได้ · Won)</b></td>
+              <td><b>🤝 เซล (ขายได้ · Won)</b><br><span class="pill oa-sale">🤝 OA Sale</span></td>
               <td>🔒 <b>แชตส่วนตัวลูกค้า (1:1)</b></td>
               <td>ส่งครั้งเดียวหลังปิดการขายได้ (เว้น 1–3 วัน) <span class="pill gray">ไม่วนซ้ำ</span></td>
               <td><code>survey.html?eval=sales&amp;case=won</code></td>
@@ -210,7 +236,7 @@
                      href="survey.html?eval=sales&case=won" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
             </tr>
             <tr>
-              <td><b>🤝 เซล (ขายไม่ได้ · Lost)</b></td>
+              <td><b>🤝 เซล (ขายไม่ได้ · Lost)</b><br><span class="pill oa-sale">🤝 OA Sale</span></td>
               <td>🔒 <b>แชตส่วนตัวลูกค้า (1:1)</b></td>
               <td>ส่งครั้งเดียวหลังปิด Lost <span class="pill gray">ไม่วนซ้ำ</span></td>
               <td><code>survey.html?eval=sales&amp;case=lost</code></td>
@@ -258,6 +284,8 @@ let BINDINGS = [
   { company:'หจก. บ้านสวนฟาร์ม',       team:'B', members:['กล้า','มิ้น'], from:'01/01/2569' }
 ];
 const COMPANIES = ['บจก. สยามเทรดดิ้ง','บจก. รุ่งเรืองพาณิชย์','หจก. บ้านสวนฟาร์ม','บจก. ดีดีมาร์เก็ตติ้ง','ร้านกาแฟบ้านสวน'];
+// พนักงานที่พร้อมเป็นหัวหน้าทีม (mock pool สำหรับสร้างทีมใหม่)
+const LEAD_POOL = ['พี่กานต์','พี่โอ๋','พี่ปุ๋ย','พี่มด'];
 
 /* ---- ตัวสลับ view ---- */
 document.querySelectorAll('#admSwitch button').forEach(b=>{
@@ -367,6 +395,40 @@ function moveMember(code){
   renderTeams(); refreshBindForm();
 }
 
+/* ---- สร้างทีมใหม่ ---- */
+function nextTeamKey(){
+  let c = Math.max.apply(null, Object.keys(TEAMS).map(k=>k.charCodeAt(0))) + 1;
+  while(TEAMS[String.fromCharCode(c)]) c++;
+  return String.fromCharCode(c);
+}
+function fillNewTeamForm(){
+  document.getElementById('ntLead').innerHTML =
+    LEAD_POOL.map(n=>`<option value="${n}">${n}</option>`).join('');
+  document.getElementById('ntFrom').value = TODAY;
+}
+function createTeam(){
+  const name=(document.getElementById('ntName').value||'').trim();
+  const custom=(document.getElementById('ntLeadCustom').value||'').trim();
+  const leadNick = custom || document.getElementById('ntLead').value;
+  const memRaw=(document.getElementById('ntMembers').value||'').trim();
+  const from=document.getElementById('ntFrom').value||TODAY;
+  if(!name){ alert('กรอกชื่อทีมก่อนนะคะ'); return; }
+  if(!leadNick){ alert('เลือกหรือพิมพ์ชื่อหัวหน้าทีมก่อนนะคะ'); return; }
+  const members = memRaw
+    ? memRaw.split(',').map(s=>s.trim()).filter(Boolean).map(n=>({ nick:n, pos:'Accounting Staff (ใหม่)' }))
+    : [];
+  const key=nextTeamKey();
+  TEAMS[key]={ name, lead:{ nick:leadNick, pos:'Senior Accountant / หัวหน้าทีม' }, members };
+  logTeam(`สร้างทีมใหม่ <b>${name}</b> — หัวหน้าทีม <b>${leadNick}</b>` +
+    (members.length ? ' + ลูกทีม ' + members.map(m=>m.nick).join(', ') : ' (ยังไม่มีลูกทีม)'), from);
+  renderTeams(); refreshBindForm();
+  // เคลียร์ + ปิดฟอร์ม
+  document.getElementById('ntName').value='';
+  document.getElementById('ntLeadCustom').value='';
+  document.getElementById('ntMembers').value='';
+  document.getElementById('form-newteam').classList.remove('open');
+}
+
 /* ============================================================
    VIEW B: ผูกบริษัท ↔ ผู้ดูแล
    ============================================================ */
@@ -434,6 +496,7 @@ function saveBinding(){
 
 /* ---- init ---- */
 renderTeams();
+fillNewTeamForm();
 renderBindTable();
 fillBindForm();
 </script>

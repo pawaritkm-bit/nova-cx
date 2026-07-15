@@ -38,6 +38,7 @@
 - FR-SC-07 Queue + Scheduler + Failed Job Retry + บันทึก delivery status
 
 ### 1.3 LINE OA / LIFF
+- FR-LN-00 **2 LINE OA (decision ผู้ใช้ 2026-07-15):** OA "Care" = ประเมินสำนักงาน(A)+พนักงานทีมบัญชี(B); OA "Sale" = ประเมินเซล ขายได้(C)+ขายไม่ได้(D) → ต้องมี channel credential 2 ชุด (Care/Sale ใน .env), webhook/LIFF แยกต่อ OA, และ routing ว่าฟอร์มไหนส่งผ่าน OA ไหน
 - FR-LN-01 LINE Login ลูกค้า + เปิดแบบประเมินผ่าน LIFF ทันที
 - FR-LN-02 ช่องทางเข้า: Rich Menu, Flex Message, LIFF, QR, แจ้งเตือนอัตโนมัติ, พนักงานส่งให้
 - FR-LN-03 Rich Menu 6 เมนู (ประเมิน/แจ้งปัญหาด่วน/ติดต่อทีม/ตรวจสถานะเรื่องร้องเรียน/FAQ/PDPA)
