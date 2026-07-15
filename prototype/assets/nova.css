@@ -113,6 +113,19 @@ h1, h2, h3, h4 { margin: 0 0 .4em; line-height: 1.3; }
   0%,100% { transform: rotate(26deg); }
   50%     { transform: rotate(-26deg); }
 }
+/* ---- ท่าวิ่งสไตล์น้องโซโซ่ (loaderScene แบบ C) — คลาสใหม่ nv-* ไม่แตะของเดิม ---- */
+@keyframes nv-bob   { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(-9px);} }
+@keyframes nv-legA  { 0%,100%{ transform: rotate(26deg);}  50%{ transform: rotate(-26deg);} }
+@keyframes nv-legB  { 0%,100%{ transform: rotate(-26deg);} 50%{ transform: rotate(26deg);} }
+@keyframes nv-armS  { 0%,100%{ transform: rotate(-10deg);} 50%{ transform: rotate(12deg);} }
+@keyframes nv-dust  { 0%{ opacity:.5; transform: translateX(0) scale(.6);} 100%{ opacity:0; transform: translateX(-30px) scale(1.4);} }
+.nv-bob  { animation: nv-bob .44s ease-in-out infinite; transform-origin:center; }
+.nv-leg  { transform-box: fill-box; transform-origin: top center; }
+.nv-legA { animation: nv-legA .44s ease-in-out infinite; }
+.nv-legB { animation: nv-legB .44s ease-in-out infinite; }
+.nv-arm  { transform-box: fill-box; transform-origin: top center; animation: nv-armS .44s ease-in-out infinite; }
+.nv-dust { animation: nv-dust .5s linear infinite; }
+@media (prefers-reduced-motion:reduce){ .nv-bob,.nv-legA,.nv-legB,.nv-arm,.nv-dust{ animation:none!important; } }
 /* เอกสาร/ใบเสร็จปลิวด้านหลัง */
 .nova-doc { position:absolute; width:26px; height:32px; background:#fff; border:1.5px solid var(--line);
   border-radius:3px; z-index:1; box-shadow:var(--shadow-sm); }
