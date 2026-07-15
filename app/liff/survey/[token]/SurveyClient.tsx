@@ -493,22 +493,12 @@ function QuestionField({
       </label>
 
       {question.type === "rating" && (
-        <div className="flex gap-2">
-          {Array.from({ length: scale }, (_, i) => i + 1).map((n) => (
-            <button
-              key={n}
-              type="button"
-              onClick={() => onChange(n)}
-              className={`w-10 h-10 rounded-full border font-semibold ${
-                value === n
-                  ? "bg-brand-light text-white border-brand-light"
-                  : "border-brand/30 text-brand"
-              }`}
-            >
-              {n}
-            </button>
-          ))}
-        </div>
+        <RatingStars
+          scale={scale}
+          value={typeof value === "number" ? value : null}
+          options={question.options}
+          onChange={onChange}
+        />
       )}
 
       {question.type === "nps" && (
@@ -598,6 +588,80 @@ function QuestionField({
             value={typeof followupValue === "string" ? followupValue : ""}
             onChange={(e) => onFollowupChange(e.target.value)}
           />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==========================================================================
+// Rating ดาว (presentation-only — ค่าที่ส่ง/เก็บยังเป็น number 1..scale เหมือนเดิม)
+// ==========================================================================
+
+// ป้ายระดับ default (1=ไม่พอใจมาก … 5=พอใจมาก) — ใช้เมื่อ template ไม่ได้ระบุ label
+const DEFAULT_RATING_LABELS: Record<number, string> = {
+  1: "ไม่พอใจมาก",
+  2: "ไม่พอใจ",
+  3: "เฉยๆ",
+  4: "พอใจ",
+  5: "พอใจมาก",
+};
+
+/** หา label ของคะแนน n: ใช้จาก template options ถ้ามี (value ตรงกับเลข) ไม่งั้น default */
+function ratingLabel(n: number, options?: Option[]): string {
+  const opt = (options ?? []).find((o) => o.value === String(n));
+  return opt?.label ?? DEFAULT_RATING_LABELS[n] ?? String(n);
+}
+
+function StarIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={`w-8 h-8 ${filled ? "text-status-medium" : "text-brand/25"}`}
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M12 2.5l2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.9l-5.8 3.05 1.1-6.46-4.69-4.58 6.49-.94L12 2.5z" />
+    </svg>
+  );
+}
+
+function RatingStars({
+  scale,
+  value,
+  options,
+  onChange,
+}: {
+  scale: number;
+  value: number | null;
+  options?: Option[];
+  onChange: (v: number) => void;
+}) {
+  // จำนวนดาว = scale จาก template (ไม่งั้น default 5 ถูกเซ็ตไว้ที่ผู้เรียก)
+  const stars = Array.from({ length: scale }, (_, i) => i + 1);
+  return (
+    <div>
+      <div role="radiogroup" aria-label="ให้คะแนนความพึงพอใจ" className="flex gap-1">
+        {stars.map((n) => {
+          const filled = value !== null && n <= value; // เติมสีถึงดาวที่เลือก
+          return (
+            <button
+              key={n}
+              type="button"
+              role="radio"
+              aria-checked={value === n}
+              aria-label={`${n} ดาว — ${ratingLabel(n, options)}`}
+              onClick={() => onChange(n)}
+              className="w-11 h-11 flex items-center justify-center rounded-lg touch-manipulation focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-light"
+            >
+              <StarIcon filled={filled} />
+            </button>
+          );
+        })}
+      </div>
+      {value !== null && (
+        <div className="text-xs text-brand/70 mt-1" aria-live="polite">
+          {value} ดาว · {ratingLabel(value, options)}
         </div>
       )}
     </div>

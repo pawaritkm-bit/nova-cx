@@ -6,10 +6,9 @@
 <title>NOVA-CX — Dashboard (ต้นแบบ)</title>
 <link rel="stylesheet" href="assets/nova.css">
 <style>
-  /* rating แบบกะทัดรัดเฉพาะฟอร์มประเมินนักบัญชี (ไม่กระทบ .rating ของ survey) */
-  #reviewForm .q-block{ margin-bottom:10px; }
-  #reviewForm .rating{ flex-direction:row; flex-wrap:wrap; gap:6px; }
-  #reviewForm .rate-btn{ width:auto; flex:1 1 52px; min-height:42px; justify-content:center; gap:0; }
+  /* ดาวให้คะแนนแบบกะทัดรัดเฉพาะฟอร์มประเมินนักบัญชี (ใช้ .star จาก nova.css) */
+  #reviewForm .q-block{ margin-bottom:12px; }
+  #reviewForm .star{ font-size:30px; }
 
   /* Delivery & Response Tracking (scoped) */
   .dlv-filter{ display:inline-flex; flex-wrap:wrap; gap:6px; }
@@ -405,6 +404,8 @@
     'การพัฒนาตนเอง / เรียนรู้',
     'ความสม่ำเสมอของผลงาน'
   ];
+  // ป้ายระดับสำหรับ Internal Review (บริบทประเมินผลงานลูกทีม)
+  const REVIEW_LABELS = {1:'ต้องปรับปรุงมาก',2:'ต้องปรับปรุง',3:'พอใช้',4:'ดี',5:'ดีมาก'};
   // เก็บคะแนน mock แยกตามนักบัญชี
   const reviewScores = { 0:{}, 1:{} };
   let curMem = 0;
@@ -418,21 +419,25 @@
     const mount=document.getElementById('reviewForm'); mount.innerHTML='';
     REVIEW_CRITERIA.forEach((c,ci)=>{
       const block=document.createElement('div'); block.className='q-block';
-      let btns='';
+      const chosen = reviewScores[curMem][ci];
+      let stars='';
       for(let v=1; v<=5; v++){
-        const sel = reviewScores[curMem][ci]===v ? ' sel' : '';
-        btns+=`<button class="rate-btn${sel}" onclick="setReview(${ci},${v},this)"><span class="num">${v}</span></button>`;
+        const on = (chosen && v<=chosen) ? ' on' : '';
+        stars+=`<button type="button" class="star${on}" data-v="${v}" aria-label="${v} ดาว (${REVIEW_LABELS[v]})" onclick="setReview(${ci},${v},this)">★</button>`;
       }
+      const lblTxt = chosen ? (chosen+' ★ · '+REVIEW_LABELS[chosen]) : 'แตะดาวเพื่อให้คะแนน';
       block.innerHTML=`<div class="q-title" style="font-size:14px;">${ci+1}. ${c}</div>
-        <div class="rating">${btns}</div>`;
+        <div class="star-rating"><div class="stars" data-crit="${ci}">${stars}</div>
+        <span class="star-label${chosen?' chosen':''}" id="rv-lbl-${ci}">${lblTxt}</span></div>`;
       mount.appendChild(block);
     });
     updateReviewAvg();
   }
   function setReview(ci,v,el){
     reviewScores[curMem][ci]=v;
-    el.parentElement.querySelectorAll('.rate-btn').forEach(b=>b.classList.remove('sel'));
-    el.classList.add('sel');
+    el.parentElement.querySelectorAll('.star').forEach(s=>s.classList.toggle('on', (+s.dataset.v)<=v));
+    const lbl=document.getElementById('rv-lbl-'+ci);
+    if(lbl){ lbl.textContent=v+' ★ · '+REVIEW_LABELS[v]; lbl.classList.add('chosen'); }
     updateReviewAvg();
   }
   function updateReviewAvg(){

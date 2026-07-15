@@ -317,7 +317,7 @@ function renderRef(sec){
   return wrap;
 }
 
-/* ---- ratings (1-5 + conditional follow-up) — รองรับซอยเป็นตอน (part/parts) ---- */
+/* ---- ratings (คะแนน 1–5 = ดาว 5 ดวง + conditional follow-up) — รองรับซอยเป็นตอน (part/parts) ---- */
 function renderRatings(sec, items, part, parts){
   items = items || sec.items;
   const wrap=document.createElement('div');
@@ -325,23 +325,37 @@ function renderRatings(sec, items, part, parts){
   let html=`<h3 style="color:var(--navy-800); margin-top:8px;">${sec.title}${partTag}</h3>`;
   if(sec.hint) html+=`<p style="font-size:12px; color:var(--muted); margin-top:-4px;">${sec.hint}</p>`;
   items.forEach(q=>{
-    let btns='';
+    let stars='';
     for(let i=1;i<=5;i++){
-      btns+=`<button class="rate-btn" data-q="${q.code}" data-v="${i}" onclick="pickRate('${q.code}',${i},this)">
-                <span class="num">${i}</span><span class="lbl">${rateLabels[i]}</span></button>`;
+      stars+=`<button type="button" class="star" data-q="${q.code}" data-v="${i}" aria-label="${i} ดาว (${rateLabels[i]})"
+                onclick="pickRate('${q.code}',${i},this)" onmouseover="hoverStar('${q.code}',${i})">★</button>`;
     }
     html+=`<div class="q-block"><div class="q-title">${q.text}</div>
-            <div class="rating">${btns}</div><div id="fu-${q.code}"></div></div>`;
+            <div class="star-rating">
+              <div class="stars" data-q="${q.code}" onmouseleave="clearHover('${q.code}')">${stars}</div>
+              <span class="star-label" id="lbl-${q.code}">แตะดาวเพื่อให้คะแนน</span>
+            </div>
+            <div id="fu-${q.code}"></div></div>`;
   });
   wrap.innerHTML=html;
   return wrap;
 }
 function pickRate(code,val,el){
   state.ratings[code]=val;
-  el.parentElement.querySelectorAll('.rate-btn').forEach(b=>b.classList.remove('sel'));
-  el.classList.add('sel');
+  el.parentElement.querySelectorAll('.star').forEach(s=>s.classList.toggle('on', (+s.dataset.v)<=val));
+  const lbl=document.getElementById('lbl-'+code);
+  if(lbl){ lbl.textContent=val+' ★ · '+rateLabels[val]; lbl.classList.add('chosen'); }
   renderFollowup(code,val);
   flashSave(); updateProgress();
+}
+/* preview เติมดาวตอน hover (เดสก์ท็อป) — ไม่แตะ state จริง */
+function hoverStar(code,val){
+  const row=document.querySelector('.stars[data-q="'+code+'"]');
+  if(row) row.querySelectorAll('.star').forEach(s=>s.classList.toggle('hovered', (+s.dataset.v)<=val));
+}
+function clearHover(code){
+  const row=document.querySelector('.stars[data-q="'+code+'"]');
+  if(row) row.querySelectorAll('.star').forEach(s=>s.classList.remove('hovered'));
 }
 function renderFollowup(code,val){
   const mount=document.getElementById('fu-'+code);
