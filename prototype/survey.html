@@ -10,9 +10,10 @@
   .toolbar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:center; }
   .toolbar a{ font-size:13px; }
   .screen{ display:none; }
-  .screen.active{ display:block; }
-  .center-col{ display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%;
-    text-align:center; padding:24px; }
+  /* active screen = flex column ที่เต็มพื้นที่ frame → ให้ .liff-body (flex:1 + min-height:0) scroll ได้จริง */
+  .screen.active{ display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
+  .center-col{ display:flex; flex-direction:column; align-items:center; justify-content:center;
+    flex:1 1 auto; min-height:0; overflow-y:auto; text-align:center; padding:24px; }
 
   /* ---- wizard step (แสดงทีละขั้น) ---- */
   .wizard-step{ display:none; }

@@ -161,9 +161,18 @@
   <div class="adm-view" id="view-forms">
 
     <div class="note-box" style="margin-bottom:16px;">
-      📌 ระบบจะ<b>ส่งแบบประเมินที่ถูกต้องให้ลูกค้าแต่ละคนอัตโนมัติ</b> ตามรอบ/สถานะ (เช่น รายเดือน,
-      หลังปิดการขาย Won/Lost) — <b>ลูกค้าไม่ได้เลือกชนิดแบบประเมินเอง</b> และจะเห็นเพียงแบบเดียวของตัวเอง
-      ผ่านลิงก์ invitation. หน้านี้ไว้ให้ทีม<b>พรีวิว/ตรวจสอบ</b>แต่ละชนิดในมุมมองลูกค้า
+      📌 ระบบจะ<b>ส่งแบบประเมินที่ถูกต้องให้ลูกค้าแต่ละคนอัตโนมัติ</b> ตามรอบ/สถานะ —
+      <b>ลูกค้าไม่ได้เลือกชนิดแบบประเมินเอง</b> และจะเห็นเพียงแบบเดียวของตัวเองผ่านลิงก์ invitation.
+      หน้านี้ไว้ให้ทีม<b>พรีวิว/ตรวจสอบ</b>แต่ละชนิดในมุมมองลูกค้า
+    </div>
+
+    <div class="note-box" style="margin-bottom:16px; background:var(--amber-bg); color:var(--navy-900);">
+      <b>⚙️ กติกาการส่งอัตโนมัติ</b>
+      <ul style="margin:8px 0 0; padding-left:18px; line-height:1.85;">
+        <li>หลังลูกค้าแอด LINE OA เป็นเพื่อน → ระบบส่งแบบประเมินเข้าแชทให้อัตโนมัติ (เริ่มที่<b>สำนักงาน</b>) แล้วเข้ารอบส่งต่อไป</li>
+        <li><b>สำนักงาน</b> = ทุก 3 เดือน · <b>นักบัญชี</b> = ทุกต้นเดือน · <b>เซล</b> = ครั้งเดียวจบต่อ 1 ดีล (ไม่วนซ้ำ)</li>
+        <li>ระบบส่งเองอัตโนมัติจากรอบ/สถานะจริง — <b>พนักงาน/ลูกค้าไม่ได้เลือกส่งเอง</b>; มีกันส่งซ้ำในรอบ/ดีลเดียว</li>
+      </ul>
     </div>
 
     <div class="card">
@@ -176,28 +185,28 @@
           <tbody>
             <tr>
               <td><b>🏢 สำนักงานบัญชี</b></td>
-              <td>ทุก 3 เดือน (ตามรอบ)</td>
+              <td>ส่งอัตโนมัติทุก 3 เดือน <span class="pill">วนซ้ำ</span></td>
               <td><code>survey.html?eval=office</code></td>
               <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
                      href="survey.html?eval=office" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
             </tr>
             <tr>
               <td><b>🧮 นักบัญชี (ทีมที่ดูแล)</b></td>
-              <td>รายเดือน — ผูกผู้ดูแลอัตโนมัติ</td>
+              <td>ส่งอัตโนมัติทุกเดือน — ต้นเดือน <span class="pill">วนซ้ำ</span></td>
               <td><code>survey.html?eval=accountant</code></td>
               <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
                      href="survey.html?eval=accountant" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
             </tr>
             <tr>
-              <td><b>🤝 เซลล์ (ขายได้)</b></td>
-              <td>หลังยืนยันซื้อ (Won)</td>
+              <td><b>🤝 เซล (ขายได้ · Won)</b></td>
+              <td>ส่งครั้งเดียวหลังปิดการขายได้ (เว้น 1–3 วัน) <span class="pill gray">ไม่วนซ้ำ</span></td>
               <td><code>survey.html?eval=sales&amp;case=won</code></td>
               <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
                      href="survey.html?eval=sales&case=won" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
             </tr>
             <tr>
-              <td><b>🤝 เซลล์ (ขายไม่ได้)</b></td>
-              <td>หลังปิดสถานะ Lost</td>
+              <td><b>🤝 เซล (ขายไม่ได้ · Lost)</b></td>
+              <td>ส่งครั้งเดียวหลังปิด Lost <span class="pill gray">ไม่วนซ้ำ</span></td>
               <td><code>survey.html?eval=sales&amp;case=lost</code></td>
               <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
                      href="survey.html?eval=sales&case=lost" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
