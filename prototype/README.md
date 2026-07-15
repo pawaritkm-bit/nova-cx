@@ -23,13 +23,13 @@ open /Users/momie/Downloads/nova-cx/prototype/index.html
 | `assets/nova.css` | Design System (สีแบรนด์ Finovas น้ำเงินเข้ม, ปุ่มใหญ่, mobile frame, dashboard) |
 | `assets/mascot.js` | Mascot น้อง NOVA วาดด้วย inline SVG (`NOVA.full/icon/profile/loaderScene`) |
 
-## Mascot — น้อง NOVA
-นกอินทรีใส่แว่นกรอบน้ำเงิน สูทน้ำเงินเข้ม เนกไทฟ้า ถือเครื่องคิดเลข — ตากลมโต ยิ้ม แก้มชมพู
-บุคลิกฉลาด เป็นมิตร น่าเชื่อถือ ไม่ดุ (ออกแบบใหม่ทั้งหมด ไม่ลอกแบรนด์อื่น)
-4 แบบ: Full Character / Icon / Profile (วงกลม) / Loading Animation
+## Mascot — น้อง NOVA (คาปิบาร่า)
+**คาปิบาร่า (capybara)** หัวโต จมูกใหญ่ หูกลมเล็ก ฟันหน้าคู่ ขนสีน้ำตาลอมส้ม — ใส่สูทน้ำเงินเข้มแบรนด์ Finovas เชิ้ตขาว ผูกไทฟ้า ถือเครื่องคิดเลข ตากลมโตมีประกาย ยิ้ม แก้มชมพูจาง (ฉลาด เป็นมิตร น่าเชื่อถือ ไม่ดุ)
+**ออกแบบขึ้นใหม่ทั้งหมดด้วย inline SVG ล้วน — ไม่ลอกตัวละคร/รูปแบรนด์อื่น (ข้อกำหนด C-05)**
+4 แบบ ใช้ชิ้นส่วนหัวเดียวกัน: Full Character / Icon / Profile (วงกลม) / Loading Animation
 
 ## สิ่งที่กดดูได้จริงในต้นแบบ
-- Mascot 4 แบบ + Loading animation (นกวิ่ง + เครื่องคิดเลขขยับ + เอกสารปลิว) + ข้อความสลับ 3 แบบ
+- Mascot 4 แบบ + Loading animation (คาปิบาร่าวิ่ง + เครื่องคิดเลขขยับ + เอกสารปลิว) + ข้อความสลับ 3 แบบ
 - PDPA Consent ครบหัวข้อ + หมายเหตุ "ไม่ใช่ Anonymous 100%"
 - แบบประเมิน A: auto-fill read-only → คะแนน 1–5 ปุ่มใหญ่เรียงต่ำ→สูง
 - **Conditional**: 1–2 เด้งหาสาเหตุ + checkbox ติดต่อกลับ / 3 ถามจุดปรับปรุง / 4–5 ถามจุดเด่น
