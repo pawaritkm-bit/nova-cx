@@ -415,6 +415,8 @@
     document.querySelectorAll('#memSwitch button').forEach(b=>b.classList.toggle('active', +b.dataset.mem===i));
     renderReviewForm();
   }
+  /* ดาวมุมมน (rounded star) — inline SVG, สีคุมด้วย CSS .star (currentColor) */
+  const STAR_SVG='<svg viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M12 2.6l2.72 5.51 6.08.88-4.4 4.29 1.04 6.06L12 16.48 6.56 19.34l1.04-6.06-4.4-4.29 6.08-.88z"/></svg>';
   function renderReviewForm(){
     const mount=document.getElementById('reviewForm'); mount.innerHTML='';
     REVIEW_CRITERIA.forEach((c,ci)=>{
@@ -423,7 +425,7 @@
       let stars='';
       for(let v=1; v<=5; v++){
         const on = (chosen && v<=chosen) ? ' on' : '';
-        stars+=`<button type="button" class="star${on}" data-v="${v}" aria-label="${v} ดาว (${REVIEW_LABELS[v]})" onclick="setReview(${ci},${v},this)">★</button>`;
+        stars+=`<button type="button" class="star${on}" data-v="${v}" aria-label="${v} ดาว (${REVIEW_LABELS[v]})" onclick="setReview(${ci},${v},this)">${STAR_SVG}</button>`;
       }
       const lblTxt = chosen ? (chosen+' ★ · '+REVIEW_LABELS[chosen]) : 'แตะดาวเพื่อให้คะแนน';
       block.innerHTML=`<div class="q-title" style="font-size:14px;">${ci+1}. ${c}</div>

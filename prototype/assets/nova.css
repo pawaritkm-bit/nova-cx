@@ -205,8 +205,12 @@ h1, h2, h3, h4 { margin: 0 0 .4em; line-height: 1.3; }
 .star-rating { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
 .stars { display:inline-flex; gap:4px; }
 .star { border:none; background:none; padding:2px; margin:0; line-height:1;
-  font-size:38px; color:#d9dee6; cursor:pointer; transition:transform .1s, color .1s;
-  -webkit-tap-highlight-color:transparent; }
+  font-size:36px; color:#d9dee6; cursor:pointer; transition:transform .1s, color .1s;
+  -webkit-tap-highlight-color:transparent; display:inline-flex; }
+.star svg { display:block; width:1em; height:1em; }
+/* ดาวมุมมน: fill+stroke ใช้ currentColor ให้ CSS เดิมคุมสีได้ / stroke round = ปลายมน */
+.star svg path { fill:currentColor; stroke:currentColor; stroke-width:1.7;
+  stroke-linejoin:round; stroke-linecap:round; }
 .star:hover { transform:scale(1.12); }
 .star:active { transform:scale(.9); }
 .star.hovered { color:#fcd34d; }

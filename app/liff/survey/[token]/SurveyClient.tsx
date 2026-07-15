@@ -619,9 +619,14 @@ function StarIcon({ filled }: { filled: boolean }) {
       viewBox="0 0 24 24"
       className={`w-8 h-8 ${filled ? "text-status-medium" : "text-brand/25"}`}
       fill="currentColor"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinejoin="round"
+      strokeLinecap="round"
       aria-hidden="true"
     >
-      <path d="M12 2.5l2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.9l-5.8 3.05 1.1-6.46-4.69-4.58 6.49-.94L12 2.5z" />
+      {/* ดาวมุมมน: stroke สีเดียวกับ fill + linejoin/linecap round ให้ปลายและมุมโค้งนุ่ม */}
+      <path d="M12 3.2l2.72 5.51 6.08.88-4.4 4.29 1.04 6.05L12 17.57l-5.44 2.86 1.04-6.05-4.4-4.29 6.08-.88L12 3.2z" />
     </svg>
   );
 }

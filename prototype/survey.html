@@ -317,6 +317,8 @@ function renderRef(sec){
   return wrap;
 }
 
+/* ดาวมุมมน (rounded star) — inline SVG, สีคุมด้วย CSS .star (currentColor) */
+const STAR_SVG='<svg viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M12 2.6l2.72 5.51 6.08.88-4.4 4.29 1.04 6.06L12 16.48 6.56 19.34l1.04-6.06-4.4-4.29 6.08-.88z"/></svg>';
 /* ---- ratings (คะแนน 1–5 = ดาว 5 ดวง + conditional follow-up) — รองรับซอยเป็นตอน (part/parts) ---- */
 function renderRatings(sec, items, part, parts){
   items = items || sec.items;
@@ -328,7 +330,7 @@ function renderRatings(sec, items, part, parts){
     let stars='';
     for(let i=1;i<=5;i++){
       stars+=`<button type="button" class="star" data-q="${q.code}" data-v="${i}" aria-label="${i} ดาว (${rateLabels[i]})"
-                onclick="pickRate('${q.code}',${i},this)" onmouseover="hoverStar('${q.code}',${i})">★</button>`;
+                onclick="pickRate('${q.code}',${i},this)" onmouseover="hoverStar('${q.code}',${i})">${STAR_SVG}</button>`;
     }
     html+=`<div class="q-block"><div class="q-title">${q.text}</div>
             <div class="star-rating">
