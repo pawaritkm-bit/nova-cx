@@ -90,7 +90,7 @@
   <div class="adm-view active" id="view-teams">
 
     <div class="note-box" style="margin-bottom:16px;">
-      ℹ️ ทุกการเปลี่ยนแปลง (เพิ่มลูกทีม / เปลี่ยนหัวหน้า / ย้ายทีม) เป็นแบบ
+      ℹ️ ทุกการเปลี่ยนแปลง (เพิ่มนักบัญชี / เปลี่ยนหัวหน้าบัญชี / ย้ายทีม) เป็นแบบ
       <b>มีผลตามวันที่ (effective-dated)</b> — ระบบจริงจะ<b>เก็บประวัติเดิมไว้</b> (ปิดด้วย valid_to)
       เพื่อให้ Feedback ย้อนหลังผูกกับผู้ดูแลที่ดูแลจริง ณ ช่วงเวลานั้น
     </div>
@@ -101,16 +101,16 @@
     <div class="card" style="margin-top:16px; border:1.5px dashed var(--blue-500); background:#f5f9ff;">
       <div class="section-title">＋ สร้างทีมบัญชีใหม่ <span class="mock-tag">mock — ไม่บันทึกจริง</span></div>
       <p style="font-size:13px; color:var(--muted); margin-top:0;">
-        เปิดทีมใหม่พร้อมกำหนดหัวหน้าทีม (และลูกทีมเริ่มต้นถ้ามี) — ทีมใหม่จะมีปุ่มจัดการเหมือนทีมอื่น</p>
+        เปิดทีมใหม่พร้อมกำหนดหัวหน้าบัญชี (และนักบัญชีเริ่มต้นถ้ามี) — ทีมใหม่จะมีปุ่มจัดการเหมือนทีมอื่น</p>
       <button class="btn btn-primary" onclick="toggleForm('newteam')">＋ สร้างทีมบัญชีใหม่</button>
 
       <div class="inline-form" id="form-newteam" style="margin-top:12px;">
         <label class="field-label" style="margin-top:0;">ชื่อทีม</label>
         <input id="ntName" placeholder="เช่น ทีมบัญชี C">
-        <label class="field-label">หัวหน้าทีม (เลือกจากพนักงาน หรือพิมพ์ชื่อเพิ่ม)</label>
+        <label class="field-label">หัวหน้าบัญชี (เลือกจากพนักงาน หรือพิมพ์ชื่อเพิ่ม)</label>
         <select id="ntLead"></select>
-        <input id="ntLeadCustom" placeholder="หรือพิมพ์ชื่อหัวหน้าทีมใหม่ (เว้นว่างถ้าเลือกจากรายการ)">
-        <label class="field-label">ลูกทีมเริ่มต้น (ออปชัน — คั่นชื่อด้วยเครื่องหมาย , )</label>
+        <input id="ntLeadCustom" placeholder="หรือพิมพ์ชื่อหัวหน้าบัญชีใหม่ (เว้นว่างถ้าเลือกจากรายการ)">
+        <label class="field-label">นักบัญชีเริ่มต้น (ออปชัน — คั่นชื่อด้วยเครื่องหมาย , )</label>
         <input id="ntMembers" placeholder="เช่น มิว, โบ๊ท (เว้นว่างได้)">
         <label class="field-label">มีผลตั้งแต่</label>
         <input id="ntFrom" placeholder="มีผลตั้งแต่" value="">
@@ -133,7 +133,7 @@
 
     <div class="note-box" style="margin-bottom:16px;">
       🔗 <b>นี่คือข้อมูลที่แบบประเมิน B (ประเมินนักบัญชี) ดึงไปผูกให้ลูกค้าโดยอัตโนมัติ</b> —
-      ลูกค้าไม่ต้องเลือกเองว่าจะประเมินใคร ระบบจะ snapshot หัวหน้าทีม + ลูกทีมที่ผูกอยู่ ณ วันส่งแบบประเมิน
+      ลูกค้าไม่ต้องเลือกเองว่าจะประเมินใคร ระบบจะ snapshot หัวหน้าบัญชี + นักบัญชีที่ผูกอยู่ ณ วันส่งแบบประเมิน
       แล้วสร้างชุดคำถามต่อคนให้เอง (กันประเมินผิดคน)
     </div>
 
@@ -142,7 +142,7 @@
       <div class="table-wrap">
         <table class="adm" id="bindTable">
           <thead><tr>
-            <th>บริษัท</th><th>ทีม</th><th>หัวหน้าทีม</th><th>ลูกทีมที่ดูแล</th><th>มีผลตั้งแต่</th>
+            <th>บริษัท</th><th>ทีม</th><th>หัวหน้าบัญชี</th><th>นักบัญชีที่ดูแล</th><th>มีผลตั้งแต่</th>
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -158,10 +158,10 @@
       <label class="field-label">2) เลือกทีมที่จะดูแล</label>
       <select id="bTeam"></select>
 
-      <label class="field-label">3) หัวหน้าทีม (ระบบเติมให้อัตโนมัติจากทีม)</label>
+      <label class="field-label">3) หัวหน้าบัญชี (ระบบเติมให้อัตโนมัติจากทีม)</label>
       <input id="bLead" readonly value="" style="background:#eef2f8; font-weight:700; color:var(--navy-800);">
 
-      <label class="field-label">4) เลือกลูกทีมที่ดูแลบริษัทนี้ (เลือกได้หลายคน)</label>
+      <label class="field-label">4) เลือกนักบัญชีที่ดูแลบริษัทนี้ (เลือกได้หลายคน)</label>
       <div class="chk-list" id="bMembers"></div>
 
       <label class="field-label">5) มีผลตั้งแต่วันที่</label>
@@ -271,10 +271,10 @@ const TODAY = '15/07/2569';
 /* ---- ข้อมูล mock ---- */
 const TEAMS = {
   A: { name:'ทีมบัญชี A',
-       lead:{ nick:'พี่แนน', pos:'Senior Accountant / หัวหน้าทีม' },
+       lead:{ nick:'พี่แนน', pos:'Senior Accountant / หัวหน้าบัญชี' },
        members:[ { nick:'ต้น', pos:'Junior Accountant' }, { nick:'ฟ้า', pos:'Accounting Staff (ผู้ประสานงาน)' } ] },
   B: { name:'ทีมบัญชี B',
-       lead:{ nick:'พี่โบว์', pos:'Senior Accountant / หัวหน้าทีม' },
+       lead:{ nick:'พี่โบว์', pos:'Senior Accountant / หัวหน้าบัญชี' },
        members:[ { nick:'กล้า', pos:'Junior Accountant' }, { nick:'มิ้น', pos:'Accounting Staff' } ] }
 };
 
@@ -284,7 +284,7 @@ let BINDINGS = [
   { company:'หจก. บ้านสวนฟาร์ม',       team:'B', members:['กล้า','มิ้น'], from:'01/01/2569' }
 ];
 const COMPANIES = ['บจก. สยามเทรดดิ้ง','บจก. รุ่งเรืองพาณิชย์','หจก. บ้านสวนฟาร์ม','บจก. ดีดีมาร์เก็ตติ้ง','ร้านกาแฟบ้านสวน'];
-// พนักงานที่พร้อมเป็นหัวหน้าทีม (mock pool สำหรับสร้างทีมใหม่)
+// พนักงานที่พร้อมเป็นหัวหน้าบัญชี (mock pool สำหรับสร้างทีมใหม่)
 const LEAD_POOL = ['พี่กานต์','พี่โอ๋','พี่ปุ๋ย','พี่มด'];
 
 /* ---- ตัวสลับ view ---- */
@@ -313,16 +313,16 @@ function renderTeams(){
     const card=document.createElement('div'); card.className='card';
     card.innerHTML=`
       <div class="section-title">🏢 ${t.name} <span class="pill gray">${t.members.length+1} คน</span></div>
-      ${personRow('หัวหน้าทีม', t.lead, 'lead')}
-      ${t.members.map(m=>personRow('ลูกทีม', m)).join('')}
+      ${personRow('หัวหน้าบัญชี', t.lead, 'lead')}
+      ${t.members.map(m=>personRow('นักบัญชี', m)).join('')}
       <div class="adm-actions">
-        <button class="btn btn-ghost" onclick="toggleForm('add-${code}')">+ เพิ่มลูกทีม</button>
-        <button class="btn btn-ghost" onclick="toggleForm('lead-${code}')">🔁 เปลี่ยนหัวหน้า</button>
-        <button class="btn btn-ghost" onclick="toggleForm('move-${code}')">↔ ย้ายลูกทีมไปทีมอื่น</button>
+        <button class="btn btn-ghost" onclick="toggleForm('add-${code}')">+ เพิ่มนักบัญชี</button>
+        <button class="btn btn-ghost" onclick="toggleForm('lead-${code}')">🔁 เปลี่ยนหัวหน้าบัญชี</button>
+        <button class="btn btn-ghost" onclick="toggleForm('move-${code}')">↔ ย้ายนักบัญชีไปทีมอื่น</button>
       </div>
 
       <div class="inline-form" id="form-add-${code}">
-        <input id="addNick-${code}" placeholder="ชื่อเล่นลูกทีมใหม่ เช่น น้ำ">
+        <input id="addNick-${code}" placeholder="ชื่อเล่นนักบัญชีใหม่ เช่น น้ำ">
         <input id="addFrom-${code}" placeholder="มีผลตั้งแต่ (เช่น 01/08/2569)" value="${TODAY}">
         <button class="btn btn-primary" onclick="addMember('${code}')">เพิ่ม</button>
       </div>
@@ -332,7 +332,7 @@ function renderTeams(){
           ${t.members.map(m=>`<option value="${m.nick}">${m.nick}</option>`).join('')}
         </select>
         <input id="leadFrom-${code}" placeholder="มีผลตั้งแต่" value="${TODAY}">
-        <button class="btn btn-primary" onclick="changeLead('${code}')">ตั้งเป็นหัวหน้าใหม่</button>
+        <button class="btn btn-primary" onclick="changeLead('${code}')">ตั้งเป็นหัวหน้าบัญชีใหม่</button>
       </div>
 
       <div class="inline-form" id="form-move-${code}">
@@ -366,7 +366,7 @@ function addMember(code){
   const from=document.getElementById('addFrom-'+code).value||TODAY;
   if(!nick){ alert('กรอกชื่อเล่นก่อนนะคะ'); return; }
   TEAMS[code].members.push({ nick, pos:'Accounting Staff (ใหม่)' });
-  logTeam(`เพิ่ม <b>${nick}</b> เป็นลูกทีม ${TEAMS[code].name}`, from);
+  logTeam(`เพิ่ม <b>${nick}</b> เป็นนักบัญชี ${TEAMS[code].name}`, from);
   renderTeams(); refreshBindForm();
 }
 function changeLead(code){
@@ -378,8 +378,8 @@ function changeLead(code){
   if(idx<0) return;
   const promoted=t.members.splice(idx,1)[0];
   t.members.push({ nick:oldLead, pos:'Accountant (อดีตหัวหน้า)' });
-  t.lead={ nick:promoted.nick, pos:'Senior Accountant / หัวหน้าทีม' };
-  logTeam(`ปิดตำแหน่งหัวหน้าของ <span class="pill old">${oldLead}</span> (valid_to ${from}) → ตั้ง <b>${newLead}</b> เป็นหัวหน้า ${t.name}`, from);
+  t.lead={ nick:promoted.nick, pos:'Senior Accountant / หัวหน้าบัญชี' };
+  logTeam(`ปิดตำแหน่งหัวหน้าบัญชีของ <span class="pill old">${oldLead}</span> (valid_to ${from}) → ตั้ง <b>${newLead}</b> เป็นหัวหน้าบัญชี ${t.name}`, from);
   renderTeams(); refreshBindForm();
 }
 function moveMember(code){
@@ -413,14 +413,14 @@ function createTeam(){
   const memRaw=(document.getElementById('ntMembers').value||'').trim();
   const from=document.getElementById('ntFrom').value||TODAY;
   if(!name){ alert('กรอกชื่อทีมก่อนนะคะ'); return; }
-  if(!leadNick){ alert('เลือกหรือพิมพ์ชื่อหัวหน้าทีมก่อนนะคะ'); return; }
+  if(!leadNick){ alert('เลือกหรือพิมพ์ชื่อหัวหน้าบัญชีก่อนนะคะ'); return; }
   const members = memRaw
     ? memRaw.split(',').map(s=>s.trim()).filter(Boolean).map(n=>({ nick:n, pos:'Accounting Staff (ใหม่)' }))
     : [];
   const key=nextTeamKey();
-  TEAMS[key]={ name, lead:{ nick:leadNick, pos:'Senior Accountant / หัวหน้าทีม' }, members };
-  logTeam(`สร้างทีมใหม่ <b>${name}</b> — หัวหน้าทีม <b>${leadNick}</b>` +
-    (members.length ? ' + ลูกทีม ' + members.map(m=>m.nick).join(', ') : ' (ยังไม่มีลูกทีม)'), from);
+  TEAMS[key]={ name, lead:{ nick:leadNick, pos:'Senior Accountant / หัวหน้าบัญชี' }, members };
+  logTeam(`สร้างทีมใหม่ <b>${name}</b> — หัวหน้าบัญชี <b>${leadNick}</b>` +
+    (members.length ? ' + นักบัญชี ' + members.map(m=>m.nick).join(', ') : ' (ยังไม่มีนักบัญชี)'), from);
   renderTeams(); refreshBindForm();
   // เคลียร์ + ปิดฟอร์ม
   document.getElementById('ntName').value='';
@@ -488,7 +488,7 @@ function saveBinding(){
     BINDINGS.push({ company, team:code, members, from });
   }
   logBind(`<b style="color:var(--navy-800);">${company}</b>: ผูกใหม่ →
-    <span class="pill">${TEAMS[code].name} · ${TEAMS[code].lead.nick} + ${members.join(', ')||'ไม่มีลูกทีม'}</span>
+    <span class="pill">${TEAMS[code].name} · ${TEAMS[code].lead.nick} + ${members.join(', ')||'ไม่มีนักบัญชี'}</span>
     (มีผล ${from}) — Form B จะดึงชุดนี้ไปให้ลูกค้าประเมินอัตโนมัติ`);
   renderBindTable();
   alert('(ต้นแบบ) บันทึกการผูกผู้ดูแลแล้ว — ในระบบจริงจะเขียนลง customer_assignments พร้อม valid_from/valid_to');

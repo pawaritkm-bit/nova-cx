@@ -489,7 +489,7 @@ function renderContact(sec){
   return wrap;
 }
 
-/* ---- roster (Form B) : การ์ดลูกทีมที่ระบบผูกอัตโนมัติ (read-only) ---- */
+/* ---- roster (Form B) : การ์ดนักบัญชีที่ระบบผูกอัตโนมัติ (read-only) ---- */
 function renderRoster(sec){
   const wrap=document.createElement('div');
   const card=(m,dim)=>`
@@ -502,7 +502,7 @@ function renderRoster(sec){
     ${sec.note?`<p style="font-size:12px; color:var(--muted); margin-top:-4px;">${sec.note}</p>`:''}
     <div class="ref-lock" style="display:block; margin:6px 0 8px;">🔒 ผูกอัตโนมัติจากระบบ • ไม่ต้องเลือกเอง</div>
     ${sec.lead?card(sec.lead,true):''}
-    <div class="sub-label" style="margin-top:10px;">ลูกทีมที่คุณจะได้ประเมิน (คนละ 10 ข้อ)</div>
+    <div class="sub-label" style="margin-top:10px;">นักบัญชีที่คุณจะได้ประเมิน (คนละ 10 ข้อ)</div>
     ${sec.members.map(m=>card(m,false)).join('')}`;
   return wrap;
 }
