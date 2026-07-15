@@ -250,19 +250,45 @@ function buildSurvey(){
   showStep(0);
 }
 
-/* ---- แบ่ง sections เป็น "ขั้น" (ส่วนละ 1 ขั้น; ratings ยาว >8 ข้อ ซอย 5+5) ---- */
+/* ---- แผนรวมขั้น: จัดกลุ่ม section เป็น "ขั้น" ตาม id (ลดจำนวนขั้น) ----
+   คะแนน (ดาว) เป็นแถวสั้น → รวม 10 ข้อในขั้นเดียวได้ (เลื่อนสั้นๆ)
+   ส่วนสั้นๆ ที่เกี่ยวกันรวมขั้นเดียว แต่ไม่ยัดทุกอย่างในขั้นเดียว
+   แต่ละ element = 1 ขั้น = รายชื่อ section id ที่อยู่ในขั้นนั้น
+   (B ใช้ default = section ละ 1 ขั้น เพราะจำนวนนักบัญชีสร้างแบบไดนามิก) */
+const STEP_GROUPS = {
+  A: [
+    ['a_ref'],                          // 1) ข้อมูลอ้างอิง
+    ['rateA'],                          // 2) คะแนน 10 ข้อ (รวมขั้นเดียว)
+    ['a_problems'],                     // 3) ปัญหาที่พบ
+    ['a_needs', 'a_services'],          // 4) ความต้องการเพิ่มเติม + บริการเสริม
+    ['a_nps', 'a_trend', 'a_loyalty'],  // 5) Loyalty: NPS + แนวโน้มใช้ต่อ + เหตุผล/ความเห็น
+    ['a_contactback']                   // 6) ติดต่อกลับ
+  ],
+  C: [
+    ['c_ref'],                          // 1) ข้อมูลอ้างอิง
+    ['rateC'],                          // 2) คะแนน 10 ข้อ (รวมขั้นเดียว)
+    ['c_reason', 'c_open'],             // 3) เหตุผลซื้อ + ปลายเปิด (รวมขั้นเดียว)
+    ['c_contactback']                   // 4) ติดต่อกลับ
+  ],
+  D: [
+    ['d_intro', 'rateD'],               // 1) ข้อความเปิด + คะแนนความเห็นต่อเซล
+    ['d_follow', 'd_reason'],           // 2) การติดตาม + เหตุผลที่ยังไม่ตัดสินใจ
+    ['d_reconsider', 'd_permission']    // 3) พิจารณาใหม่ + ช่วงเวลาติดต่อ
+  ]
+  // B: ไม่กำหนด → default (section ละ 1 ขั้น, คะแนนไม่ซอย = 10 ข้อ/คน ขั้นเดียว)
+};
+
+/* ---- แบ่ง sections เป็น "ขั้น" ตามแผน STEP_GROUPS; ถ้าไม่มีแผน = section ละ 1 ขั้น (คะแนนไม่ซอย) ---- */
 function buildSteps(form){
-  const steps=[];
-  form.sections.forEach(sec=>{
-    if(sec.type==='ratings' && sec.items.length>8){
-      const half=Math.ceil(sec.items.length/2);
-      steps.push([{type:'ratingsSlice', sec, from:0, to:half, part:1, parts:2}]);
-      steps.push([{type:'ratingsSlice', sec, from:half, to:sec.items.length, part:2, parts:2}]);
-    } else {
-      steps.push([{type:'section', sec}]);
-    }
-  });
-  return steps;
+  const groups = STEP_GROUPS[form.code];
+  if(groups){
+    const byId = {};
+    form.sections.forEach(sec=>{ if(sec.id) byId[sec.id]=sec; });
+    return groups.map(ids=>
+      ids.map(id=>byId[id]).filter(Boolean).map(sec=>({type:'section', sec}))
+    ).filter(units=>units.length);
+  }
+  return form.sections.map(sec=>[{type:'section', sec}]);
 }
 
 /* ---- แปลง 1 unit เป็น element ---- */
