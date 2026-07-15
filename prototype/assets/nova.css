@@ -1,0 +1,302 @@
+/* ============================================================
+   NOVA-CX Prototype — Shared Design System (nova.css)
+   Clickable mockup only. เปิดไฟล์ในเบราว์เซอร์ได้เลย ไม่ต้อง build.
+   สีแบรนด์ Finovas: น้ำเงินเข้ม primary + ฟ้าสว่าง accent
+   ============================================================ */
+
+:root {
+  /* Brand palette */
+  --navy-900: #172554;
+  --navy-800: #1e3a8a;   /* primary */
+  --navy-700: #1e40af;
+  --blue-600: #2563eb;   /* action */
+  --blue-500: #3b82f6;
+  --sky-400:  #38bdf8;   /* accent */
+  --amber-500:#f59e0b;   /* mascot accent (เครื่องคิดเลข/จะงอยปาก) */
+
+  /* Neutrals */
+  --bg:      #eef2f8;
+  --card:    #ffffff;
+  --line:    #e2e8f0;
+  --text:    #0f172a;
+  --muted:   #64748b;
+  --muted-2: #94a3b8;
+
+  /* Status */
+  --green:  #16a34a;
+  --green-bg:#dcfce7;
+  --amber:  #d97706;
+  --amber-bg:#fef3c7;
+  --red:    #dc2626;
+  --red-bg: #fee2e2;
+  --blue-bg:#dbeafe;
+
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow: 0 8px 30px rgba(23,37,84,.10);
+  --shadow-sm: 0 2px 8px rgba(23,37,84,.08);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Sarabun", "Noto Sans Thai",
+               "Thonburi", "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--blue-600); text-decoration: none; }
+h1, h2, h3, h4 { margin: 0 0 .4em; line-height: 1.3; }
+
+/* ---- Buttons (ปุ่มใหญ่ แตะง่าย ≥44px) ---- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 48px; padding: 12px 20px;
+  border: none; border-radius: 12px;
+  font-size: 16px; font-weight: 600; font-family: inherit;
+  cursor: pointer; transition: transform .06s ease, box-shadow .15s ease, background .15s;
+  user-select: none;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--blue-600); color: #fff; box-shadow: 0 4px 14px rgba(37,99,235,.35); }
+.btn-primary:hover { background: var(--navy-700); }
+.btn-ghost { background: #fff; color: var(--navy-800); border: 1.5px solid var(--line); }
+.btn-ghost:hover { border-color: var(--blue-500); }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-block { width: 100%; }
+.btn:focus-visible { outline: 3px solid var(--sky-400); outline-offset: 2px; }
+
+/* ---- Badges ---- */
+.badge { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:700;
+  padding:3px 10px; border-radius:999px; }
+.badge-critical { background: var(--red-bg); color: var(--red); }
+.badge-high     { background: var(--amber-bg); color: var(--amber); }
+.badge-medium   { background: var(--blue-bg); color: var(--blue-600); }
+.badge-positive { background: var(--green-bg); color: var(--green); }
+.badge-mock     { background:#f1f5f9; color:var(--muted); border:1px dashed var(--muted-2); }
+
+/* ---- Cards ---- */
+.card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+  padding: 18px; border: 1px solid var(--line); }
+
+/* ---- "จำลองไว้ก่อน" marker ---- */
+.mock-tag { font-size: 11px; font-weight: 700; color: var(--amber);
+  background: var(--amber-bg); padding: 2px 8px; border-radius: 6px; }
+
+/* ============================================================
+   MASCOT — น้อง NOVA (นกอินทรี)
+   ============================================================ */
+.nova-svg { display:block; }
+
+/* ---- Loading animation scene ---- */
+.nova-loader { position: relative; width: 220px; height: 180px; margin: 0 auto; overflow: hidden; }
+/* นกอินทรีวิ่ง (bob + tilt) */
+.nova-run { position:absolute; left:50%; top:50%; transform: translate(-50%,-50%);
+  animation: nova-bob 0.5s ease-in-out infinite; z-index:2; }
+@keyframes nova-bob {
+  0%,100% { transform: translate(-50%,-50%) rotate(-3deg); }
+  50%     { transform: translate(-50%,-54%) rotate(3deg); }
+}
+/* เครื่องคิดเลขขยับ (ในมือ) — สั่นเล็กน้อย */
+.nova-calc-shake { transform-origin: center; animation: nova-shake 0.28s ease-in-out infinite; }
+@keyframes nova-shake { 0%,100%{ transform: rotate(-4deg);} 50%{ transform: rotate(4deg);} }
+/* เอกสาร/ใบเสร็จปลิวด้านหลัง */
+.nova-doc { position:absolute; width:26px; height:32px; background:#fff; border:1.5px solid var(--line);
+  border-radius:3px; z-index:1; box-shadow:var(--shadow-sm); }
+.nova-doc::before, .nova-doc::after { content:""; position:absolute; left:4px; right:4px; height:2px;
+  background:var(--muted-2); border-radius:2px; }
+.nova-doc::before { top:7px; } .nova-doc::after { top:13px; }
+.nova-doc.d1 { top:20px;  animation: nova-fly 1.5s linear infinite; }
+.nova-doc.d2 { top:110px; animation: nova-fly 1.5s linear infinite .5s; background:#fffdf5; }
+.nova-doc.d3 { top:64px;  animation: nova-fly 1.5s linear infinite 1s; }
+@keyframes nova-fly {
+  0%   { left:-40px; transform: rotate(-15deg); opacity:0; }
+  15%  { opacity:1; }
+  85%  { opacity:1; }
+  100% { left:240px; transform: rotate(20deg); opacity:0; }
+}
+
+.nova-loading-text { text-align:center; color:var(--navy-800); font-weight:600; margin-top:6px;
+  min-height:1.5em; transition: opacity .3s; }
+.nova-loading-sub { text-align:center; color:var(--muted); font-size:13px; }
+
+/* ============================================================
+   MOBILE FRAME (กรอบจำลองมือถือสำหรับ LIFF)
+   ============================================================ */
+.phone { width: 390px; max-width: 100%; margin: 0 auto;
+  background:#0b1220; border-radius: 44px; padding: 12px;
+  box-shadow: 0 30px 70px rgba(15,23,42,.35); }
+.phone-notch { height: 26px; display:flex; align-items:center; justify-content:center; }
+.phone-notch::before { content:""; width:120px; height:22px; background:#0b1220; border-radius:0 0 16px 16px;
+  position:relative; top:-12px; }
+.phone-screen { background:#fff; border-radius: 34px; overflow:hidden; height: 720px;
+  display:flex; flex-direction:column; position:relative; }
+/* LINE app header จำลอง */
+.liff-topbar { background:var(--navy-800); color:#fff; padding:10px 16px; display:flex; align-items:center;
+  gap:10px; font-size:14px; flex-shrink:0; }
+.liff-topbar .dot { width:8px; height:8px; border-radius:50%; background:var(--sky-400); }
+.liff-body { flex:1; overflow-y:auto; padding:18px 16px 90px; }
+.liff-footer { position:absolute; bottom:0; left:0; right:0; padding:12px 16px 18px;
+  background:linear-gradient(to top,#fff 70%,rgba(255,255,255,0)); }
+
+/* Progress bar */
+.progress-wrap { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.progress-track { flex:1; height:8px; background:var(--line); border-radius:999px; overflow:hidden; }
+.progress-fill { height:100%; background:linear-gradient(90deg,var(--blue-500),var(--sky-400));
+  width:0%; transition: width .4s ease; border-radius:999px; }
+.progress-time { font-size:12px; color:var(--muted); white-space:nowrap; }
+
+/* Autosave banner */
+.autosave { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--green);
+  background:var(--green-bg); padding:6px 12px; border-radius:999px; width:max-content;
+  margin:0 auto 12px; opacity:0; transition:opacity .3s; }
+.autosave.show { opacity:1; }
+.offline-banner { display:none; align-items:center; gap:6px; font-size:12px; color:var(--amber);
+  background:var(--amber-bg); padding:8px 12px; border-radius:8px; margin-bottom:12px; }
+
+/* Reference card (auto-fill read-only) */
+.ref-card { background:#f8fafc; border:1px solid var(--line); border-radius:12px; padding:14px; }
+.ref-row { display:flex; justify-content:space-between; font-size:13px; padding:4px 0; gap:12px; }
+.ref-row .k { color:var(--muted); } .ref-row .v { font-weight:600; text-align:right; }
+.ref-lock { font-size:11px; color:var(--muted-2); }
+
+/* Rating buttons (1-5 เรียงต่ำ→สูง ปุ่มใหญ่) */
+.q-block { margin-bottom:22px; }
+.q-title { font-weight:600; margin-bottom:10px; }
+.rating { display:flex; flex-direction:column; gap:8px; }
+.rate-btn { display:flex; align-items:center; gap:12px; width:100%; min-height:50px;
+  padding:10px 14px; border:1.5px solid var(--line); background:#fff; border-radius:12px;
+  cursor:pointer; font-family:inherit; font-size:15px; text-align:left; transition:all .12s; }
+.rate-btn .num { width:30px; height:30px; flex-shrink:0; border-radius:8px; background:var(--bg);
+  display:flex; align-items:center; justify-content:center; font-weight:700; color:var(--muted); }
+.rate-btn .lbl { color:var(--text); }
+.rate-btn:hover { border-color:var(--blue-500); }
+.rate-btn.sel { border-color:var(--blue-600); background:var(--blue-bg); }
+.rate-btn.sel .num { background:var(--blue-600); color:#fff; }
+
+/* Follow-up (conditional) */
+.followup { margin-top:12px; padding:14px; border-radius:12px; border-left:4px solid var(--sky-400);
+  background:#f0f9ff; animation: nova-slide .3s ease; }
+.followup.neg { border-left-color:var(--red); background:var(--red-bg); }
+.followup.pos { border-left-color:var(--green); background:var(--green-bg); }
+@keyframes nova-slide { from{opacity:0; transform:translateY(-6px);} to{opacity:1; transform:none;} }
+.followup textarea, .followup input[type=text] { width:100%; border:1px solid var(--line);
+  border-radius:8px; padding:10px; font-family:inherit; font-size:14px; margin-top:6px; }
+
+/* Multi-select chips */
+.chips { display:flex; flex-wrap:wrap; gap:8px; }
+.chip { padding:9px 14px; border:1.5px solid var(--line); border-radius:999px; background:#fff;
+  cursor:pointer; font-size:14px; font-family:inherit; transition:all .12s; }
+.chip:hover { border-color:var(--blue-500); }
+.chip.sel { border-color:var(--blue-600); background:var(--blue-bg); color:var(--navy-800); font-weight:600; }
+.chip.exclusive.sel { border-color:var(--green); background:var(--green-bg); color:var(--green); }
+.chip.dimmed { opacity:.4; pointer-events:none; }
+
+/* NPS 0-10 */
+.nps { display:grid; grid-template-columns:repeat(6,1fr); gap:6px; }
+.nps-btn { aspect-ratio:1; min-height:44px; border:1.5px solid var(--line); border-radius:10px; background:#fff;
+  font-weight:700; cursor:pointer; font-family:inherit; font-size:15px; transition:all .12s; }
+.nps-btn:hover{ border-color:var(--blue-500);}
+.nps-btn.sel{ border-color:var(--blue-600); background:var(--blue-600); color:#fff; }
+.nps-legend{ display:flex; justify-content:space-between; font-size:11px; color:var(--muted); margin-top:6px;}
+
+/* PDPA consent */
+.consent-item { display:flex; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); font-size:14px; }
+.consent-item svg{ flex-shrink:0; margin-top:3px; }
+.consent-note { background:var(--amber-bg); color:#92400e; border-radius:10px; padding:12px;
+  font-size:13px; margin:14px 0; }
+
+/* Review list */
+.review-item { display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line);
+  font-size:14px; gap:12px; }
+.review-item .rq{ color:var(--muted); } .review-item .ra{ font-weight:600; text-align:right; }
+.review-item .edit{ color:var(--blue-600); font-size:12px; cursor:pointer; }
+
+/* generic form label */
+.field-label{ font-weight:600; font-size:14px; margin:14px 0 6px; }
+select, .txtin { width:100%; padding:11px; border:1px solid var(--line); border-radius:10px;
+  font-family:inherit; font-size:14px; background:#fff; }
+
+/* ============================================================
+   DASHBOARD
+   ============================================================ */
+.dash-wrap { max-width: 1180px; margin: 0 auto; padding: 20px; }
+.dash-top { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+  margin-bottom:20px; }
+.dash-title { display:flex; align-items:center; gap:12px; }
+.role-switch { display:inline-flex; background:#fff; border:1px solid var(--line); border-radius:12px;
+  padding:4px; gap:4px; box-shadow:var(--shadow-sm); }
+.role-switch button { border:none; background:none; padding:9px 16px; border-radius:9px; cursor:pointer;
+  font-family:inherit; font-size:14px; font-weight:600; color:var(--muted); }
+.role-switch button.active { background:var(--navy-800); color:#fff; }
+
+.kpi-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:18px; }
+.kpi { background:#fff; border-radius:var(--radius); padding:16px; border:1px solid var(--line);
+  box-shadow:var(--shadow-sm); }
+.kpi .label{ font-size:13px; color:var(--muted); font-weight:600; }
+.kpi .value{ font-size:30px; font-weight:800; color:var(--navy-800); line-height:1.1; margin:6px 0 2px; }
+.kpi .sample{ font-size:12px; color:var(--muted-2); }
+.kpi .delta{ font-size:12px; font-weight:700; }
+.kpi .delta.up{ color:var(--green);} .kpi .delta.down{ color:var(--red);}
+
+.grid-2 { display:grid; grid-template-columns:1.4fr 1fr; gap:16px; }
+.grid-2b{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }
+.section-title{ font-size:16px; font-weight:700; margin-bottom:12px; display:flex; align-items:center;
+  justify-content:space-between; }
+
+/* team bar list */
+.bar-row{ display:flex; align-items:center; gap:10px; margin-bottom:12px; font-size:13px; }
+.bar-row .name{ width:120px; flex-shrink:0; font-weight:600; }
+.bar-track{ flex:1; height:20px; background:var(--bg); border-radius:6px; overflow:hidden; }
+.bar-fill{ height:100%; border-radius:6px; background:linear-gradient(90deg,var(--blue-500),var(--sky-400)); }
+.bar-val{ width:96px; text-align:right; color:var(--muted); }
+.bar-val b{ color:var(--text); }
+
+/* case list */
+.case-row{ display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line);
+  font-size:13px; }
+.case-row .cid{ font-weight:700; color:var(--navy-800); width:80px; }
+.case-row .cdesc{ flex:1; }
+.case-row .cmeta{ color:var(--muted); font-size:12px; }
+
+/* problem list */
+.prob-row{ display:flex; justify-content:space-between; align-items:center; padding:8px 0;
+  border-bottom:1px dashed var(--line); font-size:14px; }
+.prob-row .cnt{ font-weight:700; color:var(--navy-800); }
+
+.note-box{ background:var(--blue-bg); border-radius:10px; padding:12px; font-size:13px; color:var(--navy-900);
+  margin-top:14px; }
+.hidden{ display:none !important; }
+
+/* Landing */
+.landing { max-width: 1080px; margin: 0 auto; padding: 40px 20px 60px; }
+.hero { display:flex; align-items:center; gap:36px; flex-wrap:wrap; justify-content:center; text-align:center;
+  background:linear-gradient(135deg,var(--navy-900),var(--navy-800)); color:#fff; border-radius:28px;
+  padding:40px; box-shadow:var(--shadow); }
+.hero h1{ font-size:34px; }
+.hero p{ color:#c7d2fe; max-width:520px; margin:0 auto; }
+.mascot-showcase{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:18px; margin:28px 0; }
+.showcase-card{ background:#fff; border:1px solid var(--line); border-radius:var(--radius); padding:20px;
+  text-align:center; box-shadow:var(--shadow-sm); }
+.showcase-card h4{ color:var(--navy-800); }
+.showcase-card p{ font-size:12px; color:var(--muted); margin:0; }
+.flow-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px; }
+.flow-card{ background:#fff; border:1px solid var(--line); border-radius:var(--radius); padding:22px;
+  box-shadow:var(--shadow-sm); transition:transform .12s, box-shadow .15s; }
+.flow-card:hover{ transform:translateY(-3px); box-shadow:var(--shadow); border-color:var(--blue-500); }
+.flow-card h3{ color:var(--navy-800); }
+.flow-card p{ font-size:13px; color:var(--muted); min-height:40px; }
+
+.section-head{ text-align:center; margin:44px 0 20px; }
+.section-head h2{ color:var(--navy-800); }
+.section-head p{ color:var(--muted); }
+
+@media (max-width: 900px){
+  .kpi-grid{ grid-template-columns:repeat(2,1fr); }
+  .grid-2, .grid-2b{ grid-template-columns:1fr; }
+}

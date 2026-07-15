@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA-CX — LIFF Survey (ต้นแบบมือถือ)</title>
+<link rel="stylesheet" href="assets/nova.css">
+<style>
+  body{ display:flex; flex-direction:column; align-items:center; padding:24px 12px; gap:14px; }
+  .toolbar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:center; }
+  .toolbar a{ font-size:13px; }
+  .screen{ display:none; }
+  .screen.active{ display:block; }
+  .center-col{ display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%;
+    text-align:center; padding:24px; }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <a class="btn btn-ghost" href="index.html" style="min-height:38px; padding:6px 14px;">← กลับหน้ารวม</a>
+  <span class="badge badge-mock">ต้นแบบ • ไม่ต่อ backend • ข้อมูล mock</span>
+</div>
+
+<!-- ===================== PHONE FRAME ===================== -->
+<div class="phone">
+  <div class="phone-notch"></div>
+  <div class="phone-screen">
+
+    <!-- LINE app top bar จำลอง -->
+    <div class="liff-topbar">
+      <span class="dot"></span>
+      <b>Finovas • น้อง NOVA</b>
+      <span style="margin-left:auto; opacity:.7; font-size:12px;">LIFF</span>
+    </div>
+
+    <!-- ============ SCREEN 1: LOADING ============ -->
+    <div class="screen active" id="s-loading">
+      <div class="center-col">
+        <div id="loaderMount"></div>
+        <div class="nova-loading-text" id="loadText">น้อง NOVA กำลังเตรียมแบบประเมิน…</div>
+        <div class="nova-loading-sub">ขอเวลาแป๊บเดียวนะคะ</div>
+
+        <!-- Fallback เมื่อโหลด > 5 วิ (จำลอง) -->
+        <div id="loadFallback" style="margin-top:24px; display:none;">
+          <div class="nova-loading-sub" style="color:var(--amber); margin-bottom:10px;">
+            โหลดนานกว่าปกติ ลองใหม่อีกครั้งได้เลยค่ะ
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-primary" onclick="retryLoad()">ลองใหม่</button>
+            <button class="btn btn-ghost" onclick="alert('(ต้นแบบ) จะเปิดฟอร์มแจ้งปัญหา / ติดต่อทีมดูแล')">แจ้งปัญหา</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ SCREEN 2: PDPA CONSENT ============ -->
+    <div class="screen" id="s-consent">
+      <div class="liff-body">
+        <div style="text-align:center; margin-bottom:12px;">
+          <div id="consentMascot" style="display:inline-block;"></div>
+          <h2 style="color:var(--navy-800); margin-top:8px;">ก่อนเริ่ม ขอแจ้งเรื่องข้อมูลนะคะ</h2>
+          <p style="font-size:13px; color:var(--muted); margin:0;">น้อง NOVA เก็บข้อมูลเท่าที่จำเป็น ตาม PDPA</p>
+        </div>
+
+        <div class="consent-item"><span>🎯</span><div><b>วัตถุประสงค์:</b> ประเมิน/ปรับปรุงคุณภาพบริการของสำนักงานบัญชี</div></div>
+        <div class="consent-item"><span>📋</span><div><b>ข้อมูลที่เก็บ:</b> คำตอบแบบประเมิน, คะแนน, ความเห็น, ข้อมูลอ้างอิงลูกค้า/รอบบริการ</div></div>
+        <div class="consent-item"><span>👥</span><div><b>ผู้เข้าถึง:</b> ทีมดูแล/หัวหน้า/ผู้บริหาร ตามสิทธิ์ — ผู้ถูกประเมินเห็นคะแนนแต่<b>ไม่เห็นชื่อคุณ</b></div></div>
+        <div class="consent-item"><span>🤖</span><div><b>ใช้ AI วิเคราะห์:</b> สรุปความเห็น/จัดระดับความเร่งด่วน (ตัดข้อมูลระบุตัวตนก่อนส่งเข้า AI)</div></div>
+        <div class="consent-item"><span>🗓️</span><div><b>ระยะเวลาเก็บ:</b> แบบประเมิน/เคส 3 ปี, บันทึกความยินยอม 5 ปี</div></div>
+        <div class="consent-item"><span>⚖️</span><div><b>สิทธิของคุณ:</b> ขอเข้าถึง / แก้ไข / ถอนความยินยอม / ลบข้อมูลได้ทุกเมื่อ</div></div>
+
+        <div class="consent-note">
+          <b>โปร่งใส:</b> นี่<u>ไม่ใช่ Anonymous 100%</u> — กรณีมีข้อร้องเรียนหรือประเด็นความปลอดภัย
+          Admin ที่ได้รับอนุญาตอาจเข้าถึงตัวตนของคุณได้ (และมีการบันทึก log ทุกครั้ง)
+        </div>
+
+        <a href="#" style="font-size:13px;" onclick="alert('(ต้นแบบ) เปิดนโยบายข้อมูลส่วนบุคคลฉบับเต็ม');return false;">
+          อ่านนโยบายข้อมูลส่วนบุคคลฉบับเต็ม →</a>
+      </div>
+      <div class="liff-footer">
+        <button class="btn btn-primary btn-block" onclick="goConsent(true)">ยินยอมและเริ่มทำแบบประเมิน</button>
+        <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="goConsent(false)">ยังไม่ยินยอม</button>
+      </div>
+    </div>
+
+    <!-- ============ SCREEN 3: SURVEY (FORM A) ============ -->
+    <div class="screen" id="s-survey">
+      <div class="liff-body" id="surveyBody">
+
+        <!-- progress -->
+        <div class="progress-wrap">
+          <div class="progress-track"><div class="progress-fill" id="progFill"></div></div>
+          <span class="progress-time" id="progTime">~2 นาที</span>
+        </div>
+        <div class="autosave" id="autosave">✓ บันทึกอัตโนมัติแล้ว</div>
+        <div class="offline-banner" id="offlineBanner">⚠ เน็ตหลุด — คำตอบถูกเก็บไว้ในเครื่อง จะส่งให้เมื่อกลับมาออนไลน์</div>
+
+        <p style="font-size:12px; color:var(--muted-2); margin:0 0 4px;">แบบประเมิน A · สำนักงานบัญชี · รอบทุก 3 เดือน</p>
+
+        <!-- ส่วน 1: ข้อมูลอ้างอิง (auto-fill read-only) -->
+        <h3 style="color:var(--navy-800);">ข้อมูลอ้างอิง <span class="ref-lock">🔒 กรอกให้แล้ว</span></h3>
+        <div class="ref-card">
+          <div class="ref-row"><span class="k">รหัสลูกค้า</span><span class="v">FN-10428</span></div>
+          <div class="ref-row"><span class="k">ชื่อกิจการ</span><span class="v">บจก. สยามเทรดดิ้ง</span></div>
+          <div class="ref-row"><span class="k">ประเภทบริการ</span><span class="v">ทำบัญชี + ยื่นภาษี</span></div>
+          <div class="ref-row"><span class="k">ทีมที่ดูแล</span><span class="v">ทีมบัญชี A (คุณแนน)</span></div>
+          <div class="ref-row"><span class="k">รอบประเมิน</span><span class="v">ไตรมาส 2/2569</span></div>
+        </div>
+        <p style="font-size:12px; color:var(--muted); margin-top:6px;">
+          ข้อมูลนี้ดึงมาให้อัตโนมัติ ไม่ต้องกรอกซ้ำ — หากไม่ถูกต้องแจ้งทีมดูแลได้ค่ะ</p>
+
+        <!-- ส่วน 2: คะแนน 1-5 (แสดงตัวอย่าง 3 ข้อ จาก 10 ข้อจริง) -->
+        <h3 style="color:var(--navy-800); margin-top:22px;">ความพึงพอใจภาพรวม</h3>
+        <p style="font-size:12px; color:var(--muted); margin-top:-4px;">
+          ให้คะแนน 1 (ไม่พอใจมาก) ถึง 5 (พอใจมาก) — <span class="mock-tag">ต้นแบบแสดง 3 ข้อ จาก 10 ข้อจริง</span></p>
+
+        <div id="ratingQuestions"></div>
+
+        <!-- ส่วน 3: ปัญหาที่พบ (multi-select) -->
+        <div class="q-block">
+          <div class="q-title">ปัญหาที่เคยพบ (เลือกได้หลายข้อ)</div>
+          <div class="chips" id="problemChips"></div>
+        </div>
+
+        <!-- ส่วน 5: NPS -->
+        <div class="q-block">
+          <div class="q-title">คุณจะแนะนำ Finovas ให้เพื่อน/คนรู้จักมากน้อยแค่ไหน?</div>
+          <div class="nps" id="npsRow"></div>
+          <div class="nps-legend"><span>0 ไม่แนะนำเลย</span><span>10 แนะนำแน่นอน</span></div>
+        </div>
+
+      </div>
+      <div class="liff-footer" style="display:flex; gap:8px;">
+        <button class="btn btn-ghost" style="flex:0 0 auto;" onclick="backToConsent()">← ย้อนกลับ</button>
+        <button class="btn btn-primary" style="flex:1;" onclick="goReview()">ตรวจก่อนส่ง →</button>
+      </div>
+    </div>
+
+    <!-- ============ SCREEN 4: REVIEW ============ -->
+    <div class="screen" id="s-review">
+      <div class="liff-body">
+        <h2 style="color:var(--navy-800);">ตรวจคำตอบก่อนส่ง</h2>
+        <p style="font-size:13px; color:var(--muted);">แตะ "แก้" เพื่อกลับไปแก้ข้อนั้น</p>
+        <div id="reviewList"></div>
+      </div>
+      <div class="liff-footer" style="display:flex; gap:8px;">
+        <button class="btn btn-ghost" style="flex:0 0 auto;" onclick="show('s-survey')">← แก้คำตอบ</button>
+        <button class="btn btn-primary" style="flex:1;" onclick="submitSurvey()">ส่งแบบประเมิน</button>
+      </div>
+    </div>
+
+    <!-- ============ SCREEN 5: CONFIRMATION ============ -->
+    <div class="screen" id="s-confirm">
+      <div class="center-col">
+        <div id="confirmMascot"></div>
+        <h2 style="color:var(--navy-800); margin-top:10px;">ขอบคุณมากค่ะ 🙏</h2>
+        <p style="color:var(--text);">น้อง NOVA รับเรื่องเรียบร้อยแล้ว<br>ความคิดเห็นของคุณช่วยให้เราดูแลคุณได้ดีขึ้นค่ะ</p>
+        <div class="card" id="contactBackNote" style="margin-top:14px; text-align:left; display:none; width:100%;">
+          <b style="color:var(--navy-800);">✓ ทีมจะติดต่อกลับ</b>
+          <p style="font-size:13px; color:var(--muted); margin:4px 0 0;">
+            เราส่งต่อเรื่องให้ผู้รับผิดชอบแล้ว จะติดต่อกลับตามช่องทางที่คุณเลือกโดยเร็วค่ะ</p>
+        </div>
+        <button class="btn btn-ghost" style="margin-top:20px;" onclick="restart()">↻ ดูต้นแบบใหม่อีกครั้ง</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<p style="color:var(--muted); font-size:12px; max-width:390px; text-align:center;">
+  หมายเหตุ: หน้านี้จำลอง in-app browser ของ LINE — ในระบบจริงจะเปิดผ่าน LIFF SDK + LINE Login
+</p>
+
+<script src="assets/mascot.js"></script>
+<script>
+/* ============================================================
+   State machine ของ LIFF Survey (ต้นแบบ — ไม่ต่อ backend)
+   ============================================================ */
+const state = { ratings:{}, problems:new Set(), nps:null, wantContact:false, followups:{} };
+
+// mascot mounts
+document.getElementById('loaderMount').innerHTML  = NOVA.loaderScene();
+document.getElementById('consentMascot').innerHTML= NOVA.profile(64);
+document.getElementById('confirmMascot').innerHTML= NOVA.full(150);
+
+// ---- screen switching ----
+function show(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.querySelector('.liff-body') && document.querySelectorAll('.liff-body').forEach(b=>b.scrollTop=0);
+}
+
+// ---- Loading text rotation + fallback ----
+const loadMsgs = [
+  "น้อง NOVA กำลังเตรียมแบบประเมิน…",
+  "ขอเวลาจัดเอกสารแป๊บหนึ่งนะคะ",
+  "พร้อมรับฟังทุกความคิดเห็นค่ะ"
+];
+let msgIdx=0, loadTimer, fallbackTimer;
+function rotateMsg(){
+  const el=document.getElementById('loadText');
+  el.style.opacity=0;
+  setTimeout(()=>{ msgIdx=(msgIdx+1)%loadMsgs.length; el.textContent=loadMsgs[msgIdx]; el.style.opacity=1; },300);
+}
+const params = new URLSearchParams(location.search);
+const demoLoading = params.get('demo')==='loading';
+
+function startLoading(){
+  document.getElementById('loadFallback').style.display='none';
+  msgIdx=0; document.getElementById('loadText').textContent=loadMsgs[0];
+  clearInterval(loadTimer); clearTimeout(fallbackTimer);
+  loadTimer=setInterval(rotateMsg,1600);
+  // demo=loading → ค้างที่โหลดแล้วโชว์ fallback หลัง 5 วิ
+  fallbackTimer=setTimeout(()=>{ document.getElementById('loadFallback').style.display='block'; }, 5000);
+  if(!demoLoading){
+    setTimeout(()=>{ clearInterval(loadTimer); clearTimeout(fallbackTimer); show('s-consent'); }, 2600);
+  }
+}
+function retryLoad(){ startLoading(); }
+startLoading();
+
+// ---- Consent ----
+function goConsent(ok){
+  if(!ok){ alert('(ต้นแบบ) ถ้าไม่ยินยอม จะปิดแบบประเมินและแจ้งว่าเคารพการตัดสินใจ ไม่ส่งซ้ำในรอบนี้'); return; }
+  buildSurvey(); show('s-survey'); updateProgress();
+}
+function backToConsent(){ show('s-consent'); }
+
+// ---- Build survey (Form A subset) ----
+const ratingQs = [
+  { code:'overall', text:'1. ความพึงพอใจภาพรวมต่อสำนักงานบัญชี' },
+  { code:'accuracy', text:'2. ความถูกต้องของงานบัญชี/ภาษี' },
+  { code:'speed',    text:'3. ความรวดเร็วในการให้บริการ' }
+];
+const rateLabels = {1:'ไม่พอใจมาก',2:'ไม่พอใจ',3:'เฉยๆ',4:'พอใจ',5:'พอใจมาก'};
+const problemOpts = [
+  'ติดต่อยาก','ตอบช้า','ไม่ทราบสถานะงาน','ส่งเอกสารซ้ำ','งานล่าช้า',
+  'งานผิด/แก้หลายครั้ง','อธิบายไม่เข้าใจ','ค่าบริการไม่เหมาะสม','ยังไม่พบปัญหา'
+];
+
+function buildSurvey(){
+  // ratings
+  const rc = document.getElementById('ratingQuestions'); rc.innerHTML='';
+  ratingQs.forEach(q=>{
+    const block=document.createElement('div'); block.className='q-block';
+    let btns='';
+    for(let i=1;i<=5;i++){
+      btns+=`<button class="rate-btn" data-q="${q.code}" data-v="${i}" onclick="pickRate('${q.code}',${i},this)">
+                <span class="num">${i}</span><span class="lbl">${rateLabels[i]}</span></button>`;
+    }
+    block.innerHTML=`<div class="q-title">${q.text}</div><div class="rating">${btns}</div>
+                     <div id="fu-${q.code}"></div>`;
+    rc.appendChild(block);
+  });
+  // problems (chips)
+  const pc=document.getElementById('problemChips'); pc.innerHTML='';
+  problemOpts.forEach(opt=>{
+    const excl = opt==='ยังไม่พบปัญหา';
+    const c=document.createElement('button');
+    c.className='chip'+(excl?' exclusive':''); c.textContent=opt;
+    c.onclick=()=>toggleProblem(opt,excl,c);
+    pc.appendChild(c);
+  });
+  // NPS
+  const np=document.getElementById('npsRow'); np.innerHTML='';
+  for(let i=0;i<=10;i++){
+    const b=document.createElement('button'); b.className='nps-btn'; b.textContent=i;
+    b.onclick=()=>{ state.nps=i; document.querySelectorAll('.nps-btn').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); flashSave(); updateProgress(); };
+    np.appendChild(b);
+  }
+}
+
+// ---- Rating + conditional follow-up ----
+function pickRate(code,val,el){
+  state.ratings[code]=val;
+  el.parentElement.querySelectorAll('.rate-btn').forEach(b=>b.classList.remove('sel'));
+  el.classList.add('sel');
+  renderFollowup(code,val);
+  flashSave(); updateProgress();
+}
+function renderFollowup(code,val){
+  const mount=document.getElementById('fu-'+code);
+  let cls='followup', body='';
+  if(val>=4){ cls+=' pos';
+    body=`<b>ดีใจที่คุณพอใจค่ะ 😊</b> จุดไหนที่เราทำได้ดี?
+      <textarea rows="2" placeholder="เช่น ตอบเร็ว อธิบายเข้าใจง่าย…" oninput="state.followups['${code}']=this.value"></textarea>`;
+  } else if(val===3){ cls+='';
+    body=`มีเรื่องไหนที่อยากให้เราปรับปรุงไหมคะ?
+      <textarea rows="2" placeholder="บอกได้เลยค่ะ…" oninput="state.followups['${code}']=this.value"></textarea>`;
+  } else { cls+=' neg';
+    body=`<b>ขอบคุณที่บอกตรงๆ ค่ะ 🙏</b> ช่วยเล่าสาเหตุให้น้อง NOVA หน่อยได้ไหมคะ?
+      <textarea rows="2" placeholder="เกิดอะไรขึ้น…" oninput="state.followups['${code}']=this.value"></textarea>
+      <label style="display:flex; gap:8px; align-items:center; margin-top:8px; font-size:14px; cursor:pointer;">
+        <input type="checkbox" onchange="state.wantContact=this.checked; flashSave();" style="width:18px;height:18px;">
+        อยากให้ทีมติดต่อกลับเพื่อดูแลเรื่องนี้</label>`;
+  }
+  mount.innerHTML=`<div class="${cls}">${body}</div>`;
+}
+
+// ---- Problem multi-select (exclusive "ยังไม่พบปัญหา") ----
+function toggleProblem(opt,excl,el){
+  const chips=document.querySelectorAll('#problemChips .chip');
+  if(excl){
+    const nowSel=!el.classList.contains('sel');
+    state.problems.clear();
+    chips.forEach(c=>{ c.classList.remove('sel'); if(!c.classList.contains('exclusive')) c.classList.toggle('dimmed',nowSel); });
+    if(nowSel){ el.classList.add('sel'); state.problems.add(opt); }
+  } else {
+    // ถ้ามี exclusive อยู่ ให้ปลดก่อน
+    const exEl=[...chips].find(c=>c.classList.contains('exclusive'));
+    if(exEl && exEl.classList.contains('sel')){ exEl.classList.remove('sel'); state.problems.delete('ยังไม่พบปัญหา'); }
+    chips.forEach(c=>c.classList.remove('dimmed'));
+    el.classList.toggle('sel');
+    if(el.classList.contains('sel')) state.problems.add(opt); else state.problems.delete(opt);
+  }
+  flashSave(); updateProgress();
+}
+
+// ---- Autosave banner + fake offline ----
+let saveTimer;
+function flashSave(){
+  const el=document.getElementById('autosave'); el.classList.add('show');
+  clearTimeout(saveTimer); saveTimer=setTimeout(()=>el.classList.remove('show'),1600);
+}
+// จำลอง offline ทุกๆ ~14 วิ โผล่ banner สั้นๆ (โชว์ว่า UX รองรับเน็ตหลุด)
+setInterval(()=>{
+  if(document.getElementById('s-survey').classList.contains('active')){
+    const b=document.getElementById('offlineBanner'); b.style.display='flex';
+    setTimeout(()=>{ b.style.display='none'; flashSave(); },2500);
+  }
+}, 15000);
+
+// ---- Progress ----
+function updateProgress(){
+  const total = ratingQs.length + 2; // ratings + problems + nps
+  let done = Object.keys(state.ratings).length;
+  if(state.problems.size>0) done++;
+  if(state.nps!==null) done++;
+  const pct = Math.round(done/total*100);
+  document.getElementById('progFill').style.width=pct+'%';
+  const mins = Math.max(1, Math.ceil((total-done)*0.6));
+  document.getElementById('progTime').textContent = pct>=100 ? 'พร้อมส่ง' : `เหลือ ~${mins} นาที`;
+}
+
+// ---- Review ----
+function goReview(){
+  const list=document.getElementById('reviewList'); list.innerHTML='';
+  ratingQs.forEach(q=>{
+    const v=state.ratings[q.code];
+    list.appendChild(reviewRow(q.text, v?`${v} — ${rateLabels[v]}`:'(ยังไม่ตอบ)'));
+  });
+  const probs = state.problems.size? [...state.problems].join(', ') : '(ไม่ได้เลือก)';
+  list.appendChild(reviewRow('ปัญหาที่พบ', probs));
+  list.appendChild(reviewRow('คะแนนแนะนำ (NPS)', state.nps!==null? state.nps+'/10':'(ยังไม่ตอบ)'));
+  list.appendChild(reviewRow('ขอให้ติดต่อกลับ', state.wantContact?'ใช่':'ไม่'));
+  show('s-review');
+}
+function reviewRow(q,a){
+  const d=document.createElement('div'); d.className='review-item';
+  d.innerHTML=`<span class="rq">${q}</span><span class="ra">${a} <span class="edit" onclick="show('s-survey')">แก้</span></span>`;
+  return d;
+}
+
+// ---- Submit ----
+function submitSurvey(){
+  document.getElementById('contactBackNote').style.display = state.wantContact?'block':'none';
+  show('s-confirm');
+}
+function restart(){
+  state.ratings={}; state.problems=new Set(); state.nps=null; state.wantContact=false; state.followups={};
+  show('s-loading'); startLoading();
+}
+</script>
+</body>
+</html>

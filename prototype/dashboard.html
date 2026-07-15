@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA-CX — Dashboard (ต้นแบบ)</title>
+<link rel="stylesheet" href="assets/nova.css">
+</head>
+<body>
+
+<div class="dash-wrap">
+
+  <!-- ===================== TOP BAR ===================== -->
+  <div class="dash-top">
+    <div class="dash-title">
+      <div id="dashMascot"></div>
+      <div>
+        <h1 style="margin:0; color:var(--navy-800); font-size:24px;">NOVA-CX Dashboard</h1>
+        <p style="margin:0; color:var(--muted); font-size:13px;">
+          <span id="ctxLabel">ภาพรวมทั้งสำนักงาน</span> · รอบ ไตรมาส 2/2569
+          <span class="badge badge-mock" style="margin-left:6px;">ข้อมูล mock</span>
+        </p>
+      </div>
+    </div>
+    <div>
+      <a class="btn btn-ghost" href="index.html" style="min-height:40px;">← หน้ารวม</a>
+    </div>
+  </div>
+
+  <!-- ===================== ROLE SWITCH ===================== -->
+  <div style="margin-bottom:18px;">
+    <span style="font-size:13px; color:var(--muted); margin-right:10px;">มุมมองตามบทบาท (จำลองสิทธิ์):</span>
+    <div class="role-switch">
+      <button id="btn-exec" class="active" onclick="switchRole('exec')">👔 ผู้บริหาร</button>
+      <button id="btn-acc" onclick="switchRole('acc')">🧮 นักบัญชี (คุณแนน)</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       VIEW: ผู้บริหาร (EXECUTIVE)
+       ============================================================ -->
+  <div id="view-exec">
+
+    <!-- KPI row — แสดง Sample Size คู่คะแนนเสมอ -->
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="label">CSAT (ความพึงพอใจ)</div>
+        <div class="value">4.3<span style="font-size:16px; color:var(--muted-2);">/5</span></div>
+        <div class="sample">จาก 214 คำตอบ</div>
+        <div class="delta up">▲ 0.2 จากไตรมาสก่อน</div>
+      </div>
+      <div class="kpi">
+        <div class="label">NPS</div>
+        <div class="value">+42</div>
+        <div class="sample">จาก 214 คำตอบ</div>
+        <div class="delta up">▲ 5 จากไตรมาสก่อน</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Response Rate</div>
+        <div class="value">68%</div>
+        <div class="sample">ส่ง 314 · ตอบ 214</div>
+        <div class="delta down">▼ 3% จากไตรมาสก่อน</div>
+      </div>
+      <div class="kpi">
+        <div class="label">ลูกค้าเสี่ยงยกเลิก</div>
+        <div class="value" style="color:var(--red);">7</div>
+        <div class="sample">ราย (ต้องติดตามด่วน)</div>
+        <div class="delta up" style="color:var(--muted);">— เท่าเดิม</div>
+      </div>
+    </div>
+
+    <!-- เคส Critical/High + คะแนนรายทีม -->
+    <div class="grid-2">
+      <div class="card">
+        <div class="section-title">
+          <span>เคสเร่งด่วนที่ต้องดูแล</span>
+          <span><span class="badge badge-critical">Critical 2</span> <span class="badge badge-high">High 5</span></span>
+        </div>
+        <div class="case-row">
+          <span class="cid">#C-1042</span>
+          <span class="cdesc">ลูกค้าแจ้งขอ<b>ยกเลิกบริการ</b> — เปิด Retention Case<br>
+            <span class="cmeta">ทีมบัญชี A · SLA เหลือ 3 ชม. · เจ้าของ: หัวหน้าฝ่าย</span></span>
+          <span class="badge badge-critical">Critical</span>
+        </div>
+        <div class="case-row">
+          <span class="cid">#C-1039</span>
+          <span class="cdesc">กังวลเรื่อง<b>กำหนดยื่นภาษี</b>ล่าช้า อาจโดนค่าปรับ<br>
+            <span class="cmeta">ทีมบัญชี C · SLA เหลือ 1 ชม. · เจ้าของ: ผู้บริหาร</span></span>
+          <span class="badge badge-critical">Critical</span>
+        </div>
+        <div class="case-row">
+          <span class="cid">#C-1051</span>
+          <span class="cdesc">ขอ<b>เปลี่ยนนักบัญชี</b>ผู้ดูแล — ส่งให้หัวหน้าทีมตรวจ<br>
+            <span class="cmeta">ทีมบัญชี B · วันนี้ · เจ้าของ: หัวหน้าทีม B</span></span>
+          <span class="badge badge-high">High</span>
+        </div>
+        <div class="case-row" style="border-bottom:none;">
+          <span class="cid">#C-1055</span>
+          <span class="cdesc">งานผิดต้องแก้หลายครั้ง<br>
+            <span class="cmeta">ทีมบัญชี A · วันนี้ · เจ้าของ: หัวหน้าทีม A</span></span>
+          <span class="badge badge-high">High</span>
+        </div>
+        <div class="note-box">
+          <b>AI น้อง NOVA:</b> เคส Critical/High ทั้งหมดต้องให้มนุษย์ตรวจก่อนตอบลูกค้า
+          — AI แยก "ข้อเท็จจริงจากลูกค้า" ออกจาก "ข้อสันนิษฐาน" และแสดงหลักฐานประกอบเสมอ
+          <span class="mock-tag">ผลตัวอย่าง</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>คะแนน CSAT รายทีม</span></div>
+        <div class="bar-row"><span class="name">ทีมบัญชี A</span>
+          <div class="bar-track"><div class="bar-fill" style="width:90%"></div></div>
+          <span class="bar-val"><b>4.5</b> · n=78</span></div>
+        <div class="bar-row"><span class="name">ทีมบัญชี B</span>
+          <div class="bar-track"><div class="bar-fill" style="width:84%"></div></div>
+          <span class="bar-val"><b>4.2</b> · n=64</span></div>
+        <div class="bar-row"><span class="name">ทีมบัญชี C</span>
+          <div class="bar-track"><div class="bar-fill" style="width:74%; background:linear-gradient(90deg,#f59e0b,#fbbf24);"></div></div>
+          <span class="bar-val"><b>3.7</b> · n=52</span></div>
+        <div class="bar-row"><span class="name">ทีมขาย</span>
+          <div class="bar-track"><div class="bar-fill" style="width:88%"></div></div>
+          <span class="bar-val"><b>4.4</b> · n=20</span></div>
+
+        <div class="note-box" style="background:var(--amber-bg); color:#92400e;">
+          ⚠ <b>ทีมบัญชี C</b> คะแนนต่ำกว่าเกณฑ์ + มีเคส Critical 1 · ควรเข้าดูแล<br>
+          <span style="font-size:12px;">ทุกคะแนนแสดง Sample Size (n) เสมอ — n น้อยจะไม่สรุป "ดี/แย่ที่สุด"</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ปัญหาพบบ่อย + touchpoint -->
+    <div class="grid-2b">
+      <div class="card">
+        <div class="section-title"><span>ปัญหาที่พบบ่อย (ไตรมาสนี้)</span></div>
+        <div class="prob-row"><span>ตอบช้า / ติดต่อยาก</span><span class="cnt">38 ครั้ง</span></div>
+        <div class="prob-row"><span>ไม่ทราบสถานะงาน</span><span class="cnt">29 ครั้ง</span></div>
+        <div class="prob-row"><span>งานล่าช้ากระทบกำหนด</span><span class="cnt">17 ครั้ง</span></div>
+        <div class="prob-row"><span>ค่าบริการ/ค่าใช้จ่ายไม่ชัด</span><span class="cnt">12 ครั้ง</span></div>
+        <div class="prob-row" style="border-bottom:none;"><span>งานผิด/แก้หลายครั้ง</span><span class="cnt">9 ครั้ง</span></div>
+      </div>
+      <div class="card">
+        <div class="section-title"><span>สรุปสถานะเคส</span></div>
+        <div class="prob-row"><span>🔴 Critical / High เปิดอยู่</span><span class="cnt">7</span></div>
+        <div class="prob-row"><span>🟡 Medium (Follow-up Task)</span><span class="cnt">14</span></div>
+        <div class="prob-row"><span>🟢 Positive Feedback</span><span class="cnt">126</span></div>
+        <div class="prob-row"><span>เวลาตอบกลับเฉลี่ย (First Response)</span><span class="cnt">3.2 ชม.</span></div>
+        <div class="prob-row" style="border-bottom:none;"><span>เวลาปิดเคสเฉลี่ย</span><span class="cnt">2.1 วัน</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       VIEW: นักบัญชี (ACCOUNTANT) — เห็นคะแนนตัวเอง ไม่เห็นชื่อลูกค้า
+       ============================================================ -->
+  <div id="view-acc" class="hidden">
+    <div class="note-box" style="margin-bottom:16px;">
+      🔒 มุมมอง <b>นักบัญชี</b>: เห็นเฉพาะคะแนน/คำชม/จุดปรับปรุงของตนเอง —
+      <b>ไม่เห็นชื่อลูกค้า</b> และไม่เห็นข้อมูลลูกค้านอกความรับผิดชอบ (บังคับที่ชั้น view/RLS ไม่ใช่แค่ซ่อนหน้าจอ)
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="label">คะแนนเฉลี่ยของฉัน</div>
+        <div class="value">4.4<span style="font-size:16px; color:var(--muted-2);">/5</span></div>
+        <div class="sample">จาก 31 คำตอบ (รอบนี้)</div>
+        <div class="delta up">▲ 0.3 จากเดือนก่อน</div>
+      </div>
+      <div class="kpi">
+        <div class="label">คำชมที่ได้รับ</div>
+        <div class="value" style="color:var(--green);">18</div>
+        <div class="sample">ความเห็นเชิงบวก</div>
+      </div>
+      <div class="kpi">
+        <div class="label">จุดที่ควรปรับปรุง</div>
+        <div class="value" style="color:var(--amber);">3</div>
+        <div class="sample">หัวข้อที่คะแนนต่ำ</div>
+      </div>
+      <div class="kpi">
+        <div class="label">งานติดตามของฉัน</div>
+        <div class="value">2</div>
+        <div class="sample">Task ที่ยังไม่ปิด</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="section-title"><span>คะแนนแยกหัวข้อ (ของฉัน)</span></div>
+        <div class="bar-row"><span class="name">ตอบเร็ว</span>
+          <div class="bar-track"><div class="bar-fill" style="width:96%"></div></div>
+          <span class="bar-val"><b>4.8</b> · n=31</span></div>
+        <div class="bar-row"><span class="name">สุภาพ/มืออาชีพ</span>
+          <div class="bar-track"><div class="bar-fill" style="width:94%"></div></div>
+          <span class="bar-val"><b>4.7</b> · n=31</span></div>
+        <div class="bar-row"><span class="name">อธิบายเข้าใจง่าย</span>
+          <div class="bar-track"><div class="bar-fill" style="width:84%"></div></div>
+          <span class="bar-val"><b>4.2</b> · n=31</span></div>
+        <div class="bar-row"><span class="name">แจ้งสถานะต่อเนื่อง</span>
+          <div class="bar-track"><div class="bar-fill" style="width:70%; background:linear-gradient(90deg,#f59e0b,#fbbf24);"></div></div>
+          <span class="bar-val"><b>3.5</b> · n=31</span></div>
+        <div class="bar-row"><span class="name">แจ้งเอกสารครบ/ชัด</span>
+          <div class="bar-track"><div class="bar-fill" style="width:82%"></div></div>
+          <span class="bar-val"><b>4.1</b> · n=31</span></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>คำชม & จุดปรับปรุง</span></div>
+        <p style="font-size:12px; color:var(--muted); margin-top:0;">
+          ความเห็นแสดง<b>โดยไม่ระบุชื่อลูกค้า</b></p>
+        <div style="background:var(--green-bg); border-radius:10px; padding:10px 12px; margin-bottom:10px;">
+          <b style="color:var(--green); font-size:13px;">👍 คำชม</b>
+          <p style="font-size:13px; margin:4px 0 0;">"ตอบไว ใจเย็น อธิบายเรื่องภาษีให้เข้าใจได้ดีมากค่ะ"</p>
+        </div>
+        <div style="background:var(--green-bg); border-radius:10px; padding:10px 12px; margin-bottom:10px;">
+          <p style="font-size:13px; margin:0;">"ดูแลดี ติดตามงานให้ตลอด ประทับใจ"</p>
+        </div>
+        <div style="background:var(--amber-bg); border-radius:10px; padding:10px 12px;">
+          <b style="color:var(--amber); font-size:13px;">⚠ ควรปรับปรุง</b>
+          <p style="font-size:13px; margin:4px 0 0;">"อยากให้แจ้งความคืบหน้าบ่อยขึ้น บางช่วงเงียบไปหน่อย"</p>
+        </div>
+
+        <div class="note-box" style="margin-top:14px;">
+          n=31 เพียงพอต่อการดูแนวโน้ม — หากรอบไหนคำตอบน้อย ระบบจะ<b>ไม่สรุป</b>ว่าดี/แย่ที่สุด
+          เพื่อความเป็นธรรม
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="assets/mascot.js"></script>
+<script>
+  document.getElementById('dashMascot').innerHTML = NOVA.profile(52);
+
+  function switchRole(role){
+    const isExec = role==='exec';
+    document.getElementById('view-exec').classList.toggle('hidden', !isExec);
+    document.getElementById('view-acc').classList.toggle('hidden', isExec);
+    document.getElementById('btn-exec').classList.toggle('active', isExec);
+    document.getElementById('btn-acc').classList.toggle('active', !isExec);
+    document.getElementById('ctxLabel').textContent = isExec ? 'ภาพรวมทั้งสำนักงาน' : 'คะแนนของฉัน (นักบัญชี)';
+    window.scrollTo({top:0, behavior:'smooth'});
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA-CX Prototype — เลือกดู Flow</title>
+<link rel="stylesheet" href="assets/nova.css">
+</head>
+<body>
+
+<div class="landing">
+
+  <!-- ===================== HERO + Mascot ===================== -->
+  <div class="hero">
+    <div id="heroMascot" aria-hidden="true"></div>
+    <div>
+      <h1>NOVA Customer Experience System</h1>
+      <p>ต้นแบบกดดูได้ (clickable mockup) สำหรับขออนุมัติก่อนเขียนโค้ดจริง — Gate 2<br>
+         ระบบประเมินความพึงพอใจลูกค้า Finovas Accounting ผ่าน LINE OA</p>
+      <p style="margin-top:14px;">
+        <span class="badge badge-mock">นี่คือต้นแบบ — ข้อมูลทั้งหมดเป็นตัวอย่าง (mock)</span>
+      </p>
+    </div>
+  </div>
+
+  <!-- ===================== Mascot Showcase ===================== -->
+  <div class="section-head">
+    <h2>น้อง NOVA — Mascot ออกแบบใหม่</h2>
+    <p>นกอินทรีใส่แว่น สูทน้ำเงินเข้ม ถือเครื่องคิดเลข — ฉลาด เป็นมิตร น่าเชื่อถือ ไม่ดุ</p>
+  </div>
+  <div class="mascot-showcase">
+    <div class="showcase-card">
+      <div id="mFull" style="min-height:200px; display:flex; align-items:flex-end; justify-content:center;"></div>
+      <h4>Full Character</h4>
+      <p>หน้า welcome / confirmation</p>
+    </div>
+    <div class="showcase-card">
+      <div id="mIcon" style="min-height:200px; display:flex; align-items:center; justify-content:center;"></div>
+      <h4>Icon</h4>
+      <p>Rich Menu / ปุ่ม / favicon</p>
+    </div>
+    <div class="showcase-card">
+      <div id="mProfile" style="min-height:200px; display:flex; align-items:center; justify-content:center;"></div>
+      <h4>Profile (วงกลม)</h4>
+      <p>การ์ด / แชต / avatar</p>
+    </div>
+    <div class="showcase-card">
+      <div id="mLoader" style="min-height:200px; display:flex; align-items:center; justify-content:center;"></div>
+      <h4>Loading Animation</h4>
+      <p>วิ่ง + เครื่องคิดเลขขยับ + เอกสารปลิว</p>
+    </div>
+  </div>
+
+  <!-- ===================== Flow chooser ===================== -->
+  <div class="section-head">
+    <h2>เลือก Flow ที่อยากลอง</h2>
+    <p>แต่ละหน้าเปิดแยกได้ กดปุ่มด้านล่างเพื่อเข้าไปกดดูจริง</p>
+  </div>
+  <div class="flow-grid">
+
+    <div class="flow-card">
+      <div style="font-size:30px;">📱</div>
+      <h3>LIFF Survey (มือถือ)</h3>
+      <p>Loading → PDPA → แบบประเมิน A (สำนักงาน) พร้อม conditional, progress bar,
+         auto-save, ตรวจก่อนส่ง, confirmation — กดเดินได้ครบ</p>
+      <a class="btn btn-primary btn-block" href="survey.html">เปิด LIFF Survey ▸</a>
+    </div>
+
+    <div class="flow-card">
+      <div style="font-size:30px;">📊</div>
+      <h3>Dashboard</h3>
+      <p>ผู้บริหาร: CSAT/NPS/Response Rate + เคส Critical/High + คะแนนรายทีม +
+         ปัญหาพบบ่อย (แสดง Sample Size เสมอ) — สลับดูมุม "นักบัญชี" ได้</p>
+      <a class="btn btn-primary btn-block" href="dashboard.html">เปิด Dashboard ▸</a>
+    </div>
+
+    <div class="flow-card">
+      <div style="font-size:30px;">⏳</div>
+      <h3>Loading + Fallback</h3>
+      <p>ดู Loading Animation เต็มจอ + ข้อความสลับ + จำลองกรณีโหลดเกิน 5 วิ
+         (ปุ่ม "ลองใหม่" / "แจ้งปัญหา")</p>
+      <a class="btn btn-ghost btn-block" href="survey.html?demo=loading">ดู Loading Demo ▸</a>
+    </div>
+
+  </div>
+
+  <!-- ===================== What is real / mock ===================== -->
+  <div class="section-head">
+    <h2>ต้นแบบนี้ครอบคลุมอะไร</h2>
+  </div>
+  <div class="grid-2b">
+    <div class="card">
+      <h3 style="color:var(--green)">✓ กดดูได้จริงในต้นแบบ</h3>
+      <ul style="font-size:14px; color:var(--text); padding-left:18px; line-height:1.9;">
+        <li>Mascot 4 แบบ (Full / Icon / Profile / Loading)</li>
+        <li>LIFF Survey แบบ A เดินครบเส้นทาง (state machine ใน JS)</li>
+        <li>Conditional: คะแนน 1–2 เด้งหาสาเหตุ+ติดต่อกลับ, 4–5 ถามจุดเด่น</li>
+        <li>Multi-select "ยังไม่พบปัญหา" ตัดข้ออื่น</li>
+        <li>Progress bar + auto-save banner + จำลอง offline</li>
+        <li>Review ก่อนส่ง + Confirmation</li>
+        <li>Dashboard สลับมุมผู้บริหาร ↔ นักบัญชี</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="color:var(--amber)">◐ จำลองไว้ / ยังไม่ทำจริง</h3>
+      <ul style="font-size:14px; color:var(--text); padding-left:18px; line-height:1.9;">
+        <li>ข้อมูลทั้งหมดเป็น mock — <b>ไม่ต่อ backend/DB</b></li>
+        <li>LINE Login / LIFF SDK จริง (ในต้นแบบข้ามไป)</li>
+        <li>AI น้อง NOVA วิเคราะห์จริง (โชว์แต่ผลตัวอย่าง)</li>
+        <li>Auth/RBAC/RLS จริง — สลับมุมด้วยปุ่มเฉยๆ</li>
+        <li>กราฟ trend จริง (ใช้แท่ง/ตัวเลข mock)</li>
+        <li>แบบประเมิน B/C/D (โชว์เฉพาะ A เป็นตัวแทน)</li>
+      </ul>
+    </div>
+  </div>
+
+  <p style="text-align:center; color:var(--muted); margin-top:40px; font-size:13px;">
+    NOVA-CX Prototype • เปิดไฟล์นี้ในเบราว์เซอร์ได้เลย ไม่ต้อง build •
+    ดูรายละเอียดใน <code>prototype/README.md</code>
+  </p>
+</div>
+
+<script src="assets/mascot.js"></script>
+<script>
+  document.getElementById('heroMascot').innerHTML = NOVA.full(150);
+  document.getElementById('mFull').innerHTML     = NOVA.full(150);
+  document.getElementById('mIcon').innerHTML     = NOVA.icon(120);
+  document.getElementById('mProfile').innerHTML  = NOVA.profile(120);
+  document.getElementById('mLoader').innerHTML   = NOVA.loaderScene();
+</script>
+</body>
+</html>
