@@ -3,22 +3,23 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NOVA-CX — แกลเลอรี Mascot คาปิบาร่า (6 แบบให้เลือก)</title>
+<title>NOVA-CX — แกลเลอรี Mascot คาปิบาร่า (6 แบบ + ตอนขยับ)</title>
 <link rel="stylesheet" href="assets/nova.css">
 <style>
   body{ padding:24px 16px 60px; }
   .wrap{ max-width:1100px; margin:0 auto; }
   .head-bar{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:22px; }
-  .gallery{ display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:20px; }
+  .gallery{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:20px; }
   .m-card{ background:#fff; border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-sm);
     padding:18px; display:flex; flex-direction:column; }
   .m-card .stage{ background:linear-gradient(135deg,#f1f5f9,#e0e7ff); border-radius:14px; padding:14px;
-    display:flex; align-items:flex-end; justify-content:center; min-height:230px; margin-bottom:14px; }
+    display:flex; align-items:center; justify-content:center; min-height:230px; margin-bottom:14px; overflow:hidden; }
   .m-no{ display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px;
     border-radius:50%; background:var(--navy-800); color:#fff; font-size:13px; font-weight:700; margin-right:8px; }
   .m-card h3{ color:var(--navy-800); font-size:17px; display:flex; align-items:center; margin-bottom:6px; }
-  .m-card p{ font-size:13px; color:var(--muted); margin:0; flex:1; }
-  .m-tag{ margin-top:12px; }
+  .m-card p{ font-size:13px; color:var(--muted); margin:0 0 12px; flex:1; }
+  .card-foot{ display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  .tgl-btn{ min-height:36px; padding:5px 14px; font-size:13px; }
 </style>
 </head>
 <body>
@@ -26,34 +27,37 @@
 
   <div class="head-bar">
     <a class="btn btn-ghost" href="index.html" style="min-height:40px;">← กลับหน้ารวม</a>
-    <span class="badge badge-mock">เลือกแบบ mascot — ทุกแบบ inline SVG ออกแบบใหม่ (C-05)</span>
+    <button class="btn btn-ghost" style="min-height:40px;" onclick="toggleAll()" id="toggleAllBtn">⏸ หยุดขยับทั้งหมด (ดูภาพนิ่ง)</button>
+    <span class="badge badge-mock">เลือกแบบ mascot — inline SVG ออกแบบใหม่ (C-05)</span>
   </div>
 
   <div class="section-head" style="margin-top:0;">
-    <h2>น้อง NOVA — คาปิบาร่า 6 แบบให้เลือก</h2>
-    <p>ทุกแบบเป็นคาปิบาร่า ใส่สูท ผูกไท ถือเครื่องคิดเลข โทนสีแบรนด์ Finovas — เลือกแบบที่ชอบที่สุดได้เลยค่ะ</p>
+    <h2>น้อง NOVA — คาปิบาร่า 6 แบบ (ขยับจริงแบบตอนโหลดฟอร์ม)</h2>
+    <p>แต่ละแบบวางในฉาก loading เดียวกัน: วิ่งเด้ง + เครื่องคิดเลขสั่น + เอกสารปลิว วนลูป ~1.5 วิ
+       — กด "ดูภาพนิ่ง" ที่การ์ดเพื่อเทียบท่านิ่งได้</p>
   </div>
 
   <div class="gallery" id="gallery"></div>
 
   <p style="text-align:center; color:var(--muted); font-size:13px; margin-top:34px;">
-    เมื่อเลือกแบบได้แล้ว จะนำไปใช้แทนคาปิบาร่าปัจจุบันใน <code>assets/mascot.js</code>
+    เมื่อเลือกแบบได้แล้ว จะนำท่านิ่ง + ท่าขยับของแบบนั้นไปใช้ใน <code>assets/mascot.js</code>
     (survey / dashboard / หน้ารวม จะเปลี่ยนตามอัตโนมัติ)
   </p>
 </div>
 
 <script>
 /* ============================================================
-   NOVA-CX — Mascot Gallery
-   คาปิบาร่า 6 แบบ วาดด้วย inline SVG แยกอิสระในไฟล์นี้
-   (ไม่แตะ mascot.js / survey.html / dashboard.html)
+   NOVA-CX — Mascot Gallery (คาปิบาร่า 6 แบบ + loading animation)
+   inline SVG อิสระในไฟล์นี้ — ไม่แตะ mascot.js / survey.html / dashboard.html
+   ใช้คลาส animation เดิมจาก nova.css: nova-loader / nova-run /
+   nova-calc-shake / nova-doc d1|d2|d3 (keyframes nova-bob/shake/fly)
    ============================================================ */
 
 // สีแบรนด์ + ขนคาปิบาร่า
 const NAVY="#1e3a8a", NAVY_D="#172554", BLUE="#2563eb", SKY="#38bdf8", AMBER="#f59e0b";
 const FUR="#a97b52", FUR_D="#8a5f3c", FUR_L="#c79a6e", NOSE="#5b3a26", EYE="#2b1a10";
 
-// เครื่องคิดเลข (ใช้ร่วม) — วางที่ origin, ปรับ transform ภายนอก
+// เครื่องคิดเลข (วางที่ origin, ปรับ transform ภายนอก)
 function calc(disp){
   disp = disp || "1,240";
   return `
@@ -68,40 +72,32 @@ function calc(disp){
   <rect x="9" y="17" width="9" height="7" rx="2" fill="#f59e0b"/>`;
 }
 
-/* ---------- หัวคาปิบาร่า (พารามิเตอร์ปรับได้ต่อแบบ) ----------
-   opts: glasses, teeth, mouthWide(ยิ้มกว้าง), outline(เส้นหนาสไตล์สติกเกอร์),
-         fur, furD, furL  (override สีขน) */
+/* ---------- หัวคาปิบาร่า (พารามิเตอร์ปรับได้) ----------
+   opts: glasses, teeth, mouthWide, outline */
 function head(o){
   o=o||{};
-  const F=o.fur||FUR, FD=o.furD||FUR_D, FL=o.furL||FUR_L;
-  const sw=o.outline?4:1.5;               // stroke width หัว
-  const eo=o.outline?"#3b2517":FD;        // สีเส้นขอบ
+  const F=FUR, FD=FUR_D, FL=FUR_L;
+  const sw=o.outline?4:1.5;
+  const eo=o.outline?"#3b2517":FD;
   const mouth = o.mouthWide
     ? `<path d="M98 142 Q120 164 142 142" fill="none" stroke="${NOSE}" stroke-width="3.2" stroke-linecap="round"/>`
     : `<path d="M104 144 Q120 156 136 144" fill="none" stroke="${NOSE}" stroke-width="3" stroke-linecap="round"/>`;
   return `
-    <!-- หูกลมเล็ก -->
     <ellipse cx="74" cy="58" rx="15" ry="14" fill="${FD}" stroke="${eo}" stroke-width="${o.outline?3:0}"/>
     <ellipse cx="166" cy="58" rx="15" ry="14" fill="${FD}" stroke="${eo}" stroke-width="${o.outline?3:0}"/>
     <ellipse cx="74" cy="60" rx="8" ry="7" fill="${NOSE}" opacity=".55"/>
     <ellipse cx="166" cy="60" rx="8" ry="7" fill="${NOSE}" opacity=".55"/>
-    <!-- หัวโตทรงมน -->
     <path d="M62 78 Q62 52 92 50 L148 50 Q178 52 178 78 L178 118 Q178 150 148 156 L92 156 Q62 150 62 118 Z"
           fill="${F}" stroke="${eo}" stroke-width="${sw}"/>
-    <!-- แก้มชมพู -->
     <ellipse cx="80" cy="120" rx="12" ry="8" fill="#e79a86" opacity=".55"/>
     <ellipse cx="160" cy="120" rx="12" ry="8" fill="#e79a86" opacity=".55"/>
-    <!-- ปากกระบอก -->
     <ellipse cx="120" cy="128" rx="42" ry="34" fill="${FL}"/>
-    <!-- ตากลมโต -->
     <circle cx="100" cy="94" r="15" fill="#fff" stroke="${eo}" stroke-width="${o.outline?2.5:1}"/>
     <circle cx="140" cy="94" r="15" fill="#fff" stroke="${eo}" stroke-width="${o.outline?2.5:1}"/>
     <circle cx="101" cy="96" r="9" fill="${EYE}"/><circle cx="139" cy="96" r="9" fill="${EYE}"/>
     <circle cx="104" cy="92" r="3" fill="#fff"/><circle cx="142" cy="92" r="3" fill="#fff"/>
-    <!-- คิ้ว -->
     <path d="M86 74 Q100 68 114 74" fill="none" stroke="${FD}" stroke-width="4" stroke-linecap="round"/>
     <path d="M154 74 Q140 68 126 74" fill="none" stroke="${FD}" stroke-width="4" stroke-linecap="round"/>
-    <!-- จมูกใหญ่ -->
     <rect x="98" y="112" width="44" height="26" rx="12" fill="${NOSE}" stroke="${o.outline?eo:'none'}" stroke-width="${o.outline?2:0}"/>
     <ellipse cx="110" cy="122" rx="4" ry="5" fill="${EYE}"/><ellipse cx="130" cy="122" rx="4" ry="5" fill="${EYE}"/>
     ${mouth}
@@ -113,14 +109,11 @@ function head(o){
   `;
 }
 
-/* ---------- ลำตัว/สูท (พารามิเตอร์ปรับได้) ----------
-   opts: suit, suitLight, tie(สีไท), pocketPen(ปากกากระเป๋า),
-         wave(โบกมือ), outline, tiePattern */
+/* ---------- ลำตัว/สูท (สำหรับ full static) ---------- */
 function bodyStd(o){
   o=o||{};
   const S=o.suit||NAVY, SL=o.suitLight||NAVY_D, T=o.tie||SKY;
   const eo=o.outline?"#0b1f4d":"none", sw=o.outline?3.5:0;
-  // แขนซ้าย: โบกมือ หรือปกติ
   const leftArm = o.wave
     ? `<path d="M76 184 Q52 150 66 120 Q74 112 84 122 Q80 150 96 176 Z" fill="${S}" stroke="${eo}" stroke-width="${sw}"/>
        <ellipse cx="72" cy="118" rx="14" ry="12" fill="${FUR}" stroke="${eo}" stroke-width="${sw}"/>`
@@ -132,9 +125,7 @@ function bodyStd(o){
     : `<path d="M120 188 L112 202 L120 252 L128 202 Z" fill="${T}"/>`;
   return `
     ${leftArm}
-    <!-- ลำตัวสูท -->
     <path d="M70 180 Q120 170 170 180 L178 302 Q120 314 62 302 Z" fill="${S}" stroke="${eo}" stroke-width="${sw}"/>
-    <!-- เชิ้ตขาว + ปก -->
     <path d="M120 180 L96 302 L120 290 L144 302 Z" fill="#fff"/>
     <path d="M96 184 L120 180 L112 238 Z" fill="${SL}"/>
     <path d="M144 184 L120 180 L128 238 Z" fill="${SL}"/>
@@ -142,45 +133,99 @@ function bodyStd(o){
     ${o.pocketPen?`<rect x="150" y="196" width="20" height="16" rx="2" fill="#fff" opacity=".9"/>
        <rect x="158" y="182" width="4" height="26" rx="2" fill="${AMBER}"/>
        <rect x="158" y="182" width="4" height="7" rx="2" fill="#334155"/>`:``}
-    <!-- แขนขวา (ถือเครื่องคิดเลข) -->
     <path d="M166 182 Q198 198 196 242 Q192 254 178 250 Q182 216 156 208 Z" fill="${S}" stroke="${eo}" stroke-width="${sw}"/>
-    <!-- เท้า -->
     <ellipse cx="98" cy="308" rx="16" ry="10" fill="${FUR_D}" stroke="${eo}" stroke-width="${sw}"/>
     <ellipse cx="142" cy="308" rx="16" ry="10" fill="${FUR_D}" stroke="${eo}" stroke-width="${sw}"/>
   `;
 }
 
-// ประกอบ full character (มาตรฐาน) — headOpts + bodyOpts + ตำแหน่งหัว
-function makeFull(w, headOpts, bodyOpts, headTransform){
+// full character แบบนิ่ง
+function makeFull(w, headOpts, bodyOpts){
   bodyOpts=bodyOpts||{};
-  const ht = headTransform || "";
   return `<svg viewBox="0 0 240 340" width="${w}" role="img" aria-label="น้อง NOVA คาปิบาร่า">
+    ${bodyOpts.gradientDefs||''}
     ${bodyStd(bodyOpts)}
     <g transform="translate(182,234) scale(.85)">${calc()}</g>
     <ellipse cx="182" cy="250" rx="13" ry="11" fill="${FUR}" ${bodyOpts.outline?`stroke="#0b1f4d" stroke-width="3"`:``}/>
-    <g${ht?` transform="${ht}"`:``}>${head(headOpts)}</g>
+    <g>${head(headOpts)}</g>
   </svg>`;
 }
 
 /* ============================================================
-   6 แบบ
+   ฉากขยับ (loading) — generalize จาก NOVA.loaderScene()
+   รับ opts ของแต่ละแบบ แล้ววาดคาปิบาร่าในท่าวิ่ง + calc shake + docs
    ============================================================ */
+function runSceneSVG(o){
+  o=o||{};
+  const S = o.gradient ? "url(#suitGA)" : (o.suit||NAVY);
+  const T = o.tie||SKY;
+  const eo=o.outline?"#0b1f4d":"none", sw=o.outline?3:0;
+  const stroke = sw?` stroke="${eo}" stroke-width="${sw}"`:``;
+  const grad = o.gradient
+    ? `<defs><linearGradient id="suitGA" x1="0" y1="0" x2="1" y2="1">
+         <stop offset="0" stop-color="#1e3a8a"/><stop offset="1" stop-color="#2563eb"/></linearGradient></defs>`
+    : ``;
+  // แขนโบกทัก (ยกขึ้น) สำหรับแบบ "โบกมือ"
+  const waveArm = o.wave
+    ? `<path d="M84 158 Q58 132 64 112 Q70 105 79 114 Q77 136 96 160 Z" fill="${S}"${stroke}/>
+       <ellipse cx="68" cy="110" rx="11" ry="9" fill="${FUR}"${stroke}/>`
+    : ``;
+  const pen = o.pen
+    ? `<rect x="150" y="150" width="4" height="20" rx="2" fill="${AMBER}"/>
+       <rect x="150" y="150" width="4" height="6" rx="2" fill="#334155"/>`
+    : ``;
+  const headScale = o.headScale||1;
+  const hg = headScale!==1
+    ? `<g transform="translate(120,100) scale(${headScale}) translate(-120,-100)">${head(o.headOpts)}</g>`
+    : `<g>${head(o.headOpts)}</g>`;
+  return `<svg viewBox="0 0 240 240" width="150" role="img" aria-label="น้อง NOVA คาปิบาร่ากำลังวิ่ง">
+      ${grad}
+      <ellipse cx="120" cy="172" rx="52" ry="44" fill="${S}"${stroke}/>
+      <path d="M120 132 L106 212 L120 202 L134 212 Z" fill="#fff"/>
+      <path d="M120 140 L112 170 L120 160 L128 170 Z" fill="${T}"/>
+      <ellipse cx="104" cy="214" rx="11" ry="8" fill="${FUR_D}" transform="rotate(-20 104 214)"/>
+      <ellipse cx="138" cy="214" rx="11" ry="8" fill="${FUR_D}" transform="rotate(20 138 214)"/>
+      ${waveArm}
+      <g transform="translate(170,168) scale(.7)"><g class="nova-calc-shake">${calc()}</g></g>
+      ${pen}
+      <ellipse cx="168" cy="182" rx="11" ry="9" fill="${FUR}"${stroke}/>
+      ${hg}
+    </svg>`;
+}
+
+// ห่อด้วยฉาก loading เดิม (bob+tilt wrapper + เอกสารปลิว)
+function animatedScene(o){
+  return `<div class="nova-loader">
+      <div class="nova-doc d1"></div>
+      <div class="nova-doc d2"></div>
+      <div class="nova-doc d3"></div>
+      <div class="nova-run">${runSceneSVG(o)}</div>
+    </div>`;
+}
+
+/* ============================================================
+   6 แบบ — เก็บทั้งท่านิ่ง (static) และ opts ของท่าขยับ (run)
+   ============================================================ */
+const gradientDefs = `<defs><linearGradient id="suitG" x1="0" y1="0" x2="1" y2="1">
+  <stop offset="0" stop-color="#1e3a8a"/><stop offset="1" stop-color="#2563eb"/></linearGradient></defs>`;
+
 const variants = [
   {
     name:"มินิมอลแบน (Baseline)",
     desc:"แบบปัจจุบันในระบบ — สูทน้ำเงินเรียบ ไม่ใส่แว่น สีแบนสะอาดตา ใช้เป็นค่าอ้างอิงเทียบแบบอื่น",
-    svg:()=> makeFull(160, {glasses:false}, {})
+    static:()=> makeFull(150,{glasses:false},{}),
+    run:{ headOpts:{glasses:false} }
   },
   {
     name:"นักบัญชีใส่แว่น",
     desc:"เพิ่มแว่นกรอบมนน้ำเงิน ดูฉลาด มืออาชีพ น่าเชื่อถือแบบนักบัญชี — เหมาะกับภาพลักษณ์การเงิน",
-    svg:()=> makeFull(160, {glasses:true}, {})
+    static:()=> makeFull(150,{glasses:true},{}),
+    run:{ headOpts:{glasses:true} }
   },
   {
     name:"ชิบิน่ารัก (Chibi)",
     desc:"หัวโตพิเศษ ตัวกลมป้อม สัดส่วนน่ารักแบบชิบิ — เป็นมิตรสุด เหมาะกับ sticker/โปรไฟล์แชต",
-    svg:()=> `<svg viewBox="0 0 240 340" width="160" role="img" aria-label="น้อง NOVA ชิบิ">
-        <!-- ตัวกลมป้อมเตี้ย -->
+    static:()=> `<svg viewBox="0 0 240 340" width="150" role="img" aria-label="น้อง NOVA ชิบิ">
         <path d="M74 214 Q46 226 52 262 Q58 272 70 266 Q66 236 86 226 Z" fill="${NAVY}"/>
         <ellipse cx="62" cy="264" rx="12" ry="10" fill="${FUR}"/>
         <path d="M78 210 Q120 198 162 210 L172 300 Q120 316 68 300 Z" fill="${NAVY}"/>
@@ -191,50 +236,62 @@ const variants = [
         <ellipse cx="98" cy="306" rx="15" ry="9" fill="${FUR_D}"/><ellipse cx="142" cy="306" rx="15" ry="9" fill="${FUR_D}"/>
         <g transform="translate(178,246) scale(.7)">${calc()}</g>
         <ellipse cx="178" cy="260" rx="12" ry="10" fill="${FUR}"/>
-        <!-- หัวโตพิเศษ (ขยาย) -->
         <g transform="translate(120,86) scale(1.28) translate(-120,-86)">${head({glasses:false})}</g>
-      </svg>`
+      </svg>`,
+    run:{ headOpts:{glasses:false}, headScale:1.28 }
   },
   {
     name:"โบกมือทักทาย",
     desc:"ยกอุ้งมือซ้ายโบกทักทาย อีกมือถือเครื่องคิดเลข ยิ้มกว้าง — อบอุ่น เหมาะหน้า welcome/สวัสดี",
-    svg:()=> makeFull(160, {mouthWide:true, glasses:false}, {wave:true})
+    static:()=> makeFull(150,{mouthWide:true,glasses:false},{wave:true}),
+    run:{ headOpts:{glasses:false,mouthWide:true}, wave:true }
   },
   {
     name:"สมาร์ทการเงิน (โทนไล่เฉด + ปากกา)",
-    desc:"สูทไล่เฉดน้ำเงิน→ฟ้า เนกไทลายทาง เสียบปากกากระเป๋าสูท ดู smart สายการเงิน โดดเด่นทันสมัย",
-    svg:()=> {
-      // สูทใช้ gradient
-      const grad = `<defs><linearGradient id="suitG" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="#1e3a8a"/><stop offset="1" stop-color="#2563eb"/></linearGradient></defs>`;
-      return `<svg viewBox="0 0 240 340" width="160" role="img" aria-label="น้อง NOVA สมาร์ทการเงิน">
-        ${grad}
-        ${bodyStd({suit:"url(#suitG)", tie:"#0ea5e9", tiePattern:"stripe", pocketPen:true})}
-        <g transform="translate(182,234) scale(.85)">${calc()}</g>
-        <ellipse cx="182" cy="250" rx="13" ry="11" fill="${FUR}"/>
-        <g>${head({glasses:true})}</g>
-      </svg>`;
-    }
+    desc:"สูทไล่เฉดน้ำเงิน→ฟ้า เนกไทลายทาง เสียบปากกากระเป๋าสูท ใส่แว่น ดู smart สายการเงิน ทันสมัย",
+    static:()=> makeFull(150,{glasses:true},
+        {suit:"url(#suitG)",tie:"#0ea5e9",tiePattern:"stripe",pocketPen:true,gradientDefs:gradientDefs}),
+    run:{ headOpts:{glasses:true}, gradient:true, tie:"#0ea5e9", pen:true }
   },
   {
     name:"สไตล์สติกเกอร์ (เส้นหนา)",
-    desc:"เส้นขอบหนาแบบสติกเกอร์ LINE โทนสดใส คอนทราสต์สูง อ่านง่ายในขนาดเล็ก — เด่นบนพื้นหลังทุกสี",
-    svg:()=> makeFull(160, {outline:true, glasses:false, mouthWide:true}, {outline:true})
+    desc:"เส้นขอบหนาแบบสติกเกอร์ LINE คอนทราสต์สูง อ่านง่ายในขนาดเล็ก — เด่นบนพื้นหลังทุกสี",
+    static:()=> makeFull(150,{outline:true,glasses:false,mouthWide:true},{outline:true}),
+    run:{ headOpts:{outline:true,glasses:false,mouthWide:true}, outline:true }
   }
 ];
 
-// render
+/* ---------- render + toggle ---------- */
+const cardState = [];   // true = animated
 const g = document.getElementById('gallery');
+
 variants.forEach((v,i)=>{
+  cardState[i]=true;
   const card=document.createElement('div');
   card.className='m-card';
   card.innerHTML=`
-    <div class="stage">${v.svg()}</div>
+    <div class="stage" id="stage-${i}">${animatedScene(v.run)}</div>
     <h3><span class="m-no">${i+1}</span>${v.name}</h3>
     <p>${v.desc}</p>
-    <div class="m-tag"><span class="badge badge-mock">คาปิบาร่า + สูท + ไท + เครื่องคิดเลข</span></div>`;
+    <div class="card-foot">
+      <span class="badge badge-mock">คาปิบาร่า + สูท + ไท + เครื่องคิดเลข</span>
+      <button class="btn btn-ghost tgl-btn" id="tgl-${i}" onclick="toggleCard(${i})">⏸ ดูภาพนิ่ง</button>
+    </div>`;
   g.appendChild(card);
 });
+
+function renderCard(i){
+  const v=variants[i];
+  document.getElementById('stage-'+i).innerHTML = cardState[i] ? animatedScene(v.run) : v.static();
+  document.getElementById('tgl-'+i).textContent = cardState[i] ? '⏸ ดูภาพนิ่ง' : '▶ ดูตอนขยับ';
+}
+function toggleCard(i){ cardState[i]=!cardState[i]; renderCard(i); }
+function toggleAll(){
+  const anyAnimated = cardState.some(s=>s);
+  cardState.forEach((_,i)=>{ cardState[i]=!anyAnimated; renderCard(i); });
+  document.getElementById('toggleAllBtn').textContent =
+    anyAnimated ? '▶ เล่นขยับทั้งหมด' : '⏸ หยุดขยับทั้งหมด (ดูภาพนิ่ง)';
+}
 </script>
 </body>
 </html>
