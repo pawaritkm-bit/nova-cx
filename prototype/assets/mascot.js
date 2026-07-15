@@ -100,39 +100,37 @@
     const glasses = opts.glasses !== false;
     const smile = opts.smile !== false;
     return `
-    <!-- หูไกล (ขวา) เล็ก โผล่หลังหัวเล็กน้อย -->
-    <ellipse cx="172" cy="62" rx="15" ry="14" fill="${FUR_MID}" stroke="${OL}" stroke-width="5"/>
-    <ellipse cx="172" cy="64" rx="7" ry="6" fill="${NOSE}" opacity=".35"/>
-    <!-- หัวกลมป้อม (มุม 3/4 เอียงซ้าย) -->
-    <path d="M140 38 C 94 36, 60 62, 58 106 C 56 148, 82 182, 124 183
-             C 164 184, 196 158, 197 114 C 198 74, 184 40, 140 38 Z"
+    <!-- หูไกล (ขวา) เล็ก โผล่หลังหัว -->
+    <ellipse cx="166" cy="60" rx="15" ry="14" fill="${FUR_MID}" stroke="${OL}" stroke-width="5"/>
+    <ellipse cx="166" cy="62" rx="7" ry="6" fill="${NOSE}" opacity=".35"/>
+    <!-- หัวกลมกระชับ (มุม 3/4 เอียงซ้าย) — ลดหน้าผากโล่ง หัวไม่ใหญ่โบ๋ -->
+    <path d="M136 50 C 96 48, 64 68, 60 108 C 56 148, 82 177, 122 178
+             C 160 179, 189 153, 189 112 C 189 76, 176 52, 136 50 Z"
           fill="url(#nfHead)" stroke="${OL}" stroke-width="6" stroke-linejoin="round"/>
     <!-- หูใกล้ (ซ้าย) เด่นกว่า -->
-    <ellipse cx="104" cy="42" rx="21" ry="19" fill="${FUR_TOP}" stroke="${OL}" stroke-width="5.5"/>
-    <ellipse cx="104" cy="45" rx="10" ry="9" fill="${NOSE}" opacity=".4"/>
-    <!-- ปากกระบอกยื่นออกทางซ้าย (muzzle 3/4) -->
-    <path d="M104 106 C 66 104, 44 122, 44 144 C 44 166, 68 178, 98 176
-             C 130 174, 146 152, 144 130 C 142 112, 128 108, 104 106 Z"
-          fill="${MUZZLE}" stroke="${OL}" stroke-width="4.5" stroke-linejoin="round"/>
-    <!-- แก้มชมพู (ข้างใกล้) -->
-    <ellipse cx="112" cy="152" rx="14" ry="9" fill="${CHEEK}" opacity=".5"/>
-    <ellipse cx="176" cy="126" rx="10" ry="7" fill="${CHEEK}" opacity=".35"/>
-    <!-- รูจมูก 2 จุดเล็ก (ปลายซ้าย) -->
-    <ellipse cx="62" cy="132" rx="4" ry="5" fill="${NOSE}"/>
-    <ellipse cx="79" cy="127" rx="4" ry="5" fill="${NOSE}"/>
+    <ellipse cx="96" cy="52" rx="20" ry="18" fill="${FUR_TOP}" stroke="${OL}" stroke-width="5.5"/>
+    <ellipse cx="96" cy="55" rx="9" ry="8" fill="${NOSE}" opacity=".4"/>
+    <!-- ปากกระบอกย่อ กลมกลืนต่อเนื่องกับหน้า ยื่นออกซ้ายพองาม (โคนอยู่ใต้ตาพอดี) -->
+    <ellipse cx="86" cy="128" rx="38" ry="30" fill="${MUZZLE}"/>
+    <!-- แก้มชมพู -->
+    <ellipse cx="120" cy="136" rx="13" ry="9" fill="${CHEEK}" opacity=".5"/>
+    <ellipse cx="170" cy="118" rx="10" ry="7" fill="${CHEEK}" opacity=".35"/>
+    <!-- รูจมูก 2 จุดเล็ก (บนซ้ายของ muzzle) -->
+    <ellipse cx="66" cy="120" rx="4" ry="5" fill="${NOSE}"/>
+    <ellipse cx="82" cy="116" rx="4" ry="5" fill="${NOSE}"/>
     ${smile ? `
     <!-- ร่องปาก + ยิ้มโค้งอ่อนโยน (ไม่มีฟัน) -->
-    <path d="M72 141 L83 147" fill="none" stroke="${OL}" stroke-width="3" stroke-linecap="round"/>
-    <path d="M70 151 Q94 168 118 155" fill="none" stroke="${OL}" stroke-width="4" stroke-linecap="round"/>` : ``}
-    <!-- ตาหลับยิ้มพริ้ม (โค้งนุ่ม) — ใกล้(ซ้าย) เด่น, ไกล(ขวา) สั้นกว่าตามมุม 3/4 -->
-    <path d="M94 102 Q106 90 118 102" fill="none" stroke="${EYE}" stroke-width="4.5" stroke-linecap="round"/>
-    <path d="M143 100 Q152 90 161 100" fill="none" stroke="${EYE}" stroke-width="4" stroke-linecap="round"/>
+    <path d="M74 124 L82 130" fill="none" stroke="${OL}" stroke-width="3" stroke-linecap="round"/>
+    <path d="M66 136 Q88 150 110 140" fill="none" stroke="${OL}" stroke-width="4" stroke-linecap="round"/>` : ``}
+    <!-- ตาหลับยิ้ม (‿) วางเหนือ muzzle นิดเดียว — ใกล้(ซ้าย)เด่น, ไกล(ขวา)สั้นกว่าตามมุม -->
+    <path d="M92 100 Q102 91 112 100" fill="none" stroke="${EYE}" stroke-width="4.5" stroke-linecap="round"/>
+    <path d="M138 98 Q146 90 154 98" fill="none" stroke="${EYE}" stroke-width="4" stroke-linecap="round"/>
     ${glasses ? `
-    <!-- แว่นกลม (ปรับมุมตาม 3/4: เลนส์ไกลรีเล็กน้อย) -->
-    <circle  cx="106" cy="99" r="21" fill="none" stroke="${OL}" stroke-width="5.5"/>
-    <ellipse cx="152" cy="97" rx="18" ry="20.5" fill="none" stroke="${OL}" stroke-width="5"/>
-    <path d="M126 97 Q131 93 134 98" fill="none" stroke="${OL}" stroke-width="5"/>
-    <line x1="169" y1="95" x2="183" y2="91" stroke="${OL}" stroke-width="4.5" stroke-linecap="round"/>` : ``}
+    <!-- แว่นกลม: เลนส์ใกล้(ซ้าย)เต็มวง + เลนส์ไกล(ขวา)รีเล็กน้อย, ดั้งแว่นวางตรงโคน muzzle -->
+    <circle  cx="102" cy="98" r="20" fill="none" stroke="${OL}" stroke-width="5.5"/>
+    <ellipse cx="146" cy="97" rx="17" ry="19.5" fill="none" stroke="${OL}" stroke-width="5"/>
+    <path d="M122 97 Q126 93 129 98" fill="none" stroke="${OL}" stroke-width="5"/>
+    <line x1="163" y1="95" x2="177" y2="91" stroke="${OL}" stroke-width="4.5" stroke-linecap="round"/>` : ``}
     `;
   }
 
