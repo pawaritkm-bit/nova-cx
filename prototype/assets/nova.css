@@ -120,6 +120,17 @@ h1, h2, h3, h4 { margin: 0 0 .4em; line-height: 1.3; }
   85%  { opacity:1; }
   100% { left:240px; transform: rotate(20deg); opacity:0; }
 }
+/* เส้นสปีด (speed lines) ตอนวิ่ง — สื่อการเคลื่อนไหวแบบ reference */
+.nova-speed { position:absolute; height:4px; border-radius:2px; background:var(--sky-400);
+  opacity:0; z-index:1; left:8px; }
+.nova-speed.l1 { top:64px;  width:30px; animation: nova-streak .55s linear infinite; }
+.nova-speed.l2 { top:88px;  width:44px; animation: nova-streak .55s linear infinite .18s; }
+.nova-speed.l3 { top:112px; width:26px; animation: nova-streak .55s linear infinite .36s; }
+@keyframes nova-streak {
+  0%   { transform: translateX(48px); opacity:0; }
+  25%  { opacity:.85; }
+  100% { transform: translateX(-32px); opacity:0; }
+}
 
 .nova-loading-text { text-align:center; color:var(--navy-800); font-weight:600; margin-top:6px;
   min-height:1.5em; transition: opacity .3s; }
