@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/health-ping",
+      "schedule": "0 1 * * *"
+    }
+  ],
+  "functions": {
+    "app/api/**/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

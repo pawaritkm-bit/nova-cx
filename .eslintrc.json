@@ -1,0 +1,7 @@
+{
+  "extends": "next/core-web-vitals",
+  "ignorePatterns": ["prototype/**", "docs/**", "supabase/**"],
+  "rules": {
+    "@next/next/no-page-custom-font": "off"
+  }
+}
