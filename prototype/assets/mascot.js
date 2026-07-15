@@ -15,6 +15,8 @@
   const EYE  = "#2b1a10";
   // แบรนด์
   const NAVY = "#1e3a8a", NAVY_2 = "#2563eb", NAVY_D = "#152a63", SKY = "#38bdf8";
+  // ชุดสูทครบชุด: กางเกงน้ำเงินเข้มกว่าเสื้อสูทเล็กน้อย + เข็มขัดดำ + หัวเข็มขัดทอง
+  const PANTS = "#14265c", BELT = "#0f1a33", GOLD = "#e0b24a", GOLD_D = "#b9863a";
 
   /* ---------- หัวคาปิบาร่า chibi (ใส่แว่นเป็นค่าเริ่มต้น) ----------
      canonical: หัวกลมโตศูนย์กลาง ~ (120,102)
@@ -29,44 +31,41 @@
     <ellipse cx="164" cy="56" rx="16" ry="15" fill="${FUR_D}"/>
     <ellipse cx="76"  cy="59" rx="8"  ry="7"  fill="${NOSE}" opacity=".5"/>
     <ellipse cx="164" cy="59" rx="8"  ry="7"  fill="${NOSE}" opacity=".5"/>
-    <!-- หัวกลมโต (chibi round) -->
-    <ellipse cx="120" cy="102" rx="70" ry="64" fill="${FUR}"/>
+    <!-- หัวกลมโต baby-face (กลมนุ่ม น่ากอด) -->
+    <ellipse cx="120" cy="104" rx="72" ry="66" fill="${FUR}"/>
     <!-- เงานุ่มใต้หัว (soft shadow) -->
-    <ellipse cx="120" cy="150" rx="52" ry="20" fill="${FUR_D}" opacity=".18"/>
-    <!-- แก้มชมพูจาง -->
-    <ellipse cx="74"  cy="120" rx="13" ry="9" fill="#eb9e88" opacity=".6"/>
-    <ellipse cx="166" cy="120" rx="13" ry="9" fill="#eb9e88" opacity=".6"/>
-    <!-- ปากกระบอกใหญ่มน สีอ่อน -->
-    <ellipse cx="120" cy="130" rx="46" ry="37" fill="${FUR_L}"/>
-    <!-- ตากลมโต + ประกาย -->
-    <circle cx="99"  cy="96" r="16" fill="#ffffff"/>
-    <circle cx="141" cy="96" r="16" fill="#ffffff"/>
-    <circle cx="100" cy="98" r="10" fill="${EYE}"/>
-    <circle cx="140" cy="98" r="10" fill="${EYE}"/>
-    <circle cx="104" cy="93" r="3.6" fill="#ffffff"/>
-    <circle cx="144" cy="93" r="3.6" fill="#ffffff"/>
-    <circle cx="96"  cy="101" r="1.8" fill="#ffffff" opacity=".8"/>
-    <circle cx="136" cy="101" r="1.8" fill="#ffffff" opacity=".8"/>
-    <!-- คิ้วขนสั้น เอียงเป็นมิตร -->
-    <path d="M84 72 Q99 66 114 73" fill="none" stroke="${FUR_D}" stroke-width="4" stroke-linecap="round"/>
-    <path d="M156 72 Q141 66 126 73" fill="none" stroke="${FUR_D}" stroke-width="4" stroke-linecap="round"/>
-    <!-- จมูกใหญ่มนแบบคาปิบาร่า -->
-    <rect x="97" y="114" width="46" height="27" rx="13" fill="${NOSE}"/>
-    <ellipse cx="109" cy="124" rx="4" ry="5.5" fill="${EYE}"/>
-    <ellipse cx="131" cy="124" rx="4" ry="5.5" fill="${EYE}"/>
+    <ellipse cx="120" cy="152" rx="52" ry="20" fill="${FUR_D}" opacity=".16"/>
+    <!-- แก้มชมพูจางนุ่ม -->
+    <ellipse cx="72"  cy="126" rx="14" ry="10" fill="#f2a996" opacity=".55"/>
+    <ellipse cx="168" cy="126" rx="14" ry="10" fill="#f2a996" opacity=".55"/>
+    <!-- ปากกระบอกมนกลมนุ่ม สีอ่อน -->
+    <ellipse cx="120" cy="134" rx="44" ry="35" fill="${FUR_L}"/>
+    <!-- ตากลมโตใสซื่อ เป็นมิตร + ไฮไลต์ประกาย -->
+    <circle cx="98"  cy="100" r="19" fill="#ffffff"/>
+    <circle cx="142" cy="100" r="19" fill="#ffffff"/>
+    <circle cx="99"  cy="102" r="13" fill="${EYE}"/>
+    <circle cx="141" cy="102" r="13" fill="${EYE}"/>
+    <circle cx="104" cy="97"  r="4.8" fill="#ffffff"/>
+    <circle cx="146" cy="97"  r="4.8" fill="#ffffff"/>
+    <circle cx="94"  cy="106" r="2.4" fill="#ffffff" opacity=".85"/>
+    <circle cx="136" cy="106" r="2.4" fill="#ffffff" opacity=".85"/>
+    <!-- คิ้วขนสั้น โค้งอ่อน เป็นมิตร (ไม่ดุ) -->
+    <path d="M83 78 Q98 72 113 78"  fill="none" stroke="${FUR_D}" stroke-width="3.5" stroke-linecap="round" opacity=".8"/>
+    <path d="M157 78 Q142 72 127 78" fill="none" stroke="${FUR_D}" stroke-width="3.5" stroke-linecap="round" opacity=".8"/>
+    <!-- จมูกมนกลมนุ่ม (ไม่ยื่นใหญ่เกิน) -->
+    <ellipse cx="120" cy="126" rx="17" ry="12" fill="${NOSE}"/>
+    <ellipse cx="112" cy="125" rx="3" ry="4" fill="#3a2416"/>
+    <ellipse cx="128" cy="125" rx="3" ry="4" fill="#3a2416"/>
     ${smile ? `
-    <!-- ยิ้มอ่อนโยน + ฟันหน้าคู่ -->
-    <path d="M105 146 Q120 158 135 146" fill="none" stroke="${NOSE}" stroke-width="3" stroke-linecap="round"/>
-    <rect x="115" y="148" width="10" height="9" rx="2.5" fill="#ffffff" stroke="${FUR_D}" stroke-width="1"/>
-    <line x1="120" y1="148" x2="120" y2="157" stroke="${FUR_D}" stroke-width="1"/>` : ``}
+    <!-- ยิ้มโค้งเล็กอ่อนโยน (ไม่มีฟัน ไม่อ้าปาก) -->
+    <path d="M108 143 Q120 152 132 143" fill="none" stroke="${NOSE}" stroke-width="3" stroke-linecap="round"/>` : ``}
     ${glasses ? `
-    <!-- แว่นกรอบมนน่ารัก -->
-    <circle cx="99"  cy="96" r="21" fill="none" stroke="${NAVY}" stroke-width="4.5"/>
-    <circle cx="141" cy="96" r="21" fill="none" stroke="${NAVY}" stroke-width="4.5"/>
-    <path d="M120 93 q0 -3 -0.5 0" fill="none"/>
-    <line x1="121" y1="92" x2="119" y2="92" stroke="${NAVY}" stroke-width="4.5"/>
-    <line x1="78" y1="90" x2="66" y2="85" stroke="${NAVY}" stroke-width="3.5" stroke-linecap="round"/>
-    <line x1="162" y1="90" x2="174" y2="85" stroke="${NAVY}" stroke-width="3.5" stroke-linecap="round"/>` : ``}
+    <!-- แว่นกรอบมนน้ำเงิน -->
+    <circle cx="98"  cy="100" r="24" fill="none" stroke="${NAVY}" stroke-width="4.5"/>
+    <circle cx="142" cy="100" r="24" fill="none" stroke="${NAVY}" stroke-width="4.5"/>
+    <line x1="122" y1="97" x2="118" y2="97" stroke="${NAVY}" stroke-width="4.5"/>
+    <line x1="74"  y1="94" x2="62"  y2="89" stroke="${NAVY}" stroke-width="3.5" stroke-linecap="round"/>
+    <line x1="166" y1="94" x2="178" y2="89" stroke="${NAVY}" stroke-width="3.5" stroke-linecap="round"/>` : ``}
     `;
   }
 
@@ -89,8 +88,17 @@
   /* ---------- ลำตัว chibi ตัวป้อมเตี้ย + สูทน้ำเงิน + แขนถือเครื่องคิดเลข ---------- */
   function body() {
     return `
-    <!-- เงาใต้ตัว -->
-    <ellipse cx="120" cy="312" rx="70" ry="12" fill="${NAVY_D}" opacity=".12"/>
+    <!-- เงาใต้ตัว (ใต้เท้า) -->
+    <ellipse cx="120" cy="336" rx="62" ry="9" fill="${NAVY_D}" opacity=".12"/>
+    <!-- ขาสองข้าง: กางเกงสูทขายาวคลุมถึงข้อเท้า (โทนเข้มกว่าเสื้อ) + ปลายเป็นเท้าคาปิบาร่า -->
+    <rect x="94"  y="288" width="20" height="40" rx="9" fill="${PANTS}"/>
+    <rect x="126" y="288" width="20" height="40" rx="9" fill="${PANTS}"/>
+    <!-- รอยพับกางเกงเบาๆ -->
+    <line x1="104" y1="300" x2="104" y2="322" stroke="${NAVY_D}" stroke-width="1.5" opacity=".5"/>
+    <line x1="136" y1="300" x2="136" y2="322" stroke="${NAVY_D}" stroke-width="1.5" opacity=".5"/>
+    <!-- เท้าคาปิบาร่าโผล่ปลายขากางเกง -->
+    <ellipse cx="99"  cy="328" rx="18" ry="11" fill="${FUR_D}"/>
+    <ellipse cx="141" cy="328" rx="18" ry="11" fill="${FUR_D}"/>
     <!-- แขนซ้าย (สั้น มน) -->
     <path d="M78 214 Q52 224 56 262 Q62 274 74 268 Q70 236 92 226 Z" fill="${NAVY}"/>
     <ellipse cx="66" cy="264" rx="13" ry="11" fill="${FUR}"/>
@@ -104,11 +112,12 @@
     <path d="M140 210 L120 206 L128 256 Z" fill="${NAVY_D}"/>
     <!-- เนกไทฟ้าแบรนด์ -->
     <path d="M120 214 L113 227 L120 268 L127 227 Z" fill="${SKY}"/>
+    <!-- เข็มขัดคาดเอว (ระหว่างเสื้อสูทกับกางเกง) + หัวเข็มขัดสีทอง -->
+    <rect x="72" y="278" width="96" height="15" rx="4" fill="${BELT}"/>
+    <rect x="107" y="275" width="26" height="21" rx="4" fill="${GOLD}" stroke="${GOLD_D}" stroke-width="1.8"/>
+    <rect x="113" y="281" width="14" height="9" rx="2" fill="none" stroke="${GOLD_D}" stroke-width="1.8"/>
     <!-- แขนขวา (ยกถือเครื่องคิดเลข) -->
     <path d="M164 208 Q192 214 194 250 Q188 262 176 256 Q180 226 156 224 Z" fill="${NAVY}"/>
-    <!-- เท้าเล็กมน -->
-    <ellipse cx="99"  cy="306" rx="16" ry="10" fill="${FUR_D}"/>
-    <ellipse cx="141" cy="306" rx="16" ry="10" fill="${FUR_D}"/>
     `;
   }
 
@@ -118,14 +127,17 @@
     // Full character — chibi ตัวเต็ม ถือเครื่องคิดเลข (welcome/confirmation)
     full(w) {
       w = w || 240;
-      return `<svg class="nova-svg" viewBox="0 0 240 330" width="${w}" role="img"
+      return `<svg class="nova-svg" viewBox="0 0 240 344" width="${w}" role="img"
         aria-label="น้อง NOVA คาปิบาร่าใส่สูทน้ำเงิน ใส่แว่น ถือเครื่องคิดเลข">
         ${body()}
         <!-- เครื่องคิดเลขในมือขวา -->
         <g transform="translate(182,236) scale(.82)">${calculator()}</g>
         <ellipse cx="182" cy="252" rx="13" ry="11" fill="${FUR}"/>
-        <!-- หัวโต วางทับบนตัว -->
-        <g transform="translate(0,-6)">${head()}</g>
+        <!-- คอ/ช่วงต่อ: ให้หัวนั่งบนบ่าเป็นตัวเดียว ไม่มีช่องว่าง -->
+        <path d="M96 180 Q120 176 144 180 L139 212 Q120 218 101 212 Z" fill="${FUR}"/>
+        <ellipse cx="120" cy="196" rx="30" ry="16" fill="${FUR_D}" opacity=".2"/>
+        <!-- หัวโต วางทับบนบ่า (เลื่อนลงมาให้คางจรดคอเสื้อสูท) -->
+        <g transform="translate(0,24)">${head()}</g>
       </svg>`;
     },
 
@@ -160,13 +172,22 @@
         <div class="nova-doc d3"></div>
         <div class="nova-run">
           <svg class="nova-svg" viewBox="0 0 240 240" width="150" role="img" aria-label="น้อง NOVA คาปิบาร่ากำลังวิ่ง">
+            <!-- ขาวิ่งสลับซ้าย-ขวา (กางเกงสูทขายาว+เท้า / running cycle) — วาดก่อนตัวเพื่อซ่อนสะโพกหลังลำตัว -->
+            <g class="nova-leg nova-leg-l">
+              <rect x="97" y="196" width="16" height="32" rx="8" fill="${PANTS}"/>
+              <ellipse cx="101" cy="230" rx="14" ry="9" fill="${FUR_D}"/>
+            </g>
+            <g class="nova-leg nova-leg-r">
+              <rect x="127" y="196" width="16" height="32" rx="8" fill="${PANTS}"/>
+              <ellipse cx="131" cy="230" rx="14" ry="9" fill="${FUR_D}"/>
+            </g>
             <!-- ตัวป้อมย่อ -->
             <ellipse cx="120" cy="174" rx="54" ry="46" fill="${NAVY}"/>
             <path d="M120 138 L106 214 L120 204 L134 214 Z" fill="#fff"/>
             <path d="M120 146 L113 172 L120 162 L127 172 Z" fill="${SKY}"/>
-            <!-- ขาวิ่ง -->
-            <ellipse cx="104" cy="216" rx="11" ry="8" fill="${FUR_D}" transform="rotate(-22 104 216)"/>
-            <ellipse cx="138" cy="216" rx="11" ry="8" fill="${FUR_D}" transform="rotate(22 138 216)"/>
+            <!-- เข็มขัด + หัวเข็มขัดทอง (ให้ชุดครบขณะวิ่ง) -->
+            <rect x="80" y="196" width="80" height="12" rx="3.5" fill="${BELT}"/>
+            <rect x="110" y="194" width="18" height="15" rx="3" fill="${GOLD}" stroke="${GOLD_D}" stroke-width="1.4"/>
             <!-- แขนถือเครื่องคิดเลข (สั่น) -->
             <g transform="translate(172,170) scale(.68)">${calculator('nova-calc-shake')}</g>
             <ellipse cx="170" cy="184" rx="11" ry="9" fill="${FUR}"/>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA-CX — รูปนิ่งน้อง NOVA (รีวิวก่อน animate)</title>
+<link rel="stylesheet" href="assets/nova.css">
+<style>
+  .preview-wrap { max-width: 720px; margin: 0 auto; padding: 28px 20px 60px; }
+  .preview-top { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+  .stage { background:#fff; border:1px solid var(--line); border-radius:28px; box-shadow:var(--shadow);
+    padding:32px 20px 24px; text-align:center; margin-top:14px; }
+  .stage-hero { min-height:340px; display:flex; align-items:flex-end; justify-content:center; }
+  .stage h2 { color:var(--navy-800); margin-top:18px; }
+  .stage p { color:var(--muted); font-size:14px; margin:0; }
+  .mini-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:18px; }
+  .mini-card { background:#fff; border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-sm);
+    padding:20px; text-align:center; }
+  .mini-card .slot { min-height:130px; display:flex; align-items:center; justify-content:center; }
+  .mini-card h4 { color:var(--navy-800); margin:8px 0 2px; }
+  .mini-card p { color:var(--muted); font-size:12px; margin:0; }
+  .note { text-align:center; color:var(--muted); font-size:13px; margin-top:24px; }
+</style>
+</head>
+<body>
+<div class="preview-wrap">
+
+  <div class="preview-top">
+    <a class="btn btn-ghost" href="index.html">← กลับหน้ารวม</a>
+    <span class="badge badge-mock">รูปนิ่งล้วน — ไม่มี animation ในหน้านี้</span>
+  </div>
+
+  <div class="section-head" style="margin:18px 0 0;">
+    <h2>รูปนิ่งน้อง NOVA — ท่ายืน (รีวิวหน้า/ขา ก่อน animate)</h2>
+    <p>ตรวจใบหน้า (ไม่มีฟัน ยิ้มอ่อนโยน ตาโต) และขา 2 ข้างที่เห็นชัด</p>
+  </div>
+
+  <!-- Full character ยืนนิ่ง ตัวใหญ่ -->
+  <div class="stage">
+    <div class="stage-hero" id="pvFull"></div>
+    <h2>Full Character (ท่ายืนนิ่ง)</h2>
+    <p>คาปิบาร่า chibi • สูทน้ำเงิน Finovas + เชิ้ตขาว + ไทฟ้า • แว่นกรอบมน • ถือเครื่องคิดเลข • ขา 2 ข้าง</p>
+  </div>
+
+  <!-- Icon + Profile เล็กประกอบ -->
+  <div class="mini-grid">
+    <div class="mini-card">
+      <div class="slot" id="pvIcon"></div>
+      <h4>Icon (หัว)</h4>
+      <p>Rich Menu / ปุ่ม / favicon</p>
+    </div>
+    <div class="mini-card">
+      <div class="slot" id="pvProfile"></div>
+      <h4>Profile (วงกลม)</h4>
+      <p>การ์ด / แชต / avatar</p>
+    </div>
+  </div>
+
+  <p class="note">
+    ถ้าหน้า/ขาแบบนี้โอเค → ไปดูตอนขยับได้ที่
+    <a href="index.html">หน้ารวม</a> (Loading Animation) หรือ
+    <a href="mascots.html">แกลเลอรี 6 แบบ</a>
+  </p>
+
+</div>
+
+<script src="assets/mascot.js"></script>
+<script>
+  document.getElementById('pvFull').innerHTML    = NOVA.full(320);
+  document.getElementById('pvIcon').innerHTML    = NOVA.icon(110);
+  document.getElementById('pvProfile').innerHTML = NOVA.profile(110);
+</script>
+</body>
+</html>

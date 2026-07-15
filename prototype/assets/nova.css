@@ -105,6 +105,14 @@ h1, h2, h3, h4 { margin: 0 0 .4em; line-height: 1.3; }
 /* เครื่องคิดเลขขยับ (ในมือ) — สั่นเล็กน้อย */
 .nova-calc-shake { transform-origin: center; animation: nova-shake 0.28s ease-in-out infinite; }
 @keyframes nova-shake { 0%,100%{ transform: rotate(-4deg);} 50%{ transform: rotate(4deg);} }
+/* ขาวิ่งสลับซ้าย-ขวาจริง (running cycle) — pivot ที่สะโพก, ซ้าย/ขวาสลับเฟส */
+.nova-leg { transform-box: fill-box; transform-origin: top center; }
+.nova-leg-l { animation: nova-leg-run 0.5s ease-in-out infinite; }
+.nova-leg-r { animation: nova-leg-run 0.5s ease-in-out infinite; animation-delay: -0.25s; }
+@keyframes nova-leg-run {
+  0%,100% { transform: rotate(26deg); }
+  50%     { transform: rotate(-26deg); }
+}
 /* เอกสาร/ใบเสร็จปลิวด้านหลัง */
 .nova-doc { position:absolute; width:26px; height:32px; background:#fff; border:1.5px solid var(--line);
   border-radius:3px; z-index:1; box-shadow:var(--shadow-sm); }
