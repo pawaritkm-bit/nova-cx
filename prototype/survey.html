@@ -14,19 +14,6 @@
   .center-col{ display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%;
     text-align:center; padding:24px; }
 
-  /* ---- ตัวสลับหมวดประเมิน (3 หมวดหลัก) ---- */
-  .eval-switch{ display:inline-flex; background:#fff; border:1px solid var(--line); border-radius:14px;
-    padding:5px; gap:4px; box-shadow:var(--shadow-sm); flex-wrap:wrap; justify-content:center; }
-  .eval-switch button{ border:none; background:none; padding:10px 16px; border-radius:10px; cursor:pointer;
-    font-family:inherit; font-size:14px; font-weight:700; color:var(--muted); transition:all .12s; }
-  .eval-switch button.active{ background:var(--navy-800); color:#fff; }
-  /* ---- ตัวสลับกรณีเซลล์ Won/Lost ---- */
-  .case-switch{ display:inline-flex; background:#eef2f8; border:1px dashed var(--muted-2); border-radius:12px;
-    padding:4px; gap:4px; }
-  .case-switch button{ border:none; background:none; padding:8px 14px; border-radius:9px; cursor:pointer;
-    font-family:inherit; font-size:13px; font-weight:700; color:var(--muted); }
-  .case-switch button.active{ background:var(--blue-600); color:#fff; }
-
   /* ---- การ์ดผู้ดูแล (Form B) ---- */
   .team-card{ display:flex; align-items:center; gap:12px; padding:10px; border:1px solid var(--line);
     border-radius:12px; background:#fff; margin-bottom:8px; }
@@ -50,17 +37,9 @@
   <span class="badge badge-mock">ต้นแบบ • ไม่ต่อ backend • ข้อมูล mock</span>
 </div>
 
-<!-- ตัวสลับ 3 หมวดหลัก (ตามผู้ถูกประเมิน) -->
-<div class="eval-switch" id="evalSwitch">
-  <button data-eval="office">🏢 ประเมินสำนักงานบัญชี</button>
-  <button data-eval="accountant">🧮 ประเมินนักบัญชี</button>
-  <button data-eval="sales">🤝 ประเมินเซลล์</button>
-</div>
-<!-- ตัวเลือกย่อยของเซลล์ (Won / Lost) -->
-<div class="case-switch" id="caseSwitch" style="display:none;">
-  <button data-case="won">ขายได้ (Won)</button>
-  <button data-case="lost">ขายไม่ได้ (Lost)</button>
-</div>
+<!-- หมายเหตุ: ลูกค้าเปิดลิงก์ invitation จะเห็น "แบบประเมินเดียว" ของตัวเอง
+     ชนิดแบบประเมินกำหนดจาก URL param (?eval=/&case=) — ไม่มีตัวสลับให้ลูกค้าเลือกเอง
+     (การเลือก/พรีวิวชนิดแบบประเมินอยู่ฝั่งหลังบ้าน admin.html) -->
 
 <!-- ===================== PHONE FRAME ===================== -->
 <div class="phone">
@@ -200,7 +179,7 @@ resetState();
 
 const rateLabels = {1:'ไม่พอใจมาก',2:'ไม่พอใจ',3:'เฉยๆ',4:'พอใจ',5:'พอใจมาก'};
 
-/* ---- หมวดปัจจุบัน ---- */
+/* ---- ชนิดแบบประเมิน (กำหนดจาก URL param เท่านั้น — ลูกค้าไม่เลือกเอง) ---- */
 let CURRENT_EVAL = 'office';   // office | accountant | sales
 let CURRENT_CASE = 'won';      // won | lost (เฉพาะ sales)
 function currentFormCode(){
@@ -220,35 +199,6 @@ function show(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
   document.querySelectorAll('.liff-body').forEach(b=>b.scrollTop=0);
-}
-
-/* ============================================================
-   ตัวสลับหมวด (3 หมวด + Won/Lost ของเซลล์)
-   ============================================================ */
-function updateSwitchUI(){
-  document.querySelectorAll('#evalSwitch button').forEach(b=>{
-    b.classList.toggle('active', b.dataset.eval===CURRENT_EVAL);
-  });
-  const cs=document.getElementById('caseSwitch');
-  cs.style.display = CURRENT_EVAL==='sales' ? 'inline-flex' : 'none';
-  document.querySelectorAll('#caseSwitch button').forEach(b=>{
-    b.classList.toggle('active', b.dataset.case===CURRENT_CASE);
-  });
-}
-document.querySelectorAll('#evalSwitch button').forEach(b=>{
-  b.onclick=()=>{ CURRENT_EVAL=b.dataset.eval; openCurrentForm(); };
-});
-document.querySelectorAll('#caseSwitch button').forEach(b=>{
-  b.onclick=()=>{ CURRENT_CASE=b.dataset.case; openCurrentForm(); };
-});
-
-/* เปิดฟอร์มปัจจุบัน (ใช้ตอนกดสลับหมวด — ข้าม loading เพื่อรีวิวไว) */
-function openCurrentForm(){
-  resetState();
-  buildSurvey();
-  updateSwitchUI();
-  updateProgress();
-  show('s-survey');
 }
 
 /* ============================================================
@@ -294,7 +244,6 @@ function buildSurvey(){
   const form = currentForm();
   document.getElementById('formMeta').textContent =
     `แบบประเมิน ${form.code} · ${form.name} · ${form.tag}`;
-  updateSwitchUI();
 
   const mount = document.getElementById('sectionsMount');
   mount.innerHTML='';
@@ -616,7 +565,6 @@ function restart(){ resetState(); show('s-loading'); startLoading(); }
     else if(legacy==='C'){ CURRENT_EVAL='sales'; CURRENT_CASE='won'; }
     else if(legacy==='D'){ CURRENT_EVAL='sales'; CURRENT_CASE='lost'; }
   }
-  updateSwitchUI();
   startLoading();
 })();
 </script>

@@ -78,6 +78,7 @@
     <div class="role-switch" id="admSwitch">
       <button class="active" data-view="teams">🏢 โครงสร้างทีม</button>
       <button data-view="bind">🔗 ผูกบริษัท ↔ ผู้ดูแล</button>
+      <button data-view="forms">📋 แบบประเมิน (พรีวิว)</button>
     </div>
   </div>
 
@@ -151,6 +152,62 @@
     <div class="card">
       <div class="section-title">🕓 ประวัติการผูกผู้ดูแล (valid_to)</div>
       <div class="hist" id="bindHist"><div class="h-row">ยังไม่มีการเปลี่ยนแปลงในเซสชันนี้</div></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       VIEW C: แบบประเมิน (พรีวิว / ลิงก์ที่ส่งให้ลูกค้า)
+       ============================================================ -->
+  <div class="adm-view" id="view-forms">
+
+    <div class="note-box" style="margin-bottom:16px;">
+      📌 ระบบจะ<b>ส่งแบบประเมินที่ถูกต้องให้ลูกค้าแต่ละคนอัตโนมัติ</b> ตามรอบ/สถานะ (เช่น รายเดือน,
+      หลังปิดการขาย Won/Lost) — <b>ลูกค้าไม่ได้เลือกชนิดแบบประเมินเอง</b> และจะเห็นเพียงแบบเดียวของตัวเอง
+      ผ่านลิงก์ invitation. หน้านี้ไว้ให้ทีม<b>พรีวิว/ตรวจสอบ</b>แต่ละชนิดในมุมมองลูกค้า
+    </div>
+
+    <div class="card">
+      <div class="section-title">📋 ชนิดแบบประเมินทั้งหมด <span class="mock-tag">พรีวิวมุมมองลูกค้า</span></div>
+      <div class="table-wrap">
+        <table class="adm">
+          <thead><tr>
+            <th>ชนิดแบบประเมิน</th><th>ส่งเมื่อ</th><th>ลิงก์ที่ลูกค้าได้รับ</th><th></th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td><b>🏢 สำนักงานบัญชี</b></td>
+              <td>ทุก 3 เดือน (ตามรอบ)</td>
+              <td><code>survey.html?eval=office</code></td>
+              <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
+                     href="survey.html?eval=office" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
+            </tr>
+            <tr>
+              <td><b>🧮 นักบัญชี (ทีมที่ดูแล)</b></td>
+              <td>รายเดือน — ผูกผู้ดูแลอัตโนมัติ</td>
+              <td><code>survey.html?eval=accountant</code></td>
+              <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
+                     href="survey.html?eval=accountant" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
+            </tr>
+            <tr>
+              <td><b>🤝 เซลล์ (ขายได้)</b></td>
+              <td>หลังยืนยันซื้อ (Won)</td>
+              <td><code>survey.html?eval=sales&amp;case=won</code></td>
+              <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
+                     href="survey.html?eval=sales&case=won" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
+            </tr>
+            <tr>
+              <td><b>🤝 เซลล์ (ขายไม่ได้)</b></td>
+              <td>หลังปิดสถานะ Lost</td>
+              <td><code>survey.html?eval=sales&amp;case=lost</code></td>
+              <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
+                     href="survey.html?eval=sales&case=lost" target="_blank" rel="noopener">เปิดดู (มุมมองลูกค้า) ▸</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:12px; color:var(--muted); margin-top:10px;">
+        เปิดในแท็บใหม่ (ไม่หลุดจากหลังบ้าน) • มุมมองลูกค้าจะเห็นแบบประเมินเดียวตาม param ไม่มีตัวสลับชนิด
+      </p>
     </div>
   </div>
 
