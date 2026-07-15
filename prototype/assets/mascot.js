@@ -63,13 +63,9 @@
     <!-- ร่องปาก + ยิ้มโค้งอ่อนโยน (ไม่มีฟัน) -->
     <path d="M120 132 L120 145" fill="none" stroke="${OL}" stroke-width="3" stroke-linecap="round"/>
     <path d="M103 146 Q120 160 137 146" fill="none" stroke="${OL}" stroke-width="4" stroke-linecap="round"/>` : ``}
-    <!-- ตากลมโตใสซื่อ + ประกาย -->
-    <circle cx="95"  cy="101" r="12.5" fill="${EYE}"/>
-    <circle cx="145" cy="101" r="12.5" fill="${EYE}"/>
-    <circle cx="99"  cy="96"  r="4" fill="#ffffff"/>
-    <circle cx="149" cy="96"  r="4" fill="#ffffff"/>
-    <circle cx="91"  cy="105" r="2" fill="#ffffff" opacity=".85"/>
-    <circle cx="141" cy="105" r="2" fill="#ffffff" opacity=".85"/>
+    <!-- ตาหลับยิ้มพริ้ม (โค้งนุ่ม ‿ อารมณ์ผ่อนคลาย มีความสุข) -->
+    <path d="M83 104 Q95 92 107 104" fill="none" stroke="${EYE}" stroke-width="4.5" stroke-linecap="round"/>
+    <path d="M133 104 Q145 92 157 104" fill="none" stroke="${EYE}" stroke-width="4.5" stroke-linecap="round"/>
     ${glasses ? `
     <!-- แว่นกรอบมนกลม ลายเส้นหนา -->
     <circle cx="95"  cy="101" r="21" fill="none" stroke="${OL}" stroke-width="5.5"/>
@@ -96,6 +92,50 @@
     </g>`;
   }
 
+  /* ---------- หัวคาปิบาร่า มุม 3/4 หันเฉียงไปทางซ้าย ----------
+     canonical: ครอบคลุม x40..200 y34..184 ; ปากกระบอกยื่นออกทางซ้าย
+     ใช้กับ full()/preview ; ต้องอยู่ในกรอบ SVG ที่มี defs() */
+  function headSide(opts) {
+    opts = opts || {};
+    const glasses = opts.glasses !== false;
+    const smile = opts.smile !== false;
+    return `
+    <!-- หูไกล (ขวา) เล็ก โผล่หลังหัวเล็กน้อย -->
+    <ellipse cx="172" cy="62" rx="15" ry="14" fill="${FUR_MID}" stroke="${OL}" stroke-width="5"/>
+    <ellipse cx="172" cy="64" rx="7" ry="6" fill="${NOSE}" opacity=".35"/>
+    <!-- หัวกลมป้อม (มุม 3/4 เอียงซ้าย) -->
+    <path d="M140 38 C 94 36, 60 62, 58 106 C 56 148, 82 182, 124 183
+             C 164 184, 196 158, 197 114 C 198 74, 184 40, 140 38 Z"
+          fill="url(#nfHead)" stroke="${OL}" stroke-width="6" stroke-linejoin="round"/>
+    <!-- หูใกล้ (ซ้าย) เด่นกว่า -->
+    <ellipse cx="104" cy="42" rx="21" ry="19" fill="${FUR_TOP}" stroke="${OL}" stroke-width="5.5"/>
+    <ellipse cx="104" cy="45" rx="10" ry="9" fill="${NOSE}" opacity=".4"/>
+    <!-- ปากกระบอกยื่นออกทางซ้าย (muzzle 3/4) -->
+    <path d="M104 106 C 66 104, 44 122, 44 144 C 44 166, 68 178, 98 176
+             C 130 174, 146 152, 144 130 C 142 112, 128 108, 104 106 Z"
+          fill="${MUZZLE}" stroke="${OL}" stroke-width="4.5" stroke-linejoin="round"/>
+    <!-- แก้มชมพู (ข้างใกล้) -->
+    <ellipse cx="112" cy="152" rx="14" ry="9" fill="${CHEEK}" opacity=".5"/>
+    <ellipse cx="176" cy="126" rx="10" ry="7" fill="${CHEEK}" opacity=".35"/>
+    <!-- รูจมูก 2 จุดเล็ก (ปลายซ้าย) -->
+    <ellipse cx="62" cy="132" rx="4" ry="5" fill="${NOSE}"/>
+    <ellipse cx="79" cy="127" rx="4" ry="5" fill="${NOSE}"/>
+    ${smile ? `
+    <!-- ร่องปาก + ยิ้มโค้งอ่อนโยน (ไม่มีฟัน) -->
+    <path d="M72 141 L83 147" fill="none" stroke="${OL}" stroke-width="3" stroke-linecap="round"/>
+    <path d="M70 151 Q94 168 118 155" fill="none" stroke="${OL}" stroke-width="4" stroke-linecap="round"/>` : ``}
+    <!-- ตาหลับยิ้มพริ้ม (โค้งนุ่ม) — ใกล้(ซ้าย) เด่น, ไกล(ขวา) สั้นกว่าตามมุม 3/4 -->
+    <path d="M94 102 Q106 90 118 102" fill="none" stroke="${EYE}" stroke-width="4.5" stroke-linecap="round"/>
+    <path d="M143 100 Q152 90 161 100" fill="none" stroke="${EYE}" stroke-width="4" stroke-linecap="round"/>
+    ${glasses ? `
+    <!-- แว่นกลม (ปรับมุมตาม 3/4: เลนส์ไกลรีเล็กน้อย) -->
+    <circle  cx="106" cy="99" r="21" fill="none" stroke="${OL}" stroke-width="5.5"/>
+    <ellipse cx="152" cy="97" rx="18" ry="20.5" fill="none" stroke="${OL}" stroke-width="5"/>
+    <path d="M126 97 Q131 93 134 98" fill="none" stroke="${OL}" stroke-width="5"/>
+    <line x1="169" y1="95" x2="183" y2="91" stroke="${OL}" stroke-width="4.5" stroke-linecap="round"/>` : ``}
+    `;
+  }
+
   /* ---------- เสื้อสูท + เชิ้ต + ไท (คลุมช่วงบน) ---------- */
   function jacket() {
     return `
@@ -117,38 +157,45 @@
   const NOVA = {
     head,
 
-    // Full character — คาปิบาร่ายืนเต็มตัว ถือเครื่องคิดเลข (welcome/confirmation)
+    // Full character — คาปิบาร่ายืนเต็มตัว หันข้าง 3/4 ไปทางซ้าย ยื่นเครื่องคิดเลขไปข้างหน้า
     full(w) {
       w = w || 240;
-      return `<svg class="nova-svg" viewBox="0 0 240 372" width="${w}" role="img"
-        aria-label="น้อง NOVA คาปิบาร่าใส่สูทน้ำเงิน ใส่แว่น ถือเครื่องคิดเลข ยืนเต็มตัว">
+      return `<svg class="nova-svg" viewBox="0 0 240 376" width="${w}" role="img"
+        aria-label="น้อง NOVA คาปิบาร่าใส่สูทน้ำเงิน ใส่แว่น หันข้าง 3/4 ยื่นเครื่องคิดเลขไปข้างหน้า">
         ${defs()}
         <!-- เงาใต้เท้า -->
-        <ellipse cx="120" cy="356" rx="76" ry="12" fill="${NAVY_D}" opacity=".12"/>
-        <!-- ตัว/ท้องคาปิบาร่า ทรงไข่กลมป้อม ขนน้ำตาลไล่เฉด -->
-        <path d="M120 166 C 72 164, 50 206, 50 262 C 50 320, 80 352, 120 354
-                 C 160 352, 190 320, 190 262 C 190 206, 168 164, 120 166 Z"
+        <ellipse cx="122" cy="362" rx="80" ry="12" fill="${NAVY_D}" opacity=".12"/>
+        <!-- เท้าไกล (หลัง-ขวา) วาดก่อนให้อยู่หลัง -->
+        <ellipse cx="152" cy="356" rx="23" ry="13" fill="${FUR_MID}" stroke="${OL}" stroke-width="5.5"/>
+        <!-- ตัว/ท้องคาปิบาร่า ทรงไข่ เอียง 3/4 (ด้านหน้าไปทางซ้าย) -->
+        <path d="M128 164 C 78 162, 52 206, 52 262 C 52 322, 84 356, 124 358
+                 C 166 356, 196 320, 196 260 C 196 202, 176 164, 128 164 Z"
               fill="url(#nfBody)" stroke="${OL}" stroke-width="6" stroke-linejoin="round"/>
-        <!-- แขนซ้าย (แขนเสื้อสูท + อุ้งมือขน) -->
-        <path d="M72 214 C 50 224, 44 262, 54 288 C 62 300, 78 296, 80 282
-                 C 74 258, 82 232, 96 222 Z" fill="${NAVY}" stroke="${OL}" stroke-width="6" stroke-linejoin="round"/>
-        <ellipse cx="64" cy="292" rx="16" ry="14" fill="url(#nfBody)" stroke="${OL}" stroke-width="5"/>
-        <!-- เท้าคาปิบาร่าสองข้าง -->
-        <ellipse cx="97"  cy="352" rx="25" ry="14" fill="url(#nfBody)" stroke="${OL}" stroke-width="5.5"/>
-        <ellipse cx="143" cy="352" rx="25" ry="14" fill="url(#nfBody)" stroke="${OL}" stroke-width="5.5"/>
+        <!-- เท้าใกล้ (หน้า-ซ้าย) + นิ้วเท้า -->
+        <ellipse cx="102" cy="360" rx="27" ry="14" fill="url(#nfBody)" stroke="${OL}" stroke-width="5.5"/>
         <g stroke="${OL}" stroke-width="2.5" stroke-linecap="round">
-          <line x1="88"  y1="356" x2="88"  y2="363"/><line x1="97"  y1="357" x2="97"  y2="364"/><line x1="106" y1="356" x2="106" y2="363"/>
-          <line x1="134" y1="356" x2="134" y2="363"/><line x1="143" y1="357" x2="143" y2="364"/><line x1="152" y1="356" x2="152" y2="363"/>
+          <line x1="90" y1="364" x2="90" y2="371"/><line x1="102" y1="365" x2="102" y2="372"/><line x1="114" y1="364" x2="114" y2="371"/>
         </g>
-        <!-- สูท + เชิ้ต + ไท -->
-        ${jacket()}
-        <!-- แขนขวา (ยกถือเครื่องคิดเลขไว้หน้าท้อง) -->
-        <path d="M170 214 C 194 222, 202 256, 192 282 C 184 294, 170 290, 168 278
-                 C 176 254, 166 232, 150 224 Z" fill="${NAVY}" stroke="${OL}" stroke-width="6" stroke-linejoin="round"/>
-        <g transform="translate(150,286) rotate(-6)">${calculator()}</g>
-        <ellipse cx="150" cy="300" rx="16" ry="14" fill="url(#nfBody)" stroke="${OL}" stroke-width="5"/>
-        <!-- หัวโต วางบนบ่า -->
-        <g transform="translate(0,-4)">${head()}</g>
+        <!-- แขนไกล (ขวา) บังอยู่หลังตัวตามมุม 3/4 — โผล่แค่ปลายอุ้งมือเล็กน้อย -->
+        <ellipse cx="188" cy="272" rx="13" ry="12" fill="${FUR_MID}" stroke="${OL}" stroke-width="5"/>
+        <!-- เสื้อสูทน้ำเงิน (3/4 เยื้องซ้าย) -->
+        <path d="M128 164 C 88 162, 66 190, 66 224 C 66 250, 78 268, 94 274
+                 L 116 258 L 146 272 C 162 266, 178 250, 178 224
+                 C 178 190, 160 164, 128 164 Z"
+              fill="${NAVY}" stroke="${OL}" stroke-width="6" stroke-linejoin="round"/>
+        <!-- เชิ้ตขาว + ปกสูท + เน็คไท (เยื้องซ้ายตามมุม) -->
+        <path d="M116 170 L100 260 L116 248 L134 260 Z" fill="#ffffff" stroke="${OL}" stroke-width="3"/>
+        <path d="M116 168 L96 178 L112 212 Z" fill="${NAVY_D}" stroke="${OL}" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M116 168 L136 178 L120 212 Z" fill="${NAVY_D}" stroke="${OL}" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M109 176 L116 170 L123 176 L118 186 L114 186 Z" fill="${SKY}" stroke="${OL}" stroke-width="2.5" stroke-linejoin="round"/>
+        <path d="M114 186 L118 186 L123 244 L116 254 L109 244 Z" fill="${SKY}" stroke="${OL}" stroke-width="2.5" stroke-linejoin="round"/>
+        <!-- แขนใกล้ (ซ้าย) ยื่นไปข้างหน้าถือเครื่องคิดเลข -->
+        <path d="M112 226 C 88 228, 62 242, 48 260 C 42 270, 50 282, 62 278
+                 C 78 260, 98 250, 120 252 Z" fill="${NAVY}" stroke="${OL}" stroke-width="6" stroke-linejoin="round"/>
+        <g transform="translate(60,270) rotate(-16)">${calculator()}</g>
+        <ellipse cx="62" cy="282" rx="15" ry="13" fill="url(#nfBody)" stroke="${OL}" stroke-width="5"/>
+        <!-- หัว 3/4 วางบนบ่า -->
+        <g transform="translate(0,-6)">${headSide()}</g>
       </svg>`;
     },
 
