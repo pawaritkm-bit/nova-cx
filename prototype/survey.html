@@ -127,19 +127,6 @@
       </div>
     </div>
 
-    <!-- ============ SCREEN 4: REVIEW ============ -->
-    <div class="screen" id="s-review">
-      <div class="liff-body">
-        <h2 style="color:var(--navy-800);">ตรวจคำตอบก่อนส่ง</h2>
-        <p style="font-size:13px; color:var(--muted);">แตะ "แก้" เพื่อกลับไปแก้ข้อนั้น</p>
-        <div id="reviewList"></div>
-      </div>
-      <div class="liff-footer" style="display:flex; gap:8px;">
-        <button class="btn btn-ghost" style="flex:0 0 auto;" onclick="show('s-survey')">← แก้คำตอบ</button>
-        <button class="btn btn-primary" style="flex:1;" onclick="submitSurvey()">ส่งแบบประเมิน</button>
-      </div>
-    </div>
-
     <!-- ============ SCREEN 5: CONFIRMATION ============ -->
     <div class="screen" id="s-confirm">
       <div class="center-col">
@@ -313,15 +300,15 @@ function showStep(i){
   });
   const isLast = stepIdx===STEPS.length-1;
   const btnNext=document.getElementById('btnNext');
-  btnNext.textContent = isLast ? 'ตรวจก่อนส่ง →' : 'ถัดไป →';
-  btnNext.onclick = isLast ? goReview : nextStep;
+  btnNext.textContent = isLast ? 'ส่งแบบประเมิน ✓' : 'ถัดไป →';
+  btnNext.onclick = isLast ? submitSurvey : nextStep;
   const btnBack=document.getElementById('btnBack');
   btnBack.textContent = stepIdx===0 ? '← ย้อนกลับ' : '← ก่อนหน้า';
   btnBack.onclick = stepIdx===0 ? backToConsent : prevStep;
   document.querySelectorAll('.liff-body').forEach(b=>b.scrollTop=0);
   updateProgress();
 }
-function nextStep(){ if(stepIdx<STEPS.length-1) showStep(stepIdx+1); else goReview(); }
+function nextStep(){ if(stepIdx<STEPS.length-1) showStep(stepIdx+1); else submitSurvey(); }
 function prevStep(){ if(stepIdx>0) showStep(stepIdx-1); else backToConsent(); }
 
 function elFrom(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstElementChild; }
@@ -554,46 +541,7 @@ function updateProgress(){
 }
 
 /* ============================================================
-   Review — สรุปคำตอบทุก section
-   ============================================================ */
-function reviewRow(q,a){
-  const d=document.createElement('div'); d.className='review-item';
-  d.innerHTML=`<span class="rq">${q}</span><span class="ra">${a} <span class="edit" onclick="show('s-survey')">แก้</span></span>`;
-  return d;
-}
-function goReview(){
-  const form=currentForm();
-  const list=document.getElementById('reviewList'); list.innerHTML='';
-  form.sections.forEach(sec=>{
-    if(sec.type==='ratings'){
-      sec.items.forEach(q=>{
-        const v=state.ratings[q.code];
-        list.appendChild(reviewRow(q.text, v?`${v} — ${rateLabels[v]}`:'(ยังไม่ตอบ)'));
-      });
-    } else if(sec.type==='multi'){
-      const s=state.multi[sec.id];
-      list.appendChild(reviewRow(sec.title, (s&&s.size)?[...s].join(', '):'(ไม่ได้เลือก)'));
-    } else if(sec.type==='single'){
-      list.appendChild(reviewRow(sec.title, state.single[sec.id]||'(ยังไม่ตอบ)'));
-    } else if(sec.type==='nps'){
-      list.appendChild(reviewRow('คะแนนแนะนำ (NPS)', state.nps!=null?state.nps+'/10':'(ยังไม่ตอบ)'));
-    } else if(sec.type==='open'){
-      sec.questions.forEach(q=>{
-        const v=state.open[q.id];
-        if(v && v.trim()) list.appendChild(reviewRow(q.text, v));
-      });
-    } else if(sec.type==='contact'){
-      list.appendChild(reviewRow('ให้ติดต่อกลับ', state.single[sec.id+'_level']||'(ยังไม่เลือก)'));
-      const ch=state.multi[sec.id+'_ch'];
-      if(ch&&ch.size) list.appendChild(reviewRow('ช่องทาง', [...ch].join(', ')));
-      if(state.single[sec.id+'_time']) list.appendChild(reviewRow('ช่วงเวลา', state.single[sec.id+'_time']));
-    }
-  });
-  show('s-review');
-}
-
-/* ============================================================
-   Submit / restart
+   Submit / restart (ไม่มีหน้า review — ขั้นสุดท้ายกด "ส่ง" ไป confirmation เลย)
    ============================================================ */
 function submitSurvey(){
   const wantContact = !!state.wantContact ||
