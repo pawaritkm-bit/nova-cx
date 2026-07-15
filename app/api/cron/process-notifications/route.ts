@@ -16,18 +16,25 @@ export const maxDuration = 60;
  *     2) process notification (ส่งแบบประเมิน/เตือนทาง LINE + log + retry)
  *     3) scan reminders       (เตือนอัตโนมัติ 1 ครั้ง/1 วัน → enqueue reminder)
  *
- * ความปลอดภัย: ต้องมี CRON_SECRET (Authorization: Bearer <CRON_SECRET>)
+ * ความปลอดภัย (fail-closed): ไม่ตั้ง CRON_SECRET → ปิด endpoint ทันที (503, ไม่รัน worker)
+ *   มี secret แต่ auth ผิด → 401
  * degrade: ไม่มี service-role env → skip; ไม่มี LINE credential → job คง pending (deferred)
  */
 async function handle(request: NextRequest) {
   const requestId = newRequestId();
 
+  // --- auth: CRON_SECRET (fail-closed) ---
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
+  if (!secret) {
+    // ไม่ตั้ง secret → ปิด endpoint ไม่ให้รัน worker โดยไม่มีการยืนยันตัวตน
+    return NextResponse.json(
+      { error: "cron_disabled", reason: "CRON_SECRET not configured" },
+      { status: 503 }
+    );
+  }
+  const auth = request.headers.get("authorization");
+  if (auth !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const env = getSupabaseEnv();

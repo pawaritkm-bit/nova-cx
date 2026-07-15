@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import type { LineClient } from "@/lib/line/client";
-import type { LineWebhookEvent } from "@/lib/line/webhook";
+import type { TrimmedLineEvent } from "@/lib/line/webhook";
 
 /**
  * Worker: line_event — ประมวลผล event ที่ webhook enqueue ไว้ (job_queue queue='line_event')
@@ -34,7 +34,7 @@ export type LineEventSummary = {
 type JobRow = {
   id: string;
   tenant_id: string;
-  payload: { oa?: LineOa; event?: LineWebhookEvent } | null;
+  payload: { oa?: LineOa; event?: TrimmedLineEvent } | null;
   attempts: number;
   max_attempts: number;
 };

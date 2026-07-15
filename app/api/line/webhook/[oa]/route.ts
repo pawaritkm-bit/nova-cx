@@ -3,7 +3,7 @@ import { getSupabaseEnv, getLineChannelSecret, type LineOa } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { newRequestId, logServerError } from "@/lib/http";
 import { verifyLineSignature } from "@/lib/line/signature";
-import { parseWebhookBody, resolveOaTenantId } from "@/lib/line/webhook";
+import { parseWebhookBody, resolveOaTenantId, trimLineEvent } from "@/lib/line/webhook";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -71,10 +71,11 @@ export async function POST(
     }
 
     // enqueue 1 job ต่อ 1 event (worker ประมวลผลภายหลัง)
+    // M2: trim PII — เก็บเฉพาะ field ที่ worker ใช้ (ตัด message.text ฯลฯ) ไม่เก็บ event ดิบ
     const jobs = events.map((event) => ({
       tenant_id: tenantId,
       queue: "line_event",
-      payload: { oa, event },
+      payload: { oa, event: trimLineEvent(event) },
     }));
     await db.from("job_queue").insert(jobs);
 
