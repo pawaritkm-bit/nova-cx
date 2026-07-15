@@ -489,11 +489,11 @@ function renderContact(sec){
   return wrap;
 }
 
-/* ---- roster (Form B) : การ์ดผู้ดูแลที่ระบบผูกอัตโนมัติ (read-only) ---- */
+/* ---- roster (Form B) : การ์ดลูกทีมที่ระบบผูกอัตโนมัติ (read-only) ---- */
 function renderRoster(sec){
   const wrap=document.createElement('div');
-  const card=(m)=>`
-    <div class="team-card">
+  const card=(m,dim)=>`
+    <div class="team-card"${dim?' style="opacity:.7;"':''}>
       ${NOVA.profile(44)}
       <div class="tc-info"><div class="tc-role">${m.role}</div>
         <div class="tc-nick">${m.nick}</div><div class="tc-pos">${m.pos}</div></div>
@@ -501,7 +501,9 @@ function renderRoster(sec){
   wrap.innerHTML=`<h3 style="color:var(--navy-800); margin-top:8px;">${sec.title}</h3>
     ${sec.note?`<p style="font-size:12px; color:var(--muted); margin-top:-4px;">${sec.note}</p>`:''}
     <div class="ref-lock" style="display:block; margin:6px 0 8px;">🔒 ผูกอัตโนมัติจากระบบ • ไม่ต้องเลือกเอง</div>
-    ${card(sec.lead)}${sec.members.map(card).join('')}`;
+    ${sec.lead?card(sec.lead,true):''}
+    <div class="sub-label" style="margin-top:10px;">ลูกทีมที่คุณจะได้ประเมิน (คนละ 10 ข้อ)</div>
+    ${sec.members.map(m=>card(m,false)).join('')}`;
   return wrap;
 }
 

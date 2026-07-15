@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NOVA-CX — Dashboard (ต้นแบบ)</title>
 <link rel="stylesheet" href="assets/nova.css">
+<style>
+  /* rating แบบกะทัดรัดเฉพาะฟอร์มประเมินลูกทีม (ไม่กระทบ .rating ของ survey) */
+  #reviewForm .q-block{ margin-bottom:10px; }
+  #reviewForm .rating{ flex-direction:row; flex-wrap:wrap; gap:6px; }
+  #reviewForm .rate-btn{ width:auto; flex:1 1 52px; min-height:42px; justify-content:center; gap:0; }
+</style>
 </head>
 <body>
 
@@ -32,6 +38,7 @@
     <span style="font-size:13px; color:var(--muted); margin-right:10px;">มุมมองตามบทบาท (จำลองสิทธิ์):</span>
     <div class="role-switch">
       <button id="btn-exec" class="active" onclick="switchRole('exec')">👔 ผู้บริหาร</button>
+      <button id="btn-lead" onclick="switchRole('lead')">🧑‍💼 หัวหน้าทีมบัญชี</button>
       <button id="btn-acc" onclick="switchRole('acc')">🧮 นักบัญชี (คุณแนน)</button>
     </div>
   </div>
@@ -227,21 +234,149 @@
     </div>
   </div>
 
+  <!-- ============================================================
+       VIEW: หัวหน้าทีมบัญชี — ประเมินลูกทีม (Internal Review หลังบ้าน)
+       ============================================================ -->
+  <div id="view-lead" class="hidden">
+    <div class="note-box" style="margin-bottom:16px;">
+      🧑‍💼 มุมมอง <b>หัวหน้าทีมบัญชี (พี่แนน · ทีม A)</b> — ส่วน <b>"ประเมินลูกทีม (Internal Review)"</b>
+      เป็น<b>การประเมินภายใน ไม่เกี่ยวกับลูกค้า</b> ใช้ในการพัฒนา/บริหารทีม และผลอยู่ใน dashboard เท่านั้น
+      (ลูกค้าไม่เห็น)
+    </div>
+
+    <div class="note-box" style="margin-bottom:16px; background:var(--blue-bg); color:var(--navy-900);">
+      ℹ️ <b>นักบัญชี 1 คนมีคะแนน 2 แหล่ง (แยกกัน):</b>
+      <span style="white-space:nowrap;">① จากลูกค้า</span> (แบบประเมินรายเดือน) +
+      <span style="white-space:nowrap;">② จากหัวหน้าทีม</span> (Internal Review หน้านี้) — เก็บและแสดงแยกกัน ไม่นำมารวมเป็นคะแนนเดียว
+    </div>
+
+    <div class="grid-2">
+      <!-- ฟอร์มประเมินลูกทีม -->
+      <div class="card">
+        <div class="section-title"><span>ประเมินลูกทีม (Internal Review)</span>
+          <span class="mock-tag">mock — ไม่บันทึกจริง</span></div>
+
+        <p style="font-size:13px; color:var(--muted); margin-top:0;">เลือกลูกทีมที่จะประเมิน:</p>
+        <div class="role-switch" id="memSwitch" style="margin-bottom:14px;">
+          <button class="active" data-mem="0" onclick="pickMember(0)">ต้น</button>
+          <button data-mem="1" onclick="pickMember(1)">ฟ้า</button>
+        </div>
+
+        <p style="font-size:13px; color:var(--muted);">ให้คะแนน 1 (ต้องพัฒนา) – 5 (ดีเยี่ยม) ต่อหัวข้อ:</p>
+        <div id="reviewForm"></div>
+
+        <label class="field-label">ความเห็น / ข้อเสนอแนะถึงลูกทีม</label>
+        <textarea id="leadComment" rows="3" placeholder="เช่น จุดเด่น จุดที่ควรพัฒนา แผนโค้ช…"
+          style="width:100%; padding:10px; border:1px solid var(--line); border-radius:10px; font-family:inherit; font-size:14px;"></textarea>
+
+        <div style="display:flex; gap:8px; margin-top:12px; align-items:center;">
+          <button class="btn btn-primary" onclick="saveReview()">บันทึกผลประเมิน</button>
+          <span id="reviewAvg" style="font-size:13px; color:var(--muted);"></span>
+        </div>
+      </div>
+
+      <!-- สรุปคะแนน 2 แหล่ง ต่อลูกทีม -->
+      <div class="card">
+        <div class="section-title"><span>สรุปคะแนนลูกทีม (2 แหล่ง)</span></div>
+        <div class="table-wrap" style="overflow-x:auto; border:1px solid var(--line); border-radius:12px;">
+          <table style="width:100%; border-collapse:collapse; font-size:13.5px;">
+            <thead><tr style="background:#f8fafc;">
+              <th style="text-align:left; padding:10px; border-bottom:1px solid var(--line); color:var(--muted); font-size:12px;">ลูกทีม</th>
+              <th style="text-align:left; padding:10px; border-bottom:1px solid var(--line); color:var(--muted); font-size:12px;">① จากลูกค้า</th>
+              <th style="text-align:left; padding:10px; border-bottom:1px solid var(--line); color:var(--muted); font-size:12px;">② จากหัวหน้าทีม</th>
+            </tr></thead>
+            <tbody>
+              <tr><td style="padding:10px; border-bottom:1px solid var(--line);"><b>ต้น</b></td>
+                <td style="padding:10px; border-bottom:1px solid var(--line);">4.4 <span style="color:var(--muted); font-size:12px;">· n=31</span></td>
+                <td style="padding:10px; border-bottom:1px solid var(--line);">4.2 <span style="color:var(--muted); font-size:12px;">· รอบล่าสุด</span></td></tr>
+              <tr><td style="padding:10px;"><b>ฟ้า</b></td>
+                <td style="padding:10px;">4.1 <span style="color:var(--muted); font-size:12px;">· n=27</span></td>
+                <td style="padding:10px;">3.9 <span style="color:var(--muted); font-size:12px;">· รอบล่าสุด</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note-box" style="margin-top:14px;">
+          คะแนน "จากลูกค้า" มาจากแบบประเมินรายเดือน (Form B) · คะแนน "จากหัวหน้าทีม" มาจาก Internal Review นี้
+          — <b>แสดงแยกกันเสมอ</b> เพื่อให้เห็นทั้งมุมลูกค้าและมุมการทำงานภายใน
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script src="assets/mascot.js"></script>
 <script>
   document.getElementById('dashMascot').innerHTML = NOVA.profile(52);
 
+  const ROLE_VIEWS = {
+    exec: { label:'ภาพรวมทั้งสำนักงาน' },
+    lead: { label:'ประเมินลูกทีม (หัวหน้าทีม A)' },
+    acc:  { label:'คะแนนของฉัน (นักบัญชี)' }
+  };
   function switchRole(role){
-    const isExec = role==='exec';
-    document.getElementById('view-exec').classList.toggle('hidden', !isExec);
-    document.getElementById('view-acc').classList.toggle('hidden', isExec);
-    document.getElementById('btn-exec').classList.toggle('active', isExec);
-    document.getElementById('btn-acc').classList.toggle('active', !isExec);
-    document.getElementById('ctxLabel').textContent = isExec ? 'ภาพรวมทั้งสำนักงาน' : 'คะแนนของฉัน (นักบัญชี)';
+    ['exec','lead','acc'].forEach(r=>{
+      document.getElementById('view-'+r).classList.toggle('hidden', r!==role);
+      document.getElementById('btn-'+r).classList.toggle('active', r===role);
+    });
+    document.getElementById('ctxLabel').textContent = ROLE_VIEWS[role].label;
     window.scrollTo({top:0, behavior:'smooth'});
   }
+
+  /* ---- Internal Review (หัวหน้าทีมประเมินลูกน้อง) — mock ---- */
+  const MEMBERS = ['ต้น','ฟ้า'];
+  const REVIEW_CRITERIA = [
+    'คุณภาพงาน / ความถูกต้อง',
+    'การตรงต่อเวลา / ส่งงานทัน',
+    'การสื่อสารกับลูกค้า',
+    'ความรับผิดชอบ',
+    'การทำงานเป็นทีม',
+    'การพัฒนาตนเอง / เรียนรู้',
+    'ความสม่ำเสมอของผลงาน'
+  ];
+  // เก็บคะแนน mock แยกตามลูกทีม
+  const reviewScores = { 0:{}, 1:{} };
+  let curMem = 0;
+
+  function pickMember(i){
+    curMem = i;
+    document.querySelectorAll('#memSwitch button').forEach(b=>b.classList.toggle('active', +b.dataset.mem===i));
+    renderReviewForm();
+  }
+  function renderReviewForm(){
+    const mount=document.getElementById('reviewForm'); mount.innerHTML='';
+    REVIEW_CRITERIA.forEach((c,ci)=>{
+      const block=document.createElement('div'); block.className='q-block';
+      let btns='';
+      for(let v=1; v<=5; v++){
+        const sel = reviewScores[curMem][ci]===v ? ' sel' : '';
+        btns+=`<button class="rate-btn${sel}" onclick="setReview(${ci},${v},this)"><span class="num">${v}</span></button>`;
+      }
+      block.innerHTML=`<div class="q-title" style="font-size:14px;">${ci+1}. ${c}</div>
+        <div class="rating">${btns}</div>`;
+      mount.appendChild(block);
+    });
+    updateReviewAvg();
+  }
+  function setReview(ci,v,el){
+    reviewScores[curMem][ci]=v;
+    el.parentElement.querySelectorAll('.rate-btn').forEach(b=>b.classList.remove('sel'));
+    el.classList.add('sel');
+    updateReviewAvg();
+  }
+  function updateReviewAvg(){
+    const vals=Object.values(reviewScores[curMem]);
+    const el=document.getElementById('reviewAvg');
+    if(!vals.length){ el.textContent='ยังไม่ได้ให้คะแนน'; return; }
+    const avg=(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1);
+    el.textContent=`เฉลี่ยชั่วคราว: ${avg}/5 (${vals.length}/${REVIEW_CRITERIA.length} หัวข้อ)`;
+  }
+  function saveReview(){
+    const vals=Object.values(reviewScores[curMem]);
+    const avg = vals.length ? (vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1) : '-';
+    alert(`(ต้นแบบ) บันทึกผลประเมินภายในของ "${MEMBERS[curMem]}" แล้ว\nเฉลี่ย ${avg}/5 · ${vals.length}/${REVIEW_CRITERIA.length} หัวข้อ\nในระบบจริงจะเขียนลง employee_evaluations (แหล่ง=หัวหน้าทีม) แยกจากคะแนนลูกค้า`);
+  }
+  renderReviewForm();
 </script>
 </body>
 </html>
