@@ -136,8 +136,9 @@ export async function getMemberDashboard(
   const [{ data: fbRows }, { data: trackRows }] = await Promise.all([
     db
       .from("v_feedback_for_evaluatee")
+      // ★ C1: ไม่ select response_id — กันผู้ถูกประเมินโยงคะแนน→ลูกค้า (non-linkability)
       .select(
-        "evaluation_id, employee_id, subject_role, avg_score, response_id, submitted_at, survey_type, cycle, sentiment, urgency, summary, categories, next_best_action"
+        "evaluation_id, employee_id, subject_role, avg_score, submitted_at, survey_type, cycle, sentiment, urgency, summary, categories, next_best_action"
       ),
     db
       .from("v_customer_tracking")

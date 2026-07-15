@@ -19,6 +19,10 @@
 --   เห็นคะแนน (avg_score) + สรุปของ AI (sentiment/urgency/summary/categories)
 --   ★ ไม่มี customer_id / ชื่อลูกค้า / เบอร์ / อีเมล — ตัด PII ที่ระดับคอลัมน์
 --     (ผู้ถูกประเมินจึงโยงคะแนนกลับไปหา "ลูกค้ารายไหน" ไม่ได้)
+--   ★ C1 (PDPA non-linkability): "ห้าม" expose response_id / key ใด ๆ ที่ join
+--     กลับไปหา customer_id ได้ — response_id เคยหลุดมาแม้ dashboard ไม่ได้ใช้
+--     (ผู้ถูกประเมินเอา response_id ไป join กับ view/ตารางที่มี customer_id
+--      → โยง "คะแนน → ลูกค้า" ได้) จึงตัดออกจาก select
 --   scope: privileged เห็นหมด / เจ้าตัวเห็นของตน / หัวหน้าเห็นของลูกทีม (team_members ปัจจุบัน)
 -- ---------------------------------------------------------------------
 create or replace view public.v_feedback_for_evaluatee as
@@ -28,7 +32,6 @@ select
   ee.employee_id,
   ee.subject_role,
   ee.avg_score,
-  ee.response_id,
   sr.submitted_at,
   si.survey_type,
   si.cycle_period      as cycle,
@@ -69,7 +72,10 @@ comment on view public.v_feedback_for_evaluatee is
 -- ---------------------------------------------------------------------
 -- v_dashboard_response_facts — fact ระดับ "คำเชิญ/คำตอบ" สำหรับ metric ภาพรวม
 --   ขับ: Response Rate (นับ invitation vs responded), CSAT เฉลี่ย, NPS, sentiment
---   scope: privileged เห็นทั้ง tenant / อื่น ๆ เห็นเฉพาะลูกค้าที่เข้าถึงได้ (can_access_customer)
+--   ★ C1 (PDPA): view นี้มี customer_id + response_id + คะแนน (csat/nps) อยู่ในแถวเดียว
+--     = "score ผูกลูกค้า" โดยตรง → เปิดให้ "เฉพาะ privileged (admin/executive)" เท่านั้น
+--     member (accountant/sales) ต้อง query ไม่ได้เลย (คืน 0 แถว) — member ใช้
+--     v_feedback_for_evaluatee (คะแนนตัวเองไม่มีชื่อ) + v_customer_tracking (ชื่อ+สถานะ ไม่มีคะแนน)
 --   ★ ไม่มีชื่อลูกค้า (มี customer_id เพื่อ join ต่อ/นับ unique เท่านั้น — ไม่ใช่ PII ชื่อ)
 -- ---------------------------------------------------------------------
 create or replace view public.v_dashboard_response_facts as
@@ -109,13 +115,11 @@ left join public.ai_feedback_analysis af
   on af.response_id = sr.id and af.deleted_at is null
 where si.deleted_at is null
   and si.tenant_id = public.current_tenant_id()
-  and (
-    public.is_privileged()
-    or public.can_access_customer(si.customer_id)
-  );
+  -- ★ C1: score ผูก customer_id → เฉพาะ privileged (admin/executive) เท่านั้น
+  and public.is_privileged();
 
 comment on view public.v_dashboard_response_facts is
-  'fact คำเชิญ/คำตอบ สำหรับ Response Rate + CSAT + NPS (scope can_access_customer; ไม่มีชื่อลูกค้า)';
+  'fact คำเชิญ/คำตอบ สำหรับ Response Rate + CSAT + NPS (scope=privileged เท่านั้น; มี customer_id+score จึงกัน member โยงคะแนน→ลูกค้า)';
 
 -- ---------------------------------------------------------------------
 -- v_team_score_facts — คะแนนพนักงานผูกทีม (ปัจจุบัน) สำหรับเทียบทีม + internal review
@@ -177,7 +181,8 @@ comment on view public.v_team_score_facts is
 --   ขับ: เคสเร่งด่วน, สรุปสถานะเคส, เวลาปิดเคส, ลูกค้าเสี่ยงยกเลิก (retention)
 --   ★ แสดง customer_code (รหัสธุรกิจ) ไม่แสดงชื่อบุคคล/เบอร์/อีเมล
 --     (เปิด "ตัวตนเต็ม" ต้องผ่าน endpoint audit ตาม FR-PD-04 — TODO chunk ถัดไป)
---   scope: privileged เห็นหมด / อื่น ๆ เฉพาะเคสของลูกค้าที่เข้าถึงได้
+--   ★ C1 (PDPA): view นี้ผูก customer_id + post_resolution_csat (คะแนนหลังปิดเคส)
+--     → เปิดให้ "เฉพาะ privileged (admin/executive)" เท่านั้น; member query ไม่ได้ (0 แถว)
 -- ---------------------------------------------------------------------
 create or replace view public.v_dashboard_case_facts as
 select
@@ -198,13 +203,11 @@ left join public.customers c
   on c.id = cc.customer_id and c.deleted_at is null
 where cc.deleted_at is null
   and cc.tenant_id = public.current_tenant_id()
-  and (
-    public.is_privileged()
-    or (cc.customer_id is not null and public.can_access_customer(cc.customer_id))
-  );
+  -- ★ C1: เคสผูก customer_id + คะแนน → เฉพาะ privileged (admin/executive) เท่านั้น
+  and public.is_privileged();
 
 comment on view public.v_dashboard_case_facts is
-  'เคสร้องเรียน (scoped) สำหรับ dashboard; แสดง customer_code ไม่ใช่ชื่อบุคคล/PII';
+  'เคสร้องเรียน (scope=privileged เท่านั้น) สำหรับ dashboard; แสดง customer_code ไม่ใช่ชื่อบุคคล/PII';
 
 -- ---------------------------------------------------------------------
 -- v_customer_tracking — ★ รายการติดตามลูกค้า "ที่ตนดูแล" (นักบัญชี/เซล/หัวหน้า)

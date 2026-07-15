@@ -1,9 +1,11 @@
 /**
  * หา "บทบาทผู้ชม" ของ dashboard
  *   - หลัก: จาก session พนักงาน (users → roles.code ตาม auth.uid())
- *   - ชั่วคราว (chunk 5 ยังไม่มี auth login เต็ม): fallback จาก query param ?role=
- *     ★ param มีผลแค่ "เลือกหน้าไหน" — ข้อมูลที่เห็นยังบังคับด้วย view/RLS ตาม auth เสมอ
- *       ต่อให้ปลอม ?role=executive ก็ไม่เห็นข้อมูลเกินสิทธิ์จริง
+ *   - fallbackParam (?role=): ใช้ได้เฉพาะ "โหมดตัวอย่าง" ของหน้า UI (app/dashboard/page.tsx)
+ *     เพื่อพรีวิวหน้าตาแต่ละบทบาทตอนยังไม่มี auth login เต็ม
+ *     ★ M3: API endpoint (/api/dashboard, /api/reports/export) "ห้าม" ส่ง fallbackParam
+ *       — ต้องบังคับ session จริง (เช็ค hasSession) ไม่ให้ param กำหนด composition
+ *     ★ ต่อให้ปลอม ?role=executive ข้อมูลที่เห็นยังบังคับด้วย view/RLS ตาม auth.uid() เสมอ
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isRoleCode, type RoleCode } from "./types";

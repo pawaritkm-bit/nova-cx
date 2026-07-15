@@ -77,13 +77,12 @@ export type CaseFactRow = {
   post_resolution_csat: number | null;
 };
 
-/** feedback ที่ผู้ถูกประเมินเห็น — ★ ไม่มีชื่อ/customer_id */
+/** feedback ที่ผู้ถูกประเมินเห็น — ★ ไม่มีชื่อ/customer_id/response_id (non-linkability, C1) */
 export type EvaluateeFeedbackRow = {
   evaluation_id: string;
   employee_id: string;
   subject_role: string;
   avg_score: number | null;
-  response_id: string;
   submitted_at: string | null;
   survey_type: string | null;
   cycle: string | null;

@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import { newRequestId, logServerError, serverErrorResponse } from "@/lib/http";
-import { buildReport, isReportType, type ReportFilter } from "@/lib/reports";
+import {
+  buildReport,
+  isReportType,
+  canExportReports,
+  type ReportFilter,
+} from "@/lib/reports";
 import { resolveViewer } from "@/lib/dashboard/session";
 
 export const dynamic = "force-dynamic";
@@ -10,9 +15,11 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/reports/export?type=monthly|team&cycle=2026-07&survey_type=A
  *   - Export CSV (มี BOM ให้ Excel ไทยไม่เพี้ยน) — อ่านผ่าน scoped client
- *   - สิทธิ์:
- *       * ข้อมูลถูก scope โดย view เสมอ (member เห็นเฉพาะของตน) → ไม่ leak ข้าม scope
- *       * gate เพิ่ม: รายงาน "team" ห้ามบทบาทสมาชิก (accountant/sales) ดึง
+ *   - สิทธิ์ (H1/M1 — allow-list, default deny):
+ *       * ข้อมูลถูก scope โดย view เสมอ (ไม่ leak ข้าม scope) และ
+ *       * gate export "ทั้ง team และ monthly (มี customer_id)" เฉพาะบทบาทใน allow-list
+ *         (executive/admin/acc_lead/sales_lead/cs); member/ไม่มีบทบาท → 403 (fail-closed)
+ *   - ต้องมี session จริง (auth.uid) มิฉะนั้น 401
  *   - ยังไม่ตั้ง env DB → 503 degraded
  */
 export async function GET(req: Request) {
@@ -47,13 +54,19 @@ export async function GET(req: Request) {
     const db = await createClient();
     const viewer = await resolveViewer(db);
 
-    // gate ตามสิทธิ์: รายงานทีมสงวนให้หัวหน้า/ผู้บริหาร/แอดมิน/CS
-    if (
-      type === "team" &&
-      (viewer.role === "accountant" || viewer.role === "sales")
-    ) {
+    // ต้องมี session จริงก่อน (M3): ไม่มี auth.uid → ปฏิเสธ ไม่ประเมินสิทธิ์จาก param
+    if (!viewer.hasSession) {
       return NextResponse.json(
-        { error: "forbidden", message: "ไม่มีสิทธิ์ออกรายงานระดับทีม" },
+        { error: "unauthorized", message: "ต้องเข้าสู่ระบบก่อนออกรายงาน" },
+        { status: 401 }
+      );
+    }
+
+    // gate allow-list (default deny): อนุญาต export เฉพาะบทบาทที่มีสิทธิ์ดูข้อมูลผูกลูกค้า
+    // member (accountant/sales) หรือไม่มีบทบาท → 403 (fail-closed) ครอบทั้ง team + monthly
+    if (!canExportReports(viewer.role)) {
+      return NextResponse.json(
+        { error: "forbidden", message: "ไม่มีสิทธิ์ออกรายงาน" },
         { status: 403 }
       );
     }

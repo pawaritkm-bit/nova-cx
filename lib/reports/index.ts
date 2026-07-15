@@ -5,9 +5,29 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildCsv, type CsvColumn } from "./csv";
-import type { ResponseFactRow, TeamScoreRow } from "@/lib/dashboard/types";
+import type { ResponseFactRow, TeamScoreRow, RoleCode } from "@/lib/dashboard/types";
 
 type DB = SupabaseClient;
+
+// ---------------------------------------------------------------------
+// Export gate — allow-list (default deny) · H1/M1
+//   รายงานทุกชนิด (team + monthly ที่มี customer_id) เป็น "score/ข้อมูลผูกลูกค้า"
+//   → อนุญาต export เฉพาะบทบาทที่มีสิทธิ์ดูข้อมูลผูกลูกค้าอยู่แล้ว
+//   member (accountant/sales) หรือ role=null (ไม่มี session/ไม่มีบทบาท) → ปฏิเสธ (fail-closed)
+// ---------------------------------------------------------------------
+export const EXPORT_ALLOWED_ROLES: readonly RoleCode[] = [
+  "executive",
+  "admin",
+  "acc_lead",
+  "sales_lead",
+  "cs",
+];
+
+/** true เฉพาะบทบาทใน allow-list; null/undefined/member → false (default deny) */
+export function canExportReports(role: RoleCode | null | undefined): boolean {
+  if (!role) return false;
+  return (EXPORT_ALLOWED_ROLES as readonly string[]).includes(role);
+}
 
 /** รายงานที่รองรับในเฟสนี้ */
 export const REPORT_TYPES = ["monthly", "team"] as const;

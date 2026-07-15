@@ -15,7 +15,9 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/dashboard/[role]
  *   - อ่าน metrics ตามบทบาท ผ่าน scoped client (view/RLS บังคับ scope + visibility)
- *   - [role] ใช้เลือก "ชุดข้อมูลที่ประกอบ" เท่านั้น; ข้อมูลจริงยังจำกัดตาม auth เสมอ
+ *   - M3: ต้องมี session จริง (auth.uid) — ถ้าไม่มี → 401
+ *     บทบาทที่ใช้ "ประกอบหน้า" มาจาก session เท่านั้น ไม่ใช้ [role] param เลือก composition
+ *     (แม้ RLS จะคืน 0 แถวก็ไม่ปล่อยให้ param กำหนดว่าจะประกอบ dashboard ชุดไหน)
  *   - ไม่มี env DB → 503 degraded (ไม่ crash)
  */
 export async function GET(
@@ -45,9 +47,25 @@ export async function GET(
 
   try {
     const db = await createClient();
-    // บทบาทจริงจาก session ถ้ามี; ไม่มีก็ใช้ param (ชั่วคราว) — data ยังบังคับด้วย view
-    const viewer = await resolveViewer(db, roleParam);
-    const effectiveRole = viewer.role ?? roleParam;
+    // M3: บทบาทมาจาก session เท่านั้น (ไม่ส่ง param เข้า resolveViewer)
+    const viewer = await resolveViewer(db);
+
+    // ไม่มี session จริง → 401 (ไม่ให้ param ประกอบ dashboard เอง)
+    if (!viewer.hasSession) {
+      return NextResponse.json(
+        { error: "unauthorized", message: "ต้องเข้าสู่ระบบก่อนดู dashboard" },
+        { status: 401 }
+      );
+    }
+    // ล็อกอินแล้วแต่ไม่มีบทบาทพนักงานผูกอยู่ → 403
+    if (!viewer.role) {
+      return NextResponse.json(
+        { error: "forbidden", message: "บัญชีนี้ไม่มีบทบาทพนักงานสำหรับดู dashboard" },
+        { status: 403 }
+      );
+    }
+
+    const effectiveRole = viewer.role;
     const view = dashboardViewForRole(effectiveRole);
 
     let data;
