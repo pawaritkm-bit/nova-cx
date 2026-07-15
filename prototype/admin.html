@@ -171,6 +171,8 @@
       <ul style="margin:8px 0 0; padding-left:18px; line-height:1.85;">
         <li>หลังลูกค้าแอด LINE OA เป็นเพื่อน → ระบบส่งแบบประเมินเข้าแชทให้อัตโนมัติ (เริ่มที่<b>สำนักงาน</b>) แล้วเข้ารอบส่งต่อไป</li>
         <li><b>สำนักงาน</b> = ทุก 3 เดือน · <b>นักบัญชี</b> = ทุกต้นเดือน · <b>เซล</b> = ครั้งเดียวจบต่อ 1 ดีล (ไม่วนซ้ำ)</li>
+        <li>แบบประเมิน<b>สำนักงาน</b> = ส่งเข้า<b>กลุ่ม LINE</b> (มีนักบัญชี+ลูกค้า) ทุก 3 เดือน — ประเมินภาพรวมสำนักงาน</li>
+        <li>แบบประเมิน<b>นักบัญชี</b> (ประเมินลูกน้อง) = ส่งเข้า<b>แชตส่วนตัวลูกค้า</b> ทุกต้นเดือน — เป็นการประเมินตัวบุคคล จึงส่งส่วนตัวเพื่อให้ลูกค้าตอบตรงไปตรงมา (นักบัญชีไม่เห็น)</li>
         <li>ระบบส่งเองอัตโนมัติจากรอบ/สถานะจริง — <b>พนักงาน/ลูกค้าไม่ได้เลือกส่งเอง</b>; มีกันส่งซ้ำในรอบ/ดีลเดียว</li>
       </ul>
     </div>
@@ -180,11 +182,12 @@
       <div class="table-wrap">
         <table class="adm">
           <thead><tr>
-            <th>ชนิดแบบประเมิน</th><th>ส่งเมื่อ</th><th>ลิงก์ที่ลูกค้าได้รับ</th><th></th>
+            <th>ชนิดแบบประเมิน</th><th>ช่องทางส่ง (LINE)</th><th>ส่งเมื่อ</th><th>ลิงก์ที่ลูกค้าได้รับ</th><th></th>
           </tr></thead>
           <tbody>
             <tr>
               <td><b>🏢 สำนักงานบัญชี</b></td>
+              <td>👥 <b>กลุ่ม LINE</b> (นักบัญชี+ลูกค้าอยู่ด้วยกัน)</td>
               <td>ส่งอัตโนมัติทุก 3 เดือน <span class="pill">วนซ้ำ</span></td>
               <td><code>survey.html?eval=office</code></td>
               <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
@@ -192,6 +195,7 @@
             </tr>
             <tr>
               <td><b>🧮 นักบัญชี (ทีมที่ดูแล)</b></td>
+              <td>🔒 <b>แชตส่วนตัวลูกค้า (1:1)</b> โดยตรง</td>
               <td>ส่งอัตโนมัติทุกเดือน — ต้นเดือน <span class="pill">วนซ้ำ</span></td>
               <td><code>survey.html?eval=accountant</code></td>
               <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
@@ -199,6 +203,7 @@
             </tr>
             <tr>
               <td><b>🤝 เซล (ขายได้ · Won)</b></td>
+              <td>🔒 <b>แชตส่วนตัวลูกค้า (1:1)</b></td>
               <td>ส่งครั้งเดียวหลังปิดการขายได้ (เว้น 1–3 วัน) <span class="pill gray">ไม่วนซ้ำ</span></td>
               <td><code>survey.html?eval=sales&amp;case=won</code></td>
               <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
@@ -206,6 +211,7 @@
             </tr>
             <tr>
               <td><b>🤝 เซล (ขายไม่ได้ · Lost)</b></td>
+              <td>🔒 <b>แชตส่วนตัวลูกค้า (1:1)</b></td>
               <td>ส่งครั้งเดียวหลังปิด Lost <span class="pill gray">ไม่วนซ้ำ</span></td>
               <td><code>survey.html?eval=sales&amp;case=lost</code></td>
               <td><a class="btn btn-primary" style="min-height:auto; padding:8px 12px; font-size:13px;"
