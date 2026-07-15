@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA-CX — Back-office / Admin (ต้นแบบ)</title>
+<link rel="stylesheet" href="assets/nova.css">
+<style>
+  /* ---- โครงเฉพาะหน้า admin (ต้นแบบ · mock) ---- */
+  .adm-view{ display:none; }
+  .adm-view.active{ display:block; }
+
+  .team-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px; }
+  .person{ display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--line);
+    border-radius:12px; background:#fff; margin-bottom:8px; }
+  .person .p-role{ font-size:11px; font-weight:700; color:var(--blue-600); }
+  .person .p-nick{ font-weight:700; color:var(--navy-800); }
+  .person .p-pos{ font-size:12px; color:var(--muted); }
+  .person.lead{ border-color:var(--blue-500); background:linear-gradient(0deg,#fff,#f5f9ff); }
+  .avatar{ width:40px; height:40px; border-radius:50%; flex-shrink:0; display:flex; align-items:center;
+    justify-content:center; font-size:18px; background:var(--blue-bg); color:var(--navy-800); font-weight:800; }
+
+  .adm-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .adm-actions .btn{ min-height:auto; padding:8px 12px; font-size:13px; }
+
+  .inline-form{ border:1px dashed var(--muted-2); border-radius:12px; padding:12px; margin-top:10px;
+    background:#f8fafc; display:none; }
+  .inline-form.open{ display:block; }
+  .inline-form input, .inline-form select{ width:100%; padding:9px 10px; border:1px solid var(--line);
+    border-radius:9px; font-family:inherit; font-size:14px; margin-bottom:8px; background:#fff; }
+
+  table.adm{ width:100%; border-collapse:collapse; font-size:13.5px; }
+  table.adm th, table.adm td{ text-align:left; padding:10px 10px; border-bottom:1px solid var(--line);
+    vertical-align:top; }
+  table.adm th{ color:var(--muted); font-size:12px; font-weight:700; text-transform:none;
+    background:#f8fafc; }
+  table.adm tr:last-child td{ border-bottom:none; }
+  .table-wrap{ overflow-x:auto; border:1px solid var(--line); border-radius:12px; }
+
+  .pill{ display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px;
+    background:var(--blue-bg); color:var(--navy-800); }
+  .pill.gray{ background:#eef2f8; color:var(--muted); }
+  .pill.old{ background:#f1f5f9; color:var(--muted-2); text-decoration:line-through; }
+
+  .hist{ font-size:12.5px; color:var(--muted); }
+  .hist .h-row{ padding:6px 0; border-bottom:1px dashed var(--line); }
+  .hist .h-row:last-child{ border-bottom:none; }
+
+  .chk-list{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
+  .chk-list label{ display:flex; align-items:center; gap:6px; font-size:13px; background:#fff;
+    border:1px solid var(--line); border-radius:9px; padding:7px 10px; cursor:pointer; }
+</style>
+</head>
+<body>
+
+<div class="dash-wrap">
+
+  <!-- ===================== TOP BAR ===================== -->
+  <div class="dash-top">
+    <div class="dash-title">
+      <div id="admMascot"></div>
+      <div>
+        <h1 style="margin:0; color:var(--navy-800); font-size:24px;">NOVA-CX Back-office</h1>
+        <p style="margin:0; color:var(--muted); font-size:13px;">
+          จัดการโครงสร้างทีม · ผูกบริษัทกับผู้ดูแล (มุมมอง Admin)
+          <span class="badge badge-mock" style="margin-left:6px;">ต้นแบบ · mock</span>
+        </p>
+      </div>
+    </div>
+    <div>
+      <a class="btn btn-ghost" href="index.html" style="min-height:40px;">← หน้ารวม</a>
+    </div>
+  </div>
+
+  <!-- ===================== VIEW SWITCH ===================== -->
+  <div style="margin-bottom:18px;">
+    <span style="font-size:13px; color:var(--muted); margin-right:10px;">เลือกส่วนจัดการ:</span>
+    <div class="role-switch" id="admSwitch">
+      <button class="active" data-view="teams">🏢 โครงสร้างทีม</button>
+      <button data-view="bind">🔗 ผูกบริษัท ↔ ผู้ดูแล</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       VIEW A: โครงสร้างทีม
+       ============================================================ -->
+  <div class="adm-view active" id="view-teams">
+
+    <div class="note-box" style="margin-bottom:16px;">
+      ℹ️ ทุกการเปลี่ยนแปลง (เพิ่มลูกทีม / เปลี่ยนหัวหน้า / ย้ายทีม) เป็นแบบ
+      <b>มีผลตามวันที่ (effective-dated)</b> — ระบบจริงจะ<b>เก็บประวัติเดิมไว้</b> (ปิดด้วย valid_to)
+      เพื่อให้ Feedback ย้อนหลังผูกกับผู้ดูแลที่ดูแลจริง ณ ช่วงเวลานั้น
+    </div>
+
+    <div class="team-grid" id="teamGrid"></div>
+
+    <div class="card" style="margin-top:16px;">
+      <div class="section-title">🕓 ประวัติการเปลี่ยนแปลงโครงสร้างทีม (effective-dated)</div>
+      <div class="hist" id="teamHist"><div class="h-row">ยังไม่มีการเปลี่ยนแปลงในเซสชันนี้ (ลองกดปุ่มในการ์ดทีมด้านบน)</div></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       VIEW B: ผูกบริษัท ↔ ผู้ดูแล
+       ============================================================ -->
+  <div class="adm-view" id="view-bind">
+
+    <div class="note-box" style="margin-bottom:16px;">
+      🔗 <b>นี่คือข้อมูลที่แบบประเมิน B (ประเมินนักบัญชี) ดึงไปผูกให้ลูกค้าโดยอัตโนมัติ</b> —
+      ลูกค้าไม่ต้องเลือกเองว่าจะประเมินใคร ระบบจะ snapshot หัวหน้าทีม + ลูกทีมที่ผูกอยู่ ณ วันส่งแบบประเมิน
+      แล้วสร้างชุดคำถามต่อคนให้เอง (กันประเมินผิดคน)
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title">📋 บริษัทและผู้ดูแลปัจจุบัน</div>
+      <div class="table-wrap">
+        <table class="adm" id="bindTable">
+          <thead><tr>
+            <th>บริษัท</th><th>ทีม</th><th>หัวหน้าทีม</th><th>ลูกทีมที่ดูแล</th><th>มีผลตั้งแต่</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title">➕ ผูกผู้ดูแลใหม่ให้บริษัท <span class="mock-tag">mock — ไม่บันทึกจริง</span></div>
+
+      <label class="field-label">1) เลือกบริษัท</label>
+      <select id="bCompany"></select>
+
+      <label class="field-label">2) เลือกทีมที่จะดูแล</label>
+      <select id="bTeam"></select>
+
+      <label class="field-label">3) หัวหน้าทีม (ระบบเติมให้อัตโนมัติจากทีม)</label>
+      <input id="bLead" readonly value="" style="background:#eef2f8; font-weight:700; color:var(--navy-800);">
+
+      <label class="field-label">4) เลือกลูกทีมที่ดูแลบริษัทนี้ (เลือกได้หลายคน)</label>
+      <div class="chk-list" id="bMembers"></div>
+
+      <label class="field-label">5) มีผลตั้งแต่วันที่</label>
+      <input id="bFrom" placeholder="เช่น 01/08/2569" value="">
+
+      <div class="adm-actions">
+        <button class="btn btn-primary" onclick="saveBinding()">บันทึกการผูกผู้ดูแล</button>
+        <span style="font-size:12px; color:var(--muted); align-self:center;">
+          เมื่อบันทึก การผูกเดิมของบริษัทจะถูกปิด (valid_to) และเก็บเป็นประวัติ</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">🕓 ประวัติการผูกผู้ดูแล (valid_to)</div>
+      <div class="hist" id="bindHist"><div class="h-row">ยังไม่มีการเปลี่ยนแปลงในเซสชันนี้</div></div>
+    </div>
+  </div>
+
+  <p style="text-align:center; color:var(--muted); margin-top:34px; font-size:13px;">
+    NOVA-CX Back-office (ต้นแบบ) • ทุกข้อมูลเป็นตัวอย่าง mock ไม่ต่อ backend •
+    การกดปุ่มสาธิตแนวคิด effective-dating / เก็บประวัติเท่านั้น
+  </p>
+</div>
+
+<script src="assets/mascot.js"></script>
+<script>
+/* ============================================================
+   NOVA-CX Back-office (ต้นแบบ mock) — ไม่ต่อ backend
+   สาธิต 2 เรื่อง: (A) โครงสร้างทีม  (B) ผูกบริษัท↔ผู้ดูแล
+   แนวคิดหลัก = effective-dated + เก็บประวัติ (valid_to)
+   ============================================================ */
+document.getElementById('admMascot').innerHTML = NOVA.profile(56);
+const TODAY = '15/07/2569';
+
+/* ---- ข้อมูล mock ---- */
+const TEAMS = {
+  A: { name:'ทีมบัญชี A',
+       lead:{ nick:'พี่แนน', pos:'Senior Accountant / หัวหน้าทีม' },
+       members:[ { nick:'ต้น', pos:'Junior Accountant' }, { nick:'ฟ้า', pos:'Accounting Staff (ผู้ประสานงาน)' } ] },
+  B: { name:'ทีมบัญชี B',
+       lead:{ nick:'พี่โบว์', pos:'Senior Accountant / หัวหน้าทีม' },
+       members:[ { nick:'กล้า', pos:'Junior Accountant' }, { nick:'มิ้น', pos:'Accounting Staff' } ] }
+};
+
+let BINDINGS = [
+  { company:'บจก. สยามเทรดดิ้ง',      team:'A', members:['ต้น','ฟ้า'], from:'01/03/2567' },
+  { company:'บจก. รุ่งเรืองพาณิชย์',   team:'A', members:['ต้น'],       from:'15/06/2568' },
+  { company:'หจก. บ้านสวนฟาร์ม',       team:'B', members:['กล้า','มิ้น'], from:'01/01/2569' }
+];
+const COMPANIES = ['บจก. สยามเทรดดิ้ง','บจก. รุ่งเรืองพาณิชย์','หจก. บ้านสวนฟาร์ม','บจก. ดีดีมาร์เก็ตติ้ง','ร้านกาแฟบ้านสวน'];
+
+/* ---- ตัวสลับ view ---- */
+document.querySelectorAll('#admSwitch button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('#admSwitch button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    document.querySelectorAll('.adm-view').forEach(v=>v.classList.remove('active'));
+    document.getElementById('view-'+b.dataset.view).classList.add('active');
+  };
+});
+
+/* ============================================================
+   VIEW A: โครงสร้างทีม
+   ============================================================ */
+const avatar = (nick)=>`<div class="avatar">${nick.slice(-1)}</div>`;
+function personRow(role, p, cls){
+  return `<div class="person ${cls||''}">${avatar(p.nick)}
+    <div style="flex:1;"><div class="p-role">${role}</div>
+      <div class="p-nick">${p.nick}</div><div class="p-pos">${p.pos}</div></div></div>`;
+}
+function renderTeams(){
+  const grid=document.getElementById('teamGrid'); grid.innerHTML='';
+  Object.keys(TEAMS).forEach(code=>{
+    const t=TEAMS[code];
+    const card=document.createElement('div'); card.className='card';
+    card.innerHTML=`
+      <div class="section-title">🏢 ${t.name} <span class="pill gray">${t.members.length+1} คน</span></div>
+      ${personRow('หัวหน้าทีม', t.lead, 'lead')}
+      ${t.members.map(m=>personRow('ลูกทีม', m)).join('')}
+      <div class="adm-actions">
+        <button class="btn btn-ghost" onclick="toggleForm('add-${code}')">+ เพิ่มลูกทีม</button>
+        <button class="btn btn-ghost" onclick="toggleForm('lead-${code}')">🔁 เปลี่ยนหัวหน้า</button>
+        <button class="btn btn-ghost" onclick="toggleForm('move-${code}')">↔ ย้ายลูกทีมไปทีมอื่น</button>
+      </div>
+
+      <div class="inline-form" id="form-add-${code}">
+        <input id="addNick-${code}" placeholder="ชื่อเล่นลูกทีมใหม่ เช่น น้ำ">
+        <input id="addFrom-${code}" placeholder="มีผลตั้งแต่ (เช่น 01/08/2569)" value="${TODAY}">
+        <button class="btn btn-primary" onclick="addMember('${code}')">เพิ่ม</button>
+      </div>
+
+      <div class="inline-form" id="form-lead-${code}">
+        <select id="leadPick-${code}">
+          ${t.members.map(m=>`<option value="${m.nick}">${m.nick}</option>`).join('')}
+        </select>
+        <input id="leadFrom-${code}" placeholder="มีผลตั้งแต่" value="${TODAY}">
+        <button class="btn btn-primary" onclick="changeLead('${code}')">ตั้งเป็นหัวหน้าใหม่</button>
+      </div>
+
+      <div class="inline-form" id="form-move-${code}">
+        <select id="movePick-${code}">
+          ${t.members.map(m=>`<option value="${m.nick}">${m.nick}</option>`).join('')}
+        </select>
+        <select id="moveTo-${code}">
+          ${Object.keys(TEAMS).filter(c=>c!==code).map(c=>`<option value="${c}">${TEAMS[c].name}</option>`).join('')}
+        </select>
+        <input id="moveFrom-${code}" placeholder="มีผลตั้งแต่" value="${TODAY}">
+        <button class="btn btn-primary" onclick="moveMember('${code}')">ย้ายทีม</button>
+      </div>`;
+    grid.appendChild(card);
+  });
+}
+function toggleForm(id){
+  const el=document.getElementById('form-'+id);
+  const open=el.classList.contains('open');
+  document.querySelectorAll('.inline-form').forEach(f=>f.classList.remove('open'));
+  if(!open) el.classList.add('open');
+}
+function logTeam(msg, from){
+  const box=document.getElementById('teamHist');
+  if(box.dataset.empty!=='1'){ box.innerHTML=''; box.dataset.empty='1'; }
+  const row=document.createElement('div'); row.className='h-row';
+  row.innerHTML=`<b style="color:var(--navy-800);">มีผล ${from}</b> — ${msg}`;
+  box.prepend(row);
+}
+function addMember(code){
+  const nick=(document.getElementById('addNick-'+code).value||'').trim();
+  const from=document.getElementById('addFrom-'+code).value||TODAY;
+  if(!nick){ alert('กรอกชื่อเล่นก่อนนะคะ'); return; }
+  TEAMS[code].members.push({ nick, pos:'Accounting Staff (ใหม่)' });
+  logTeam(`เพิ่ม <b>${nick}</b> เป็นลูกทีม ${TEAMS[code].name}`, from);
+  renderTeams(); refreshBindForm();
+}
+function changeLead(code){
+  const newLead=document.getElementById('leadPick-'+code).value;
+  const from=document.getElementById('leadFrom-'+code).value||TODAY;
+  const t=TEAMS[code];
+  const oldLead=t.lead.nick;
+  const idx=t.members.findIndex(m=>m.nick===newLead);
+  if(idx<0) return;
+  const promoted=t.members.splice(idx,1)[0];
+  t.members.push({ nick:oldLead, pos:'Accountant (อดีตหัวหน้า)' });
+  t.lead={ nick:promoted.nick, pos:'Senior Accountant / หัวหน้าทีม' };
+  logTeam(`ปิดตำแหน่งหัวหน้าของ <span class="pill old">${oldLead}</span> (valid_to ${from}) → ตั้ง <b>${newLead}</b> เป็นหัวหน้า ${t.name}`, from);
+  renderTeams(); refreshBindForm();
+}
+function moveMember(code){
+  const nick=document.getElementById('movePick-'+code).value;
+  const to=document.getElementById('moveTo-'+code).value;
+  const from=document.getElementById('moveFrom-'+code).value||TODAY;
+  const t=TEAMS[code];
+  const idx=t.members.findIndex(m=>m.nick===nick);
+  if(idx<0) return;
+  const person=t.members.splice(idx,1)[0];
+  TEAMS[to].members.push(person);
+  logTeam(`ย้าย <b>${nick}</b> จาก ${t.name} → ${TEAMS[to].name} (สังกัดเดิมปิดที่ valid_to ${from})`, from);
+  renderTeams(); refreshBindForm();
+}
+
+/* ============================================================
+   VIEW B: ผูกบริษัท ↔ ผู้ดูแล
+   ============================================================ */
+function renderBindTable(){
+  const tb=document.querySelector('#bindTable tbody'); tb.innerHTML='';
+  BINDINGS.forEach(b=>{
+    const t=TEAMS[b.team];
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td><b>${b.company}</b></td>
+      <td>${t?t.name:'—'}</td>
+      <td>${t?t.lead.nick:'—'} <span class="pill">auto</span></td>
+      <td>${b.members.join(', ')||'—'}</td>
+      <td><span class="pill gray">${b.from}</span></td>`;
+    tb.appendChild(tr);
+  });
+}
+function fillBindForm(){
+  const cSel=document.getElementById('bCompany');
+  cSel.innerHTML=COMPANIES.map(c=>`<option>${c}</option>`).join('');
+  const tSel=document.getElementById('bTeam');
+  tSel.innerHTML=Object.keys(TEAMS).map(c=>`<option value="${c}">${TEAMS[c].name}</option>`).join('');
+  tSel.onchange=refreshBindForm;
+  document.getElementById('bFrom').value=TODAY;
+  refreshBindForm();
+}
+function refreshBindForm(){
+  const tSel=document.getElementById('bTeam');
+  if(!tSel) return;
+  // เผื่อทีมถูกแก้ตอน view A ให้ options ทันสมัย
+  const cur=tSel.value;
+  tSel.innerHTML=Object.keys(TEAMS).map(c=>`<option value="${c}">${TEAMS[c].name}</option>`).join('');
+  if(TEAMS[cur]) tSel.value=cur;
+  const code=tSel.value; const t=TEAMS[code];
+  document.getElementById('bLead').value=t.lead.nick+' ('+t.lead.pos+')';
+  const mBox=document.getElementById('bMembers');
+  mBox.innerHTML=t.members.map(m=>
+    `<label><input type="checkbox" value="${m.nick}" checked> ${m.nick}</label>`).join('');
+}
+function logBind(msg){
+  const box=document.getElementById('bindHist');
+  if(box.dataset.empty!=='1'){ box.innerHTML=''; box.dataset.empty='1'; }
+  const row=document.createElement('div'); row.className='h-row'; row.innerHTML=msg;
+  box.prepend(row);
+}
+function saveBinding(){
+  const company=document.getElementById('bCompany').value;
+  const code=document.getElementById('bTeam').value;
+  const from=document.getElementById('bFrom').value||TODAY;
+  const members=[...document.querySelectorAll('#bMembers input:checked')].map(x=>x.value);
+  const prev=BINDINGS.find(b=>b.company===company);
+  if(prev){
+    logBind(`<b style="color:var(--navy-800);">${company}</b>: ปิดการผูกเดิม
+      <span class="pill old">${TEAMS[prev.team].name} · ${TEAMS[prev.team].lead.nick}</span>
+      (valid_to ${from})`);
+    prev.team=code; prev.members=members; prev.from=from;
+  } else {
+    BINDINGS.push({ company, team:code, members, from });
+  }
+  logBind(`<b style="color:var(--navy-800);">${company}</b>: ผูกใหม่ →
+    <span class="pill">${TEAMS[code].name} · ${TEAMS[code].lead.nick} + ${members.join(', ')||'ไม่มีลูกทีม'}</span>
+    (มีผล ${from}) — Form B จะดึงชุดนี้ไปให้ลูกค้าประเมินอัตโนมัติ`);
+  renderBindTable();
+  alert('(ต้นแบบ) บันทึกการผูกผู้ดูแลแล้ว — ในระบบจริงจะเขียนลง customer_assignments พร้อม valid_from/valid_to');
+}
+
+/* ---- init ---- */
+renderTeams();
+renderBindTable();
+fillBindForm();
+</script>
+</body>
+</html>

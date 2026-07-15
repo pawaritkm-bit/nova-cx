@@ -194,7 +194,6 @@ function resetState(){
   state.single    = {};   // { secId: value }
   state.open      = {};   // { questionId: text }
   state.nps       = null;
-  state.audience  = null;
   state.dnc       = false;
 }
 resetState();
@@ -309,12 +308,11 @@ function buildSurvey(){
       case 'nps':      el=renderNps(sec); break;
       case 'open':     el=renderOpen(sec); break;
       case 'contact':  el=renderContact(sec); break;
-      case 'audience': el=renderAudience(sec); break;
+      case 'roster':   el=renderRoster(sec); break;
       case 'intro':    el=renderIntro(sec); break;
     }
     if(el) mount.appendChild(el);
   });
-  applyAudience();
 }
 
 function elFrom(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstElementChild; }
@@ -333,9 +331,6 @@ function renderRef(sec){
 /* ---- ratings (1-5 + conditional follow-up) ---- */
 function renderRatings(sec){
   const wrap=document.createElement('div');
-  wrap.className='rate-section';
-  wrap.dataset.secid=sec.id;
-  if(sec.showFor) wrap.dataset.showfor=JSON.stringify(sec.showFor);
   let html=`<h3 style="color:var(--navy-800); margin-top:8px;">${sec.title}</h3>`;
   if(sec.hint) html+=`<p style="font-size:12px; color:var(--muted); margin-top:-4px;">${sec.hint}</p>`;
   sec.items.forEach(q=>{
@@ -496,35 +491,20 @@ function renderContact(sec){
   return wrap;
 }
 
-/* ---- audience (Form B) : เลือกผู้ถูกประเมิน + การ์ดผู้ดูแล ---- */
-function renderAudience(sec){
-  const wrap=document.createElement('div'); wrap.className='q-block';
-  let cards=sec.team.map(m=>`
+/* ---- roster (Form B) : การ์ดผู้ดูแลที่ระบบผูกอัตโนมัติ (read-only) ---- */
+function renderRoster(sec){
+  const wrap=document.createElement('div');
+  const card=(m)=>`
     <div class="team-card">
       ${NOVA.profile(44)}
       <div class="tc-info"><div class="tc-role">${m.role}</div>
         <div class="tc-nick">${m.nick}</div><div class="tc-pos">${m.pos}</div></div>
-    </div>`).join('');
-  wrap.innerHTML=`<div class="q-title">${sec.title}</div>
+    </div>`;
+  wrap.innerHTML=`<h3 style="color:var(--navy-800); margin-top:8px;">${sec.title}</h3>
     ${sec.note?`<p style="font-size:12px; color:var(--muted); margin-top:-4px;">${sec.note}</p>`:''}
-    <div class="chips" id="chips-${sec.id}" style="margin-bottom:12px;"></div>
-    <div class="sub-label">ผู้ดูแลของคุณ</div>${cards}`;
-  const box=wrap.querySelector('#chips-'+sec.id);
-  state.audience = sec.defaultVal || sec.options[0];
-  sec.options.forEach(opt=>{
-    const c=document.createElement('button'); c.className='chip'+(opt===state.audience?' sel':''); c.textContent=opt;
-    c.onclick=()=>{ state.audience=opt; box.querySelectorAll('.chip').forEach(x=>x.classList.remove('sel')); c.classList.add('sel'); applyAudience(); flashSave(); updateProgress(); };
-    box.appendChild(c);
-  });
+    <div class="ref-lock" style="display:block; margin:6px 0 8px;">🔒 ผูกอัตโนมัติจากระบบ • ไม่ต้องเลือกเอง</div>
+    ${card(sec.lead)}${sec.members.map(card).join('')}`;
   return wrap;
-}
-/* แสดง/ซ่อน rating sections ตามผู้ถูกประเมินที่เลือก */
-function applyAudience(){
-  document.querySelectorAll('.rate-section').forEach(sec=>{
-    if(!sec.dataset.showfor) return;
-    const list=JSON.parse(sec.dataset.showfor);
-    sec.style.display = list.includes(state.audience) ? '' : 'none';
-  });
 }
 
 /* ---- intro (Form D opening message) ---- */
@@ -556,7 +536,6 @@ function updateProgress(){
   let total=0, done=0;
   form.sections.forEach(sec=>{
     if(sec.type==='ratings'){
-      if(sec.showFor && !sec.showFor.includes(state.audience)) return;
       sec.items.forEach(q=>{ total++; if(state.ratings[q.code]!=null) done++; });
     } else if(sec.type==='multi'){
       total++; if(state.multi[sec.id] && state.multi[sec.id].size>0) done++;
@@ -585,10 +564,7 @@ function goReview(){
   const form=currentForm();
   const list=document.getElementById('reviewList'); list.innerHTML='';
   form.sections.forEach(sec=>{
-    if(sec.type==='audience'){
-      list.appendChild(reviewRow('ประเมิน', state.audience||'(ยังไม่เลือก)'));
-    } else if(sec.type==='ratings'){
-      if(sec.showFor && !sec.showFor.includes(state.audience)) return;
+    if(sec.type==='ratings'){
       sec.items.forEach(q=>{
         const v=state.ratings[q.code];
         list.appendChild(reviewRow(q.text, v?`${v} — ${rateLabels[v]}`:'(ยังไม่ตอบ)'));
