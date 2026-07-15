@@ -61,3 +61,62 @@ export function getLiffId(oa: LineOa): string | undefined {
 export function isLineDevMode(): boolean {
   return !getLiffId("care") && !getLiffId("sale");
 }
+
+export type LineOaCredentials = {
+  /** channel id (optional — ใช้เฉพาะบางการเรียก) */
+  channelId?: string;
+  /** channel secret — ใช้ verify x-line-signature (HMAC) ของ webhook */
+  channelSecret: string;
+  /** long-lived channel access token — ใช้ยิง Messaging API (push/reply) */
+  channelAccessToken: string;
+};
+
+/**
+ * credential ของ OA (Care/Sale) จาก env — คืน null ถ้ายังไม่ครบ
+ * (ต้องมีทั้ง channel secret + access token ถึงจะยิง LINE ได้จริง)
+ * secret มาจาก env เท่านั้น (C-14) ไม่ฝังในโค้ด
+ */
+export function getLineOaCredentials(oa: LineOa): LineOaCredentials | null {
+  const prefix = oa === "care" ? "LINE_CARE" : "LINE_SALE";
+  const channelSecret = process.env[`${prefix}_CHANNEL_SECRET`];
+  const channelAccessToken = process.env[`${prefix}_CHANNEL_ACCESS_TOKEN`];
+
+  if (!channelSecret || !channelAccessToken) return null;
+
+  return {
+    channelId: process.env[`${prefix}_CHANNEL_ID`] || undefined,
+    channelSecret,
+    channelAccessToken,
+  };
+}
+
+/**
+ * channel secret ของ OA — สำหรับ verify webhook signature โดยเฉพาะ
+ * (แยกออกมาเพราะ webhook ต้อง verify ได้แม้ยังไม่ได้ตั้ง access token)
+ */
+export function getLineChannelSecret(oa: LineOa): string | undefined {
+  const prefix = oa === "care" ? "LINE_CARE" : "LINE_SALE";
+  return process.env[`${prefix}_CHANNEL_SECRET`] || undefined;
+}
+
+/** true เมื่อ OA นั้นตั้ง credential ครบ (พร้อมยิง Messaging API) */
+export function hasLineOaCredentials(oa: LineOa): boolean {
+  return getLineOaCredentials(oa) !== null;
+}
+
+/**
+ * group id ของ "กลุ่ม LINE สำนักงาน" (fallback ระดับ env) — ใช้เมื่อ invitation
+ * ยังไม่มี group id ผูกมาเอง (dev/เฟสแรกที่ยังไม่เก็บ group ต่อลูกค้า)
+ * TODO(chunk ถัดไป): เก็บ group id ต่อลูกค้า/สำนักงานใน DB แทน env กลาง
+ */
+export function getOfficeGroupId(): string | undefined {
+  return process.env.LINE_CARE_OFFICE_GROUP_ID || undefined;
+}
+
+/**
+ * tenant override สำหรับ LINE webhook (multi-tenant future) — ยังไม่ตั้ง = undefined
+ * เฟสแรก (1 tenant) webhook จะ resolve tenant จากตาราง tenants เอง
+ */
+export function getLineTenantId(): string | undefined {
+  return process.env.LINE_TENANT_ID || undefined;
+}

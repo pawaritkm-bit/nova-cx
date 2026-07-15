@@ -9,15 +9,20 @@ export const dynamic = "force-dynamic";
  * โครง cron last-run alert (E12): Vercel Cron เรียกทุกวัน → อัปเดต cron_health.last_run_at
  * ทีม monitor แจ้งเตือนได้เมื่อ last_run_at ค้าง (บทเรียน: cron เงียบ)
  *
- * ความปลอดภัย: ต้องมี CRON_SECRET (Vercel Cron ส่ง `Authorization: Bearer <CRON_SECRET>`)
+ * ความปลอดภัย (fail-closed): ไม่ตั้ง CRON_SECRET → ปิด endpoint ทันที (503)
+ *   มี secret แต่ auth ผิด → 401
  */
 async function handle(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
+  if (!secret) {
+    return NextResponse.json(
+      { error: "cron_disabled", reason: "CRON_SECRET not configured" },
+      { status: 503 }
+    );
+  }
+  const auth = request.headers.get("authorization");
+  if (auth !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const timestamp = new Date().toISOString();

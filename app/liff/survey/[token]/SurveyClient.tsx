@@ -6,6 +6,7 @@ import {
   type Followup,
 } from "@/lib/survey/conditional";
 import { isAnswered } from "@/lib/survey/submit";
+import { oaForSurveyType } from "@/lib/line/routing";
 
 /**
  * LIFF Survey wizard (step-by-step) — render จาก API จริง
@@ -143,9 +144,13 @@ export default function SurveyClient({
   }, [token]);
 
   // ---- LIFF init (best-effort; dev mode = ข้าม) ----
+  // เลือก LIFF id ตาม OA ของ invitation (A/B = Care, C/D = Sale)
+  // รอ template โหลดก่อนเพื่อรู้ survey_type → ใช้ OA ที่ถูกต้อง
   useEffect(() => {
     if (devMode) return;
-    const liffId = liffSaleId ?? liffCareId;
+    if (!template) return;
+    const oa = oaForSurveyType(template.survey_type);
+    const liffId = oa === "sale" ? liffSaleId : liffCareId;
     if (!liffId) return;
 
     const script = document.createElement("script");
@@ -170,7 +175,7 @@ export default function SurveyClient({
     return () => {
       script.remove();
     };
-  }, [devMode, liffCareId, liffSaleId]);
+  }, [devMode, liffCareId, liffSaleId, template]);
 
   // ---- auto-save ----
   useEffect(() => {

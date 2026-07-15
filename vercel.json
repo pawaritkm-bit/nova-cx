@@ -4,6 +4,14 @@
     {
       "path": "/api/cron/health-ping",
       "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/process-ai",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/process-notifications",
+      "schedule": "*/5 * * * *"
     }
   ],
   "functions": {
