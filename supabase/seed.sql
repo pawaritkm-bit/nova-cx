@@ -37,7 +37,7 @@ insert into public.permissions (id, tenant_id, code, resource, action, descripti
 
 -- ---------- Role → Permission (scope ตาม Permission Matrix §15) ----------
 insert into public.role_permissions (tenant_id, role_id, permission_id, scope)
-select '11111111-1111-1111-1111-111111111111', rp.role_id, rp.permission_id, rp.scope
+select '11111111-1111-1111-1111-111111111111', rp.role_id::uuid, rp.permission_id::uuid, rp.scope
 from (values
   -- executive: เห็นทั้ง tenant
   ('20000000-0000-0000-0000-000000000001','80000000-0000-0000-0000-000000000001','all'),
@@ -350,9 +350,6 @@ insert into public.feedback_tags (tenant_id, code, label) values
   ('11111111-1111-1111-1111-111111111111','complaint','ร้องเรียน'),
   ('11111111-1111-1111-1111-111111111111','request','คำขอ');
 
--- ---------- Cron health (job รายวัน) ----------
-insert into public.cron_health (job_name, status) values
-  ('health-ping','unknown'),
-  ('scan-invitations','unknown'),
-  ('worker-notification','unknown'),
-  ('worker-ai-analysis','unknown');
+-- ---------- Cron health ----------
+-- (ย้ายไป migration 0024 แล้ว — ใช้ชื่อ job จริง process-notifications/process-ai
+--  + on conflict do nothing; seed ไม่ต้อง insert ซ้ำ)
