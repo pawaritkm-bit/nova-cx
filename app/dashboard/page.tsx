@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -14,6 +15,9 @@ import { ROLE_CODES, type RoleCode } from "@/lib/dashboard/types";
 import { ExecView, MemberView, LeadView } from "./_components";
 
 export const dynamic = "force-dynamic";
+
+// โหมด demo ?role= เปิดเฉพาะตอน dev เท่านั้น (production ต้อง login จริง)
+const DEV_FALLBACK = process.env.NODE_ENV !== "production";
 
 const ROLE_LABEL: Record<RoleCode, string> = {
   executive: "ผู้บริหาร",
@@ -37,31 +41,58 @@ function Frame({
   return (
     <main className="mx-auto max-w-5xl px-5 py-8">
       <header className="mb-6">
-        <h1 className="text-2xl font-bold text-brand">NOVA-CX Dashboard</h1>
-        <p className="mt-1 text-sm text-brand/50">
-          มุมมองตามบทบาท · แสดง Sample Size (n) ทุกคะแนน · คะแนนตัวอย่างน้อยไม่สรุปดี/แย่สุด
-        </p>
-        {!fromSession ? (
-          <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-            โหมดตัวอย่าง (ยังไม่มี auth login เต็มใน chunk นี้): เลือกบทบาทจากลิงก์ด้านล่างเพื่อดูหน้าตา —
-            ข้อมูลจริงยังบังคับด้วย view/RLS ตามผู้ล็อกอินเสมอ
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-brand">NOVA-CX Dashboard</h1>
+            <p className="mt-1 text-sm text-brand/50">
+              มุมมองตามบทบาท · แสดง Sample Size (n) ทุกคะแนน · คะแนนตัวอย่างน้อยไม่สรุปดี/แย่สุด
+            </p>
+          </div>
+          {/* แสดงบทบาท + ปุ่มออกจากระบบเฉพาะเมื่อ login จริง */}
+          {fromSession && activeRole ? (
+            <div className="flex shrink-0 items-center gap-3">
+              <span className="rounded-full bg-brand/5 px-3 py-1 text-xs font-medium text-brand/70">
+                {ROLE_LABEL[activeRole]}
+              </span>
+              <form method="post" action="/auth/logout">
+                <button
+                  type="submit"
+                  className="rounded-lg px-3 py-1 text-xs font-medium text-brand/60 ring-1 ring-black/10 transition hover:bg-brand/5"
+                >
+                  ออกจากระบบ
+                </button>
+              </form>
+            </div>
+          ) : null}
+        </div>
+
+        {/* โหมดตัวอย่าง (dev เท่านั้น) — ปุ่มสลับบทบาทเพื่อพรีวิวหน้าตา */}
+        {!fromSession && DEV_FALLBACK ? (
+          <>
+            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              โหมดตัวอย่าง (dev — ยังไม่ได้ login): เลือกบทบาทเพื่อดูหน้าตา —
+              ข้อมูลจริงยังบังคับด้วย view/RLS ตามผู้ล็อกอินเสมอ · เข้าสู่ระบบจริงที่{" "}
+              <Link href="/login" className="font-medium underline">
+                /login
+              </Link>
+            </p>
+            <nav className="mt-3 flex flex-wrap gap-2">
+              {ROLE_CODES.map((r) => (
+                <Link
+                  key={r}
+                  href={`/dashboard?role=${r}`}
+                  className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ring-black/10 transition ${
+                    r === activeRole
+                      ? "bg-brand text-white"
+                      : "bg-white text-brand/70 hover:bg-brand/5"
+                  }`}
+                >
+                  {ROLE_LABEL[r]}
+                </Link>
+              ))}
+            </nav>
+          </>
         ) : null}
-        <nav className="mt-3 flex flex-wrap gap-2">
-          {ROLE_CODES.map((r) => (
-            <Link
-              key={r}
-              href={`/dashboard?role=${r}`}
-              className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ring-black/10 transition ${
-                r === activeRole
-                  ? "bg-brand text-white"
-                  : "bg-white text-brand/70 hover:bg-brand/5"
-              }`}
-            >
-              {ROLE_LABEL[r]}
-            </Link>
-          ))}
-        </nav>
       </header>
       {children}
     </main>
@@ -88,14 +119,48 @@ export default async function DashboardPage({
   }
 
   const db = await createClient();
-  const viewer = await resolveViewer(db, roleParam);
+  // ★ session จริงมาก่อนเสมอ; ?role= ใช้ได้เฉพาะโหมด dev fallback (พรีวิว)
+  //   เมื่อมี session จริง resolveViewer จะเมิน param อยู่แล้ว (session ชนะ param)
+  const viewer = await resolveViewer(db, DEV_FALLBACK ? roleParam : undefined);
 
-  // 2) ยังไม่มีบทบาท (ไม่ล็อกอิน + ไม่ส่ง ?role=) → ให้เลือก
+  // 2a) ไม่มี session จริง และไม่ใช่ dev → บังคับ login
+  //     (defense-in-depth ซ้ำ middleware เผื่อเข้าถึงหน้าโดยตรง)
+  if (!viewer.hasSession && !DEV_FALLBACK) {
+    redirect("/login");
+  }
+
+  // 2b) login แล้วแต่บัญชีไม่มีบทบาทพนักงานผูกอยู่ → แจ้งอย่างสุภาพ + ให้ออกจากระบบ
+  if (viewer.hasSession && !viewer.role) {
+    return (
+      <Frame activeRole={null} fromSession={false}>
+        <div className="rounded-2xl bg-white p-6 text-brand/70 shadow-sm ring-1 ring-black/5">
+          <p>บัญชีนี้ยังไม่ได้ผูกบทบาทพนักงานสำหรับดู dashboard</p>
+          <p className="mt-1 text-sm text-brand/50">
+            กรุณาติดต่อผู้ดูแลระบบเพื่อกำหนดบทบาท
+          </p>
+          <form method="post" action="/auth/logout" className="mt-4">
+            <button
+              type="submit"
+              className="rounded-lg px-3 py-1 text-xs font-medium text-brand/60 ring-1 ring-black/10 transition hover:bg-brand/5"
+            >
+              ออกจากระบบ
+            </button>
+          </form>
+        </div>
+      </Frame>
+    );
+  }
+
+  // 2c) dev, ไม่ login, ไม่ส่ง ?role= → ให้เลือกบทบาทตัวอย่าง
   if (!viewer.role) {
     return (
       <Frame activeRole={null} fromSession={viewer.fromSession}>
         <div className="rounded-2xl bg-white p-6 text-brand/70 shadow-sm ring-1 ring-black/5">
-          เลือกบทบาทด้านบนเพื่อดู dashboard
+          เลือกบทบาทด้านบนเพื่อดู dashboard (หรือ{" "}
+          <Link href="/login" className="font-medium underline">
+            เข้าสู่ระบบ
+          </Link>
+          )
         </div>
       </Frame>
     );
