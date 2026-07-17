@@ -15,6 +15,7 @@ import {
   groupScores,
 } from "./aggregate";
 import { pickBestWorst } from "./sample-size";
+import { compareUrgency, summarizeEscalation } from "./sla";
 import { redactFeedbackRows } from "./redact";
 import type {
   ExecDashboard,
@@ -70,7 +71,15 @@ function summarizeCases(rows: CaseFactRow[]): CaseSummary {
 // ---------------------------------------------------------------------
 // Executive — ภาพรวมทั้ง tenant (view scope = privileged เห็นหมด)
 // ---------------------------------------------------------------------
-export async function getExecDashboard(db: DB): Promise<ExecDashboard> {
+/** จำนวนเคสด่วนสูงสุดที่ "ส่งไปแสดง" (สรุปตัวเลข escalation นับจากชุดเต็มไปแล้ว) */
+const URGENT_LIST_CAP = 100;
+
+export async function getExecDashboard(
+  db: DB,
+  // ★ nowMs ส่งจาก page (เวลา ณ ตอน render) — ใช้คำนวณ overdue ของ escalation summary
+  //   ให้ตรงกับที่ component ใช้ (เดียวกันกับ now ที่ส่งเข้า ExecView)
+  nowMs: number = Date.now()
+): Promise<ExecDashboard> {
   const [{ data: facts }, { data: teamRows }, { data: caseRows }] =
     await Promise.all([
       db
@@ -105,17 +114,24 @@ export async function getExecDashboard(db: DB): Promise<ExecDashboard> {
   const teamRanking = pickBestWorst(teamCsat);
 
   const caseSummary = summarizeCases(cases);
-  // ★ คืน "เคสด่วนที่ยังเปิดอยู่ทั้งหมด" (ไม่ตัดเหลือ 20) เพื่อให้ชั้น UI นับ escalation
-  //   (critical/high/เกิน SLA) ได้ครบถ้วน — การจัดลำดับ urgency + ตัดจำนวนแสดง ทำที่ component
-  //   ที่มี `now`. เรียง sla_due_at น้อย→มาก (เคสเกิน/ใกล้ครบมาก่อน) แล้ว cap กันข้อมูลล้น
-  const urgentCases = cases
-    .filter(
-      (r) =>
-        (r.level === "critical" || r.level === "high") &&
-        !CLOSED_STATUSES.has(r.status)
-    )
-    .sort((a, b) => (a.sla_due_at ?? "~").localeCompare(b.sla_due_at ?? "~"))
-    .slice(0, 100);
+
+  // เคสด่วนที่ยังเปิดอยู่ "ทั้งหมด" (critical/high ที่ยังไม่ปิด) — ยังไม่ตัด
+  const urgentAll = cases.filter(
+    (r) =>
+      (r.level === "critical" || r.level === "high") &&
+      !CLOSED_STATUSES.has(r.status)
+  );
+
+  // ★ สรุป escalation (total/critical/high/overdue) นับจาก "ชุดเต็ม" ก่อน cap
+  //   → ตัวเลขแถบ escalation ตรงกับการ์ด KPI/สรุปเคส (d.cases.urgent) เสมอ
+  //     แม้เคสด่วนจะเกิน URGENT_LIST_CAP (เดิม slice ก่อนนับทำให้ต่ำกว่าจริง)
+  const escalation = summarizeEscalation(urgentAll, nowMs);
+  const urgentTotal = urgentAll.length;
+
+  // list ที่ส่งไปแสดง: เรียงตามความเร่งด่วนแล้ว cap (การนับสรุปทำจากชุดเต็มไปแล้ว)
+  const urgentCases = [...urgentAll]
+    .sort((a, b) => compareUrgency(a, b, nowMs))
+    .slice(0, URGENT_LIST_CAP);
 
   return {
     role: "executive",
@@ -126,6 +142,8 @@ export async function getExecDashboard(db: DB): Promise<ExecDashboard> {
     teamRanking,
     cases: caseSummary,
     urgentCases,
+    urgentTotal,
+    escalation,
   };
 }
 
@@ -171,8 +189,9 @@ export async function getMemberDashboard(
   const responded = tracking.filter((r) => r.is_responded === true).length;
   const notResponded = tracking.length - responded;
   // ★ โทรตามได้เฉพาะคนที่ "ยังไม่ประเมิน" (ตรงกับต้นแบบ) + มีเบอร์ในระบบ
+  //   (ถ้าไม่มีเบอร์ก็โทรตามไม่ได้ → ตัดออกจากรายการโทรตาม ให้ตรงกับคอมเมนต์)
   const callList = tracking
-    .filter((r) => r.is_responded !== true)
+    .filter((r) => r.is_responded !== true && r.has_phone)
     .sort((a, b) => b.reminder_count - a.reminder_count);
 
   return {

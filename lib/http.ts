@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 /**
@@ -9,6 +9,32 @@ import { NextResponse } from "next/server";
 
 export function newRequestId(): string {
   return randomUUID();
+}
+
+/**
+ * เทียบ string แบบ constant-time (กัน timing attack) — ใช้กับ secret/token
+ *   - ยาวไม่เท่ากัน → false ทันที (timingSafeEqual จะ throw ถ้า buffer คนละยาว)
+ *   - helper กลางให้ cron/webhook เทียบ secret แบบสม่ำเสมอ
+ */
+export function constantTimeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * ตรวจ Bearer secret ของ cron แบบ constant-time (fail-closed)
+ *   - ไม่มี header authorization → false
+ *   - เทียบ `Bearer <secret>` แบบ timing-safe
+ *   ผู้เรียกต้องเช็ค `secret` ว่าตั้งค่าแล้วเอง (ไม่ตั้ง → ปิด endpoint 503)
+ */
+export function isValidCronAuth(
+  authHeader: string | null,
+  secret: string
+): boolean {
+  if (!authHeader) return false;
+  return constantTimeEqual(authHeader, `Bearer ${secret}`);
 }
 
 /** log error ฝั่ง server (มี request id + context) — ไม่ส่งรายละเอียดออก client */

@@ -2,6 +2,7 @@
  * ชนิดข้อมูลชั้น dashboard (M2 chunk 5)
  */
 import type { ScoredItem, BestWorstResult } from "./sample-size";
+import type { EscalationSummary } from "./sla";
 import type {
   CsatAggregate,
   NpsAggregate,
@@ -126,7 +127,9 @@ export type ExecDashboard = {
   teamCsat: ScoredItem[];
   teamRanking: BestWorstResult;
   cases: CaseSummary;
-  urgentCases: CaseFactRow[];
+  urgentCases: CaseFactRow[]; // ★ list สำหรับแสดง (cap แล้ว, เรียงตามความเร่งด่วน)
+  urgentTotal: number; // จำนวนเคสด่วนทั้งหมด (ก่อน cap) — ใช้คำนวณ "และอีก N"
+  escalation: EscalationSummary; // สรุปนับจากชุดเต็ม (ตรงกับ cases.urgent)
 };
 
 export type AccountantDashboard = {

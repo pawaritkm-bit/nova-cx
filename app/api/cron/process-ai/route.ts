@@ -3,7 +3,7 @@ import { getSupabaseEnv } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { getAIProvider } from "@/lib/ai/provider";
 import { processAiAnalysisJobs } from "@/lib/ai/worker";
-import { newRequestId, logServerError } from "@/lib/http";
+import { newRequestId, logServerError, isValidCronAuth } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -30,7 +30,7 @@ async function handle(request: NextRequest) {
     );
   }
   const auth = request.headers.get("authorization");
-  if (auth !== `Bearer ${secret}`) {
+  if (!isValidCronAuth(auth, secret)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

@@ -23,6 +23,21 @@ function todayISO(): string {
 }
 
 /**
+ * ยืนยันว่า mutation (update) แตะจริงอย่างน้อย 1 แถว
+ *   - service-role ข้าม RLS → update ที่ id ผิด/ต่าง tenant จะ match 0 แถวโดยไม่ error
+ *     ถ้าไม่เช็คจะตอบ "สำเร็จ" ทั้งที่ไม่ได้แก้อะไร → throw ให้ actions ชั้นบนแจ้งผู้ใช้
+ */
+function assertAffected(
+  data: unknown[] | null,
+  error: unknown
+): void {
+  if (error) throw new Error((error as { message?: string }).message ?? "update failed");
+  if (!data || data.length === 0) {
+    throw new Error("ไม่พบรายการที่ต้องการแก้ไข");
+  }
+}
+
+/**
  * ตรวจว่า record (id) อยู่ใน tenant นี้จริงและยังไม่ถูกลบ — กัน caller อ้าง id ข้าม tenant
  * (service-role ข้าม RLS จึงต้องเช็ค tenant เองที่ชั้นนี้)
  */
@@ -99,12 +114,13 @@ export async function deactivateTeam(
   tenantId: string,
   teamId: string
 ): Promise<void> {
-  const { error } = await db
+  const { data, error } = await db
     .from("teams")
     .update({ deleted_at: new Date().toISOString() })
     .eq("id", teamId)
-    .eq("tenant_id", tenantId); // scope tenant กันลบข้าม tenant
-  if (error) throw new Error(error.message);
+    .eq("tenant_id", tenantId) // scope tenant กันลบข้าม tenant
+    .select("id");
+  assertAffected(data as unknown[] | null, error);
 }
 
 // =====================================================================
@@ -179,12 +195,13 @@ export async function setEmployeeActive(
   employeeId: string,
   isActive: boolean
 ): Promise<void> {
-  const { error } = await db
+  const { data, error } = await db
     .from("employees")
     .update({ is_active: isActive })
     .eq("id", employeeId)
-    .eq("tenant_id", tenantId);
-  if (error) throw new Error(error.message);
+    .eq("tenant_id", tenantId)
+    .select("id");
+  assertAffected(data as unknown[] | null, error);
 }
 
 // =====================================================================
@@ -248,12 +265,25 @@ export async function deactivateCustomer(
   tenantId: string,
   customerId: string
 ): Promise<void> {
-  const { error } = await db
+  const { data, error } = await db
     .from("customers")
     .update({ deleted_at: new Date().toISOString(), status: "cancelled" })
     .eq("id", customerId)
-    .eq("tenant_id", tenantId);
-  if (error) throw new Error(error.message);
+    .eq("tenant_id", tenantId)
+    .select("id");
+  assertAffected(data as unknown[] | null, error);
+
+  // cascade: ปิดผู้ดูแลปัจจุบัน (customer_assignments) ของลูกค้าที่ถูกปิดใช้งาน
+  //   ไม่ให้ลูกค้าที่ยกเลิกแล้วยังโผล่ในรายการมอบหมาย (valid_to=วันนี้ เก็บ history)
+  //   best-effort: ลูกค้าอาจไม่มีผู้ดูแล (0 แถว = ไม่ error) — throw เฉพาะเมื่อ error จริง
+  const { error: cascadeErr } = await db
+    .from("customer_assignments")
+    .update({ valid_to: todayISO() })
+    .eq("tenant_id", tenantId)
+    .eq("customer_id", customerId)
+    .is("valid_to", null)
+    .is("deleted_at", null);
+  if (cascadeErr) throw new Error(cascadeErr.message);
 }
 
 // =====================================================================
@@ -280,7 +310,7 @@ export async function listCurrentAssignments(
   const { data, error } = await db
     .from("customer_assignments")
     .select(
-      "id, role, valid_from, customer_id, employee_id, team_id, customers(name, customer_code), employees(first_name, nickname)"
+      "id, role, valid_from, customer_id, employee_id, team_id, customers(name, customer_code, deleted_at), employees(first_name, nickname)"
     )
     .eq("tenant_id", tenantId)
     .is("valid_to", null)
@@ -295,11 +325,18 @@ export async function listCurrentAssignments(
     customer_id: string;
     employee_id: string;
     team_id: string | null;
-    customers: { name?: string; customer_code?: string | null } | null;
+    customers: {
+      name?: string;
+      customer_code?: string | null;
+      deleted_at?: string | null;
+    } | null;
     employees: { first_name?: string; nickname?: string | null } | null;
   };
 
-  return ((data ?? []) as unknown as Raw[]).map((r) => ({
+  return ((data ?? []) as unknown as Raw[])
+    // กรองลูกค้าที่ถูกปิดใช้งาน (soft-deleted) ออก — ไม่ให้โผล่ในรายการมอบหมาย
+    .filter((r) => !r.customers?.deleted_at)
+    .map((r) => ({
     id: r.id,
     role: r.role,
     valid_from: r.valid_from,
@@ -372,7 +409,14 @@ export async function createAssignment(
     })
     .select("id")
     .single();
-  if (error) throw new Error(error.message);
+  if (error) {
+    // unique violation จาก partial index 0028 (tenant, customer, employee) where valid_to null
+    //   เกิดได้เมื่อ race กับอีก request ที่เพิ่งสร้างคู่เดียวกัน → แจ้งสุภาพ (idempotent-ish)
+    if ((error as { code?: string }).code === "23505") {
+      throw new Error("มีการมอบหมายลูกค้ารายนี้ให้พนักงานคนนี้อยู่แล้ว");
+    }
+    throw new Error(error.message);
+  }
 
   return { id: (data as { id: string }).id, replacedPrevious };
 }
@@ -383,11 +427,12 @@ export async function endAssignment(
   tenantId: string,
   assignmentId: string
 ): Promise<void> {
-  const { error } = await db
+  const { data, error } = await db
     .from("customer_assignments")
     .update({ valid_to: todayISO() })
     .eq("id", assignmentId)
     .eq("tenant_id", tenantId)
-    .is("valid_to", null);
-  if (error) throw new Error(error.message);
+    .is("valid_to", null)
+    .select("id");
+  assertAffected(data as unknown[] | null, error);
 }

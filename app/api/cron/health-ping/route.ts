@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseEnv } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { isValidCronAuth } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ async function handle(request: NextRequest) {
     );
   }
   const auth = request.headers.get("authorization");
-  if (auth !== `Bearer ${secret}`) {
+  if (!isValidCronAuth(auth, secret)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

@@ -167,11 +167,13 @@ export default async function DashboardPage({
   // 3) ดึงข้อมูล (degrade เมื่อ query ล้ม เช่นยัง apply migration ไม่ครบ)
   try {
     if (view === "exec") {
-      const d = await getExecDashboard(db);
-      // now = เวลา ณ ตอน render (server) — ใช้คำนวณสถานะ SLA/escalation ในหน้า exec
+      // now = เวลา ณ ตอน render (server) — ใช้เดียวกันทั้ง query (escalation summary)
+      //   และ component (SLA badge) ให้ตัวเลขสอดคล้องกัน
+      const now = Date.now();
+      const d = await getExecDashboard(db, now);
       return (
         <Frame activeRole={role} fromSession={viewer.fromSession}>
-          <ExecView d={d} now={Date.now()} />
+          <ExecView d={d} now={now} />
         </Frame>
       );
     }

@@ -15,7 +15,6 @@ import {
   computeSlaStatus,
   formatSlaLabel,
   compareUrgency,
-  summarizeEscalation,
 } from "@/lib/dashboard/sla";
 
 // ---- primitives -------------------------------------------------------
@@ -160,18 +159,19 @@ export function ExecView({ d, now }: { d: ExecDashboard; now: number }) {
   const npsValue =
     d.nps.nps === null ? null : d.nps.nps > 0 ? `+${d.nps.nps}` : `${d.nps.nps}`;
 
-  // สรุป escalation จากเคสด่วนที่เปิดอยู่ทั้งหมด (query กรอง status ปิดออกแล้ว)
-  const esc = summarizeEscalation(d.urgentCases, now);
+  // ★ สรุป escalation นับจาก "ชุดเต็ม" ที่ query คำนวณไว้ (ก่อน cap list)
+  //   → ตัวเลขแถบนี้ตรงกับการ์ด KPI "สรุปสถานะเคส" (d.cases.urgent) เสมอ
+  const esc = d.escalation;
   const critCount = esc.critical;
   const highCount = esc.high;
 
   // เรียงเคสด่วนตาม urgency (เกิน SLA ก่อน → critical ก่อน high → sla ใกล้สุด)
-  // แล้วตัดจำนวนที่แสดงในการ์ด (ส่วนเกินสรุปไว้ที่แถบ escalation + การ์ด "สรุปสถานะเคส")
+  // แล้วตัดจำนวนที่แสดงในการ์ด — จำนวนที่ซ่อนอ้างจาก urgentTotal (ชุดเต็ม)
   const sortedUrgent = [...d.urgentCases].sort((a, b) =>
     compareUrgency(a, b, now)
   );
   const visibleUrgent = sortedUrgent.slice(0, URGENT_DISPLAY_LIMIT);
-  const hiddenUrgent = sortedUrgent.length - visibleUrgent.length;
+  const hiddenUrgent = d.urgentTotal - visibleUrgent.length;
 
   return (
     <div className="dash-views">

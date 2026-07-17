@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseEnv } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { newRequestId, logServerError } from "@/lib/http";
+import { newRequestId, logServerError, isValidCronAuth } from "@/lib/http";
 import { processLineEventJobs } from "@/lib/line/events";
 import { processNotificationJobs, processReminders } from "@/lib/line/notify";
 import { getLineClient } from "@/lib/line/client";
@@ -33,7 +33,7 @@ async function handle(request: NextRequest) {
     );
   }
   const auth = request.headers.get("authorization");
-  if (auth !== `Bearer ${secret}`) {
+  if (!isValidCronAuth(auth, secret)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
