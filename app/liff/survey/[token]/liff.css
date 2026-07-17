@@ -1,0 +1,547 @@
+/* ============================================================
+   NOVA-CX LIFF Survey — สไตล์หน้าแบบประเมินจริง
+   พอร์ตจาก prototype/assets/nova.css (source of truth ที่อนุมัติแล้ว)
+   - ทุก selector scope ใต้ .liff-survey เพื่อไม่ชนกับหน้าอื่น (dashboard ฯลฯ)
+   - keyframes ใช้ชื่อ nv- และ nova- (unique) ปลอดภัยแม้เป็น global
+   ============================================================ */
+
+.liff-survey {
+  /* Brand palette (Finovas) ตาม nova.css */
+  --navy-900: #172554;
+  --navy-800: #1e3a8a; /* primary */
+  --navy-700: #1e40af;
+  --blue-600: #2563eb; /* action */
+  --blue-500: #3b82f6;
+  --sky-400: #38bdf8; /* accent */
+  --amber-500: #f59e0b;
+
+  --bg: #eef2f8;
+  --card: #ffffff;
+  --line: #e2e8f0;
+  --text: #0f172a;
+  --muted: #64748b;
+  --muted-2: #94a3b8;
+
+  --green: #16a34a;
+  --green-bg: #dcfce7;
+  --amber: #d97706;
+  --amber-bg: #fef3c7;
+  --red: #dc2626;
+  --red-bg: #fee2e2;
+  --blue-bg: #dbeafe;
+
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow-sm: 0 2px 8px rgba(23, 37, 84, 0.08);
+
+  color: var(--text);
+  background: var(--card);
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- โครง full-height + scroll (LIFF ในแอป LINE) ---- */
+.liff-survey .liff-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  background: var(--card);
+}
+.liff-survey .liff-header {
+  flex-shrink: 0;
+  background: var(--navy-800);
+  color: #fff;
+  padding: 12px 16px;
+}
+.liff-survey .liff-header .liff-title {
+  font-size: 15px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.liff-survey .liff-header .liff-title .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sky-400);
+  flex-shrink: 0;
+}
+/* min-height:0 = กุญแจให้ flex child ที่ overflow scroll ได้จริง (แก้ปุ่มถูก footer บัง) */
+.liff-survey .liff-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 18px 16px;
+}
+.liff-survey .liff-footer {
+  flex-shrink: 0;
+  padding: 12px 16px 16px;
+  background: #fff;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+}
+
+/* ---- Buttons (แตะง่าย ≥48px) ---- */
+.liff-survey .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 12px 20px;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform 0.06s ease, box-shadow 0.15s ease, background 0.15s;
+  user-select: none;
+}
+.liff-survey .btn:active {
+  transform: translateY(1px);
+}
+.liff-survey .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.liff-survey .btn-primary {
+  background: var(--blue-600);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+}
+.liff-survey .btn-primary:not(:disabled):hover {
+  background: var(--navy-700);
+}
+.liff-survey .btn-ghost {
+  background: #fff;
+  color: var(--navy-800);
+  border: 1.5px solid var(--line);
+}
+.liff-survey .btn-ghost:not(:disabled):hover {
+  border-color: var(--blue-500);
+}
+.liff-survey .btn-block {
+  width: 100%;
+}
+.liff-survey .btn:focus-visible {
+  outline: 3px solid var(--sky-400);
+  outline-offset: 2px;
+}
+
+/* ---- Center column (loading / submitted / error) ---- */
+.liff-survey .center-col {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+/* ---- Mascot loader scene (พอร์ต nova.css) ---- */
+.liff-survey .nova-svg {
+  display: block;
+}
+.liff-survey .nova-loader {
+  position: relative;
+  width: 220px;
+  height: 180px;
+  margin: 0 auto;
+  overflow: hidden;
+}
+.liff-survey .nova-loading-text {
+  text-align: center;
+  color: var(--navy-800);
+  font-weight: 600;
+  margin-top: 6px;
+  min-height: 1.5em;
+}
+.liff-survey .nova-loading-sub {
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ---- ท่าวิ่งสไตล์น้องโซโซ่ (loaderScene แบบ C) : nv-* ---- */
+@keyframes nv-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
+}
+@keyframes nv-legA {
+  0%,
+  100% {
+    transform: rotate(26deg);
+  }
+  50% {
+    transform: rotate(-26deg);
+  }
+}
+@keyframes nv-legB {
+  0%,
+  100% {
+    transform: rotate(-26deg);
+  }
+  50% {
+    transform: rotate(26deg);
+  }
+}
+@keyframes nv-armS {
+  0%,
+  100% {
+    transform: rotate(-10deg);
+  }
+  50% {
+    transform: rotate(12deg);
+  }
+}
+@keyframes nv-dust {
+  0% {
+    opacity: 0.5;
+    transform: translateX(0) scale(0.6);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-30px) scale(1.4);
+  }
+}
+.liff-survey .nv-bob {
+  animation: nv-bob 0.44s ease-in-out infinite;
+  transform-origin: center;
+}
+.liff-survey .nv-leg {
+  transform-box: fill-box;
+  transform-origin: top center;
+}
+.liff-survey .nv-legA {
+  animation: nv-legA 0.44s ease-in-out infinite;
+}
+.liff-survey .nv-legB {
+  animation: nv-legB 0.44s ease-in-out infinite;
+}
+.liff-survey .nv-arm {
+  transform-box: fill-box;
+  transform-origin: top center;
+  animation: nv-armS 0.44s ease-in-out infinite;
+}
+.liff-survey .nv-dust {
+  animation: nv-dust 0.5s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .liff-survey .nv-bob,
+  .liff-survey .nv-legA,
+  .liff-survey .nv-legB,
+  .liff-survey .nv-arm,
+  .liff-survey .nv-dust {
+    animation: none !important;
+  }
+}
+
+/* ---- Progress bar ---- */
+.liff-survey .progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.liff-survey .progress-track {
+  flex: 1;
+  height: 8px;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.liff-survey .progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue-500), var(--sky-400));
+  transition: width 0.4s ease;
+  border-radius: 999px;
+}
+.liff-survey .progress-time {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.liff-survey .step-meta {
+  font-size: 12px;
+  color: var(--blue-600);
+  font-weight: 700;
+  margin: 0 0 10px;
+}
+.liff-survey .form-intro {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+.liff-survey .step-title {
+  color: var(--navy-800);
+  font-size: 18px;
+  font-weight: 700;
+  margin: 4px 0 12px;
+}
+
+/* ---- Reference / subject card (auto-fill read-only) ---- */
+.liff-survey .ref-card {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+.liff-survey .ref-lock {
+  font-size: 11px;
+  color: var(--muted-2);
+  margin-bottom: 6px;
+}
+.liff-survey .ref-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 4px 0;
+  gap: 12px;
+}
+.liff-survey .ref-row .k {
+  color: var(--muted);
+}
+.liff-survey .ref-row .v {
+  font-weight: 600;
+  text-align: right;
+}
+
+/* ---- Question block ---- */
+.liff-survey .q-block {
+  margin-bottom: 22px;
+}
+.liff-survey .q-title {
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+
+/* ---- Star rating (ดาวมุมมน currentColor) ---- */
+.liff-survey .star-rating {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.liff-survey .stars {
+  display: inline-flex;
+  gap: 4px;
+}
+.liff-survey .star {
+  border: none;
+  background: none;
+  padding: 2px;
+  margin: 0;
+  line-height: 1;
+  font-size: 36px;
+  color: #d9dee6;
+  cursor: pointer;
+  transition: transform 0.1s, color 0.1s;
+  -webkit-tap-highlight-color: transparent;
+  display: inline-flex;
+}
+.liff-survey .star svg {
+  display: block;
+  width: 1em;
+  height: 1em;
+}
+/* ดาวมุมมน: fill+stroke = currentColor, stroke round = ปลาย/มุมโค้งนุ่ม */
+.liff-survey .star svg path {
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.liff-survey .star:active {
+  transform: scale(0.9);
+}
+.liff-survey .star.on {
+  color: #f59e0b;
+}
+.liff-survey .star:focus-visible {
+  outline: 2px solid var(--sky-400);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.liff-survey .star-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.liff-survey .star-label.chosen {
+  color: #d97706;
+}
+
+/* ---- Follow-up (conditional) ---- */
+.liff-survey .followup {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  border-left: 4px solid var(--sky-400);
+  background: #f0f9ff;
+  animation: nova-slide 0.3s ease;
+}
+.liff-survey .followup.neg {
+  border-left-color: var(--red);
+  background: var(--red-bg);
+}
+.liff-survey .followup.pos {
+  border-left-color: var(--green);
+  background: var(--green-bg);
+}
+@keyframes nova-slide {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.liff-survey .followup .fu-label {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.liff-survey .followup textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  font-family: inherit;
+  font-size: 14px;
+  margin-top: 6px;
+}
+
+/* ---- Multi/single-select chips ---- */
+.liff-survey .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.liff-survey .chip {
+  padding: 9px 14px;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+.liff-survey .chip:hover {
+  border-color: var(--blue-500);
+}
+.liff-survey .chip.sel {
+  border-color: var(--blue-600);
+  background: var(--blue-bg);
+  color: var(--navy-800);
+  font-weight: 600;
+}
+.liff-survey .chip.exclusive.sel {
+  border-color: var(--green);
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+/* ---- NPS 0-10 ---- */
+.liff-survey .nps {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.liff-survey .nps-btn {
+  aspect-ratio: 1;
+  min-height: 44px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 15px;
+  transition: all 0.12s;
+}
+.liff-survey .nps-btn:hover {
+  border-color: var(--blue-500);
+}
+.liff-survey .nps-btn.sel {
+  border-color: var(--blue-600);
+  background: var(--blue-600);
+  color: #fff;
+}
+
+/* ---- Open textarea ---- */
+.liff-survey .txtin {
+  width: 100%;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
+  background: #fff;
+}
+
+/* ---- PDPA consent ---- */
+.liff-survey .consent-box {
+  margin-top: 22px;
+  background: var(--blue-bg);
+  border-radius: 12px;
+  padding: 14px;
+}
+.liff-survey .consent-box label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--navy-900);
+  cursor: pointer;
+}
+.liff-survey .consent-box input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+/* ---- Warning / error text ---- */
+.liff-survey .warn-text {
+  color: var(--red);
+  font-size: 14px;
+  margin-top: 14px;
+}
+
+/* ---- Confirmation / submitted ---- */
+.liff-survey .confirm-title {
+  color: var(--navy-800);
+  font-size: 20px;
+  font-weight: 700;
+  margin-top: 10px;
+}
+.liff-survey .confirm-sub {
+  color: var(--text);
+  font-size: 14px;
+  margin-top: 6px;
+}
