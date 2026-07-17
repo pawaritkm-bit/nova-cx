@@ -1,131 +1,118 @@
 # NOVA Customer Experience System (nova-cx)
 
-ระบบประเมินความพึงพอใจและติดตามคุณภาพบริการของ Finovas Accounting ผ่าน LINE OA
-พร้อม AI Assistant "น้อง NOVA" ที่ช่วยพูดคุย เก็บข้อมูล และสรุปผลให้ทีมบริการ
-เพื่อยกระดับประสบการณ์ลูกค้าอย่างต่อเนื่อง
+ระบบวัด/ติดตามคุณภาพบริการ (CX) ของ **Finovas Accounting** ผ่าน **LINE OA + LIFF + AI**
+ลูกค้าตอบแบบประเมินผ่าน LINE → AI "น้อง NOVA" สรุป/จัดระดับความเร่งด่วน → เปิดเคส + แจ้งเตือนทีม → Dashboard/Report แยกสิทธิ์ตามบทบาท
 
-> สถานะ: **M1 — โครงหลักรันได้** (Next.js + Supabase, Auth/RBAC/RLS foundation, migration + seed, health check)
-> เฟสถัดไป (M2+): Survey engine, LIFF/LINE, AI, Case, Dashboard
+- **Prod:** https://nova-cx.vercel.app
+- **Repo:** https://github.com/pawaritkm-bit/nova-cx
+- **Stack:** Next.js 15 (App Router) + TypeScript + Tailwind · Supabase (Postgres + RLS + Auth) · Vercel (+ Cron) · OpenAI
 
-House Stack: Next.js (App Router) + TypeScript + Tailwind · Supabase (Postgres + Auth + RLS) · Vercel · OpenAI (ผ่าน abstraction)
-
----
-
-## โครงสร้างโปรเจกต์
-
-```
-app/                 Next.js App Router (landing + /api/health)
-lib/                 supabase client (server/client) + env helper
-middleware.ts        refresh session พนักงาน (Supabase Auth)
-supabase/
-  migrations/        DDL 17 ไฟล์ (0001–0017) — 41 ตาราง + RLS/RBAC + hardening
-  seed.sql           demo data (1 tenant, 7 role, แบบประเมิน A/B/C/D)
-tests/               vitest: unit (env/health/zod) + RLS/permission (ต้องมี DB)
-.github/workflows/   CI (typecheck + lint + test + build)
-vercel.json          Vercel cron (health-ping) + function maxDuration
-docs/                เอกสารออกแบบ (อย่าแก้จากโค้ด)
-prototype/           ต้นแบบ HTML เดิม (อย่าแก้)
-```
+> เอกสารนี้เขียนสำหรับ "นักพัฒนา/ผู้ดูแลระบบคนต่อไป" — สะท้อนโค้ดจริงในโปรเจกต์
+> เอกสารออกแบบเชิงลึก (Phase 1–3): `docs/00-brief.md` … `docs/03-roadmap.md`
+> เอกสารเทคนิค: [`docs/architecture.md`](docs/architecture.md) · [`docs/setup.md`](docs/setup.md) · [`docs/api.md`](docs/api.md)
 
 ---
 
-## การรัน (dev)
+## ระบบทำอะไรได้
 
-1. คัดลอก env:
-   ```bash
-   cp .env.example .env.local
-   ```
-   แล้วเติมค่า Supabase (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`).
-   > ยังไม่ตั้ง env ก็รัน dev ได้ — `/api/health` จะตอบ `degraded` อย่างสุภาพ (ไม่ crash)
-
-2. ติดตั้ง + รัน:
-   ```bash
-   npm install
-   npm run dev          # http://localhost:3000
-   ```
-
-3. ตรวจคุณภาพก่อนส่งงาน:
-   ```bash
-   npm run typecheck    # tsc --noEmit
-   npm run lint         # eslint (next lint)
-   npm test             # vitest (unit; RLS test ข้ามถ้าไม่มี DATABASE_URL)
-   npm run build        # production build
-   ```
-
-4. Health check:
-   ```
-   GET /api/health
-   → ok        : ตั้ง env ครบ + ต่อ DB ได้
-   → degraded  : ยังไม่ตั้ง env หรือ query ไม่ได้ (เช่น ยัง apply migration ไม่ครบ)
-   ```
+- **2 LINE OA**
+  - **Care** = แบบประเมิน **A** (สำนักงาน / ราย 3 เดือน — ส่งเข้ากลุ่ม LINE) + **B** (นักบัญชี / รายเดือน — แชตส่วนตัว)
+  - **Sale** = แบบประเมิน **C** (เซลขายได้/Won) + **D** (เซลขายไม่ได้/Lost) — แชตส่วนตัว
+- **แบบประเมิน 4 แบบ (A/B/C/D)** เป็น **versioned JSON** + conditional question (คะแนน 4–5 ถามจุดเด่น / 3 ถามจุดปรับปรุง / 1–2 หาสาเหตุ + ขอติดต่อกลับ) + validate ทั้ง client และ server (Zod)
+- **ส่งอัตโนมัติจากสถานะจริง** ผ่าน Vercel Cron + `job_queue` (idempotent, กันบิดเบือนคะแนน) — พนักงานเลือกส่งเองไม่ได้
+- **AI น้อง NOVA**: redact PII → OpenAI (structured JSON) → Zod validate → guardrail → เปิดเคสถ้า High/Critical (human-in-the-loop)
+- **Dashboard 7 บทบาท** (executive / acc_lead / accountant / sales_lead / sales / cs / admin) อ่านผ่าน view ชั้นการมองเห็น — นักบัญชี/เซลไม่เห็นชื่อลูกค้า
+- **Admin**: จัดการ user / team / employee / customer / assignment (effective-dated)
+- **Integration กับ NOVA Sales**: เปิดลูกค้า / ปิดดีล (Won/Lost) → upsert + ยิงแบบประเมินเซลอัตโนมัติ
+- **PDPA**: consent ก่อนเริ่ม, pseudonymity (ไม่ใช่ anonymous 100%), audit append-only, PII เข้ารหัส
 
 ---
 
-## การ apply migration (ต้องมี Supabase project + env)
+## ความต้องการของระบบ
 
-migration/seed ต้องรันบน **Postgres ของ Supabase จริง** (เครื่อง dev นี้ยังไม่มี instance)
+| อย่าง | เวอร์ชัน / หมายเหตุ |
+|---|---|
+| Node.js | 18.18+ (แนะนำ 20 LTS — Next.js 15) |
+| Next.js / React / TS | 15 (App Router) / 19 / 5.7 |
+| Tailwind CSS | 3.4 |
+| Supabase | Postgres + RLS + Auth (โปรเจกต์ + `supabase` CLI) |
+| OpenAI | API key (ทางเลือก — ไม่มีก็รันได้ AI จะ skip อย่างสุภาพ) |
+| Vercel | deploy + Cron (prod) |
 
-**ตัวเลือก A — Supabase CLI (แนะนำ):**
+Dependencies หลัก (`package.json`): `@supabase/ssr`, `@supabase/supabase-js`, `next`, `react`, `zod`
+Dev/test: `vitest`, `pg`, `dotenv`, `eslint`, `tailwindcss`
+
+---
+
+## ติดตั้งและรัน (local)
+
 ```bash
+# 1) ติดตั้ง dependencies
+npm install
+
+# 2) สร้างไฟล์ env จากตัวอย่าง แล้วเติมค่า (รายละเอียดใน docs/setup.md)
+cp .env.example .env.local
+
+# 3) เตรียม Supabase (ติดตั้ง supabase CLI + login แล้ว)
 supabase link --project-ref <PROJECT_REF>
-supabase db reset          # apply migrations 0001–0012 ตามลำดับ + รัน seed.sql
-```
-> `db reset` รันไฟล์ใน `supabase/migrations/` เรียงชื่อ แล้วต่อด้วย `supabase/seed.sql`
+supabase db push            # apply migrations 0001–0028
+# (ทางเลือก) รีเซ็ต + seed demo data:
+supabase db reset --linked  # รัน migrations + supabase/seed.sql
 
-**ตัวเลือก B — รันผ่าน psql เอง:**
+# 4) รัน dev server
+npm run dev                 # http://localhost:3000
+```
+
+คำสั่งอื่น (จาก `package.json`):
+
 ```bash
-for f in supabase/migrations/*.sql; do psql "$DATABASE_URL" -f "$f"; done
-psql "$DATABASE_URL" -f supabase/seed.sql
+npm run build       # next build
+npm run start       # next start (หลัง build)
+npm run lint        # eslint (สแกนเฉพาะ app/ + lib/)
+npm run typecheck   # tsc --noEmit
+npm test            # vitest run  (ดู docs/setup.md เรื่อง DATABASE_URL สำหรับ DB test)
 ```
 
-**หลัง apply ตารางใหม่ ถ้า API ขึ้น 500 "schema cache"** ให้ reload:
-```sql
-notify pgrst, 'reload schema';
-```
-
-### หมายเหตุสำคัญเรื่อง Auth (M1)
-- `users.auth_user_id` ใน seed เป็น **UUID placeholder** — ต้องผูกกับผู้ใช้จริงใน Supabase Auth ภายหลัง
-  (M1 ยังไม่มีหน้า login; RLS จะทำงานเต็มรูปเมื่อ user ล็อกอินและ `auth.uid()` ตรงกับ `users.auth_user_id`)
-- RLS เปิดทุกตาราง (deny-by-default + tenant isolation) — role `anon`/ที่ยังไม่ล็อกอินจะเห็น 0 แถว
+> ระบบออกแบบให้ **degrade อย่างสุภาพ**: ถ้ายังไม่ตั้ง env (Supabase/OpenAI/LINE) แอปจะไม่ crash —
+> `GET /api/health` ตอบ `degraded`, worker/cron จะ skip, หน้า LIFF เข้าโหมด dev
 
 ---
 
-## การทดสอบ (test)
+## โครงสร้างโปรเจกต์ (ย่อ)
 
-```bash
-npm test                      # unit test (env/health/zod) — รันได้ทันที
 ```
+app/                       # Next.js App Router
+├─ page.tsx  layout.tsx    # หน้าแรก + layout
+├─ login/  auth/logout/    # เข้า/ออกระบบ (Supabase Auth — พนักงาน)
+├─ dashboard/              # Dashboard ตามบทบาท (server-rendered)
+├─ admin/                  # จัดการ master data (admin/executive)
+├─ liff/survey/[token]/    # LIFF แบบประเมินลูกค้า (มือถือ)
+└─ api/                    # Route Handlers (ดู docs/api.md)
+   ├─ health/  survey/{template,submit}/  liff/survey/[token]/
+   ├─ line/webhook/[oa]/   dashboard/[role]/   reports/export/
+   ├─ integrations/nova-sales/{customer,deal-status}/
+   └─ cron/{scan-invitations,process-ai,process-notifications,health-ping}/
 
-**RLS / permission test (E1 DoD)** ต้องมี Postgres ของ Supabase จริง (มี `auth.uid()`):
-```bash
-supabase db reset                          # apply migration + base seed
-DATABASE_URL="postgres://postgres:...@db.<ref>.supabase.co:5432/postgres" npm test
+lib/                       # โดเมนลอจิก (pure/testable + inject deps)
+├─ env.ts  http.ts  pdpa.ts  health.ts
+├─ supabase/               # client(browser) + server + service-role
+├─ auth/                   # guard เส้นทาง + login/session
+├─ survey/                 # schema/conditional/scoring/submit/token/service/steps
+├─ ai/                     # redact→prompt→provider(OpenAI)→schema→guardrail→worker→case
+├─ scheduling/             # engine + eligibility (cron scan)
+├─ line/                   # signature/webhook/events/routing/notify/messages/client
+├─ dashboard/              # queries/aggregate/redact/sample-size/session/sla
+├─ admin/                  # guard + service (write path) + schema
+├─ integrations/           # nova-sales (contract + service)
+└─ reports/                # csv + build report
+
+supabase/
+├─ migrations/0001…0028_*.sql   # schema + RLS + views + RPC (ดู docs/setup.md)
+└─ seed.sql                     # demo: 1 tenant, 7 roles, template A/B/C/D
+
+tests/                     # vitest (unit + DB-integration; ดู docs/setup.md)
+middleware.ts              # refresh session + guard /dashboard,/admin
+vercel.json                # Vercel Cron (4 ตัว) + function maxDuration
+next.config.mjs            # security headers (LIFF ยกเว้น X-Frame-Options)
+docs/  prototype/          # เอกสารออกแบบ + ต้นแบบ HTML (Gate 2)
 ```
-- ไฟล์ `tests/rls/rls.test.ts` จะ **ถูก skip อัตโนมัติ** ถ้าไม่มี `DATABASE_URL`
-- harness impersonate แต่ละ role (ตั้ง `request.jwt.claims.sub` + `set role authenticated`) แล้ว assert:
-  tenant isolation ข้ามกอง, scope นักบัญชี (C-10), deny-by-default, anon ถูกปฏิเสธ, นักบัญชีแก้ tenant ไม่ได้
-- `tests/rls/fixtures.sql` เพิ่ม tenant#2 + ลูกค้าไม่มีผู้ดูแล (idempotent) ให้ test เดินได้
-
-> ยังต้อง **verify จริงบน Supabase** (เครื่อง dev นี้ไม่มี Postgres/CLI) — CI จะรันเฉพาะ unit; RLS test รันเมื่อ set `DATABASE_URL` เป็น secret
-
----
-
-## ความปลอดภัย / PDPA
-- ห้ามฝัง secret ในโค้ด — ใช้ `.env` (`.env*` อยู่ใน `.gitignore` ยกเว้น `.env.example`)
-- PII (เบอร์/อีเมล) เก็บเป็น ciphertext ในคอลัมน์ `_enc` (เข้ารหัสด้วย `CREDENTIAL_ENC_KEY` ตั้งครั้งเดียวห้ามเปลี่ยน)
-- **RLS hardening (0013–0015):**
-  - `anon` ถูก revoke สิทธิ์ตารางทั้งหมด; `authenticated` ได้แค่ select/insert/update/delete (ไม่มี TRUNCATE)
-  - append-only (`audit_logs`, `case_activity_logs`, `survey_answers`) กัน update/delete/**truncate** ด้วย trigger (แม้ service_role)
-  - scope ตาม `can_access_customer()` ครอบ **ทุกตารางที่ผูกลูกค้า** (ตรงด้วย `customer_id` หรือผ่าน `response_id`)
-  - `audit_logs`/`case_activity_logs` กัน spoof: authenticated ตั้ง `actor_user_id` เป็นคนอื่นไม่ได้ + มี `log_audit()`/`log_case_activity()` (SECURITY DEFINER)
-  - `tenants` แก้ไขได้เฉพาะ admin/executive
-- helper functions เป็น SECURITY DEFINER + fixed `search_path` (กัน hijack) + revoke execute จาก public
-- **scope ครอบตารางลูกครบ (0014 + 0018):** case_activity_logs / case_assignments / follow_up_tasks (ผ่าน `case_id`), sales_status_history (ผ่าน `opportunity_id`), customer_assignments (`customer_id`), audit_logs อ่านได้เฉพาะ privileged
-- **⚠️ M2 LIFF note:** 0013 revoke สิทธิ์ตารางจาก `anon` → หน้า survey สาธารณะผ่าน LIFF **ห้ามอ่าน/เขียนด้วย anon key ตรง** ต้องผ่าน API server (service-role หรือ token-scoped endpoint) เท่านั้น มิฉะนั้นฟอร์มพังเพราะ RLS/GRANT
-- **หมายเหตุ RBAC (M1):** `role_permissions` เป็น catalog แต่ RLS ยัง enforce ด้วย role-code (hardcode ใน helper) — ยอมรับได้สำหรับ M1, เฟสถัดไปขับ policy ด้วย catalog
-- **ERD note (0017):** `sales_leads.customer_id` **nullable** — ผูก customer เมื่อ lead convert เป็นลูกค้า (Won); Lost/ยังไม่ convert = null. มี `owner_employee_id` (เซลล์เจ้าของ) ใช้ทำ RLS scope per-lead: `is_privileged() OR sales_lead OR owner OR can_access_customer(customer_id)`
-
-## Cron / Monitoring (E12)
-- `vercel.json` ตั้ง Vercel Cron เรียก `/api/cron/health-ping` รายวัน → อัปเดต `cron_health.last_run_at` (โครง cron last-run alert)
-- endpoint ตรวจ `Authorization: Bearer $CRON_SECRET`; ไม่มี service-role env ก็ไม่ล้ม (ตอบ skipped)
-- M2+ จะเพิ่ม cron `scan-invitations` + worker (notification/ai-analysis) ต่อยอดจากโครงนี้
