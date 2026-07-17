@@ -1,5 +1,9 @@
 import { getLiffId, isLineDevMode } from "@/lib/env";
-import { extractLiffToken, firstQueryValue } from "@/lib/line/liff";
+import {
+  extractLiffToken,
+  firstQueryValue,
+  hasOAuthReturnParams,
+} from "@/lib/line/liff";
 import SurveyClient from "./[token]/SurveyClient";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +33,16 @@ export default async function SurveyEndpointPage({
     liffState: firstQueryValue(sp["liff.state"]),
   });
 
-  if (!token) {
+  // เพิ่งกลับจาก LINE OAuth (legacy/edge)? — มี code/state/liffRedirectUri แต่ token หลุด
+  // → อย่าเพิ่งตัดว่า "ไม่พบ": render client ให้ลองกู้ token จาก sessionStorage ก่อน
+  const isOAuthReturn = hasOAuthReturnParams({
+    code: firstQueryValue(sp["code"]),
+    state: firstQueryValue(sp["state"]),
+    liffRedirectUri: firstQueryValue(sp["liffRedirectUri"]),
+  });
+
+  // ไม่มีทั้ง token และร่องรอย OAuth → "ไม่พบ" ตามเดิม (ฝั่ง server)
+  if (!token && !isOAuthReturn) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 text-center">
         <div>
@@ -44,6 +57,7 @@ export default async function SurveyEndpointPage({
     );
   }
 
+  // token อาจเป็น null (กรณี OAuth return) → SurveyClient จะกู้จาก sessionStorage ฝั่ง client
   return (
     <SurveyClient
       token={token}

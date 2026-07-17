@@ -1,5 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { extractLiffToken, firstQueryValue } from "@/lib/line/liff";
+import { describe, it, expect, vi } from "vitest";
+import {
+  extractLiffToken,
+  firstQueryValue,
+  getBestEffortLineUserId,
+  hasOAuthReturnParams,
+  resolveSurveyToken,
+} from "@/lib/line/liff";
 import { buildLiffSurveyUrl } from "@/lib/line/messages";
 
 describe("line/liff — extractLiffToken", () => {
@@ -51,6 +57,118 @@ describe("line/liff — firstQueryValue", () => {
   });
   it("undefined → undefined", () => {
     expect(firstQueryValue(undefined)).toBeUndefined();
+  });
+});
+
+describe("line/liff — hasOAuthReturnParams", () => {
+  it("มี code → true", () => {
+    expect(hasOAuthReturnParams({ code: "xyz" })).toBe(true);
+  });
+  it("มี state → true", () => {
+    expect(hasOAuthReturnParams({ state: "s1" })).toBe(true);
+  });
+  it("มี liffRedirectUri → true", () => {
+    expect(hasOAuthReturnParams({ liffRedirectUri: "https://x" })).toBe(true);
+  });
+  it("ว่างทั้งหมด/null → false", () => {
+    expect(hasOAuthReturnParams({})).toBe(false);
+    expect(
+      hasOAuthReturnParams({ code: null, state: null, liffRedirectUri: null })
+    ).toBe(false);
+    expect(hasOAuthReturnParams({ code: "", state: "" })).toBe(false);
+  });
+});
+
+describe("line/liff — resolveSurveyToken", () => {
+  it("มี initial token → ใช้เลย (ไม่แตะ storage)", () => {
+    expect(
+      resolveSurveyToken({
+        initialToken: "tok",
+        storedToken: "other",
+        isOAuthReturn: true,
+      })
+    ).toBe("tok");
+  });
+
+  it("ไม่มี initial + เพิ่งกลับจาก OAuth + มีใน storage → กู้จาก storage", () => {
+    expect(
+      resolveSurveyToken({
+        initialToken: null,
+        storedToken: "recovered",
+        isOAuthReturn: true,
+      })
+    ).toBe("recovered");
+  });
+
+  it("ไม่มี initial + เพิ่งกลับจาก OAuth + storage ว่าง → null", () => {
+    expect(
+      resolveSurveyToken({
+        initialToken: null,
+        storedToken: null,
+        isOAuthReturn: true,
+      })
+    ).toBeNull();
+  });
+
+  it("ไม่มี initial + ไม่ใช่ OAuth return → ไม่กู้จาก storage (null) กัน token เก่าค้าง", () => {
+    expect(
+      resolveSurveyToken({
+        initialToken: null,
+        storedToken: "stale",
+        isOAuthReturn: false,
+      })
+    ).toBeNull();
+  });
+
+  it("trim ค่า", () => {
+    expect(
+      resolveSurveyToken({ initialToken: "  tok  ", isOAuthReturn: false })
+    ).toBe("tok");
+    expect(
+      resolveSurveyToken({
+        initialToken: "   ",
+        storedToken: "  rec  ",
+        isOAuthReturn: true,
+      })
+    ).toBe("rec");
+  });
+});
+
+describe("line/liff — getBestEffortLineUserId (ห้ามเรียก login)", () => {
+  it("ยังไม่ล็อกอิน → คืน null และ 'ไม่' เรียก login/getProfile", async () => {
+    const login = vi.fn();
+    const getProfile = vi.fn(async () => ({ userId: "u1" }));
+    const liff = {
+      init: vi.fn(async () => {}),
+      isLoggedIn: () => false,
+      getProfile,
+      // แนบ login เข้ามาเพื่อยืนยันว่าโค้ด "ไม่" เรียก
+      login,
+    };
+    const uid = await getBestEffortLineUserId(liff);
+    expect(uid).toBeNull();
+    expect(login).not.toHaveBeenCalled();
+    expect(getProfile).not.toHaveBeenCalled();
+  });
+
+  it("ล็อกอินแล้ว → คืน userId จาก profile", async () => {
+    const liff = {
+      init: vi.fn(async () => {}),
+      isLoggedIn: () => true,
+      getProfile: vi.fn(async () => ({ userId: "line-123" })),
+    };
+    expect(await getBestEffortLineUserId(liff)).toBe("line-123");
+  });
+
+  it("getProfile โยน error → null (best-effort, ไม่ crash)", async () => {
+    const liff = {
+      init: vi.fn(async () => {}),
+      isLoggedIn: () => true,
+      getProfile: vi.fn(async () => {
+        throw new Error("network");
+      }),
+    };
+    expect(await getBestEffortLineUserId(liff)).toBeNull();
   });
 });
 

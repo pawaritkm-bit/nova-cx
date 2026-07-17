@@ -11,6 +11,13 @@ import {
   type Step,
 } from "@/lib/survey/steps";
 import { oaForSurveyType } from "@/lib/line/routing";
+import {
+  LIFF_TOKEN_STORAGE_KEY,
+  getBestEffortLineUserId,
+  hasOAuthReturnParams,
+  resolveSurveyToken,
+  type LiffClient,
+} from "@/lib/line/liff";
 import NovaMascot from "./NovaMascot";
 import "./liff.css";
 
@@ -21,21 +28,18 @@ import "./liff.css";
  *   - auto-save คำตอบลง localStorage (กันหลุด/เน็ตช้า)
  *   - submit → /api/survey/submit → หน้า confirmation
  *   - LINE LIFF init แบบ best-effort (ไม่มี env = dev mode, ไม่ crash)
+ *   - ⚠️ ห้าม redirect ไป LINE Login: token คือตัวยืนยันสิทธิ์ — LIFF ใช้แค่ดึง profile
+ *     ถ้ามี (ไม่มีก็ตอบได้ปกติ). login() ทำให้ ?token= หลุด → "ไม่พบลิงก์แบบประเมิน"
  */
 
 // ---- โครง schema/step ย้ายไป lib/survey/steps.ts (เพื่อ unit test buildSteps ได้) ----
 type AnswerValue = number | string | string[] | null;
 type Answers = Record<string, AnswerValue>;
 
-type LiffLike = {
-  init: (config: { liffId: string }) => Promise<void>;
-  isLoggedIn: () => boolean;
-  login: () => void;
-  getProfile: () => Promise<{ userId: string }>;
-};
+// ใช้ LiffClient จาก lib/line/liff (subset ที่ใช้จริง — ไม่มี login โดยเจตนา)
 declare global {
   interface Window {
-    liff?: LiffLike;
+    liff?: LiffClient;
   }
 }
 
@@ -75,16 +79,25 @@ function loadLiffSdk(): Promise<void> {
 }
 
 export default function SurveyClient({
-  token,
+  token: initialToken,
   liffCareId,
   liffSaleId,
   devMode,
 }: {
-  token: string;
+  // token อาจเป็น null: หน้า base /liff/survey อาจ render โดยยังไม่มี token
+  // (เพิ่งกลับจาก OAuth) แล้วให้ client กู้จาก sessionStorage
+  token: string | null;
   liffCareId: string | null;
   liffSaleId: string | null;
   devMode: boolean;
 }) {
+  // token ที่ใช้จริง (กู้แล้ว) + สถานะว่ากู้เสร็จหรือยัง
+  const [token, setToken] = useState<string | null>(
+    () => initialToken?.trim() || null
+  );
+  const [tokenResolved, setTokenResolved] = useState<boolean>(
+    () => Boolean(initialToken?.trim())
+  );
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [template, setTemplate] = useState<ApiTemplate | null>(null);
@@ -97,7 +110,44 @@ export default function SurveyClient({
   const [consentChecked, setConsentChecked] = useState(false);
   const [showRequiredWarn, setShowRequiredWarn] = useState(false);
 
-  const storageKey = `nova-cx:survey:${token}`;
+  const storageKey = token ? `nova-cx:survey:${token}` : "";
+
+  // ---- กู้/ยืนยัน token (กัน "ไม่พบลิงก์แบบประเมิน" จาก OAuth redirect เดิม) ----
+  // 1) มี token (props/URL) → เก็บลง sessionStorage เป็น safety net
+  // 2) ไม่มี token แต่ URL มีร่องรอย OAuth (code/state/liffRedirectUri) → กู้จาก storage
+  //    (เป้าหลักคือไม่ให้เกิด OAuth redirect ตั้งแต่แรกอยู่แล้ว — นี่คือกันเหนียว legacy/edge)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const initial = initialToken?.trim() || null;
+
+    if (initial) {
+      try {
+        window.sessionStorage.setItem(LIFF_TOKEN_STORAGE_KEY, initial);
+      } catch {
+        // ignore storage error (private mode ฯลฯ)
+      }
+      setToken(initial);
+      setTokenResolved(true);
+      return;
+    }
+
+    const url = new URL(window.location.href);
+    const isOAuthReturn = hasOAuthReturnParams({
+      code: url.searchParams.get("code"),
+      state: url.searchParams.get("state"),
+      liffRedirectUri: url.searchParams.get("liffRedirectUri"),
+    });
+    let stored: string | null = null;
+    try {
+      stored = window.sessionStorage.getItem(LIFF_TOKEN_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    setToken(
+      resolveSurveyToken({ initialToken: initial, storedToken: stored, isOAuthReturn })
+    );
+    setTokenResolved(true);
+  }, [initialToken]);
 
   // ---- กัน loader วิ่ง 2 รอบ ----
   // LINE เปิดหน้า base /liff/survey?liff.state=%2F<token> ก่อนเสมอ (หน้านี้ render loader รอบ 1)
@@ -106,6 +156,7 @@ export default function SurveyClient({
   // ก่อน liff.init() ทำงาน → SDK ไม่ redirect → เหลือ loader รอบเดียว ลื่น ๆ
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!token) return; // ยังไม่มี token → ยังไม่ต้องจัดการ URL
     const url = new URL(window.location.href);
     if (!url.searchParams.has("liff.state")) return;
     url.searchParams.delete("liff.state");
@@ -116,7 +167,7 @@ export default function SurveyClient({
       `/liff/survey/${encodeURIComponent(token)}${qs ? `?${qs}` : ""}`
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [token]);
 
   // ---- โหลด template + init LIFF ใน "เฟสโหลดเดียวต่อเนื่อง" ----
   // ทำไมรวมเป็นเฟสเดียว: เดิมแยกเป็น (1) fetch template → setLoading(false) โชว์แบบประเมิน
@@ -125,6 +176,8 @@ export default function SurveyClient({
   // แก้: คง loading=true ต่อเนื่องตั้งแต่ mount จน "template พร้อม + init LIFF เสร็จ" ค่อยเผยแบบประเมิน
   //   → <NovaMascot variant="loader"> mount ครั้งเดียว/unmount ครั้งเดียว = CSS animation วิ่งต่อเนื่องไม่รีสตาร์ท
   useEffect(() => {
+    if (!token) return; // ยังไม่มี token → รอ effect กู้ token ก่อน (หรือจะโชว์ "ไม่พบ")
+    const activeToken = token; // narrow ให้แน่ (ใช้ใน closure ด้านล่าง)
     let cancelled = false;
 
     // best-effort init LIFF → คืน lineUserId (หรือ null); มี timeout กัน SDK ค้างทำ loader ค้าง
@@ -140,15 +193,9 @@ export default function SurveyClient({
           const liff = window.liff;
           if (!liff) return null;
           await liff.init({ liffId });
-          if (!liff.isLoggedIn()) {
-            // login() = full navigation ออกไป LINE แล้วกลับมา (หน้าจะ remount เอง)
-            // ระหว่างนี้ loader ยังค้างอยู่ = ไม่โชว์แบบประเมินก่อนเวลา
-            liff.login();
-            // ค้างไว้ให้ browser พาไป login (ไม่ resolve) — loader ยังวิ่งต่อจนถูก redirect
-            return await new Promise<string | null>(() => {});
-          }
-          const profile = await liff.getProfile();
-          return profile.userId ?? null;
+          // ⚠️ ห้ามเรียก liff.login()/redirect: แบบประเมินยืนยันสิทธิ์ด้วย token
+          // ถ้ายังไม่ล็อกอิน → getBestEffortLineUserId คืน null แล้วตอบผ่าน token ต่อได้
+          return await getBestEffortLineUserId(liff);
         } catch {
           return null; // LIFF ล้ม → ปล่อยเป็น dev-like (ยังตอบได้ผ่าน token)
         }
@@ -174,7 +221,7 @@ export default function SurveyClient({
       let tpl: ApiTemplate | null = null;
       try {
         const res = await fetch(
-          `/api/liff/survey/${encodeURIComponent(token)}`,
+          `/api/liff/survey/${encodeURIComponent(activeToken)}`,
           { cache: "no-store" }
         );
         const data = await res.json();
@@ -212,6 +259,7 @@ export default function SurveyClient({
 
   // ---- auto-save ----
   useEffect(() => {
+    if (!storageKey) return; // ยังไม่มี token → ยังไม่ต้อง save
     try {
       window.localStorage.setItem(storageKey, JSON.stringify(answers));
     } catch {
@@ -290,6 +338,19 @@ export default function SurveyClient({
   }
 
   // ---- UI states ----
+  // กู้ token ไม่ได้จริง (ไม่มีทั้ง props/URL และ sessionStorage) → โชว์ "ไม่พบ" ฝั่ง client
+  if (tokenResolved && !token) {
+    return (
+      <Centered>
+        <div className="warn-text" style={{ fontWeight: 600 }}>
+          ไม่พบลิงก์แบบประเมิน
+        </div>
+        <div className="nova-loading-sub">
+          กรุณาเปิดแบบประเมินจากลิงก์ที่ได้รับใน LINE อีกครั้งค่ะ
+        </div>
+      </Centered>
+    );
+  }
   if (loading) {
     // หน้าโหลด: น้อง NOVA วิ่ง (พอร์ตจาก prototype loaderScene) + ข้อความ
     return (
