@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="น้อง NOVA — Finovas">
+  <!-- พื้นหลังวงกลมโทน navy Finovas -->
+  <circle cx="32" cy="32" r="32" fill="#1e3a8a"/>
+  <!-- หัวคาปิบาร่า (crop เฉพาะหัว ให้ชัดในขนาดเล็ก) -->
+  <ellipse cx="32" cy="35" rx="23" ry="21" fill="#b07f52"/>
+  <!-- หู -->
+  <circle cx="15" cy="19" r="6" fill="#8a5f3c"/><circle cx="15" cy="19" r="3" fill="#6b4425"/>
+  <circle cx="49" cy="19" r="6" fill="#8a5f3c"/><circle cx="49" cy="19" r="3" fill="#6b4425"/>
+  <!-- แก้ม (จางๆ) + ปาก/จมูกโซน -->
+  <circle cx="16" cy="41" r="5.5" fill="#e79b8f" opacity="0.45"/>
+  <circle cx="48" cy="41" r="5.5" fill="#e79b8f" opacity="0.45"/>
+  <ellipse cx="32" cy="41" rx="14" ry="10" fill="#d9b489"/>
+  <!-- แว่นตา (จุดจำของน้อง NOVA) -->
+  <g stroke="#2b3a33" stroke-width="2.2" fill="#ffffff" fill-opacity="0.85">
+    <circle cx="24" cy="33" r="7"/>
+    <circle cx="40" cy="33" r="7"/>
+  </g>
+  <line x1="30" y1="33" x2="34" y2="33" stroke="#2b3a33" stroke-width="2.2"/>
+  <!-- ตา + ประกาย -->
+  <circle cx="24" cy="34" r="3" fill="#20120a"/><circle cx="25" cy="32.7" r="1" fill="#fff"/>
+  <circle cx="40" cy="34" r="3" fill="#20120a"/><circle cx="41" cy="32.7" r="1" fill="#fff"/>
+  <!-- จมูก + ยิ้ม -->
+  <ellipse cx="32" cy="45" rx="4.5" ry="3" fill="#7a5233"/>
+  <path d="M26 50 q6 5 12 0" stroke="#6b4425" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+</svg>

@@ -13,6 +13,7 @@ import {
 } from "@/lib/dashboard/session";
 import { ROLE_CODES, type RoleCode } from "@/lib/dashboard/types";
 import { ExecView, MemberView, LeadView } from "./_components";
+import NovaMascot from "../liff/survey/[token]/NovaMascot";
 import "./dashboard.css";
 
 export const dynamic = "force-dynamic";
@@ -44,11 +45,17 @@ function Frame({
       <header>
         <div className="dash-top">
           <div className="dash-title">
-            <h1>NOVA-CX Dashboard</h1>
-            <p>
-              มุมมองตามบทบาท · แสดง Sample Size (n) ทุกคะแนน ·
-              คะแนนตัวอย่างน้อยไม่สรุปดี/แย่สุด
-            </p>
+            {/* avatar น้อง NOVA (คาปิบาร่าวงกลม) ข้างหัวข้อ — ตรง prototype */}
+            <div className="dash-mascot" aria-hidden="true">
+              <NovaMascot variant="profile" width={52} />
+            </div>
+            <div>
+              <h1>NOVA-CX Dashboard</h1>
+              <p>
+                มุมมองตามบทบาท · แสดง Sample Size (n) ทุกคะแนน ·
+                คะแนนตัวอย่างน้อยไม่สรุปดี/แย่สุด
+              </p>
+            </div>
           </div>
           {/* แสดงบทบาท + ปุ่มออกจากระบบเฉพาะเมื่อ login จริง */}
           {fromSession && activeRole ? (

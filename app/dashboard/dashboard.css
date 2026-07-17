@@ -41,11 +41,27 @@
 /* ---- Top bar ---- */
 .nova-dash .dash-top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
+}
+/* avatar + ชื่อ + subtitle เรียงแนวนอนฝั่งซ้าย (ตรง prototype .dash-title) */
+.nova-dash .dash-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* กรอบกลมของมาสคอต — ตัดขอบ svg ให้เป็นวงกลมพอดี ไม่บีบ */
+.nova-dash .dash-mascot {
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  line-height: 0;
+}
+.nova-dash .dash-mascot svg {
+  display: block;
 }
 .nova-dash .dash-title h1 {
   margin: 0;

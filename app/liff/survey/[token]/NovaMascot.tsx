@@ -151,6 +151,25 @@ function LoaderScene({ width }: { width: number }) {
   );
 }
 
+/** avatar วงกลม (profile) — หัวโซโซ่ในกรอบกลมพื้นฟ้า (การ์ด/หัวข้อ/แชต) ตรงกับ NOVA.profile() */
+function ProfilePose({ width }: { width: number }) {
+  return (
+    <svg
+      className="nova-svg"
+      viewBox="0 0 160 160"
+      width={width}
+      height={width}
+      role="img"
+      aria-label="โปรไฟล์น้อง NOVA"
+    >
+      <circle cx="80" cy="80" r="77" fill="#dbeafe" stroke={NAVY} strokeWidth="4" />
+      <g transform="translate(-13,7) scale(0.92)">
+        <Head />
+      </g>
+    </svg>
+  );
+}
+
 /** ท่ายืนยิ้ม (full) — ถือเครื่องคิดเลขข้างลำตัว */
 function FullPose({ width }: { width: number }) {
   return (
@@ -184,8 +203,10 @@ export default function NovaMascot({
   variant = "loader",
   width = 150,
 }: {
-  variant?: "loader" | "full";
+  variant?: "loader" | "full" | "profile";
   width?: number;
 }) {
-  return variant === "full" ? <FullPose width={width} /> : <LoaderScene width={width} />;
+  if (variant === "full") return <FullPose width={width} />;
+  if (variant === "profile") return <ProfilePose width={width} />;
+  return <LoaderScene width={width} />;
 }
