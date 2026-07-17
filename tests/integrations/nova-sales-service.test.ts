@@ -170,6 +170,63 @@ describe("upsertDealAndMaybeInvite — Lost (D)", () => {
   });
 });
 
+describe("upsertDealAndMaybeInvite — attribution เซลด้วยชื่อ", () => {
+  it("Won + sales_employee_name ตรง 1 คน → invitation มี snapshot เซล (subject_role: sales) + response resolved", async () => {
+    const store = makeStore();
+    tplType(store, "C");
+    store.data.employees = [
+      {
+        id: "emp-joe",
+        tenant_id: TENANT,
+        first_name: "สมชาย",
+        nickname: "โจ",
+        employee_type: "sales",
+        is_active: true,
+        deleted_at: null,
+      },
+    ];
+
+    const r = await upsertDealAndMaybeInvite(makeDb(store), {
+      ...dealPayload("won"),
+      sales_employee_name: "โจ",
+    } as DealStatusPayload);
+
+    expect(r.salesEmployee?.resolved).toBe(true);
+    const snap = invites(store)[0].row.assignee_snapshot as Row[];
+    expect(snap).toHaveLength(1);
+    expect(snap[0].employee_id).toBe("emp-joe");
+    expect(snap[0].subject_role).toBe("sales");
+    // opportunity ผูก sales_employee_id ที่ resolve ได้
+    const opp = store.inserts.find((i) => i.table === "sales_opportunities");
+    expect(opp?.row.sales_employee_id).toBe("emp-joe");
+  });
+
+  it("Won + ชื่อไม่เจอ → invitation ยังสร้างได้ (unattributed) + response reason=not_found", async () => {
+    const store = makeStore();
+    tplType(store, "C");
+    store.data.employees = []; // ไม่มีพนักงานตรงชื่อ
+
+    const r = await upsertDealAndMaybeInvite(makeDb(store), {
+      ...dealPayload("won"),
+      sales_employee_name: "ไม่มีจริง",
+    } as DealStatusPayload);
+
+    expect(r.salesEmployee?.resolved).toBe(false);
+    expect(r.salesEmployee?.reason).toBe("not_found");
+    // invitation ยังสร้าง (unattributed) — snapshot ว่าง
+    expect(invites(store)).toHaveLength(1);
+    expect(invites(store)[0].row.assignee_snapshot as Row[]).toHaveLength(0);
+    expect(r.invitation?.token).toBeTruthy();
+  });
+
+  it("ไม่ส่งเซลมาเลย → response ไม่มี sales_employee (undefined)", async () => {
+    const store = makeStore();
+    tplType(store, "C");
+    const r = await upsertDealAndMaybeInvite(makeDb(store), dealPayload("won"));
+    expect(r.salesEmployee).toBeUndefined();
+  });
+});
+
 describe("upsertDealAndMaybeInvite — idempotent", () => {
   it("ยิงซ้ำ external_deal_id เดิม (Lost) → ไม่สร้าง invitation ซ้ำ, token เดิม, ไม่ push", async () => {
     const store = makeStore();

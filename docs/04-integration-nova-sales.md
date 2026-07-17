@@ -58,7 +58,8 @@ Content-Type: `application/json`
 | `external_deal_id` | string | ✓ | id ดีลฝั่ง NOVA Sales (idempotency) |
 | `status` | `open\|won\|lost` | ✓ | won→ประเมิน C, lost→ประเมิน D |
 | `customer_id` **หรือ** `customer_code` | uuid / string | ✓ (อย่างใดอย่างหนึ่ง) | ผูกลูกค้า |
-| `sales_employee_id` | uuid | – | เซลเจ้าของดีล (เข้า assignee snapshot) |
+| `sales_employee_id` | uuid | – | เซลผู้ถูกประเมิน (uuid ภายใน NOVA-CX) — ถ้ามีใช้ตรง |
+| `sales_employee_name` | string | – | ชื่อเซลจาก roster ฝั่ง NOVA Sales (ไม่มี uuid) → NOVA-CX resolve เป็น employee_id เอง (ดู mapping ด้านล่าง) |
 | `external_lead_id` | string | – | |
 | `stage` | string | – | |
 | `amount` | number (≥0) | – | |
@@ -72,9 +73,26 @@ Content-Type: `application/json`
   "created": true,
   "status_changed": true,
   "previous_status": "open",
-  "invitation": { "id": "<uuid>", "created": true, "surveyType": "C" }
+  "sales_employee": { "resolved": true },
+  "invitation": { "id": "<uuid>", "created": true, "survey_type": "C" }
 }
 ```
+- `sales_employee` = `null` เมื่อ payload ไม่ได้ส่งเซลมาเลย
+- resolve ไม่ติด: `{ "resolved": false, "reason": "not_found" }` (ชื่อไม่ตรง roster) หรือ
+  `{ "resolved": false, "reason": "ambiguous" }` (ชื่อซ้ำหลายคน แยกไม่ได้) — invitation ยังสร้าง+ส่งได้ แต่ **ไม่ระบุตัวเซล** (unattributed)
+
+### Mapping ชื่อเซล → employee_id (`sales_employee_name`)
+- ใช้เมื่อ NOVA Sales มีแค่ **ชื่อเซล** (roster เป็นชื่อ ไม่มี uuid)
+- ลำดับการ resolve:
+  1. ถ้าส่ง `sales_employee_id` (uuid) มา → ใช้ตรง (ยังยืนยัน cross-tenant เดิม; ไม่พบ = 400)
+  2. ไม่งั้นใช้ `sales_employee_name` เทียบกับพนักงานใน admin NOVA-CX ของ tenant นั้น
+     (เฉพาะ active + ไม่ถูกลบ) โดยเทียบ **`nickname` หรือ `first_name`** (ตัดช่องว่างหัวท้าย,
+     ยุบช่องว่างซ้ำ, ไม่สนตัวพิมพ์เล็ก/ใหญ่)
+- เงื่อนไขผล:
+  - เจอ **พอดี 1 คน** → ผูกเป็นเซลผู้ถูกประเมิน (`assignee_snapshot` = `[{employee_id, name, subject_role:"sales"}]`)
+  - เจอ **0 คน** → `resolved:false, reason:"not_found"` (ไม่เดามั่ว)
+  - เจอ **หลายคน (ชื่อซ้ำ)** → เลือกคนที่ `employee_type = "sales"` ถ้าเหลือพอดี 1 คน; ถ้ายังหลายคน → `resolved:false, reason:"ambiguous"`
+- **ข้อควรระวัง:** ชื่อใน roster NOVA Sales ต้องตรงกับชื่อ/ชื่อเล่นพนักงานใน admin NOVA-CX จึงจะ attribute รายเซลได้; กำกวม/ไม่เจอ = ประเมินแบบไม่ระบุตัว (ยังได้คะแนนรวม แต่ dashboard/report รายเซลจะไม่ผูกให้)
 
 ### พฤติกรรม
 - **Idempotent:** ผูกดีลด้วย `external_deal_id` (unique ต่อ tenant) — ยิงซ้ำ = อัปเดตดีลเดิม ไม่สร้างซ้ำ

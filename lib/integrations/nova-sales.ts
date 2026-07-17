@@ -107,7 +107,10 @@ export const dealStatusSchema = z.object({
   customer_id: uuid.optional(),
   customer_code: z.string().optional(),
   external_lead_id: z.string().optional(),
+  /** เซลผู้ถูกประเมิน: ส่ง uuid ภายในได้ (sales_employee_id) หรือส่งชื่อ (sales_employee_name)
+   *  แล้วให้ NOVA-CX resolve เป็น employee_id เอง — roster ฝั่ง NOVA Sales เป็นชื่อ ไม่มี uuid */
   sales_employee_id: uuid.optional(),
+  sales_employee_name: z.string().optional(),
   stage: z.string().optional(),
   amount: z.number().nonnegative().optional(),
   status: z.enum(["open", "won", "lost"]),

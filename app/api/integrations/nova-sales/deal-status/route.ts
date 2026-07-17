@@ -98,6 +98,8 @@ export async function POST(request: NextRequest) {
         created: result.created,
         status_changed: result.statusChanged,
         previous_status: result.previousStatus,
+        // แจ้ง NOVA Sales ว่า map ชื่อเซล → employee_id ติดไหม (debug ชื่อไม่ตรง roster)
+        sales_employee: result.salesEmployee ?? null,
         invitation: inv
           ? {
               id: inv.id,

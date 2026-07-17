@@ -64,16 +64,16 @@ async function assertCustomerInTenant(
   return (data as { id: string }).id;
 }
 
-/** ยืนยันพนักงานอยู่ tenant นี้ + ไม่ soft-deleted */
+/** ยืนยันพนักงานอยู่ tenant นี้ + ไม่ soft-deleted (คืน id + ชื่อสำหรับ enrich snapshot) */
 async function assertEmployeeInTenant(
   db: DB,
   tenantId: string,
   employeeId: string,
   field: string
-): Promise<void> {
+): Promise<{ id: string; name: string | null }> {
   const { data } = await db
     .from("employees")
-    .select("id")
+    .select("id, first_name, nickname")
     .eq("id", employeeId)
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
@@ -83,6 +83,92 @@ async function assertEmployeeInTenant(
       `ไม่พบพนักงานใน tenant นี้ (${field} ไม่ถูกต้อง)`
     );
   }
+  const row = data as { id: string; first_name?: string; nickname?: string };
+  return { id: row.id, name: row.nickname || row.first_name || null };
+}
+
+// --------------------------------------------------------------------------
+// resolve sales employee (uuid ตรง / ชื่อจาก roster NOVA Sales)
+// --------------------------------------------------------------------------
+
+/** สถานะการ map ชื่อเซล → employee_id (ส่งกลับให้ NOVA Sales debug ว่าชื่อตรงไหม) */
+export type SalesEmployeeResolution = {
+  /** employee_id ที่ resolve ได้ (null = ประเมินแบบไม่ระบุตัวเซล) */
+  employeeId: string | null;
+  /** ชื่อพนักงาน ณ ตอนนั้น (best-effort สำหรับ snapshot) */
+  name: string | null;
+  reason: "matched" | "not_found" | "ambiguous";
+};
+
+/** normalize ชื่อสำหรับเทียบ: trim + ยุบช่องว่าง + lowercase */
+function normalizeName(value: unknown): string {
+  return typeof value === "string"
+    ? value.trim().replace(/\s+/g, " ").toLowerCase()
+    : "";
+}
+
+/**
+ * resolve เซลผู้ถูกประเมินจาก payload:
+ *   - มี sales_employee_id (uuid) → ใช้ตรง (คง cross-tenant guard เดิม)
+ *   - ไม่งั้นมี name → match best-effort กับ employees ของ tenant (active, ไม่ soft-deleted)
+ *     เทียบ nickname หรือ first_name (trim, ยุบช่องว่าง, case-insensitive)
+ *       · เจอพอดี 1 คน → ใช้ id นั้น
+ *       · เจอ 0 คน → not_found (คืน null — ประเมินแบบไม่ระบุตัว ไม่ error)
+ *       · เจอ >1 คน (กำกวม) → prefer พนักงานชนิด 'sales'; ถ้ายัง >1 → ambiguous (null)
+ */
+export async function resolveSalesEmployeeId(
+  db: DB,
+  tenantId: string,
+  opts: { id?: string | null; name?: string | null }
+): Promise<SalesEmployeeResolution> {
+  // uuid ภายใน → ใช้ตรง (assert ว่าอยู่ tenant เดียวกัน)
+  if (opts.id) {
+    const emp = await assertEmployeeInTenant(db, tenantId, opts.id, "sales_employee_id");
+    return { employeeId: emp.id, name: emp.name, reason: "matched" };
+  }
+
+  const target = normalizeName(opts.name);
+  if (!target) {
+    return { employeeId: null, name: null, reason: "not_found" };
+  }
+
+  const { data } = await db
+    .from("employees")
+    .select("id, first_name, nickname, employee_type")
+    .eq("tenant_id", tenantId)
+    .eq("is_active", true)
+    .is("deleted_at", null);
+
+  const rows = (Array.isArray(data) ? data : []) as {
+    id: string;
+    first_name?: string;
+    nickname?: string;
+    employee_type?: string;
+  }[];
+
+  const matches = rows.filter(
+    (r) =>
+      normalizeName(r.nickname) === target ||
+      normalizeName(r.first_name) === target
+  );
+
+  const pick = (r: (typeof matches)[number]): SalesEmployeeResolution => ({
+    employeeId: r.id,
+    name: r.nickname || r.first_name || null,
+    reason: "matched",
+  });
+
+  if (matches.length === 1) return pick(matches[0]);
+  if (matches.length === 0) {
+    return { employeeId: null, name: null, reason: "not_found" };
+  }
+
+  // ชื่อซ้ำหลายคน → prefer ชนิด 'sales' ก่อน (ถ้าแยกได้พอดี 1 คน)
+  const salesMatches = matches.filter((r) => r.employee_type === "sales");
+  if (salesMatches.length === 1) return pick(salesMatches[0]);
+
+  // ยังกำกวม → ไม่เดา คืน null (ประเมินแบบไม่ระบุตัว)
+  return { employeeId: null, name: null, reason: "ambiguous" };
 }
 
 // --------------------------------------------------------------------------
@@ -261,6 +347,8 @@ export type DealResult = {
   created: boolean;
   statusChanged: boolean;
   previousStatus: string | null;
+  /** สถานะการ map เซล (มีเมื่อ payload ส่ง sales_employee_id/name มา) */
+  salesEmployee?: { resolved: boolean; reason?: "not_found" | "ambiguous" };
   invitation?: {
     id: string;
     created: boolean;
@@ -282,14 +370,15 @@ export async function upsertDealAndMaybeInvite(
     customer_id: payload.customer_id,
     customer_code: payload.customer_code,
   });
-  if (payload.sales_employee_id) {
-    await assertEmployeeInTenant(
-      db,
-      payload.tenant_id,
-      payload.sales_employee_id,
-      "sales_employee_id"
-    );
-  }
+  // resolve เซลผู้ถูกประเมิน: uuid ตรง หรือชื่อจาก roster NOVA Sales → employee_id
+  const salesRequested = !!(
+    payload.sales_employee_id || payload.sales_employee_name
+  );
+  const salesResolution = await resolveSalesEmployeeId(db, payload.tenant_id, {
+    id: payload.sales_employee_id,
+    name: payload.sales_employee_name,
+  });
+  const salesEmployeeId = salesResolution.employeeId;
 
   const closedAt =
     payload.status === "open"
@@ -314,7 +403,7 @@ export async function upsertDealAndMaybeInvite(
       .from("sales_opportunities")
       .update({
         customer_id: customerId,
-        sales_employee_id: payload.sales_employee_id ?? undefined,
+        sales_employee_id: salesEmployeeId ?? undefined,
         stage: payload.stage ?? undefined,
         amount: payload.amount ?? undefined,
         status: payload.status,
@@ -326,7 +415,7 @@ export async function upsertDealAndMaybeInvite(
       tenant_id: payload.tenant_id,
       external_ref: payload.external_deal_id,
       customer_id: customerId,
-      sales_employee_id: payload.sales_employee_id ?? null,
+      sales_employee_id: salesEmployeeId ?? null,
       stage: payload.stage ?? null,
       amount: payload.amount ?? null,
       status: payload.status,
@@ -383,13 +472,22 @@ export async function upsertDealAndMaybeInvite(
     previousStatus,
   };
 
+  // แจ้งสถานะ map เซล เฉพาะเมื่อ payload ตั้งใจส่งเซลมา (กันสับสนกรณีไม่ส่งเลย)
+  if (salesRequested) {
+    result.salesEmployee = {
+      resolved: salesEmployeeId !== null,
+      ...(salesEmployeeId === null ? { reason: salesResolution.reason as "not_found" | "ambiguous" } : {}),
+    };
+  }
+
   const surveyType = dealStatusToSurveyType(payload.status);
   if (surveyType) {
     const invitation = await enqueueSalesInvitation(db, {
       tenantId: payload.tenant_id,
       customerId,
       opportunityId,
-      salesEmployeeId: payload.sales_employee_id ?? null,
+      salesEmployeeId,
+      salesEmployeeName: salesResolution.name,
       externalDealId: payload.external_deal_id,
       surveyType,
     });
@@ -448,6 +546,7 @@ export async function enqueueSalesInvitation(
     customerId: string;
     opportunityId: string;
     salesEmployeeId: string | null;
+    salesEmployeeName?: string | null;
     externalDealId: string;
     surveyType: "C" | "D";
   }
@@ -475,8 +574,16 @@ export async function enqueueSalesInvitation(
     args.customerId
   );
 
+  // snapshot เซลผู้ถูกประเมิน (subject_role: 'sales') → dashboard/report attribute ต่อเซลได้
+  // ว่าง = ประเมินแบบไม่ระบุตัวเซล (ชื่อไม่ตรง roster / กำกวม / ไม่ได้ส่งเซลมา)
   const assigneeSnapshot = args.salesEmployeeId
-    ? [{ employee_id: args.salesEmployeeId, subject_role: "member" }]
+    ? [
+        {
+          employee_id: args.salesEmployeeId,
+          ...(args.salesEmployeeName ? { name: args.salesEmployeeName } : {}),
+          subject_role: "sales",
+        },
+      ]
     : [];
 
   // สร้าง token ไว้ล่วงหน้าเพื่อ insert + คืนกลับให้ route ประกอบ survey_url
