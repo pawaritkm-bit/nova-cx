@@ -324,6 +324,21 @@
   text-align: right;
 }
 
+/* ---- Subject group (Form B: ให้ดาวหลายคนในหน้าเดียว แยกการ์ดต่อคน) ---- */
+.liff-survey .subject-group + .subject-group {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px dashed var(--line);
+}
+.liff-survey .subject-head {
+  background: var(--blue-bg);
+  border-color: #c7d7fb;
+}
+.liff-survey .subject-head .v {
+  font-size: 15px;
+  color: var(--navy-800);
+}
+
 /* ---- Question block ---- */
 .liff-survey .q-block {
   margin-bottom: 22px;

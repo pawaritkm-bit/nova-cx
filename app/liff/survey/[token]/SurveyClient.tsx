@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ratingFollowup,
-  type Followup,
-} from "@/lib/survey/conditional";
 import { isAnswered } from "@/lib/survey/submit";
-import { resolveSubjectSet, subjectQuestionCode } from "@/lib/survey/schema";
+import {
+  buildSteps,
+  type ApiTemplate,
+  type Option,
+  type Question,
+  type Reference,
+  type Step,
+} from "@/lib/survey/steps";
 import { oaForSurveyType } from "@/lib/line/routing";
 import NovaMascot from "./NovaMascot";
 import "./liff.css";
@@ -20,50 +23,9 @@ import "./liff.css";
  *   - LINE LIFF init แบบ best-effort (ไม่มี env = dev mode, ไม่ crash)
  */
 
-// ---- โครง schema (หลวม — มาจาก API) ----
-type Option = { value: string; label: string; is_exclusive?: boolean };
-type Question = {
-  code: string;
-  text?: string;
-  type: "rating" | "single" | "multi" | "open" | "nps";
-  scale?: number;
-  options?: Option[];
-};
-type Section = {
-  code?: string;
-  title?: string;
-  auto_fill?: boolean;
-  questions?: Question[];
-};
-type SchemaJson = {
-  title?: string;
-  intro?: string;
-  estimated_minutes?: number;
-  sections?: Section[];
-  question_sets?: Record<string, Question[]>;
-  open_questions?: Question[];
-};
-type Reference = {
-  customer_code: string | null;
-  name: string;
-  business_name: string | null;
-  service_start_date: string | null;
-} | null;
-type Subject = { employee_id?: string; name?: string; subject_role?: string };
-
-type ApiTemplate = {
-  token: string;
-  survey_type: "A" | "B" | "C" | "D";
-  survey_slug: string;
-  schema: SchemaJson;
-  reference: Reference;
-  subjects: Subject[];
-};
-
+// ---- โครง schema/step ย้ายไป lib/survey/steps.ts (เพื่อ unit test buildSteps ได้) ----
 type AnswerValue = number | string | string[] | null;
 type Answers = Record<string, AnswerValue>;
-
-type Step = { title: string; questions: Question[]; ref?: Reference };
 
 type LiffLike = {
   init: (config: { liffId: string }) => Promise<void>;
@@ -78,6 +40,39 @@ declare global {
 }
 
 const LIFF_SDK_URL = "https://static.line-scdn.net/liff/edge/2/sdk.js";
+
+/**
+ * โหลด LIFF SDK แบบครั้งเดียว (idempotent) แล้ว resolve เมื่อพร้อมใช้
+ *   - ถ้า window.liff มีอยู่แล้ว = resolve ทันที (ไม่ยัด script ซ้ำ)
+ *   - ถ้า script ถูกฝังไว้แล้ว = รอ onload ของตัวเดิม
+ * แยกเป็น helper เพื่อให้ boot() (เฟสโหลดเดียว) await ได้ตรง ๆ
+ */
+function loadLiffSdk(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined") return reject(new Error("no window"));
+    if (window.liff) return resolve();
+
+    const existing = document.querySelector<HTMLScriptElement>(
+      `script[src="${LIFF_SDK_URL}"]`
+    );
+    if (existing) {
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener(
+        "error",
+        () => reject(new Error("liff sdk load error")),
+        { once: true }
+      );
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = LIFF_SDK_URL;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("liff sdk load error"));
+    document.body.appendChild(script);
+  });
+}
 
 export default function SurveyClient({
   token,
@@ -123,9 +118,48 @@ export default function SurveyClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- โหลด template จาก API + init LIFF ----
+  // ---- โหลด template + init LIFF ใน "เฟสโหลดเดียวต่อเนื่อง" ----
+  // ทำไมรวมเป็นเฟสเดียว: เดิมแยกเป็น (1) fetch template → setLoading(false) โชว์แบบประเมิน
+  //   แล้วค่อย (2) init LIFF ทีหลัง — พอ LIFF ต้อง login()/redirect หน้าจะรีโหลด → มาสคอตวิ่ง "รอบ 2"
+  //   (ผู้ใช้เห็นเป็น 2 จังหวะ: วิ่ง → โผล่หน้าแบบประเมินแวบ → วิ่งใหม่)
+  // แก้: คง loading=true ต่อเนื่องตั้งแต่ mount จน "template พร้อม + init LIFF เสร็จ" ค่อยเผยแบบประเมิน
+  //   → <NovaMascot variant="loader"> mount ครั้งเดียว/unmount ครั้งเดียว = CSS animation วิ่งต่อเนื่องไม่รีสตาร์ท
   useEffect(() => {
     let cancelled = false;
+
+    // best-effort init LIFF → คืน lineUserId (หรือ null); มี timeout กัน SDK ค้างทำ loader ค้าง
+    async function initLiffUserId(surveyType: ApiTemplate["survey_type"]) {
+      if (devMode) return null;
+      const oa = oaForSurveyType(surveyType);
+      const liffId = oa === "sale" ? liffSaleId : liffCareId;
+      if (!liffId) return null;
+
+      const run = async (): Promise<string | null> => {
+        try {
+          await loadLiffSdk();
+          const liff = window.liff;
+          if (!liff) return null;
+          await liff.init({ liffId });
+          if (!liff.isLoggedIn()) {
+            // login() = full navigation ออกไป LINE แล้วกลับมา (หน้าจะ remount เอง)
+            // ระหว่างนี้ loader ยังค้างอยู่ = ไม่โชว์แบบประเมินก่อนเวลา
+            liff.login();
+            // ค้างไว้ให้ browser พาไป login (ไม่ resolve) — loader ยังวิ่งต่อจนถูก redirect
+            return await new Promise<string | null>(() => {});
+          }
+          const profile = await liff.getProfile();
+          return profile.userId ?? null;
+        } catch {
+          return null; // LIFF ล้ม → ปล่อยเป็น dev-like (ยังตอบได้ผ่าน token)
+        }
+      };
+
+      // ถ้า init ช้า/ค้างเกิน 6s → เผยแบบประเมินไปก่อน (best-effort) ยังตอบผ่าน token ได้
+      const timeout = new Promise<string | null>((resolve) =>
+        setTimeout(() => resolve(null), 6000)
+      );
+      return Promise.race([run(), timeout]);
+    }
 
     async function boot() {
       // 1) โหลดคำตอบที่ค้างจาก localStorage (auto-save)
@@ -137,25 +171,36 @@ export default function SurveyClient({
       }
 
       // 2) โหลด template
+      let tpl: ApiTemplate | null = null;
       try {
-        const params = new URLSearchParams();
-        if (lineUserId) params.set("lineUserId", lineUserId);
         const res = await fetch(
-          `/api/liff/survey/${encodeURIComponent(token)}?${params.toString()}`,
+          `/api/liff/survey/${encodeURIComponent(token)}`,
           { cache: "no-store" }
         );
         const data = await res.json();
         if (cancelled) return;
         if (!res.ok) {
           setLoadError(data?.message ?? "โหลดแบบประเมินไม่สำเร็จ");
-        } else {
-          setTemplate(data as ApiTemplate);
+          setLoading(false);
+          return;
         }
+        tpl = data as ApiTemplate;
       } catch {
-        if (!cancelled) setLoadError("เชื่อมต่อไม่สำเร็จ กรุณาลองใหม่");
-      } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoadError("เชื่อมต่อไม่สำเร็จ กรุณาลองใหม่");
+          setLoading(false);
+        }
+        return;
       }
+
+      // 3) init LIFF ในเฟสเดียวกัน (รู้ survey_type แล้วจึงเลือก OA/LIFF id ได้ถูก)
+      const uid = await initLiffUserId(tpl.survey_type);
+      if (cancelled) return;
+      if (uid) setLineUserId(uid);
+
+      // 4) เผยแบบประเมิน "ครั้งเดียว" — loader หายไปตรงนี้จุดเดียว
+      setTemplate(tpl);
+      setLoading(false);
     }
 
     boot();
@@ -164,40 +209,6 @@ export default function SurveyClient({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
-
-  // ---- LIFF init (best-effort; dev mode = ข้าม) ----
-  // เลือก LIFF id ตาม OA ของ invitation (A/B = Care, C/D = Sale)
-  // รอ template โหลดก่อนเพื่อรู้ survey_type → ใช้ OA ที่ถูกต้อง
-  useEffect(() => {
-    if (devMode) return;
-    if (!template) return;
-    const oa = oaForSurveyType(template.survey_type);
-    const liffId = oa === "sale" ? liffSaleId : liffCareId;
-    if (!liffId) return;
-
-    const script = document.createElement("script");
-    script.src = LIFF_SDK_URL;
-    script.async = true;
-    script.onload = async () => {
-      try {
-        const liff = window.liff;
-        if (!liff) return;
-        await liff.init({ liffId });
-        if (!liff.isLoggedIn()) {
-          liff.login();
-          return;
-        }
-        const profile = await liff.getProfile();
-        setLineUserId(profile.userId);
-      } catch {
-        // LIFF init ล้ม → ปล่อยเป็น dev-like (ยังตอบได้ผ่าน token)
-      }
-    };
-    document.body.appendChild(script);
-    return () => {
-      script.remove();
-    };
-  }, [devMode, liffCareId, liffSaleId, template]);
 
   // ---- auto-save ----
   useEffect(() => {
@@ -374,27 +385,41 @@ export default function SurveyClient({
             <p className="form-intro">{template.schema.intro}</p>
           )}
 
-          {template.survey_type === "B" && template.subjects.length > 0 && (
-            <SubjectCard subjects={template.subjects} />
-          )}
-
           <h2 className="step-title">{step.title}</h2>
 
           {step.ref && <ReferenceCard reference={step.ref} />}
 
-          <div>
-            {step.questions.map((q) => (
-              <QuestionField
-                key={q.code}
-                question={q}
-                value={answers[q.code] ?? null}
-                followupValue={answers[`${q.code}__followup`] ?? null}
-                onChange={(v) => setAnswer(q.code, v)}
-                onToggleMulti={(val) => toggleMulti(q, val)}
-                onFollowupChange={(v) => setAnswer(`${q.code}__followup`, v)}
-              />
-            ))}
-          </div>
+          {/* Form B หน้าดาว: แสดงคำถาม "แยกการ์ดต่อคน" (ทุกคนในหน้าเดียว) */}
+          {step.groups && step.groups.length > 0 ? (
+            <div>
+              {step.groups.map((group) => (
+                <div className="subject-group" key={group.subjectName}>
+                  <SubjectHeader name={group.subjectName} />
+                  {group.questions.map((q) => (
+                    <QuestionField
+                      key={q.code}
+                      question={q}
+                      value={answers[q.code] ?? null}
+                      onChange={(v) => setAnswer(q.code, v)}
+                      onToggleMulti={(val) => toggleMulti(q, val)}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div>
+              {step.questions.map((q) => (
+                <QuestionField
+                  key={q.code}
+                  question={q}
+                  value={answers[q.code] ?? null}
+                  onChange={(v) => setAnswer(q.code, v)}
+                  onToggleMulti={(val) => toggleMulti(q, val)}
+                />
+              ))}
+            </div>
+          )}
 
           {showRequiredWarn && !stepComplete && (
             <p className="warn-text">
@@ -500,13 +525,14 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-function SubjectCard({ subjects }: { subjects: Subject[] }) {
+/** หัวการ์ดต่อคน (Form B หน้าดาว) — บอกชัดว่ากำลังให้ดาวใคร */
+function SubjectHeader({ name }: { name: string }) {
   return (
-    <div className="ref-card">
-      <div className="ref-lock">ผู้ที่คุณกำลังประเมิน</div>
+    <div className="ref-card subject-head">
+      <div className="ref-lock">กำลังให้คะแนน</div>
       <div className="ref-row">
         <span className="v" style={{ textAlign: "left" }}>
-          {subjects.map((s) => s.name ?? s.employee_id).join(", ")}
+          {name}
         </span>
       </div>
     </div>
@@ -516,23 +542,15 @@ function SubjectCard({ subjects }: { subjects: Subject[] }) {
 function QuestionField({
   question,
   value,
-  followupValue,
   onChange,
   onToggleMulti,
-  onFollowupChange,
 }: {
   question: Question;
   value: AnswerValue;
-  followupValue: AnswerValue;
   onChange: (v: AnswerValue) => void;
   onToggleMulti: (optionValue: string) => void;
-  onFollowupChange: (v: string) => void;
 }) {
   const scale = question.scale ?? 5;
-  const followup: Followup =
-    question.type === "rating" && typeof value === "number"
-      ? ratingFollowup(value)
-      : null;
 
   return (
     <div className="q-block">
@@ -605,28 +623,8 @@ function QuestionField({
           placeholder="พิมพ์ความเห็นของคุณ…"
         />
       )}
-
-      {/* conditional follow-up ปลายเปิดตามคะแนน — สีตามอารมณ์ (pos/neg) แบบ prototype */}
-      {followup && (
-        <div
-          className={`followup${
-            followup === "PRAISE" ? " pos" : followup === "ROOT_CAUSE" ? " neg" : ""
-          }`}
-        >
-          <div className="fu-label">
-            {followup === "PRAISE"
-              ? "สิ่งที่เราทำได้ดีคืออะไร?"
-              : followup === "IMPROVE"
-                ? "เรื่องที่อยากให้ปรับปรุง?"
-                : "เกิดอะไรขึ้น อยากให้เราช่วยแก้ไขอย่างไร?"}
-          </div>
-          <textarea
-            rows={2}
-            value={typeof followupValue === "string" ? followupValue : ""}
-            onChange={(e) => onFollowupChange(e.target.value)}
-          />
-        </div>
-      )}
+      {/* หมายเหตุ: ตัด conditional follow-up ปลายเปิดต่อดาวออกแล้ว (ตาม feedback ผู้ใช้)
+          เหลือช่องความเห็นช่องเดียวท้ายแบบประเมิน (open_questions → step สุดท้าย) */}
     </div>
   );
 }
@@ -702,57 +700,4 @@ function RatingStars({
   );
 }
 
-// ==========================================================================
-// helper: สร้าง steps จาก schema (รองรับ sections / question_sets / open)
-// ==========================================================================
-function buildSteps(template: ApiTemplate): Step[] {
-  const { schema, survey_type, reference } = template;
-  const steps: Step[] = [];
-
-  if (schema.sections && schema.sections.length > 0) {
-    for (const section of schema.sections) {
-      const questions = section.questions ?? [];
-      if (section.auto_fill || section.code === "ref") {
-        // ส่วนข้อมูลอ้างอิง auto-fill → step แสดงข้อมูลอย่างเดียว
-        steps.push({ title: section.title ?? "ข้อมูลอ้างอิง", questions: [], ref: reference });
-        continue;
-      }
-      if (questions.length === 0) continue;
-      steps.push({ title: section.title ?? "แบบประเมิน", questions });
-    }
-  }
-
-  // Form B: ประเมิน "ต่อคน" (per-subject) — แต่ละผู้ดูแลได้ 1 step
-  //   answer key = <employee_id>__<question_code> (สูตรเดียวกับ flattenQuestions ฝั่ง server)
-  //   เพื่อให้ validate/scoring ฝั่ง server ตรงกับที่ client ส่งเป๊ะ
-  if (survey_type === "B" && schema.question_sets) {
-    const subjects = (template.subjects ?? []).filter((s) => s.employee_id);
-    if (subjects.length > 0) {
-      for (const subject of subjects) {
-        const set = resolveSubjectSet(
-          schema.question_sets,
-          subject.subject_role
-        );
-        if (set.length === 0) continue;
-        const questions = set.map((q) => ({
-          ...q,
-          code: subjectQuestionCode(subject.employee_id!, q.code),
-        }));
-        const who = subject.name ?? subject.employee_id!;
-        steps.push({ title: `ให้คะแนน: ${who}`, questions });
-      }
-    } else {
-      // fallback (invitation ไม่มี subject) — ใช้ชุด member ครั้งเดียว
-      const memberSet = schema.question_sets.member ?? [];
-      if (memberSet.length > 0) {
-        steps.push({ title: "ให้คะแนนผู้ดูแล", questions: memberSet });
-      }
-    }
-  }
-
-  if (schema.open_questions && schema.open_questions.length > 0) {
-    steps.push({ title: "ความเห็นเพิ่มเติม", questions: schema.open_questions });
-  }
-
-  return steps;
-}
+// buildSteps + โครง Step/Question ย้ายไป lib/survey/steps.ts (unit-testable)
