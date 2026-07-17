@@ -13,6 +13,7 @@ import {
 import { oaForSurveyType } from "@/lib/line/routing";
 import {
   LIFF_TOKEN_STORAGE_KEY,
+  extractLiffToken,
   getBestEffortLineUserId,
   hasOAuthReturnParams,
   resolveSurveyToken,
@@ -132,6 +133,26 @@ export default function SurveyClient({
     }
 
     const url = new URL(window.location.href);
+
+    // กันเหนียว: ถ้า server ไม่ได้ส่ง token มา (edge) ลองแยกจาก URL ปัจจุบันเองก่อน
+    // — สำคัญ: ต้องแยก token จาก liff.state ให้ได้ "ก่อน" effect ลบ liff.state ทิ้ง
+    //   (ไม่งั้น token หายก่อนใช้). extractLiffToken รองรับทั้ง ?token= และ liff.state
+    //   ทุกรูปแบบ (path-style "/{token}" และ query-style "?token={token}")
+    const fromUrl = extractLiffToken({
+      token: url.searchParams.get("token") ?? undefined,
+      liffState: url.searchParams.get("liff.state") ?? undefined,
+    });
+    if (fromUrl) {
+      try {
+        window.sessionStorage.setItem(LIFF_TOKEN_STORAGE_KEY, fromUrl);
+      } catch {
+        // ignore storage error
+      }
+      setToken(fromUrl);
+      setTokenResolved(true);
+      return;
+    }
+
     const isOAuthReturn = hasOAuthReturnParams({
       code: url.searchParams.get("code"),
       state: url.searchParams.get("state"),

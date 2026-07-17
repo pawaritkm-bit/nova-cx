@@ -29,6 +29,33 @@ describe("line/liff — extractLiffToken", () => {
     expect(extractLiffToken({ liffState: "/abc?foo=bar" })).toBe("abc");
   });
 
+  // ---- query-style liff.state (เคสที่พังจริงบน prod: LINE ส่ง ?token= มาทาง liff.state) ----
+  it("liff.state = '%3Ftoken%3Dabc123' (encoded '?token=') → 'abc123'", () => {
+    expect(extractLiffToken({ liffState: "%3Ftoken%3Dabc123" })).toBe("abc123");
+  });
+
+  it("liff.state = '?token=abc123' → 'abc123'", () => {
+    expect(extractLiffToken({ liffState: "?token=abc123" })).toBe("abc123");
+  });
+
+  it("liff.state = 'token=abc123' (ไม่มี ?) → 'abc123'", () => {
+    expect(extractLiffToken({ liffState: "token=abc123" })).toBe("abc123");
+  });
+
+  it("liff.state = '/?token=abc123' → 'abc123'", () => {
+    expect(extractLiffToken({ liffState: "/?token=abc123" })).toBe("abc123");
+  });
+
+  it("liff.state encode ซ้อน 2 ชั้น '%252Fabc123' → 'abc123'", () => {
+    expect(extractLiffToken({ liffState: "%252Fabc123" })).toBe("abc123");
+  });
+
+  it("query-style liff.state ที่ token เป็น base64url (มี _ -) ไม่โดนตัด", () => {
+    const t = "aB3_x-Yz09";
+    expect(extractLiffToken({ liffState: `?token=${t}` })).toBe(t);
+    expect(extractLiffToken({ liffState: `%3Ftoken%3D${t}` })).toBe(t);
+  });
+
   it("?token= มาก่อน liff.state", () => {
     expect(extractLiffToken({ token: "direct", liffState: "/other" })).toBe(
       "direct"

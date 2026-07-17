@@ -29,20 +29,40 @@ export function extractLiffToken(params: {
   const direct = params.token?.trim();
   if (direct) return direct;
 
-  // 2) liff.state — ถอด token ออก
+  // 2) liff.state — ถอด token ออก (รองรับทั้ง path-style และ query-style)
   let state = params.liffState?.trim();
   if (!state) return null;
 
-  // Next.js ถอด url-encode ให้แล้วระดับหนึ่ง แต่เผื่อกรณี "%2F..." ยังหลุดมา
-  // ลอง decode อีกชั้นแบบ best-effort (token เป็น base64url จึงไม่มี %/ อยู่แล้ว)
-  try {
-    state = decodeURIComponent(state);
-  } catch {
-    // decode ไม่ได้ → ใช้ค่าดิบต่อ
+  // Next.js ถอด url-encode ให้แล้วระดับหนึ่ง แต่ LINE บางเคสส่ง liff.state มา encode ซ้อน
+  // เช่น "%3Ftoken%3D{token}" (= "?token={token}") หรือ "%2F{token}" (= "/{token}")
+  // → ลอง decode แบบ best-effort สูงสุด 2 ชั้น (หยุดเมื่อไม่มี %XX เหลือ/decode ไม่ได้)
+  for (let i = 0; i < 2; i++) {
+    if (!/%[0-9a-fA-F]{2}/.test(state)) break; // ไม่มีอะไรให้ decode แล้ว
+    try {
+      const decoded = decodeURIComponent(state);
+      if (decoded === state) break; // decode แล้วไม่เปลี่ยน → พอ
+      state = decoded;
+    } catch {
+      break; // decode ไม่ได้ → ใช้ค่าปัจจุบันต่อ
+    }
   }
 
-  state = state.replace(/^\/+/, ""); // ตัด "/" นำหน้า (เช่น "/{token}")
-  state = state.split(/[?#]/)[0]; // เผื่อ liff.state พก query/hash ต่อท้าย เอาเฉพาะ path
+  // 2a) query-style: LINE แนบ query ส่วนเกินของ endpoint มาทาง liff.state
+  //     เช่น "?token={token}", "token={token}", "/?token={token}"
+  //     → parse เอา param `token` ตรง ๆ (เดิม split ที่ "?" ทำให้ได้ค่าว่าง = บั๊ก "ไม่พบลิงก์")
+  //     boundary (^|?|&|/) กัน match token ที่บังเอิญมีสตริง "token=" อยู่ข้างใน (base64url ไม่มี ? & /)
+  if (/(?:^|[?&/])token=/.test(state)) {
+    const query = state.includes("?")
+      ? state.slice(state.indexOf("?") + 1)
+      : state;
+    const parsed = new URLSearchParams(query).get("token")?.trim();
+    if (parsed) return parsed;
+    // parse ได้ว่าง → ตกลงไปลองแบบ path ต่อ (best-effort)
+  }
+
+  // 2b) path-style: "/{token}" หรือ "{token}" (อาจพก query/hash ต่อท้าย)
+  state = state.replace(/^\/+/, ""); // ตัด "/" นำหน้า
+  state = state.split(/[?#]/)[0].trim(); // เอาเฉพาะส่วน path
 
   return state ? state : null;
 }
