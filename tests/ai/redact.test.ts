@@ -3,6 +3,7 @@ import {
   redactText,
   redactDeep,
   hasResidualPii,
+  collectStringValues,
   PII_PLACEHOLDER,
 } from "@/lib/ai/redact";
 
@@ -90,6 +91,73 @@ describe("ai/redact — รวมหลาย PII + residual", () => {
   it("hasResidualPii จับ PII ที่ยังหลงเหลือ", () => {
     expect(hasResidualPii("โทร 0812345678")).toBe(true);
     expect(hasResidualPii("ปลอดภัยแล้ว")).toBe(false);
+  });
+});
+
+describe("ai/redact — collectStringValues (ตรวจเฉพาะค่า ไม่เอา key)", () => {
+  it("เก็บเฉพาะค่า string จาก object/array ไม่รวม key", () => {
+    const vals = collectStringValues({
+      note: "งานดีมาก",
+      score: 5,
+      tags: ["เมล a@b.com", "ปกติ"],
+      flag: true,
+      nested: { comment: "ไม่มี" },
+    });
+    expect(vals).toContain("งานดีมาก");
+    expect(vals).toContain("เมล a@b.com");
+    expect(vals).toContain("ปกติ");
+    expect(vals).toContain("ไม่มี");
+    // key ต้องไม่ถูกเก็บ, ค่าที่ไม่ใช่ string ต้องไม่ถูกเก็บ
+    expect(vals).not.toContain("note");
+    expect(vals).not.toContain("score");
+    expect(vals.every((v) => typeof v === "string")).toBe(true);
+    expect(vals).toHaveLength(4);
+  });
+
+  it("Form B: key เป็น per-subject UUID ไม่ทริกเกอร์ residual-PII (bugfix)", () => {
+    // key มี UUID (เลข 13 หลักคั่น dash) แต่ค่าเป็น rating + comment ปกติ
+    const answers = {
+      "30000000-0000-0000-0000-000000000002__mem_correct": 5,
+      "30000000-0000-0000-0000-000000000002__mem_comment": "ไม่มี",
+      "30000000-0000-0000-0000-000000000003__mem_correct": 4,
+      "30000000-0000-0000-0000-000000000003__mem_comment": "งานดีมาก",
+    };
+    // ตรวจแบบเดิม (รวม key) จะ false positive
+    expect(hasResidualPii(JSON.stringify(answers))).toBe(true);
+    // ตรวจเฉพาะค่า (วิธีใหม่) ต้องไม่บล็อก
+    expect(hasResidualPii(collectStringValues(answers).join(" "))).toBe(false);
+  });
+
+  it("Form B: ค่า comment มีเบอร์โทรจริงหลง redact → ยังบล็อก", () => {
+    const answers = {
+      "30000000-0000-0000-0000-000000000002__mem_correct": 3,
+      "30000000-0000-0000-0000-000000000002__mem_comment": "ติดต่อ 081-234-5678",
+    };
+    expect(hasResidualPii(collectStringValues(answers).join(" "))).toBe(true);
+  });
+
+  it("Form B: ค่า comment มีเลขภาษี 13 หลักหลง redact → ยังบล็อก", () => {
+    const answers = {
+      "30000000-0000-0000-0000-000000000002__mem_comment": "เลขภาษี 1234567890123",
+    };
+    expect(hasResidualPii(collectStringValues(answers).join(" "))).toBe(true);
+  });
+
+  it("Form B: ค่า comment มีอีเมลหลง redact → ยังบล็อก", () => {
+    const answers = {
+      "30000000-0000-0000-0000-000000000002__mem_comment": "เมล boss@company.co.th",
+    };
+    expect(hasResidualPii(collectStringValues(answers).join(" "))).toBe(true);
+  });
+
+  it("Form A: key ปกติ + ค่าปลอดภัย → ไม่บล็อก (คงพฤติกรรมเดิม)", () => {
+    const answers = { acc_correct: 5, acc_comment: "บริการดีมาก", r1: 4 };
+    expect(hasResidualPii(collectStringValues(answers).join(" "))).toBe(false);
+  });
+
+  it("Form A: ค่ามี PII จริง → ยังบล็อก", () => {
+    const answers = { acc_comment: "โทร 0812345678" };
+    expect(hasResidualPii(collectStringValues(answers).join(" "))).toBe(true);
   });
 });
 

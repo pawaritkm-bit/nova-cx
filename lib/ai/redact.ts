@@ -104,6 +104,25 @@ export function hasResidualPii(text: string): boolean {
 }
 
 /**
+ * เก็บเฉพาะ "ค่า" string (leaf values) จาก object/array แบบ recursive — ไม่เอา key
+ *   ใช้ตรวจ residual-PII เฉพาะสิ่งที่ลูกค้าพิมพ์ (ค่า) ไม่ใช่ key ที่ระบบสร้างเอง
+ *   (key ของ answers เป็น question_code/employee_id เช่น
+ *    "30000000-0000-0000-0000-000000000002__mem_correct" — UUID มีเลข 13 หลัก
+ *    ที่ไป match regex เลขภาษี ทำให้ false positive ถ้านำ key มาตรวจด้วย)
+ */
+export function collectStringValues(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap((v) => collectStringValues(v));
+  if (value && typeof value === "object") {
+    // เก็บเฉพาะ "ค่า" (Object.values) — ตั้งใจข้าม key
+    return Object.values(value as Record<string, unknown>).flatMap((v) =>
+      collectStringValues(v)
+    );
+  }
+  return [];
+}
+
+/**
  * redact ค่าใน object/array แบบ recursive (ใช้กับ answers map)
  *   - string → redactText
  *   - ค่าชนิดอื่น (number/boolean/null) คงเดิม

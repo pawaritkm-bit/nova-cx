@@ -92,6 +92,40 @@ describe("analyze — retry + fallback", () => {
   });
 });
 
+describe("analyze — residual-PII gate (C-15) Form B", () => {
+  it("Form B: key เป็น per-subject UUID + ค่าปกติ → ไม่บล็อก, AI วิเคราะห์จริง (bugfix)", async () => {
+    const p = new FakeProvider(() => JSON.stringify(goodOutput()));
+    const out = await analyzeFeedback(p, {
+      survey_type: "B",
+      overall_score: 5,
+      answers: {
+        "30000000-0000-0000-0000-000000000002__mem_correct": 5,
+        "30000000-0000-0000-0000-000000000002__mem_comment": "ไม่มี",
+        "30000000-0000-0000-0000-000000000003__mem_comment": "งานดีมาก",
+      },
+      knownNames: [],
+    });
+    // provider ต้องถูกเรียกจริง (ไม่โดน gate บล็อก)
+    expect(p.calls).toBeGreaterThanOrEqual(1);
+    expect(out.result.validated).toBe(true);
+    expect(out.violations).not.toContain("residual_pii_blocked (C-15)");
+    expect(out.result.summary).not.toContain("ตรวจพบข้อมูลส่วนบุคคลตกค้าง");
+  });
+
+  it("Form A: key ปกติ + ค่าปลอดภัย → ไม่บล็อก (คงพฤติกรรมเดิม)", async () => {
+    const p = new FakeProvider(() => JSON.stringify(goodOutput()));
+    const out = await analyzeFeedback(p, {
+      survey_type: "A",
+      overall_score: 5,
+      answers: { acc_correct: 5, acc_comment: "บริการดีมาก", r1: 4 },
+      knownNames: [],
+    });
+    expect(p.calls).toBeGreaterThanOrEqual(1);
+    expect(out.result.validated).toBe(true);
+    expect(out.violations).not.toContain("residual_pii_blocked (C-15)");
+  });
+});
+
 describe("analyze — guardrail + human-in-the-loop", () => {
   it("draft_reply ผิด guardrail → ถูกตัด + needs_human_review", async () => {
     const p = new FakeProvider(() =>

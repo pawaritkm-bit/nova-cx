@@ -1,7 +1,7 @@
 import type { AIProvider } from "./provider";
 import { AI_JSON_SCHEMA, parseAiOutput, type AiAnalysisResult, type AiOutput } from "./schema";
 import { buildSystemPrompt, buildUserPrompt, type SurveyContext } from "./prompt";
-import { redactDeep, hasResidualPii } from "./redact";
+import { redactDeep, hasResidualPii, collectStringValues } from "./redact";
 import { applyGuardrails } from "./guardrail";
 
 /**
@@ -61,7 +61,10 @@ export async function analyzeFeedback(
 
   // [1.5] residual-PII gate (C-15 fail-safe): ถ้ายังพบ PII เด่นๆ ตกค้างหลัง redact
   //   → ห้ามส่งออก external AI (กัน PII รั่ว), บังคับมนุษย์ตรวจ, ไม่คืน draft_reply
-  if (hasResidualPii(JSON.stringify(redactedAnswers))) {
+  //   ตรวจเฉพาะ "ค่า" ที่ลูกค้าพิมพ์ (leaf string values) ไม่รวม key เพราะ key เป็น
+  //   question_code/employee_id (UUID) ที่ระบบสร้างเอง — UUID มีเลข 13 หลักไป match
+  //   regex เลขภาษี ทำให้บล็อกผิด (false positive) ทุก Form B
+  if (hasResidualPii(collectStringValues(redactedAnswers).join(" "))) {
     console.warn(
       "[ai/analyze] residual PII detected after redaction — blocking external AI call, forcing human review (C-15)"
     );
