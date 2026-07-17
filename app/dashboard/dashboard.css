@@ -245,6 +245,53 @@
   font-size: 13px;
 }
 
+/* ---- Escalation bar (แถบแจ้งเตือนเคสด่วน — เหนือ KPI) ---- */
+.nova-dash .escalation-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  /* ค่าเริ่มต้น = ส้ม (มีเคสด่วนแต่ยังไม่เกิน SLA) */
+  background: var(--amber-bg);
+  border: 1px solid #f59e0b;
+  box-shadow: var(--shadow-sm);
+}
+/* มีเคสเกิน SLA → เน้นแดง */
+.nova-dash .escalation-bar.has-overdue {
+  background: var(--red-bg);
+  border-color: var(--red);
+}
+.nova-dash .escalation-bar .esc-icon {
+  font-size: 26px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.nova-dash .escalation-bar .esc-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.nova-dash .escalation-bar .esc-headline {
+  font-size: 16px;
+  font-weight: 800;
+  color: #92400e;
+}
+.nova-dash .escalation-bar.has-overdue .esc-headline {
+  color: var(--red);
+}
+.nova-dash .escalation-bar .esc-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.nova-dash .badge-overdue {
+  background: var(--red);
+  color: #fff;
+}
+
 /* ---- Badges ---- */
 .nova-dash .badge {
   display: inline-flex;
@@ -337,6 +384,41 @@
 .nova-dash .case-row .cmeta {
   color: var(--muted);
   font-size: 12px;
+}
+/* กลุ่ม badge ฝั่งขวาของแถวเคส (ระดับ + สถานะ SLA) เรียงซ้อนขวา */
+.nova-dash .case-row .case-badges {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+/* ---- SLA badge (ป้ายเหลือ/เกินเวลา ต่อเคส) ---- */
+.nova-dash .sla-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.nova-dash .sla-badge.sla-overdue {
+  background: var(--red);
+  color: #fff;
+}
+.nova-dash .sla-badge.sla-due-soon {
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+.nova-dash .sla-badge.sla-ok {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.nova-dash .sla-badge.sla-none {
+  background: #f1f5f9;
+  color: var(--muted);
 }
 
 /* ---- Problem / summary list ---- */

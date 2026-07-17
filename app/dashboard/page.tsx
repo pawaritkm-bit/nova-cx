@@ -168,9 +168,10 @@ export default async function DashboardPage({
   try {
     if (view === "exec") {
       const d = await getExecDashboard(db);
+      // now = เวลา ณ ตอน render (server) — ใช้คำนวณสถานะ SLA/escalation ในหน้า exec
       return (
         <Frame activeRole={role} fromSession={viewer.fromSession}>
-          <ExecView d={d} />
+          <ExecView d={d} now={Date.now()} />
         </Frame>
       );
     }

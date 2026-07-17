@@ -105,14 +105,17 @@ export async function getExecDashboard(db: DB): Promise<ExecDashboard> {
   const teamRanking = pickBestWorst(teamCsat);
 
   const caseSummary = summarizeCases(cases);
+  // ★ คืน "เคสด่วนที่ยังเปิดอยู่ทั้งหมด" (ไม่ตัดเหลือ 20) เพื่อให้ชั้น UI นับ escalation
+  //   (critical/high/เกิน SLA) ได้ครบถ้วน — การจัดลำดับ urgency + ตัดจำนวนแสดง ทำที่ component
+  //   ที่มี `now`. เรียง sla_due_at น้อย→มาก (เคสเกิน/ใกล้ครบมาก่อน) แล้ว cap กันข้อมูลล้น
   const urgentCases = cases
     .filter(
       (r) =>
         (r.level === "critical" || r.level === "high") &&
         !CLOSED_STATUSES.has(r.status)
     )
-    .sort((a, b) => (a.sla_due_at ?? "").localeCompare(b.sla_due_at ?? ""))
-    .slice(0, 20);
+    .sort((a, b) => (a.sla_due_at ?? "~").localeCompare(b.sla_due_at ?? "~"))
+    .slice(0, 100);
 
   return {
     role: "executive",

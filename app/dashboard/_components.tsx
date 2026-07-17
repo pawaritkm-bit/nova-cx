@@ -11,6 +11,12 @@ import type {
 } from "@/lib/dashboard/types";
 import type { ScoredItem, BestWorstResult } from "@/lib/dashboard/sample-size";
 import { SAMPLE_SIZE_MIN, isSufficientSample } from "@/lib/dashboard/sample-size";
+import {
+  computeSlaStatus,
+  formatSlaLabel,
+  compareUrgency,
+  summarizeEscalation,
+} from "@/lib/dashboard/sla";
 
 // ---- primitives -------------------------------------------------------
 
@@ -140,8 +146,12 @@ function levelBadgeClass(level: string): string {
   return "badge-medium";
 }
 
+/** จำนวนเคสด่วนสูงสุดที่แสดงใน section (ที่เหลือสรุปไว้ที่แถบ escalation) */
+const URGENT_DISPLAY_LIMIT = 20;
+
 // ---- Executive --------------------------------------------------------
-export function ExecView({ d }: { d: ExecDashboard }) {
+// `now` = เวลา ณ ตอน render (ms) ส่งจาก server component — ใช้คำนวณสถานะ SLA/escalation
+export function ExecView({ d, now }: { d: ExecDashboard; now: number }) {
   const rr =
     d.responseRate.rate !== null
       ? `${Math.round(d.responseRate.rate * 100)}%`
@@ -149,16 +159,50 @@ export function ExecView({ d }: { d: ExecDashboard }) {
   // NPS แสดงเครื่องหมาย + เมื่อเป็นบวก (มาตรฐาน NPS)
   const npsValue =
     d.nps.nps === null ? null : d.nps.nps > 0 ? `+${d.nps.nps}` : `${d.nps.nps}`;
-  // นับ critical/high จากเคสเร่งด่วนที่ค้างจริง (แสดงคู่หัวข้อการ์ด)
-  const critCount = d.urgentCases.filter(
-    (c) => c.level.toLowerCase() === "critical"
-  ).length;
-  const highCount = d.urgentCases.filter(
-    (c) => c.level.toLowerCase() === "high"
-  ).length;
+
+  // สรุป escalation จากเคสด่วนที่เปิดอยู่ทั้งหมด (query กรอง status ปิดออกแล้ว)
+  const esc = summarizeEscalation(d.urgentCases, now);
+  const critCount = esc.critical;
+  const highCount = esc.high;
+
+  // เรียงเคสด่วนตาม urgency (เกิน SLA ก่อน → critical ก่อน high → sla ใกล้สุด)
+  // แล้วตัดจำนวนที่แสดงในการ์ด (ส่วนเกินสรุปไว้ที่แถบ escalation + การ์ด "สรุปสถานะเคส")
+  const sortedUrgent = [...d.urgentCases].sort((a, b) =>
+    compareUrgency(a, b, now)
+  );
+  const visibleUrgent = sortedUrgent.slice(0, URGENT_DISPLAY_LIMIT);
+  const hiddenUrgent = sortedUrgent.length - visibleUrgent.length;
 
   return (
     <div className="dash-views">
+      {/* แถบ escalation เด่นบนสุด — แสดงเฉพาะเมื่อมีเคสด่วนค้าง (ไม่มี = ไม่แสดง ไม่รก) */}
+      {esc.total > 0 ? (
+        <div
+          className={`escalation-bar${esc.overdue > 0 ? " has-overdue" : ""}`}
+          role="alert"
+        >
+          <span className="esc-icon" aria-hidden="true">
+            ⚠️
+          </span>
+          <div className="esc-body">
+            <div className="esc-headline">
+              มีเคสด่วน {esc.total} รายการต้องดูแล
+            </div>
+            <div className="esc-detail">
+              <span className="badge badge-critical">
+                Critical {esc.critical}
+              </span>
+              <span className="badge badge-high">High {esc.high}</span>
+              {esc.overdue > 0 ? (
+                <span className="badge badge-overdue">
+                  เกิน SLA {esc.overdue}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* KPI: CSAT / NPS / Response Rate / ลูกค้าเสี่ยงยกเลิก — แสดง n เสมอ */}
       <div className="kpi-grid">
         <Kpi label="CSAT (ความพึงพอใจ)" value={d.csat.avg} unit="/5" n={d.csat.n} />
@@ -186,24 +230,39 @@ export function ExecView({ d }: { d: ExecDashboard }) {
             </span>
           }
         >
-          {d.urgentCases.length === 0 ? (
+          {visibleUrgent.length === 0 ? (
             <p className="empty">ไม่มีเคสเร่งด่วนค้าง</p>
           ) : (
-            d.urgentCases.map((c) => (
-              <div className="case-row" key={c.case_id}>
-                <span className="cid">{c.case_no}</span>
-                <span className="cdesc">
-                  {c.type}
-                  <br />
-                  <span className="cmeta">
-                    ลูกค้า: {c.customer_code ?? "—"} · สถานะ: {c.status}
-                  </span>
-                </span>
-                <span className={`badge ${levelBadgeClass(c.level)}`}>
-                  {c.level}
-                </span>
-              </div>
-            ))
+            <>
+              {visibleUrgent.map((c) => {
+                const sla = computeSlaStatus(c.sla_due_at, now);
+                return (
+                  <div className="case-row" key={c.case_id}>
+                    <span className="cid">{c.case_no}</span>
+                    <span className="cdesc">
+                      {c.type}
+                      <br />
+                      <span className="cmeta">
+                        ลูกค้า: {c.customer_code ?? "—"} · สถานะ: {c.status}
+                      </span>
+                    </span>
+                    <span className="case-badges">
+                      <span className={`badge ${levelBadgeClass(c.level)}`}>
+                        {c.level}
+                      </span>
+                      <span className={`sla-badge sla-${sla.state}`}>
+                        {formatSlaLabel(sla)}
+                      </span>
+                    </span>
+                  </div>
+                );
+              })}
+              {hiddenUrgent > 0 ? (
+                <p className="muted" style={{ margin: "8px 0 0", fontSize: 12 }}>
+                  และอีก {hiddenUrgent} เคส (แสดง {URGENT_DISPLAY_LIMIT} เคสแรกตามความเร่งด่วน)
+                </p>
+              ) : null}
+            </>
           )}
           <div className="note-box">
             <b>AI น้อง NOVA:</b> เคส Critical/High ต้องให้มนุษย์ตรวจก่อนตอบลูกค้าเสมอ
