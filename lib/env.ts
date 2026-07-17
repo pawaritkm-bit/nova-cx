@@ -120,3 +120,16 @@ export function getOfficeGroupId(): string | undefined {
 export function getLineTenantId(): string | undefined {
   return process.env.LINE_TENANT_ID || undefined;
 }
+
+/**
+ * base URL ของแอป (ใช้ประกอบ survey_url ลิงก์เว็บที่เปิดในเบราว์เซอร์ไหนก็ได้)
+ *   ลำดับ: NEXT_PUBLIC_APP_URL → https://${VERCEL_URL} → fallback prod
+ *   ตัด trailing slash ออกเสมอ เพื่อไม่ให้เกิด // ตอนต่อ path
+ */
+export function getAppBaseUrl(): string {
+  const explicit = process.env.NEXT_PUBLIC_APP_URL;
+  if (explicit) return explicit.replace(/\/+$/, "");
+  const vercel = process.env.VERCEL_URL;
+  if (vercel) return `https://${vercel.replace(/\/+$/, "")}`;
+  return "https://nova-cx.vercel.app";
+}

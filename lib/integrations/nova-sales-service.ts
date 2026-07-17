@@ -16,7 +16,9 @@ import { generateInvitationToken } from "@/lib/survey/token";
  *   - upsert customer/lead/opportunity แบบ idempotent (external_ref — 0019) + จับ 23505 กัน race
  *   - ยืนยัน cross-tenant: ทุก id ที่รับจาก payload ต้องอยู่ tenant เดียวกัน + มีจริง (Reviewer 🔴#2)
  *   - เขียน sales_status_history เมื่อสถานะเปลี่ยน
- *   - Won/Lost → enqueue survey_invitation (C/D) + notification job
+ *   - Won (C) → enqueue survey_invitation + push OA Sale เหมือนเดิม (ลูกค้ามักแอด OA)
+ *   - Lost (D) → enqueue survey_invitation แต่ "ไม่ push OA" (prospect มักไม่ได้แอด OA)
+ *     → คืน token/survey_url ให้ NOVA Sales/เซล ส่งลิงก์ให้ prospect เองผ่านช่องที่คุยอยู่
  */
 
 type DB = SupabaseClient;
@@ -259,7 +261,12 @@ export type DealResult = {
   created: boolean;
   statusChanged: boolean;
   previousStatus: string | null;
-  invitation?: { id: string; created: boolean; surveyType: "C" | "D" };
+  invitation?: {
+    id: string;
+    created: boolean;
+    token: string;
+    surveyType: "C" | "D";
+  };
 };
 
 /**
@@ -427,9 +434,12 @@ async function findCustomerLineUserId(
 }
 
 /**
- * สร้าง survey_invitation สำหรับดีล (C/D) + notification job — idempotent
+ * สร้าง survey_invitation สำหรับดีล (C/D) — idempotent + คืน token
  *   - idempotency_key + unique(customer_id, survey_type, cycle_period) กันซ้ำ
- *   - ผูก line_user_id ถ้ามี (owner-binding) — ยังไม่ส่ง LINE จริงในรอบนี้
+ *   - ผูก line_user_id ถ้ามี (owner-binding)
+ *   - C (Won): enqueue notification job → push ผ่าน OA Sale เหมือนเดิม
+ *   - D (Lost): ไม่ enqueue notification job (prospect มักไม่ได้แอด OA)
+ *     → คืน token ให้ route ประกอบ survey_url ส่งกลับ NOVA Sales/เซล เอาไปส่งเอง
  */
 export async function enqueueSalesInvitation(
   db: DB,
@@ -441,18 +451,20 @@ export async function enqueueSalesInvitation(
     externalDealId: string;
     surveyType: "C" | "D";
   }
-): Promise<{ id: string; created: boolean } | null> {
+): Promise<{ id: string; created: boolean; token: string } | null> {
   const idempotencyKey = dealInvitationIdempotencyKey(
     args.externalDealId,
     args.surveyType
   );
 
-  const existingId = await findInvitationByIdempotency(
+  const existing = await findInvitationByIdempotency(
     db,
     args.tenantId,
     idempotencyKey
   );
-  if (existingId) return { id: existingId, created: false };
+  if (existing) {
+    return { id: existing.id, created: false, token: existing.token };
+  }
 
   const found = await getActiveVersionByType(db, args.tenantId, args.surveyType);
   if (!found) return null; // ยังไม่ตั้ง template — ข้าม (route รายงาน invitation=null)
@@ -467,6 +479,9 @@ export async function enqueueSalesInvitation(
     ? [{ employee_id: args.salesEmployeeId, subject_role: "member" }]
     : [];
 
+  // สร้าง token ไว้ล่วงหน้าเพื่อ insert + คืนกลับให้ route ประกอบ survey_url
+  const token = generateInvitationToken();
+
   const { data, error } = await db
     .from("survey_invitations")
     .insert({
@@ -478,7 +493,7 @@ export async function enqueueSalesInvitation(
       opportunity_id: args.opportunityId,
       cycle_period: dealCyclePeriod(args.externalDealId),
       assignee_snapshot: assigneeSnapshot,
-      token: generateInvitationToken(),
+      token,
       token_expires_at: new Date(
         Date.now() + 30 * 24 * 60 * 60 * 1000
       ).toISOString(),
@@ -490,42 +505,46 @@ export async function enqueueSalesInvitation(
 
   if (error) {
     if (isUniqueViolation(error)) {
-      const dupId = await findInvitationByIdempotency(
+      const dup = await findInvitationByIdempotency(
         db,
         args.tenantId,
         idempotencyKey
       );
-      return dupId ? { id: dupId, created: false } : null;
+      return dup ? { id: dup.id, created: false, token: dup.token } : null;
     }
     throw new Error(error.message);
   }
 
   const invitationId = (data as { id: string }).id;
 
-  await db.from("job_queue").insert({
-    tenant_id: args.tenantId,
-    queue: "notification",
-    payload: {
-      kind: "survey_invitation",
-      invitation_id: invitationId,
-      survey_type: args.surveyType,
-      oa: "sale",
-    },
-  });
+  // C (Won) เท่านั้นที่ push ผ่าน OA — D (Lost) ไม่ enqueue เพื่อไม่ให้มี job ค้าง
+  // ที่ push ไม่ถึง (prospect มักไม่ได้แอด OA) แล้ว fail/retry ไม่จบ
+  if (args.surveyType === "C") {
+    await db.from("job_queue").insert({
+      tenant_id: args.tenantId,
+      queue: "notification",
+      payload: {
+        kind: "survey_invitation",
+        invitation_id: invitationId,
+        survey_type: args.surveyType,
+        oa: "sale",
+      },
+    });
+  }
 
-  return { id: invitationId, created: true };
+  return { id: invitationId, created: true, token };
 }
 
 async function findInvitationByIdempotency(
   db: DB,
   tenantId: string,
   idempotencyKey: string
-): Promise<string | null> {
+): Promise<{ id: string; token: string } | null> {
   const { data } = await db
     .from("survey_invitations")
-    .select("id")
+    .select("id, token")
     .eq("tenant_id", tenantId)
     .eq("idempotency_key", idempotencyKey)
     .maybeSingle();
-  return data ? (data as { id: string }).id : null;
+  return data ? (data as { id: string; token: string }) : null;
 }

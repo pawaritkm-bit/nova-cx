@@ -3,6 +3,7 @@ import {
   getSupabaseEnv,
   getNovaSalesApiKey,
   getNovaSalesTenantId,
+  getAppBaseUrl,
 } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import {
@@ -82,6 +83,14 @@ export async function POST(request: NextRequest) {
     const db = createServiceRoleClient();
     const result = await upsertDealAndMaybeInvite(db, parsed.data);
 
+    // ลิงก์เว็บที่เปิดในเบราว์เซอร์ไหนก็ได้ (ไม่ต้องแอด OA/ไม่ต้องเป็น LIFF-only)
+    //   Won (C): push ผ่าน OA แล้ว แต่คืนลิงก์เผื่อ forward
+    //   Lost (D): ไม่ push OA → ลิงก์นี้คือช่องทางหลักให้เซลส่งให้ prospect เอง
+    const inv = result.invitation;
+    const surveyUrl = inv
+      ? `${getAppBaseUrl()}/liff/survey?token=${encodeURIComponent(inv.token)}`
+      : null;
+
     return NextResponse.json(
       {
         ok: true,
@@ -89,7 +98,14 @@ export async function POST(request: NextRequest) {
         created: result.created,
         status_changed: result.statusChanged,
         previous_status: result.previousStatus,
-        invitation: result.invitation ?? null,
+        invitation: inv
+          ? {
+              id: inv.id,
+              created: inv.created,
+              survey_type: inv.surveyType,
+            }
+          : null,
+        survey_url: surveyUrl,
       },
       { status: result.created ? 201 : 200 }
     );
