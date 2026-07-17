@@ -1,0 +1,209 @@
+/* ============================================================
+   NOVA-CX Admin — สไตล์เสริมของหน้า /admin
+   อาศัย token สีจาก .nova-dash (dashboard.css) — scope ใต้ .nova-dash
+   ============================================================ */
+
+/* ---- แท็บ ---- */
+.nova-dash .admin-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px;
+  gap: 4px;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 18px;
+}
+.nova-dash .admin-tabs button {
+  border: none;
+  background: none;
+  padding: 8px 16px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.nova-dash .admin-tabs button.active {
+  background: var(--navy-800);
+  color: #fff;
+}
+
+/* ---- layout ฟอร์ม + list (2 คอลัมน์ ยุบเป็น 1 บนจอเล็ก) ---- */
+.nova-dash .admin-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 820px) {
+  .nova-dash .admin-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.nova-dash .card h3 {
+  margin: 0 0 12px;
+  color: var(--navy-800);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+/* ---- ฟอร์ม ---- */
+.nova-dash .admin-form label {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+.nova-dash .admin-form input[type="text"],
+.nova-dash .admin-form input:not([type]),
+.nova-dash .admin-form input[type="date"],
+.nova-dash .admin-form select {
+  width: 100%;
+  margin-top: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: #fff;
+  box-sizing: border-box;
+}
+.nova-dash .admin-form input:focus,
+.nova-dash .admin-form select:focus {
+  outline: none;
+  border-color: var(--blue-500);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+.nova-dash .admin-form label.admin-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.nova-dash .admin-form label.admin-check input {
+  width: auto;
+  margin: 0;
+}
+.nova-dash .admin-form button[type="submit"] {
+  width: 100%;
+  margin-top: 4px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 10px;
+  background: var(--navy-800);
+  color: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.nova-dash .admin-form button[type="submit"]:hover:not(:disabled) {
+  background: var(--navy-900);
+}
+.nova-dash .admin-form button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ---- แจ้งผล ---- */
+.nova-dash .admin-note {
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.nova-dash .admin-note.ok {
+  background: var(--green-bg);
+  color: #166534;
+}
+.nova-dash .admin-note.err {
+  background: var(--red-bg);
+  color: #991b1b;
+}
+.nova-dash .admin-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* ---- ตาราง list ---- */
+.nova-dash .admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.nova-dash .admin-table th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 700;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.nova-dash .admin-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  vertical-align: middle;
+}
+.nova-dash .admin-table tr:last-child td {
+  border-bottom: none;
+}
+.nova-dash .admin-table tr.row-off td {
+  color: var(--muted-2);
+}
+.nova-dash .admin-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+/* ---- badge สถานะ ---- */
+.nova-dash .admin-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.nova-dash .admin-badge.on {
+  background: var(--green-bg);
+  color: #166534;
+}
+.nova-dash .admin-badge.off {
+  background: #f1f5f9;
+  color: var(--muted);
+}
+
+/* ---- ปุ่มต่อแถว ---- */
+.nova-dash .admin-row-btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 11px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+}
+.nova-dash .admin-row-btn:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+.nova-dash .admin-row-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

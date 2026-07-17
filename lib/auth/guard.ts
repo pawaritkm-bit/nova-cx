@@ -36,9 +36,14 @@ export function isPublicPath(pathname: string): boolean {
   );
 }
 
-/** เส้นทางที่ต้องมี session พนักงาน (หน้า dashboard) */
+/** เส้นทางที่ต้องมี session พนักงาน (หน้า dashboard + admin) */
 export function isProtectedPath(pathname: string): boolean {
-  return pathname === "/dashboard" || pathname.startsWith("/dashboard/");
+  return (
+    pathname === "/dashboard" ||
+    pathname.startsWith("/dashboard/") ||
+    pathname === "/admin" ||
+    pathname.startsWith("/admin/")
+  );
 }
 
 /**
