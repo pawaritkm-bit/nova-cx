@@ -10,12 +10,16 @@ export type LineMessage = Record<string, unknown>;
 
 /**
  * สร้าง URL เปิด LIFF สำหรับ token หนึ่ง ๆ
- *   รูปแบบ https://liff.line.me/{liffId}/{token}
+ *   รูปแบบ https://liff.line.me/{liffId}?token={token}
  *   (ตั้ง LIFF endpoint URL ใน LINE console = {APP_URL}/liff/survey
- *    → LINE จะต่อ /{token} เป็น {APP_URL}/liff/survey/{token})
+ *    → LINE เปิด {APP_URL}/liff/survey?token={token} → หน้า base อ่าน ?token= ได้ตรง ๆ)
+ *
+ *   เดิมใช้ path-style (.../{token}) แต่ LINE เปิด endpoint base ก่อนแล้วส่ง extra path
+ *   ผ่าน query liff.state ทำให้ /liff/survey (base) โดน 404 — เลี่ยงด้วย query-style
+ *   (หน้า base ยังรองรับ liff.state อยู่ เผื่อข้อความ path-style ที่ส่งไปก่อนหน้า)
  */
 export function buildLiffSurveyUrl(liffId: string, token: string): string {
-  return `https://liff.line.me/${liffId}/${encodeURIComponent(token)}`;
+  return `https://liff.line.me/${liffId}?token=${encodeURIComponent(token)}`;
 }
 
 export type InvitationMessageParams = {
