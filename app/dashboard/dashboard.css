@@ -1,0 +1,450 @@
+/* ============================================================
+   NOVA-CX Dashboard — พอร์ตดีไซน์จาก prototype/dashboard.html
+   (source of truth: prototype/assets/nova.css)
+   ทุกอย่าง scoped ใต้ .nova-dash เพื่อไม่รั่วไปทับสไตล์หน้าอื่น
+   ============================================================ */
+
+.nova-dash {
+  /* Brand palette (Finovas navy + accent) — ตรงกับ prototype */
+  --navy-900: #172554;
+  --navy-800: #1e3a8a; /* primary */
+  --navy-700: #1e40af;
+  --blue-600: #2563eb;
+  --blue-500: #3b82f6;
+  --sky-400: #38bdf8;
+
+  --line: #e2e8f0;
+  --text: #0f172a;
+  --muted: #64748b;
+  --muted-2: #94a3b8;
+
+  --green: #16a34a;
+  --green-bg: #dcfce7;
+  --amber: #d97706;
+  --amber-bg: #fef3c7;
+  --red: #dc2626;
+  --red-bg: #fee2e2;
+  --blue-bg: #dbeafe;
+
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow-sm: 0 2px 8px rgba(23, 37, 84, 0.08);
+
+  --bg: #eef2f8;
+
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px;
+  color: var(--text);
+}
+
+/* ---- Top bar ---- */
+.nova-dash .dash-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.nova-dash .dash-title h1 {
+  margin: 0;
+  color: var(--navy-800);
+  font-size: 24px;
+  font-weight: 800;
+}
+.nova-dash .dash-title p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.nova-dash .role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--navy-800);
+  background: var(--blue-bg);
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+.nova-dash .logout-btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 7px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.nova-dash .logout-btn:hover {
+  border-color: var(--blue-500);
+  background: #f5f9ff;
+}
+
+/* ---- Dev role switch (พรีวิว dev เท่านั้น) ---- */
+.nova-dash .role-switch {
+  display: inline-flex;
+  flex-wrap: wrap;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px;
+  gap: 4px;
+  box-shadow: var(--shadow-sm);
+}
+.nova-dash .role-switch a {
+  border: none;
+  background: none;
+  padding: 8px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  text-decoration: none;
+}
+.nova-dash .role-switch a.active {
+  background: var(--navy-800);
+  color: #fff;
+}
+.nova-dash .dev-hint {
+  margin: 0 0 12px;
+  background: var(--amber-bg);
+  color: #92400e;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.nova-dash .dev-hint a {
+  color: #92400e;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+/* ---- KPI grid ---- */
+.nova-dash .kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.nova-dash .kpi-grid.cols-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+.nova-dash .kpi {
+  background: #fff;
+  border-radius: var(--radius);
+  padding: 16px;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+}
+.nova-dash .kpi .label {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 700;
+}
+.nova-dash .kpi .value {
+  font-size: 30px;
+  font-weight: 800;
+  color: var(--navy-800);
+  line-height: 1.1;
+  margin: 6px 0 2px;
+}
+.nova-dash .kpi .value .unit {
+  font-size: 16px;
+  color: var(--muted-2);
+  font-weight: 700;
+  margin-left: 2px;
+}
+.nova-dash .kpi .value.v-red {
+  color: var(--red);
+}
+.nova-dash .kpi .value.v-green {
+  color: var(--green);
+}
+.nova-dash .kpi .value.v-amber {
+  color: var(--amber);
+}
+.nova-dash .kpi .sample {
+  font-size: 12px;
+  color: var(--muted-2);
+}
+.nova-dash .kpi .sample.low {
+  color: var(--amber);
+  font-weight: 700;
+}
+
+/* ---- Layout grids ---- */
+.nova-dash .dash-views {
+  display: grid;
+  gap: 16px;
+}
+.nova-dash .grid-2 {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 16px;
+}
+.nova-dash .grid-2b {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+/* ---- Card ---- */
+.nova-dash .card {
+  background: #fff;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 18px;
+  border: 1px solid var(--line);
+}
+.nova-dash .section-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text);
+}
+.nova-dash .section-head {
+  margin: 6px 0 12px;
+}
+.nova-dash .section-head h2 {
+  margin: 0;
+  color: var(--navy-800);
+  font-size: 20px;
+  font-weight: 800;
+}
+.nova-dash .section-head p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ---- Badges ---- */
+.nova-dash .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.nova-dash .badge-critical {
+  background: var(--red-bg);
+  color: var(--red);
+}
+.nova-dash .badge-high {
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+.nova-dash .badge-medium {
+  background: var(--blue-bg);
+  color: var(--blue-600);
+}
+.nova-dash .badge-mock {
+  background: #f1f5f9;
+  color: var(--muted);
+  border: 1px dashed var(--muted-2);
+}
+
+/* ---- Team / topic bar list ---- */
+.nova-dash .bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.nova-dash .bar-row .name {
+  width: 130px;
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--text);
+}
+.nova-dash .bar-track {
+  flex: 1;
+  height: 20px;
+  background: var(--bg);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.nova-dash .bar-fill {
+  height: 100%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--blue-500), var(--sky-400));
+}
+.nova-dash .bar-fill.low {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+.nova-dash .bar-val {
+  width: 110px;
+  text-align: right;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.nova-dash .bar-val b {
+  color: var(--text);
+}
+
+/* ---- Case list ---- */
+.nova-dash .case-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.nova-dash .case-row:last-of-type {
+  border-bottom: none;
+}
+.nova-dash .case-row .cid {
+  font-weight: 700;
+  color: var(--navy-800);
+  width: 84px;
+  flex-shrink: 0;
+}
+.nova-dash .case-row .cdesc {
+  flex: 1;
+}
+.nova-dash .case-row .cmeta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ---- Problem / summary list ---- */
+.nova-dash .prob-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: 14px;
+}
+.nova-dash .prob-row:last-child {
+  border-bottom: none;
+}
+.nova-dash .prob-row .cnt {
+  font-weight: 700;
+  color: var(--navy-800);
+}
+
+/* ---- Note box ---- */
+.nova-dash .note-box {
+  background: var(--blue-bg);
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 13px;
+  color: var(--navy-900);
+  margin-top: 14px;
+}
+.nova-dash .note-box.warn {
+  background: var(--amber-bg);
+  color: #92400e;
+}
+.nova-dash .note-box.lock {
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+
+/* ---- Feedback quote boxes (คำชม / จุดปรับปรุง) ---- */
+.nova-dash .fb {
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.nova-dash .fb:last-child {
+  margin-bottom: 0;
+}
+.nova-dash .fb.pos {
+  background: var(--green-bg);
+}
+.nova-dash .fb.neg {
+  background: var(--amber-bg);
+}
+.nova-dash .fb .fb-tag {
+  font-size: 12px;
+  font-weight: 800;
+}
+.nova-dash .fb.pos .fb-tag {
+  color: var(--green);
+}
+.nova-dash .fb.neg .fb-tag {
+  color: var(--amber);
+}
+.nova-dash .fb p {
+  margin: 4px 0 0;
+}
+
+/* ---- Delivery / tracking table ---- */
+.nova-dash .table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-top: 12px;
+}
+.nova-dash table.dlv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.nova-dash table.dlv-table th,
+.nova-dash table.dlv-table td {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.nova-dash table.dlv-table th {
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.nova-dash table.dlv-table tr:last-child td {
+  border-bottom: none;
+}
+.nova-dash table.dlv-table .center {
+  text-align: center;
+}
+
+/* ---- Helpers ---- */
+.nova-dash .muted {
+  color: var(--muted);
+}
+.nova-dash .empty {
+  font-size: 14px;
+  color: var(--muted-2);
+}
+
+/* ---- Responsive (ตรงกับ prototype) ---- */
+@media (max-width: 900px) {
+  .nova-dash .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .nova-dash .grid-2,
+  .nova-dash .grid-2b {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 520px) {
+  .nova-dash {
+    padding: 14px;
+  }
+  .nova-dash .bar-row .name {
+    width: 96px;
+  }
+}

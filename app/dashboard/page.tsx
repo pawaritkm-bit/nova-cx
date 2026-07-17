@@ -13,6 +13,7 @@ import {
 } from "@/lib/dashboard/session";
 import { ROLE_CODES, type RoleCode } from "@/lib/dashboard/types";
 import { ExecView, MemberView, LeadView } from "./_components";
+import "./dashboard.css";
 
 export const dynamic = "force-dynamic";
 
@@ -39,26 +40,22 @@ function Frame({
   children: React.ReactNode;
 }) {
   return (
-    <main className="mx-auto max-w-5xl px-5 py-8">
-      <header className="mb-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-brand">NOVA-CX Dashboard</h1>
-            <p className="mt-1 text-sm text-brand/50">
-              มุมมองตามบทบาท · แสดง Sample Size (n) ทุกคะแนน · คะแนนตัวอย่างน้อยไม่สรุปดี/แย่สุด
+    <main className="nova-dash">
+      <header>
+        <div className="dash-top">
+          <div className="dash-title">
+            <h1>NOVA-CX Dashboard</h1>
+            <p>
+              มุมมองตามบทบาท · แสดง Sample Size (n) ทุกคะแนน ·
+              คะแนนตัวอย่างน้อยไม่สรุปดี/แย่สุด
             </p>
           </div>
           {/* แสดงบทบาท + ปุ่มออกจากระบบเฉพาะเมื่อ login จริง */}
           {fromSession && activeRole ? (
             <div className="flex shrink-0 items-center gap-3">
-              <span className="rounded-full bg-brand/5 px-3 py-1 text-xs font-medium text-brand/70">
-                {ROLE_LABEL[activeRole]}
-              </span>
+              <span className="role-chip">{ROLE_LABEL[activeRole]}</span>
               <form method="post" action="/auth/logout">
-                <button
-                  type="submit"
-                  className="rounded-lg px-3 py-1 text-xs font-medium text-brand/60 ring-1 ring-black/10 transition hover:bg-brand/5"
-                >
+                <button type="submit" className="logout-btn">
                   ออกจากระบบ
                 </button>
               </form>
@@ -69,23 +66,17 @@ function Frame({
         {/* โหมดตัวอย่าง (dev เท่านั้น) — ปุ่มสลับบทบาทเพื่อพรีวิวหน้าตา */}
         {!fromSession && DEV_FALLBACK ? (
           <>
-            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            <p className="dev-hint">
               โหมดตัวอย่าง (dev — ยังไม่ได้ login): เลือกบทบาทเพื่อดูหน้าตา —
               ข้อมูลจริงยังบังคับด้วย view/RLS ตามผู้ล็อกอินเสมอ · เข้าสู่ระบบจริงที่{" "}
-              <Link href="/login" className="font-medium underline">
-                /login
-              </Link>
+              <Link href="/login">/login</Link>
             </p>
-            <nav className="mt-3 flex flex-wrap gap-2">
+            <nav className="role-switch" style={{ marginBottom: 18 }}>
               {ROLE_CODES.map((r) => (
                 <Link
                   key={r}
                   href={`/dashboard?role=${r}`}
-                  className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ring-black/10 transition ${
-                    r === activeRole
-                      ? "bg-brand text-white"
-                      : "bg-white text-brand/70 hover:bg-brand/5"
-                  }`}
+                  className={r === activeRole ? "active" : ""}
                 >
                   {ROLE_LABEL[r]}
                 </Link>
@@ -110,7 +101,7 @@ export default async function DashboardPage({
   if (!getSupabaseEnv()) {
     return (
       <Frame activeRole={null} fromSession={false}>
-        <div className="rounded-2xl bg-white p-6 text-brand/70 shadow-sm ring-1 ring-black/5">
+        <div className="card">
           ยังไม่ได้ตั้งค่าฐานข้อมูล (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY) —
           ตั้งค่า env แล้ว dashboard จะอ่านข้อมูลจริงจาก Supabase
         </div>
@@ -133,16 +124,13 @@ export default async function DashboardPage({
   if (viewer.hasSession && !viewer.role) {
     return (
       <Frame activeRole={null} fromSession={false}>
-        <div className="rounded-2xl bg-white p-6 text-brand/70 shadow-sm ring-1 ring-black/5">
+        <div className="card">
           <p>บัญชีนี้ยังไม่ได้ผูกบทบาทพนักงานสำหรับดู dashboard</p>
           <p className="mt-1 text-sm text-brand/50">
             กรุณาติดต่อผู้ดูแลระบบเพื่อกำหนดบทบาท
           </p>
-          <form method="post" action="/auth/logout" className="mt-4">
-            <button
-              type="submit"
-              className="rounded-lg px-3 py-1 text-xs font-medium text-brand/60 ring-1 ring-black/10 transition hover:bg-brand/5"
-            >
+          <form method="post" action="/auth/logout" style={{ marginTop: 16 }}>
+            <button type="submit" className="logout-btn">
               ออกจากระบบ
             </button>
           </form>
@@ -155,7 +143,7 @@ export default async function DashboardPage({
   if (!viewer.role) {
     return (
       <Frame activeRole={null} fromSession={viewer.fromSession}>
-        <div className="rounded-2xl bg-white p-6 text-brand/70 shadow-sm ring-1 ring-black/5">
+        <div className="card">
           เลือกบทบาทด้านบนเพื่อดู dashboard (หรือ{" "}
           <Link href="/login" className="font-medium underline">
             เข้าสู่ระบบ
@@ -202,7 +190,7 @@ export default async function DashboardPage({
   } catch {
     return (
       <Frame activeRole={role} fromSession={viewer.fromSession}>
-        <div className="rounded-2xl bg-white p-6 text-brand/70 shadow-sm ring-1 ring-black/5">
+        <div className="card">
           อ่านข้อมูล dashboard ไม่สำเร็จ — ตรวจว่า apply migration ครบ (ถึง 0025) และมี session พนักงาน
         </div>
       </Frame>
