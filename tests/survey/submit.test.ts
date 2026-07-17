@@ -6,6 +6,7 @@ import {
   requiredQuestionCodes,
   isAnswered,
 } from "@/lib/survey/submit";
+import { flattenQuestions } from "@/lib/survey/schema";
 import type { NormalizedQuestion } from "@/lib/survey/types";
 
 const questions: NormalizedQuestion[] = [
@@ -120,6 +121,66 @@ describe("survey/submit — required (FR-SC-04c บังคับตอบ)", (
   it("ตอบบังคับครบ → ok", () => {
     const r = validateAnswers(questions, { r1: 4, nps: 9 }, ["r1", "nps"]);
     expect(r.ok).toBe(true);
+  });
+});
+
+// Form B: โครง question_sets + ประเมินหลาย subject (per-subject key)
+const schemaB = {
+  type: "B",
+  question_sets: {
+    lead: [{ code: "lead_overall", text: "ภาพรวมหัวหน้า", type: "rating", scale: 5 }],
+    member: [
+      { code: "mem_correct", text: "ถูกต้อง", type: "rating", scale: 5 },
+      { code: "mem_overall", text: "ภาพรวม", type: "rating", scale: 5 },
+    ],
+  },
+  open_questions: [{ code: "open_feedback", text: "เพิ่มเติม", type: "open" }],
+};
+const subjectsB = [
+  { employee_id: "emp-1", subject_role: "member" },
+  { employee_id: "emp-2", subject_role: "member" },
+];
+
+describe("survey/submit — Form B per-subject (บั๊ก answer_invalid)", () => {
+  it("required = เฉพาะ rating ต่อ subject (ไม่มี lead_* เมื่อทุกคนเป็น member)", () => {
+    const qs = flattenQuestions(schemaB, { subjects: subjectsB });
+    const required = requiredQuestionCodes(qs);
+    expect(required.sort()).toEqual([
+      "emp-1__mem_correct",
+      "emp-1__mem_overall",
+      "emp-2__mem_correct",
+      "emp-2__mem_overall",
+    ]);
+    expect(required.some((c) => c.includes("lead_"))).toBe(false);
+  });
+
+  it("ตอบครบทุก subject ด้วย per-subject key → ผ่าน", () => {
+    const qs = flattenQuestions(schemaB, { subjects: subjectsB });
+    const required = requiredQuestionCodes(qs);
+    const answers: Record<string, unknown> = {
+      "emp-1__mem_correct": 5,
+      "emp-1__mem_overall": 4,
+      "emp-2__mem_correct": 5,
+      "emp-2__mem_overall": 5,
+      open_feedback: "ดีมาก",
+      // follow-up ปลายเปิด (นอก template) ต้องปล่อยผ่าน
+      "emp-1__mem_overall__followup": "ชอบการสื่อสาร",
+    };
+    const r = validateAnswers(qs, answers, required);
+    expect(r.ok).toBe(true);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("ขาดคำตอบของ subject ที่สอง → answer_invalid (required ตีตก)", () => {
+    const qs = flattenQuestions(schemaB, { subjects: subjectsB });
+    const required = requiredQuestionCodes(qs);
+    const answers = {
+      "emp-1__mem_correct": 5,
+      "emp-1__mem_overall": 4,
+    };
+    const r = validateAnswers(qs, answers, required);
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.code === "emp-2__mem_correct")).toBe(true);
   });
 });
 

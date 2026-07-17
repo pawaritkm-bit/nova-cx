@@ -6,6 +6,7 @@ import {
   type Followup,
 } from "@/lib/survey/conditional";
 import { isAnswered } from "@/lib/survey/submit";
+import { resolveSubjectSet, subjectQuestionCode } from "@/lib/survey/schema";
 import { oaForSurveyType } from "@/lib/line/routing";
 import NovaMascot from "./NovaMascot";
 import "./liff.css";
@@ -102,6 +103,25 @@ export default function SurveyClient({
   const [showRequiredWarn, setShowRequiredWarn] = useState(false);
 
   const storageKey = `nova-cx:survey:${token}`;
+
+  // ---- กัน loader วิ่ง 2 รอบ ----
+  // LINE เปิดหน้า base /liff/survey?liff.state=%2F<token> ก่อนเสมอ (หน้านี้ render loader รอบ 1)
+  // แล้ว liff.init() จะ redirect ตาม liff.state ไป /liff/survey/<token> → remount → loader รอบ 2
+  // แก้: ลบ liff.state ออกจาก URL แบบ client-side (history.replaceState, ไม่ full navigation)
+  // ก่อน liff.init() ทำงาน → SDK ไม่ redirect → เหลือ loader รอบเดียว ลื่น ๆ
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("liff.state")) return;
+    url.searchParams.delete("liff.state");
+    const qs = url.searchParams.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `/liff/survey/${encodeURIComponent(token)}${qs ? `?${qs}` : ""}`
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---- โหลด template จาก API + init LIFF ----
   useEffect(() => {
@@ -702,11 +722,31 @@ function buildSteps(template: ApiTemplate): Step[] {
     }
   }
 
-  // Form B: ใช้ question_sets.member (ลูกค้าประเมินลูกน้องที่ดูแลจริง)
+  // Form B: ประเมิน "ต่อคน" (per-subject) — แต่ละผู้ดูแลได้ 1 step
+  //   answer key = <employee_id>__<question_code> (สูตรเดียวกับ flattenQuestions ฝั่ง server)
+  //   เพื่อให้ validate/scoring ฝั่ง server ตรงกับที่ client ส่งเป๊ะ
   if (survey_type === "B" && schema.question_sets) {
-    const memberSet = schema.question_sets.member ?? [];
-    if (memberSet.length > 0) {
-      steps.push({ title: "ให้คะแนนผู้ดูแล", questions: memberSet });
+    const subjects = (template.subjects ?? []).filter((s) => s.employee_id);
+    if (subjects.length > 0) {
+      for (const subject of subjects) {
+        const set = resolveSubjectSet(
+          schema.question_sets,
+          subject.subject_role
+        );
+        if (set.length === 0) continue;
+        const questions = set.map((q) => ({
+          ...q,
+          code: subjectQuestionCode(subject.employee_id!, q.code),
+        }));
+        const who = subject.name ?? subject.employee_id!;
+        steps.push({ title: `ให้คะแนน: ${who}`, questions });
+      }
+    } else {
+      // fallback (invitation ไม่มี subject) — ใช้ชุด member ครั้งเดียว
+      const memberSet = schema.question_sets.member ?? [];
+      if (memberSet.length > 0) {
+        steps.push({ title: "ให้คะแนนผู้ดูแล", questions: memberSet });
+      }
     }
   }
 

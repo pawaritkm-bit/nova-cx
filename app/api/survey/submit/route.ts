@@ -4,6 +4,7 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import {
   getInvitationByToken,
   getVersionById,
+  getEvaluationSubjects,
   persistSurveyResponse,
   DuplicateSubmissionError,
 } from "@/lib/survey/service";
@@ -109,7 +110,10 @@ export async function POST(request: NextRequest) {
         { status: 404 }
       );
     }
-    const questions = flattenQuestions(version.schema_json);
+    // Form B: expand คำถามต่อผู้ถูกประเมิน (per-subject key) ให้ตรงกับที่ client ส่ง
+    const subjects =
+      inv.survey_type === "B" ? getEvaluationSubjects(inv) : [];
+    const questions = flattenQuestions(version.schema_json, { subjects });
 
     // 4) validate คำตอบ (conditional/exclusive/ช่วงคะแนน + บังคับตอบ rating/nps — server-side)
     const required = requiredQuestionCodes(questions);

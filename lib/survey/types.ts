@@ -43,4 +43,6 @@ export type NormalizedQuestion = {
   options?: { value: string; label: string; is_exclusive?: boolean }[];
   /** สำหรับ Form B: กลุ่มคำถามตามบทบาทผู้ถูกประเมิน (lead/member) */
   group?: string;
+  /** สำหรับ Form B: id ผู้ถูกประเมินที่คำถามนี้ผูกอยู่ (per-subject) */
+  subject_id?: string;
 };

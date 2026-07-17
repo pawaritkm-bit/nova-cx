@@ -74,6 +74,10 @@ export async function GET(
 
     const customer = await getCustomerRef(db, inv.customer_id);
 
+    // Form B: ผู้ถูกประเมินที่ผูกอัตโนมัติจาก assignee snapshot (ใช้ต่อ per-subject)
+    const subjects =
+      inv.survey_type === "B" ? getEvaluationSubjects(inv) : [];
+
     // อัปเดตสถานะ opened (best-effort; ไม่ให้ล้มถ้าพลาด)
     if (inv.status === "pending" || inv.status === "sent") {
       await db
@@ -88,7 +92,7 @@ export async function GET(
       survey_slug: SURVEY_SLUG_BY_TYPE[inv.survey_type],
       version: { id: version.id, version_no: version.version_no },
       schema: version.schema_json,
-      questions: flattenQuestions(version.schema_json),
+      questions: flattenQuestions(version.schema_json, { subjects }),
       reference: customer
         ? {
             customer_code: customer.customer_code,
@@ -98,7 +102,7 @@ export async function GET(
           }
         : null,
       // Form B: ผู้ถูกประเมินที่ระบบผูกอัตโนมัติ (ลูกค้าไม่ต้องเลือกเอง)
-      subjects: inv.survey_type === "B" ? getEvaluationSubjects(inv) : [],
+      subjects,
     });
   } catch (e) {
     logServerError("liff/survey", requestId, e);
