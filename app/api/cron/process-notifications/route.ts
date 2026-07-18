@@ -5,6 +5,7 @@ import { newRequestId, logServerError, isValidCronAuth } from "@/lib/http";
 import { processLineEventJobs } from "@/lib/line/events";
 import { processNotificationJobs, processReminders } from "@/lib/line/notify";
 import { getLineClient } from "@/lib/line/client";
+import { scanSlaBreaches } from "@/lib/sla/breach-scan";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -52,8 +53,21 @@ async function handle(request: NextRequest) {
     const notifications = await processNotificationJobs({ db });
     const reminders = await processReminders({ db });
 
+    // Phase 3: สแกน SLA breach → sla_events + risk_alerts + enqueue แจ้งเตือน/escalate
+    //   isolate: SLA พังต้องไม่ทำให้ survey notify worker ล้ม (คืนผลแยกใน sla.error)
+    let sla;
+    try {
+      sla = await scanSlaBreaches({ db });
+    } catch (slaErr) {
+      logServerError("cron/process-notifications:sla", requestId, slaErr);
+      return NextResponse.json(
+        { status: "ok", events, notifications, reminders, sla: { error: true, request_id: requestId } },
+        { status: 200 }
+      );
+    }
+
     return NextResponse.json(
-      { status: "ok", events, notifications, reminders },
+      { status: "ok", events, notifications, reminders, sla },
       { status: 200 }
     );
   } catch (e) {

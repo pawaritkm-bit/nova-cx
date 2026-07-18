@@ -3,6 +3,7 @@ import type { AIProvider } from "./provider";
 import { analyzeChat, type AnalyzeChatInput } from "./chat-analyze";
 import type { ChatMessageContext } from "./chat-prompt";
 import { decryptField, hasEncKey } from "@/lib/crypto/field";
+import { openCaseFromChatAnalysis } from "@/lib/sla/case-open";
 
 /**
  * Chat Analysis Worker (Phase 2) — ดึง job `chat_analysis` จาก job_queue แล้วประมวลผล
@@ -59,6 +60,7 @@ type MessageRow = {
 type ChatWindow = {
   tenantId: string;
   chatGroupId: string;
+  customerId: string | null;
   windowStart: string | null;
   windowEnd: string | null;
   /** ข้อความ context (idx → text) พร้อม map idx → {id, at} */
@@ -181,6 +183,7 @@ export async function loadChatWindow(
   return {
     tenantId: g.tenant_id,
     chatGroupId,
+    customerId: g.customer_id,
     windowStart,
     windowEnd,
     messages,
@@ -316,7 +319,7 @@ async function processJob(
     validated: res.validated,
   };
 
-  const { error: rpcErr } = await db.rpc("persist_chat_analysis", {
+  const { data: rpcData, error: rpcErr } = await db.rpc("persist_chat_analysis", {
     p_tenant_id: win.tenantId,
     p_chat_group_id: win.chatGroupId,
     p_window_start: win.windowStart,
@@ -331,6 +334,40 @@ async function processJob(
     // sec-M2: ไม่เก็บ error message ดิบจาก DB (กันรั่วโครงสร้าง) — เก็บแค่ code/generic
     const code = (rpcErr as { code?: string }).code;
     return fail(`persist_failed${code ? `:${code}` : ""}`);
+  }
+
+  // ★ Phase 3: เปิด/อัปเดตเคสจากผลวิเคราะห์ (idempotent) — ทำหลัง persist สำเร็จ
+  //   analysis_id null = persist no-op (window ถูกวิเคราะห์ไปแล้ว) → ข้าม
+  //   isolate: เปิดเคสพลาดต้องไม่ทำให้ job วิเคราะห์ fail (analysis บันทึกไปแล้ว)
+  const analysisId = (rpcData as { analysis_id?: string | null } | null)?.analysis_id ?? null;
+  if (analysisId) {
+    try {
+      await openCaseFromChatAnalysis(
+        db,
+        {
+          tenantId: win.tenantId,
+          chatGroupId: win.chatGroupId,
+          customerId: win.customerId,
+          analysisId,
+          analysis: {
+            urgency: res.urgency,
+            sentiment: res.sentiment,
+            summary: res.summary,
+            problems: res.problems,
+            insufficient_data: res.insufficient_data,
+          },
+          messageIds,
+        },
+        now
+      );
+    } catch (e) {
+      // ไม่ล้ม job — บันทึกวิเคราะห์สำเร็จแล้ว; เปิดเคสค่อยลองใหม่รอบ scan ได้
+      console.warn(
+        `[ai/chat-worker] open case failed (group=${win.chatGroupId}): ${
+          e instanceof Error ? e.message : "unknown"
+        }`
+      );
+    }
   }
 
   await markDone();
