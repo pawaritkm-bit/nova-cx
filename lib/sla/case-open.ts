@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CaseLevel } from "@/lib/ai/case";
 import { selectSlaRule, computeSlaDue, type SlaRule } from "./rules";
 import { resolveCaseOwner } from "./owner";
+import { computeRiskLevel } from "./risk";
+import { upsertRiskAlert } from "./alert";
 
 /**
  * เปิด/อัปเดต conversation_case จากผลวิเคราะห์แชต (Phase 3)
@@ -89,7 +91,7 @@ export async function openCaseFromChatAnalysis(
   const level = chatCaseLevel(input.analysis.urgency);
 
   // resolve owner จาก customer_assignments (ณ เวลาเปิดเคส)
-  const owner = await resolveCaseOwner(db, input.customerId, now);
+  const owner = await resolveCaseOwner(db, input.tenantId, input.customerId, now);
 
   // เลือก SLA rule → คำนวณ due (fallback default)
   const rules = await loadActiveRules(db, input.tenantId);
@@ -122,5 +124,34 @@ export async function openCaseFromChatAnalysis(
   }
 
   const res = (data ?? {}) as { case_id?: string; created?: boolean };
+
+  // ★ M2: สร้าง/ยกระดับ risk_alert ตั้งแต่ตอนเปิดเคส จาก sentiment/ปัญหา
+  //   → เคส sentiment ลบ/มีปัญหาได้ alert ทันที ไม่ต้องรอ SLA breach scan
+  if (res.case_id) {
+    const risk = computeRiskLevel({
+      level,
+      sentiment: input.analysis.sentiment,
+      problemCount: Array.isArray(input.analysis.problems) ? input.analysis.problems.length : 0,
+    });
+    if (risk !== "green") {
+      try {
+        await upsertRiskAlert(
+          db,
+          {
+            tenantId: input.tenantId,
+            caseId: res.case_id,
+            customerId: input.customerId,
+            ownerEmployeeId: owner?.employeeId ?? null,
+            level: risk,
+            reason: "sentiment ลบ/พบปัญหาในบทสนทนา",
+          },
+          now.toISOString()
+        );
+      } catch {
+        // alert พลาดต้องไม่ทำให้การเปิดเคส fail — SLA scan จะยกระดับให้ภายหลัง
+      }
+    }
+  }
+
   return { skipped: false, caseId: res.case_id, created: res.created };
 }

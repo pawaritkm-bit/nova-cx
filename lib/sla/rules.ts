@@ -80,16 +80,22 @@ const DEFAULT_RESOLUTION_HOURS: Record<CaseLevel, number> = {
  *   - ไม่มี rule → fallback default ตาม level (เท่าเดิมใน case.ts)
  */
 export function computeSlaDue(rule: SlaRule | null, level: CaseLevel, now: Date): SlaDue {
+  let firstResponseDueAt: Date;
+  let resolutionDueAt: Date;
+
   if (rule && (rule.first_response_minutes != null || rule.resolution_minutes != null)) {
     const frMin = rule.first_response_minutes ?? rule.resolution_minutes ?? 0;
     const resMin = rule.resolution_minutes ?? rule.first_response_minutes ?? 0;
-    return {
-      firstResponseDueAt: addBusinessHours(now, frMin / 60),
-      resolutionDueAt: addBusinessHours(now, resMin / 60),
-    };
+    firstResponseDueAt = addBusinessHours(now, frMin / 60);
+    resolutionDueAt = addBusinessHours(now, resMin / 60);
+  } else {
+    firstResponseDueAt = computeSlaDueAt(level, now);
+    resolutionDueAt = addBusinessHours(now, DEFAULT_RESOLUTION_HOURS[level]);
   }
-  return {
-    firstResponseDueAt: computeSlaDueAt(level, now),
-    resolutionDueAt: addBusinessHours(now, DEFAULT_RESOLUTION_HOURS[level]),
-  };
+
+  // L1: กัน misconfig (ตอบช้ากว่าปิด) — first-response ต้องไม่เกินกำหนดปิดงาน
+  if (firstResponseDueAt.getTime() > resolutionDueAt.getTime()) {
+    firstResponseDueAt = resolutionDueAt;
+  }
+  return { firstResponseDueAt, resolutionDueAt };
 }

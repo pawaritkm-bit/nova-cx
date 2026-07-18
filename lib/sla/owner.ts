@@ -22,21 +22,29 @@ type AssignmentRow = {
   valid_to: string | null;
 };
 
-/** yyyy-mm-dd ของวันที่ (ใช้เทียบกับ valid_from/valid_to ซึ่งเป็น date) */
-function toDateStr(at: Date): string {
-  return at.toISOString().slice(0, 10);
+/** offset เวลาไทย (Asia/Bangkok, UTC+7) เป็นมิลลิวินาที */
+const THAI_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+/**
+ * yyyy-mm-dd ของ "วันไทย" (ใช้เทียบกับ valid_from/valid_to ซึ่งเป็น date ตามเวลาไทย)
+ *   ★ M4: ต้องเลื่อนเป็นเวลาไทยก่อน slice — ไม่งั้นช่วง 00:00–07:00 ไทยจะได้วัน UTC ที่ผิด (off-by-one)
+ */
+function toThaiDateStr(at: Date): string {
+  return new Date(at.getTime() + THAI_OFFSET_MS).toISOString().slice(0, 10);
 }
 
-/** โหลด assignment ที่ยัง effective ณ วันที่ at สำหรับลูกค้ารายนี้ */
+/** โหลด assignment ที่ยัง effective ณ วันที่ at สำหรับลูกค้ารายนี้ (scope ด้วย tenant explicit) */
 async function loadEffectiveAssignments(
   db: SupabaseClient,
+  tenantId: string,
   customerId: string,
   at: Date
 ): Promise<AssignmentRow[]> {
-  const atStr = toDateStr(at);
+  const atStr = toThaiDateStr(at);
   const { data } = await db
     .from("customer_assignments")
     .select("employee_id, team_id, role, valid_from, valid_to")
+    .eq("tenant_id", tenantId)
     .eq("customer_id", customerId)
     .is("deleted_at", null)
     .lte("valid_from", atStr);
@@ -59,11 +67,12 @@ function ownerRank(role: string): number {
  */
 export async function resolveCaseOwner(
   db: SupabaseClient,
+  tenantId: string,
   customerId: string | null,
   at: Date
 ): Promise<CaseOwner | null> {
   if (!customerId) return null;
-  const rows = await loadEffectiveAssignments(db, customerId, at);
+  const rows = await loadEffectiveAssignments(db, tenantId, customerId, at);
   if (rows.length === 0) return null;
   rows.sort((a, b) => ownerRank(a.role) - ownerRank(b.role));
   const pick = rows[0];
@@ -78,6 +87,7 @@ export async function resolveCaseOwner(
  */
 export async function resolveTeamLead(
   db: SupabaseClient,
+  tenantId: string,
   customerId: string | null,
   teamId: string | null,
   at: Date
@@ -87,7 +97,7 @@ export async function resolveTeamLead(
 
   // ไม่ได้รับ teamId มา → หา team จาก assignment ปัจจุบันของลูกค้า
   if (!resolvedTeamId && customerId) {
-    rows = await loadEffectiveAssignments(db, customerId, at);
+    rows = await loadEffectiveAssignments(db, tenantId, customerId, at);
     const withTeam = rows.find((r) => r.team_id);
     if (withTeam) resolvedTeamId = withTeam.team_id;
   }
@@ -96,6 +106,7 @@ export async function resolveTeamLead(
     const { data: team } = await db
       .from("teams")
       .select("lead_employee_id")
+      .eq("tenant_id", tenantId)
       .eq("id", resolvedTeamId)
       .maybeSingle();
     const leadId = (team as { lead_employee_id: string | null } | null)?.lead_employee_id;
@@ -104,7 +115,7 @@ export async function resolveTeamLead(
 
   // fallback: assignment role='lead' ของลูกค้ารายนั้น ณ เวลานั้น
   if (customerId) {
-    rows = rows ?? (await loadEffectiveAssignments(db, customerId, at));
+    rows = rows ?? (await loadEffectiveAssignments(db, tenantId, customerId, at));
     const lead = rows.find((r) => r.role === "lead");
     if (lead) return lead.employee_id;
   }

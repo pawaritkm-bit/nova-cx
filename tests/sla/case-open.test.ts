@@ -14,13 +14,26 @@ type Store = {
   data: Record<string, unknown[]>;
   rpcCalls: { name: string; params: Record<string, unknown> }[];
   rpcResult?: { data: unknown; error: unknown };
+  alertInserts: Record<string, unknown>[];
 };
 
 class QB {
+  private op: "select" | "insert" | "update" = "select";
   private filters: Record<string, unknown> = {};
   private wantSingle = false;
+  private payload: Record<string, unknown> = {};
   constructor(private table: string, private store: Store) {}
   select() {
+    return this;
+  }
+  insert(payload: Record<string, unknown>) {
+    this.op = "insert";
+    this.payload = payload;
+    return this;
+  }
+  update(payload: Record<string, unknown>) {
+    this.op = "update";
+    this.payload = payload;
     return this;
   }
   eq(col: string, val: unknown) {
@@ -48,12 +61,18 @@ class QB {
   }
   private rows(): unknown[] {
     const all = (this.store.data[this.table] ?? []) as Record<string, unknown>[];
-    // กรองตาม eq filter แบบง่าย ๆ (คอลัมน์ที่มีใน row)
     return all.filter((r) =>
       Object.entries(this.filters).every(([k, v]) => !(k in r) || r[k] === v)
     );
   }
   private result() {
+    if (this.op === "insert") {
+      if (this.table === "risk_alerts") this.store.alertInserts.push(this.payload);
+      return { data: null, error: null };
+    }
+    if (this.op === "update") {
+      return { data: null, error: null };
+    }
     const rows = this.rows();
     if (this.wantSingle) return { data: rows[0] ?? null, error: null };
     return { data: rows, error: null };
@@ -73,6 +92,10 @@ function makeDb(store: Store): SupabaseClient {
       return store.rpcResult ?? { data: { case_id: "case-1", created: true }, error: null };
     },
   } as unknown as SupabaseClient;
+}
+
+function makeStore(overrides: Partial<Store> = {}): Store {
+  return { data: {}, rpcCalls: [], alertInserts: [], ...overrides };
 }
 
 const NOW = new Date("2026-07-20T03:00:00Z"); // จันทร์ 10:00 ไทย
@@ -111,65 +134,74 @@ describe("shouldOpenChatCase / chatCaseLevel", () => {
   });
 });
 
-describe("resolveCaseOwner — owner จาก customer_assignments (effective-dated)", () => {
+describe("resolveCaseOwner — owner จาก customer_assignments (effective-dated, tenant-scoped)", () => {
   it("customerId null → null", async () => {
-    const store: Store = { data: {}, rpcCalls: [] };
-    expect(await resolveCaseOwner(makeDb(store), null, NOW)).toBeNull();
+    const store = makeStore();
+    expect(await resolveCaseOwner(makeDb(store), "t1", null, NOW)).toBeNull();
   });
 
   it("เลือกผู้ดูแลตรง (member) ก่อนหัวหน้า (lead) + คืน team", async () => {
-    const store: Store = {
+    const store = makeStore({
       data: {
         customer_assignments: [
-          { customer_id: "c1", employee_id: "lead-emp", team_id: "team-1", role: "lead", valid_from: "2026-01-01", valid_to: null },
-          { customer_id: "c1", employee_id: "acc-emp", team_id: "team-1", role: "member", valid_from: "2026-01-01", valid_to: null },
+          { tenant_id: "t1", customer_id: "c1", employee_id: "lead-emp", team_id: "team-1", role: "lead", valid_from: "2026-01-01", valid_to: null },
+          { tenant_id: "t1", customer_id: "c1", employee_id: "acc-emp", team_id: "team-1", role: "member", valid_from: "2026-01-01", valid_to: null },
         ],
       },
-      rpcCalls: [],
-    };
-    const owner = await resolveCaseOwner(makeDb(store), "c1", NOW);
+    });
+    const owner = await resolveCaseOwner(makeDb(store), "t1", "c1", NOW);
     expect(owner).toEqual({ employeeId: "acc-emp", teamId: "team-1" });
   });
 
   it("กรอง assignment ที่หมดอายุแล้ว (valid_to < now)", async () => {
-    const store: Store = {
+    const store = makeStore({
       data: {
         customer_assignments: [
-          { customer_id: "c1", employee_id: "old-emp", team_id: "team-x", role: "member", valid_from: "2025-01-01", valid_to: "2026-06-30" },
+          { tenant_id: "t1", customer_id: "c1", employee_id: "old-emp", team_id: "team-x", role: "member", valid_from: "2025-01-01", valid_to: "2026-06-30" },
         ],
       },
-      rpcCalls: [],
-    };
-    expect(await resolveCaseOwner(makeDb(store), "c1", NOW)).toBeNull();
+    });
+    expect(await resolveCaseOwner(makeDb(store), "t1", "c1", NOW)).toBeNull();
+  });
+
+  it("M4: ใช้ 'วันไทย' เทียบ valid_to — ช่วงดึก UTC ไม่ off-by-one", async () => {
+    // 2026-07-20T18:30:00Z = 2026-07-21 01:30 เวลาไทย → วันไทย = 2026-07-21
+    //   assignment valid_to='2026-07-20' = หมดอายุแล้วตามเวลาไทย → ต้องถูกกรองออก
+    //   (ถ้าใช้วัน UTC='2026-07-20' จะเข้าใจผิดว่ายัง active)
+    const lateNight = new Date("2026-07-20T18:30:00Z");
+    const store = makeStore({
+      data: {
+        customer_assignments: [
+          { tenant_id: "t1", customer_id: "c1", employee_id: "expired", team_id: "team-1", role: "member", valid_from: "2026-01-01", valid_to: "2026-07-20" },
+        ],
+      },
+    });
+    expect(await resolveCaseOwner(makeDb(store), "t1", "c1", lateNight)).toBeNull();
   });
 });
 
 describe("resolveTeamLead — หัวหน้าทีมสำหรับ escalate", () => {
   it("จาก teams.lead_employee_id", async () => {
-    const store: Store = {
-      data: { teams: [{ id: "team-1", lead_employee_id: "lead-emp" }] },
-      rpcCalls: [],
-    };
-    expect(await resolveTeamLead(makeDb(store), "c1", "team-1", NOW)).toBe("lead-emp");
+    const store = makeStore({ data: { teams: [{ id: "team-1", lead_employee_id: "lead-emp" }] } });
+    expect(await resolveTeamLead(makeDb(store), "t1", "c1", "team-1", NOW)).toBe("lead-emp");
   });
 
   it("fallback: assignment role=lead ของลูกค้า", async () => {
-    const store: Store = {
+    const store = makeStore({
       data: {
         teams: [],
         customer_assignments: [
-          { customer_id: "c1", employee_id: "lead-emp", team_id: null, role: "lead", valid_from: "2026-01-01", valid_to: null },
+          { tenant_id: "t1", customer_id: "c1", employee_id: "lead-emp", team_id: null, role: "lead", valid_from: "2026-01-01", valid_to: null },
         ],
       },
-      rpcCalls: [],
-    };
-    expect(await resolveTeamLead(makeDb(store), "c1", null, NOW)).toBe("lead-emp");
+    });
+    expect(await resolveTeamLead(makeDb(store), "t1", "c1", null, NOW)).toBe("lead-emp");
   });
 });
 
 describe("openCaseFromChatAnalysis — orchestrator", () => {
   it("ไม่เข้าเงื่อนไขเปิดเคส → skipped ไม่เรียก RPC", async () => {
-    const store: Store = { data: {}, rpcCalls: [] };
+    const store = makeStore();
     const res = await openCaseFromChatAnalysis(
       makeDb(store),
       {
@@ -187,17 +219,16 @@ describe("openCaseFromChatAnalysis — orchestrator", () => {
   });
 
   it("เปิดเคส: resolve owner จาก assignment + match rule + เรียก RPC ด้วย due ที่คำนวณ", async () => {
-    const store: Store = {
+    const store = makeStore({
       data: {
         customer_assignments: [
-          { customer_id: "c1", employee_id: "acc-emp", team_id: "team-1", role: "member", valid_from: "2026-01-01", valid_to: null },
+          { tenant_id: "t1", customer_id: "c1", employee_id: "acc-emp", team_id: "team-1", role: "member", valid_from: "2026-01-01", valid_to: null },
         ],
         sla_rules: [
           { id: "rule-high", customer_type: null, urgency: "high", work_type: null, team_id: null, first_response_minutes: 120, resolution_minutes: 300, priority: 500, is_active: true },
         ],
       },
-      rpcCalls: [],
-    };
+    });
     const res = await openCaseFromChatAnalysis(
       makeDb(store),
       {
@@ -219,13 +250,48 @@ describe("openCaseFromChatAnalysis — orchestrator", () => {
     expect(p.p_sla_rule_id).toBe("rule-high");
     expect(p.p_level).toBe("high");
     expect(p.p_message_ids).toEqual(["m1", "m2"]);
-    // due ต้องเป็น ISO string (คำนวณจริง ไม่ null)
     expect(typeof p.p_first_response_due_at).toBe("string");
     expect(typeof p.p_resolution_due_at).toBe("string");
   });
 
+  it("M2: เปิดเคส sentiment ลบ + มีปัญหา → สร้าง risk_alert ทันที (ไม่รอ SLA breach)", async () => {
+    const store = makeStore();
+    await openCaseFromChatAnalysis(
+      makeDb(store),
+      {
+        tenantId: "t1",
+        chatGroupId: "g1",
+        customerId: "c1",
+        analysisId: "a1",
+        analysis: analysis({ urgency: "high", sentiment: "negative", problems: [{ type: "x" }] }),
+        messageIds: ["m1"],
+      },
+      NOW
+    );
+    // negative + มีปัญหา → orange (computeRiskLevel) → insert risk_alert
+    expect(store.alertInserts).toHaveLength(1);
+    expect(store.alertInserts[0]).toMatchObject({ case_id: "case-1", level: "orange" });
+  });
+
+  it("M2: sentiment เป็นกลาง ไม่มีปัญหา → ไม่สร้าง alert (green)", async () => {
+    const store = makeStore();
+    await openCaseFromChatAnalysis(
+      makeDb(store),
+      {
+        tenantId: "t1",
+        chatGroupId: "g1",
+        customerId: "c1",
+        analysisId: "a1",
+        analysis: analysis({ urgency: "high", sentiment: "neutral", problems: [] }),
+        messageIds: ["m1"],
+      },
+      NOW
+    );
+    expect(store.alertInserts).toHaveLength(0);
+  });
+
   it("customerId null → เปิดเคสได้แต่ owner null (ยังจับคู่ไม่ได้)", async () => {
-    const store: Store = { data: {}, rpcCalls: [] };
+    const store = makeStore();
     const res = await openCaseFromChatAnalysis(
       makeDb(store),
       {
@@ -244,11 +310,7 @@ describe("openCaseFromChatAnalysis — orchestrator", () => {
   });
 
   it("RPC error → skipped=true (ไม่ throw ให้ล้ม job)", async () => {
-    const store: Store = {
-      data: {},
-      rpcCalls: [],
-      rpcResult: { data: null, error: { code: "P0002" } },
-    };
+    const store = makeStore({ rpcResult: { data: null, error: { code: "P0002" } } });
     const res = await openCaseFromChatAnalysis(
       makeDb(store),
       {

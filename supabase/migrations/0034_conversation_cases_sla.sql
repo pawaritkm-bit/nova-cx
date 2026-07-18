@@ -264,9 +264,12 @@ revoke all on public.risk_alerts          from anon;
 grant select, insert, update, delete on public.sla_rules            to authenticated;
 grant select, insert, update, delete on public.conversation_cases   to authenticated;
 grant select, insert, update, delete on public.case_messages        to authenticated;
-grant select, insert, update, delete on public.case_status_history  to authenticated;
-grant select, insert, update, delete on public.sla_events           to authenticated;
 grant select, insert, update, delete on public.risk_alerts          to authenticated;
+
+-- ★ audit/event ตาราง: authenticated อ่านได้อย่างเดียว (SELECT) — เขียนผ่าน RPC/worker
+--   (service_role) เท่านั้น เพื่อกัน status-history/sla-event ปลอมจากฝั่ง client
+grant select on public.case_status_history  to authenticated;
+grant select on public.sla_events           to authenticated;
 
 grant all on public.sla_rules            to service_role;
 grant all on public.conversation_cases   to service_role;
@@ -281,7 +284,10 @@ grant all on public.risk_alerts          to service_role;
 --      (bump level ถ้ารุนแรงกว่า, refresh summary/urgency, เติม owner/due ถ้ายังว่าง)
 --   2) ถ้าไม่มี → เปิดเคสใหม่ + status_history (null→open) + sla_events 'opened'
 --   3) โยง case_messages ทุกครั้ง (idempotent ผ่าน unique case_id+chat_message_id)
---   ★ FOR UPDATE ล็อกเคส active กัน race เปิดซ้ำ; ชน uq_conv_cases_active_group = 23505
+--   ★ idempotency มาจาก unique index uq_conv_cases_active_group (1 เคส active/กลุ่ม):
+--     ถ้าสอง tx เปิดพร้อมกัน ตัวแพ้ชน unique_violation → exception handler re-select เคส
+--     ที่เพิ่งเกิด แล้ววิ่งเข้า branch update+link ต่อ (ไม่ทิ้งงาน). FOR UPDATE แค่ลด race
+--   ★ defense-in-depth: ตรวจ customer/owner/sla_rule ว่าอยู่ใน tenant เดียวกัน (ไม่ใช่ → null)
 --   SECURITY DEFINER + fixed search_path; execute เฉพาะ service_role (worker)
 -- =====================================================================
 create or replace function public.open_or_update_conversation_case(
@@ -315,7 +321,24 @@ begin
     raise exception 'chat_group_not_found' using errcode = 'P0002';
   end if;
 
-  -- หาเคส active ของกลุ่ม (ล็อกกันเปิดซ้ำ race)
+  -- defense-in-depth: ref ต้องอยู่ใน tenant เดียวกัน — ไม่ใช่/ไม่เจอ → null (degrade ไม่ผูกข้าม tenant)
+  if p_customer_id is not null and not exists (
+    select 1 from public.customers where id = p_customer_id and tenant_id = p_tenant_id
+  ) then
+    p_customer_id := null;
+  end if;
+  if p_owner_employee_id is not null and not exists (
+    select 1 from public.employees where id = p_owner_employee_id and tenant_id = p_tenant_id
+  ) then
+    p_owner_employee_id := null;
+  end if;
+  if p_sla_rule_id is not null and not exists (
+    select 1 from public.sla_rules where id = p_sla_rule_id and tenant_id = p_tenant_id
+  ) then
+    p_sla_rule_id := null;
+  end if;
+
+  -- หาเคส active ของกลุ่ม (FOR UPDATE ลด race; idempotency จริงจาก unique index + handler ล่าง)
   select id into v_case_id
   from public.conversation_cases
   where chat_group_id = p_chat_group_id
@@ -327,27 +350,48 @@ begin
   for update;
 
   if v_case_id is null then
-    -- เปิดเคสใหม่
-    insert into public.conversation_cases (
-      tenant_id, customer_id, chat_group_id, owner_employee_id,
-      title, summary, status, urgency, level, source,
-      sla_rule_id, first_response_due_at, resolution_due_at, opened_at
-    ) values (
-      p_tenant_id, p_customer_id, p_chat_group_id, p_owner_employee_id,
-      p_title, p_summary, 'open', p_urgency, coalesce(nullif(p_level,''), 'high'), 'chat',
-      p_sla_rule_id, p_first_response_due_at, p_resolution_due_at, now()
-    )
-    returning id into v_case_id;
-    v_created := true;
+    -- เปิดเคสใหม่ — ★ ห่อ exception กัน race: ตัวแพ้ (ชน unique index) re-select แล้ว update ต่อ
+    begin
+      insert into public.conversation_cases (
+        tenant_id, customer_id, chat_group_id, owner_employee_id,
+        title, summary, status, urgency, level, source,
+        sla_rule_id, first_response_due_at, resolution_due_at, opened_at
+      ) values (
+        p_tenant_id, p_customer_id, p_chat_group_id, p_owner_employee_id,
+        p_title, p_summary, 'open', p_urgency, coalesce(nullif(p_level,''), 'high'), 'chat',
+        p_sla_rule_id, p_first_response_due_at, p_resolution_due_at, now()
+      )
+      returning id into v_case_id;
+      v_created := true;
 
-    insert into public.case_status_history (tenant_id, case_id, from_status, to_status, changed_by, note)
-    values (p_tenant_id, v_case_id, null, 'open', p_changed_by, 'เปิดเคสจากผลวิเคราะห์แชต');
+      insert into public.case_status_history (tenant_id, case_id, from_status, to_status, changed_by, note)
+      values (p_tenant_id, v_case_id, null, 'open', p_changed_by, 'เปิดเคสจากผลวิเคราะห์แชต');
 
-    insert into public.sla_events (tenant_id, case_id, event_type, occurred_at)
-    values (p_tenant_id, v_case_id, 'opened', now())
-    on conflict (case_id, event_type) do nothing;
-  else
-    -- อัปเดตเคสเดิม: bump level ถ้ารุนแรงกว่า, refresh summary/urgency, เติม owner/due ถ้ายังว่าง
+      insert into public.sla_events (tenant_id, case_id, event_type, occurred_at)
+      values (p_tenant_id, v_case_id, 'opened', now())
+      on conflict (case_id, event_type) do nothing;
+    exception when unique_violation then
+      -- อีก tx เปิดเคส active ของกลุ่มนี้ไปก่อน → re-select เคสนั้นแล้ว fall-through ไป update
+      select id into v_case_id
+      from public.conversation_cases
+      where chat_group_id = p_chat_group_id
+        and tenant_id = p_tenant_id
+        and status in ('open','in_progress','waiting_customer','reopened')
+        and deleted_at is null
+      order by opened_at desc
+      limit 1;
+      v_created := false;
+    end;
+  end if;
+
+  if v_case_id is null then
+    -- ไม่ควรเกิด (insert สำเร็จ หรือ re-select ต้องเจอ) — กันพลาด
+    raise exception 'case_not_resolved' using errcode = 'P0002';
+  end if;
+
+  if not v_created then
+    -- อัปเดตเคสเดิม (พบตั้งแต่ต้น หรือหลังชน race): bump level ถ้ารุนแรงกว่า,
+    --   refresh summary/urgency, เติม owner/rule/due ถ้ายังว่าง
     update public.conversation_cases c
     set summary = coalesce(nullif(p_summary,''), c.summary),
         urgency = coalesce(nullif(p_urgency,''), c.urgency),

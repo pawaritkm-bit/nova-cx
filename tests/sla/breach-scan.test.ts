@@ -23,7 +23,6 @@ type Store = {
   existingAlerts: Map<string, { id: string; level: string; escalated_at: string | null }>;
   alertInserts: Record<string, unknown>[];
   alertUpdates: { id: string; patch: Record<string, unknown> }[];
-  jobInserts: Record<string, unknown>[];
   teams: { id: string; lead_employee_id: string | null }[];
   assignments: Record<string, unknown>[];
 };
@@ -78,9 +77,7 @@ class QB {
     if (this.op === "insert") {
       if (this.table === "sla_events") {
         const key = `${this.payload.case_id}:${this.payload.event_type}`;
-        if (this.store.existingEvents.has(key)) {
-          return { data: null, error: { code: "23505" } };
-        }
+        if (this.store.existingEvents.has(key)) return { data: null, error: { code: "23505" } };
         this.store.existingEvents.add(key);
         this.store.eventInserts.push({
           case_id: this.payload.case_id as string,
@@ -98,20 +95,13 @@ class QB {
         });
         return { data: null, error: null };
       }
-      if (this.table === "job_queue") {
-        this.store.jobInserts.push(this.payload);
-        return { data: null, error: null };
-      }
       return { data: null, error: null };
     }
 
     // ----- UPDATE -----
     if (this.op === "update") {
       if (this.table === "risk_alerts") {
-        this.store.alertUpdates.push({
-          id: this.filters.id as string,
-          patch: this.payload,
-        });
+        this.store.alertUpdates.push({ id: this.filters.id as string, patch: this.payload });
       }
       return { data: null, error: null };
     }
@@ -122,8 +112,7 @@ class QB {
     }
     if (this.table === "risk_alerts") {
       const caseId = this.filters.case_id as string;
-      const ex = this.store.existingAlerts.get(caseId) ?? null;
-      return { data: ex, error: null };
+      return { data: this.store.existingAlerts.get(caseId) ?? null, error: null };
     }
     if (this.table === "teams") {
       const t = this.store.teams.find((x) => x.id === this.filters.id) ?? null;
@@ -159,7 +148,6 @@ function baseStore(overrides: Partial<Store> = {}): Store {
     existingAlerts: new Map(),
     alertInserts: [],
     alertUpdates: [],
-    jobInserts: [],
     teams: [],
     assignments: [],
     ...overrides,
@@ -168,8 +156,8 @@ function baseStore(overrides: Partial<Store> = {}): Store {
 
 const NOW = new Date("2026-07-20T05:00:00Z"); // จันทร์ 12:00 ไทย
 
-describe("scanSlaBreaches — SLA breach → event + alert + escalate (idempotent)", () => {
-  it("เคสเลยกำหนดตอบครั้งแรก → response_breached + แจ้ง owner + alert orange", async () => {
+describe("scanSlaBreaches — SLA breach → event + alert + escalate (dashboard-only, idempotent)", () => {
+  it("เลยกำหนดตอบครั้งแรก → response_breached + alert orange (แจ้ง owner ผ่าน dashboard)", async () => {
     const store = baseStore({
       cases: [
         {
@@ -187,17 +175,17 @@ describe("scanSlaBreaches — SLA breach → event + alert + escalate (idempoten
     });
     const summary = await scanSlaBreaches({ db: makeDb(store), now: () => NOW });
     expect(summary.scanned).toBe(1);
-    expect(summary.ownerNotified).toBe(1);
+    expect(summary.ownerAlerted).toBe(1);
     expect(summary.escalated).toBe(0);
     expect(store.eventInserts.some((e) => e.event_type === "response_breached")).toBe(true);
-    expect(store.jobInserts[0]).toMatchObject({
-      queue: "case_notification",
-      payload: { kind: "owner_breach", employee_id: "acc-emp" },
+    expect(store.alertInserts[0]).toMatchObject({
+      level: "orange",
+      owner_employee_id: "acc-emp",
     });
-    expect(store.alertInserts[0]).toMatchObject({ level: "orange" });
+    // H1: ไม่มีการ enqueue job — escalation/แจ้งเตือนอยู่ใน risk_alerts เท่านั้น
   });
 
-  it("รันซ้ำ (event มีอยู่แล้ว) → ไม่ยิงแจ้งเตือนซ้ำ (idempotent)", async () => {
+  it("รันซ้ำ (event มีอยู่แล้ว) → ไม่ยกระดับ/ไม่แจ้งซ้ำ (idempotent)", async () => {
     const store = baseStore({
       cases: [
         {
@@ -218,11 +206,13 @@ describe("scanSlaBreaches — SLA breach → event + alert + escalate (idempoten
       ]),
     });
     const summary = await scanSlaBreaches({ db: makeDb(store), now: () => NOW });
-    expect(summary.ownerNotified).toBe(0);
-    expect(store.jobInserts).toHaveLength(0);
+    expect(summary.ownerAlerted).toBe(0);
+    expect(summary.alerts).toBe(0);
+    expect(store.alertInserts).toHaveLength(0);
+    expect(store.alertUpdates).toHaveLength(0);
   });
 
-  it("เลยกำหนดปิดงาน → resolution_breached → escalate หัวหน้าทีม + alert red", async () => {
+  it("เลยกำหนดปิดงาน → resolution_breached → escalate หัวหน้าทีม (risk_alerts) + alert red", async () => {
     const store = baseStore({
       cases: [
         {
@@ -245,16 +235,40 @@ describe("scanSlaBreaches — SLA breach → event + alert + escalate (idempoten
     const summary = await scanSlaBreaches({ db: makeDb(store), now: () => NOW });
     expect(summary.escalated).toBe(1);
     expect(store.eventInserts.some((e) => e.event_type === "resolution_breached")).toBe(true);
-    // escalate ไป lead-emp ผ่าน assignment team → teams.lead_employee_id
-    const escJob = store.jobInserts.find(
-      (j) => (j.payload as { kind?: string }).kind === "lead_escalation"
-    );
-    expect(escJob).toBeDefined();
-    expect((escJob!.payload as { employee_id?: string }).employee_id).toBe("lead-emp");
-    expect(store.alertInserts[0]).toMatchObject({ level: "red" });
+    // escalate บันทึกใน risk_alerts (ไม่ push LINE)
+    expect(store.alertInserts[0]).toMatchObject({
+      level: "red",
+      escalated_to_employee_id: "lead-emp",
+    });
+    expect(store.alertInserts[0].escalated_at).toBeTruthy();
   });
 
-  it("owner เป็นหัวหน้าทีมเอง → ไม่ escalate ไปหาตัวเอง", async () => {
+  it("M1: waiting_customer → pause resolution SLA (ไม่ breach/ไม่ escalate)", async () => {
+    const store = baseStore({
+      cases: [
+        {
+          id: "case-wc",
+          tenant_id: "t1",
+          customer_id: "c1",
+          owner_employee_id: "acc-emp",
+          level: "high",
+          status: "waiting_customer",
+          first_responded_at: "2026-07-19T05:00:00Z", // ตอบแล้ว
+          first_response_due_at: "2026-07-19T04:00:00Z",
+          resolution_due_at: "2026-07-20T01:00:00Z", // เลยมาแล้ว แต่ต้อง pause
+        },
+      ],
+      teams: [{ id: "team-1", lead_employee_id: "lead-emp" }],
+    });
+    const summary = await scanSlaBreaches({ db: makeDb(store), now: () => NOW });
+    expect(summary.events).toBe(0);
+    expect(summary.escalated).toBe(0);
+    expect(summary.alerts).toBe(0);
+    expect(store.eventInserts).toHaveLength(0);
+    expect(store.alertInserts).toHaveLength(0);
+  });
+
+  it("owner เป็นหัวหน้าทีมเอง → ไม่ escalate ไปหาตัวเอง (แต่ยัง alert red จาก breach)", async () => {
     const store = baseStore({
       cases: [
         {
@@ -275,10 +289,11 @@ describe("scanSlaBreaches — SLA breach → event + alert + escalate (idempoten
       ],
     });
     const summary = await scanSlaBreaches({ db: makeDb(store), now: () => NOW });
-    // event resolution_breached ยังบันทึก แต่ไม่ enqueue escalation (หัวหน้า=owner)
     expect(store.eventInserts.some((e) => e.event_type === "resolution_breached")).toBe(true);
     expect(summary.escalated).toBe(0);
-    expect(store.jobInserts.filter((j) => (j.payload as { kind?: string }).kind === "lead_escalation")).toHaveLength(0);
+    // resolution breach → alert red แต่ escalated_to ต้อง null
+    expect(store.alertInserts[0]).toMatchObject({ level: "red" });
+    expect(store.alertInserts[0].escalated_to_employee_id).toBeNull();
   });
 
   it("ยังไม่ถึงกำหนด (ok) → ไม่มี event/alert", async () => {
@@ -300,6 +315,6 @@ describe("scanSlaBreaches — SLA breach → event + alert + escalate (idempoten
     const summary = await scanSlaBreaches({ db: makeDb(store), now: () => NOW });
     expect(summary.events).toBe(0);
     expect(summary.alerts).toBe(0);
-    expect(store.jobInserts).toHaveLength(0);
+    expect(store.alertInserts).toHaveLength(0);
   });
 });
