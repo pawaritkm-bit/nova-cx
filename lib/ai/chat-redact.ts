@@ -11,14 +11,16 @@ import { redactText, hasResidualPii, PII_PLACEHOLDER } from "./redact";
  */
 
 export const CHAT_PII_PLACEHOLDER = {
-  bankAccount: "[เลขบัญชี]",
+  // ★ rev-M2: เลข 10–12 หลักอาจเป็นเลข ref/ออเดอร์ ไม่ใช่บัญชีเสมอ → ใช้ placeholder กลาง
+  //   ไม่ระบุว่าเป็น "บัญชี" (กัน mislabel) แต่ยัง redact เพื่อความปลอดภัย/ให้ผ่าน residual gate
+  longNumber: "[เลข]",
   amount: "[จำนวนเงิน]",
   address: "[ที่อยู่]",
 } as const;
 
-// เลขบัญชีธนาคารไทย: 10–12 หลัก (อาจมีขีด/เว้นวรรค) — จับหลัง base redact
-//   เช่น 123-4-56789-0 , 1234567890 , 012-3-45678-9
-const BANK_ACCOUNT_RE = /\b\d(?:[-\s]?\d){9,11}\b/g;
+// เลขยาว 10–12 หลัก (อาจมีขีด/เว้นวรรค) — จับหลัง base redact (เบอร์/เลขภาษี 13 หลักถูกกินไปก่อน)
+//   ครอบเลขบัญชี/เลขอ้างอิงที่ยาวพอจะเป็น PII เช่น 1234567890 , 123-4-56789-0
+const LONG_NUMBER_RE = /\b\d(?:[-\s]?\d){9,11}\b/g;
 
 // ยอดเงิน: ตัวเลข(มี , คั่นหลักพันหรือทศนิยม) ตามด้วยหน่วยเงิน บาท/บ./THB/฿
 //   เช่น 12,500 บาท , 3500.50 บ. , ฿1,000
@@ -42,10 +44,10 @@ export function redactChatText(input: string, knownNames: string[] = []): string
   let text = redactText(input, knownNames).text;
 
   // 2) เสริม pattern แชต (ตามลำดับ: ที่อยู่ → ยอดเงิน → เลขบัญชี)
-  //    ที่อยู่ก่อน เพราะภายในอาจมีเลขที่ไปโดน bank account จับผิด
+  //    ที่อยู่ก่อน เพราะภายในอาจมีเลขที่ไปโดนเลขยาวจับผิด
   text = text.replace(ADDRESS_RE, CHAT_PII_PLACEHOLDER.address);
   text = text.replace(AMOUNT_RE, CHAT_PII_PLACEHOLDER.amount);
-  text = text.replace(BANK_ACCOUNT_RE, CHAT_PII_PLACEHOLDER.bankAccount);
+  text = text.replace(LONG_NUMBER_RE, CHAT_PII_PLACEHOLDER.longNumber);
 
   return text;
 }

@@ -17,7 +17,7 @@ import { z } from "zod";
  */
 
 export const CHAT_SENTIMENTS = ["positive", "neutral", "negative"] as const;
-export const CHAT_URGENCIES = ["critical", "high", "medium", "positive"] as const;
+export const CHAT_URGENCIES = ["critical", "high", "medium", "low"] as const;
 
 export const FLOW_STEPS = [
   "receive", // รับเรื่อง

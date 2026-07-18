@@ -120,7 +120,12 @@ export async function scanChatAnalysis(deps: ChatScanDeps): Promise<ChatScanSumm
         payload: { chat_group_id: chatGroupId },
       });
       if (insErr) {
-        summary.failed += 1;
+        // ★ 23505 = ชน partial unique index (มี job ค้างอยู่แล้ว) → idempotent skip ไม่ใช่ error
+        if ((insErr as { code?: string }).code === "23505") {
+          summary.existed += 1;
+        } else {
+          summary.failed += 1;
+        }
       } else {
         summary.enqueued += 1;
       }

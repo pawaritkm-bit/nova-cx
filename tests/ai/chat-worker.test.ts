@@ -148,28 +148,33 @@ function baseStore(): Store {
         id: "grp-1",
         tenant_id: "t-1",
         customer_id: "cust-1",
-        display_name: "กลุ่มลูกค้า A",
       },
       chat_messages: [
         {
           id: "msg-0",
           chat_member_id: "mem-c",
           message_type: "text",
-          content_enc: encryptField("ยื่นภาษีเดือนนี้ยัง โทร 0812345678"),
+          content_enc: encryptField("ยื่นภาษีเดือนนี้ยัง ประยุทธ โทร 0812345678"),
           sent_at: "2026-07-18T10:00:00Z",
         },
         {
           id: "msg-1",
           chat_member_id: "mem-a",
           message_type: "text",
-          content_enc: encryptField("กำลังตรวจให้ครับ"),
+          content_enc: encryptField("สมชายกำลังตรวจให้ครับ"),
           sent_at: "2026-07-18T10:05:00Z",
         },
       ],
       chat_members: [
-        { id: "mem-c", member_kind: "customer" },
-        { id: "mem-a", member_kind: "accountant" },
+        { id: "mem-c", member_kind: "customer", display_name_enc: null, employee_id: null },
+        {
+          id: "mem-a",
+          member_kind: "accountant",
+          display_name_enc: encryptField("สมชาย"),
+          employee_id: "emp-1",
+        },
       ],
+      employees: [{ id: "emp-1", first_name: "ประยุทธ", nickname: "ตุ่น" }],
       customers: { name: "ลูกค้าทดสอบ", business_name: "บริษัท ทดสอบ" },
     },
     updates: [],
@@ -215,15 +220,65 @@ describe("chat-worker — happy path (batch window)", () => {
     expect(store.updates.some((u) => u.payload.status === "sent")).toBe(true);
   });
 
-  it("★ decrypt ฝั่ง server + redact: prompt ที่ส่ง AI ไม่มีเบอร์ดิบ (C-15)", async () => {
+  it("★ decrypt ฝั่ง server + redact: prompt ไม่มีเบอร์/ชื่อคนในกลุ่มดิบ (C-15, sec-M1)", async () => {
     const store = baseStore();
     const provider = new FakeProvider(JSON.stringify(output()));
     await processChatAnalysisJobs({ db: makeDb(store), provider });
-    // เนื้อความถูกถอดรหัสแล้ว (มีในบริบท) แต่ PII ถูก redact ก่อนส่ง AI
-    expect(provider.lastArgs?.user).not.toContain("0812345678");
-    expect(provider.lastArgs?.user).toContain("[เบอร์โทร]");
-    // ต้องเห็นเนื้อความ (decrypt สำเร็จ) ในบริบท
-    expect(provider.lastArgs?.user).toContain("กำลังตรวจให้ครับ");
+    const prompt = provider.lastArgs?.user ?? "";
+    // เบอร์ถูก redact
+    expect(prompt).not.toContain("0812345678");
+    expect(prompt).toContain("[เบอร์โทร]");
+    // ★ sec-M1: ชื่อสมาชิกกลุ่ม (จาก display_name_enc) + ชื่อพนักงาน ถูก redact ด้วย
+    expect(prompt).not.toContain("สมชาย"); // ชื่อสมาชิก (decrypt แล้วเข้า knownNames)
+    expect(prompt).not.toContain("ประยุทธ"); // first_name พนักงาน
+    // เนื้อความอื่น (decrypt สำเร็จ) ยังอยู่
+    expect(prompt).toContain("กำลังตรวจให้");
+  });
+
+  it("★ sec-H1: ไม่ส่งชื่อกลุ่มเข้า AI prompt เลย", async () => {
+    const store = baseStore();
+    const provider = new FakeProvider(JSON.stringify(output()));
+    await processChatAnalysisJobs({ db: makeDb(store), provider });
+    // prompt ไม่มี label 'กลุ่ม:' (ตัด groupLabel ออกทั้งหมด)
+    expect(provider.lastArgs?.user).not.toContain("กลุ่ม:");
+  });
+});
+
+describe("chat-worker — gate-blocked marker (rev-M1)", () => {
+  it("PII หลุด redact → persist พร้อม blocked_reason='residual_pii' + mark done (ไม่วน)", async () => {
+    const store = baseStore();
+    // ข้อความมีเลขยาว 15 หลักที่ redact ไม่ได้ → residual gate บล็อก
+    store.data.chat_messages = [
+      {
+        id: "msg-0",
+        chat_member_id: "mem-c",
+        message_type: "text",
+        content_enc: encryptField("รหัสลับ 987654321012345"),
+        sent_at: "2026-07-18T10:00:00Z",
+      },
+      {
+        id: "msg-1",
+        chat_member_id: "mem-a",
+        message_type: "text",
+        content_enc: encryptField("รับทราบครับ"),
+        sent_at: "2026-07-18T10:05:00Z",
+      },
+    ];
+    const provider = new FakeProvider(JSON.stringify(output()));
+    const summary = await processChatAnalysisJobs({ db: makeDb(store), provider });
+
+    expect(summary.done).toBe(1);
+    // ยัง persist (เพื่อ mark analyzed → ไม่วนบล็อกซ้ำ) พร้อม marker
+    const rpc = store.rpcCalls.find((c) => c.name === "persist_chat_analysis");
+    expect(rpc).toBeTruthy();
+    const analysis = rpc?.params.p_analysis as Record<string, unknown>;
+    expect(analysis.blocked_reason).toBe("residual_pii");
+    expect(analysis.needs_human_review).toBe(true);
+    expect(analysis.validated).toBe(false);
+    // provider ต้องไม่ถูกเรียก (โดนบล็อกก่อนส่ง AI)
+    expect(provider.lastArgs).toBeNull();
+    // job mark done
+    expect(store.updates.some((u) => u.payload.status === "sent")).toBe(true);
   });
 });
 

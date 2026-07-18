@@ -64,26 +64,25 @@ type ChatWindow = {
   /** ข้อความ context (idx → text) พร้อม map idx → {id, at} */
   messages: ChatMessageContext[];
   idxToMessage: { id: string; at: string | null }[];
-  groupLabel: string | null;
   knownNames: string[];
 };
 
-/** โหลด window: ข้อความยังไม่วิเคราะห์ของกลุ่ม + decrypt (server) + resolve บทบาท/ชื่อ */
+/** โหลด window: ข้อความยังไม่วิเคราะห์ของกลุ่ม + decrypt (server) + resolve บทบาท/ชื่อ
+ *   ★ ไม่ดึงชื่อกลุ่มเข้าบริบท AI (sec-H1) — ใช้ชื่อ (ลูกค้า/พนักงาน/สมาชิก) เพื่อ "redact" เท่านั้น */
 export async function loadChatWindow(
   db: SupabaseClient,
   chatGroupId: string
 ): Promise<ChatWindow | null> {
-  // กลุ่ม + tenant + ลูกค้า (ไว้ redact ชื่อ)
+  // กลุ่ม + tenant + ลูกค้า (ไว้ redact ชื่อ — ไม่ดึงชื่อกลุ่มเข้า AI)
   const { data: group } = await db
     .from("chat_groups")
-    .select("id, tenant_id, customer_id, display_name")
+    .select("id, tenant_id, customer_id")
     .eq("id", chatGroupId)
     .maybeSingle();
   if (!group) return null;
   const g = group as {
     tenant_id: string;
     customer_id: string | null;
-    display_name: string | null;
   };
 
   // ข้อความที่ยังไม่วิเคราะห์ (analyzed_at null) เรียงตามเวลา
@@ -97,18 +96,51 @@ export async function loadChatWindow(
     .limit(MAX_WINDOW_MESSAGES);
   const rows = (msgRows ?? []) as MessageRow[];
 
-  // บทบาทผู้ส่ง: map chat_member_id → member_kind (ไม่ดึงชื่อ = ลด PII)
+  // ชื่อสำหรับ redact (สะสมจากลูกค้า/ธุรกิจ/พนักงาน/สมาชิกกลุ่ม) — sec-M1
+  const knownNames = new Set<string>();
+
+  // บทบาทผู้ส่ง + ชื่อสมาชิก: map chat_member_id → member_kind
+  //   ★ decrypt display_name_enc (server) เพื่อ "redact" ชื่อคนในกลุ่ม (ไม่ส่งเข้า AI)
   const memberKind = new Map<string, string>();
+  const employeeIds: string[] = [];
   const { data: members } = await db
     .from("chat_members")
-    .select("id, member_kind")
+    .select("id, member_kind, display_name_enc, employee_id")
     .eq("chat_group_id", chatGroupId);
-  for (const m of (members ?? []) as { id: string; member_kind: string }[]) {
+  for (const m of (members ?? []) as {
+    id: string;
+    member_kind: string;
+    display_name_enc: string | null;
+    employee_id: string | null;
+  }[]) {
     memberKind.set(m.id, m.member_kind);
+    if (m.employee_id) employeeIds.push(m.employee_id);
+    if (m.display_name_enc) {
+      try {
+        const name = decryptField(m.display_name_enc);
+        if (name) knownNames.add(name);
+      } catch {
+        // ห้าม log ciphertext/plaintext — ชื่อ decrypt ไม่ได้ ก็ข้าม (best-effort)
+      }
+    }
   }
 
-  // ชื่อสำหรับ redact (ลูกค้า/ธุรกิจ)
-  const knownNames: string[] = [];
+  // ชื่อพนักงานที่ผูกกับสมาชิกกลุ่ม (first_name/nickname) — เพิ่มลง redact
+  if (employeeIds.length > 0) {
+    const { data: emps } = await db
+      .from("employees")
+      .select("id, first_name, nickname")
+      .in("id", employeeIds);
+    for (const e of (emps ?? []) as {
+      first_name: string | null;
+      nickname: string | null;
+    }[]) {
+      if (e.first_name) knownNames.add(e.first_name);
+      if (e.nickname) knownNames.add(e.nickname);
+    }
+  }
+
+  // ชื่อลูกค้า/ธุรกิจ
   if (g.customer_id) {
     const { data: cust } = await db
       .from("customers")
@@ -116,8 +148,8 @@ export async function loadChatWindow(
       .eq("id", g.customer_id)
       .maybeSingle();
     const c = cust as { name: string | null; business_name: string | null } | null;
-    if (c?.name) knownNames.push(c.name);
-    if (c?.business_name) knownNames.push(c.business_name);
+    if (c?.name) knownNames.add(c.name);
+    if (c?.business_name) knownNames.add(c.business_name);
   }
 
   const messages: ChatMessageContext[] = [];
@@ -153,8 +185,7 @@ export async function loadChatWindow(
     windowEnd,
     messages,
     idxToMessage,
-    groupLabel: g.display_name,
-    knownNames,
+    knownNames: [...knownNames],
   };
 }
 
@@ -218,7 +249,6 @@ async function processJob(
 
   const input: AnalyzeChatInput = {
     messages: win.messages,
-    groupLabel: win.groupLabel,
     knownNames: win.knownNames,
   };
 
@@ -281,6 +311,8 @@ async function processJob(
     provider: outcome.provider,
     needs_human_review: res.needs_human_review,
     insufficient_data: res.insufficient_data,
+    // ★ rev-M1: ถูกบล็อกเพราะ PII หลุด → mark ไว้ (ผู้ตรวจ re-queue เอง ไม่วิเคราะห์ใหม่อัตโนมัติ)
+    blocked_reason: outcome.blocked ? "residual_pii" : null,
     validated: res.validated,
   };
 
@@ -296,7 +328,9 @@ async function processJob(
   });
 
   if (rpcErr) {
-    return fail(`persist_failed: ${rpcErr.message ?? "rpc_error"}`);
+    // sec-M2: ไม่เก็บ error message ดิบจาก DB (กันรั่วโครงสร้าง) — เก็บแค่ code/generic
+    const code = (rpcErr as { code?: string }).code;
+    return fail(`persist_failed${code ? `:${code}` : ""}`);
   }
 
   await markDone();

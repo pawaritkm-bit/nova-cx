@@ -50,7 +50,7 @@ create table if not exists public.ai_chat_analysis (
   message_ids         jsonb not null default '[]'::jsonb,
   summary             text,
   sentiment           text check (sentiment in ('positive','neutral','negative')),
-  urgency             text check (urgency in ('critical','high','medium','positive')),
+  urgency             text check (urgency in ('critical','high','medium','low')),
   customer_facts      jsonb not null default '[]'::jsonb,  -- ★ ข้อเท็จจริง (อ้างข้อความ+เวลา)
   ai_assumptions      jsonb not null default '[]'::jsonb,  -- ★ ข้อสันนิษฐาน AI
   evidence            jsonb not null default '[]'::jsonb,  -- ★ อ้าง message_id + เวลา
@@ -61,6 +61,8 @@ create table if not exists public.ai_chat_analysis (
   provider            text,
   needs_human_review  boolean not null default false,
   insufficient_data   boolean not null default false,      -- ★ ข้อมูลไม่เพียงพอ
+  -- ★ marker เมื่อถูกบล็อก (เช่น residual PII หลุด redact) — ผู้ตรวจ re-queue เองได้ ไม่วิเคราะห์ใหม่อัตโนมัติ
+  blocked_reason      text,
   validated           boolean not null default false,      -- ผ่าน Zod หรือไม่
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now(),
@@ -126,6 +128,12 @@ alter table public.job_queue drop constraint if exists job_queue_queue_check;
 alter table public.job_queue add constraint job_queue_queue_check
   check (queue in ('notification','ai_analysis','line_event','chat_analysis'));
 
+-- ★ กัน job chat_analysis ซ้อนต่อกลุ่ม (cron overlap/reclaim) ตั้งแต่ชั้น DB
+--   อนุญาต pending/processing ได้แค่ 1 งานต่อ chat_group_id — chat-scan จับ 23505 → skip
+create unique index if not exists uq_job_queue_chat_analysis_active
+  on public.job_queue ((payload->>'chat_group_id'))
+  where queue = 'chat_analysis' and status in ('pending','processing');
+
 -- =====================================================================
 -- RLS: tenant isolation (pattern 0012) — ตารางใหม่ทุกตัวต้องมี
 --   worker เขียนผ่าน service_role (bypass RLS) จึงทำงานได้ปกติ
@@ -190,6 +198,7 @@ as $$
 declare
   v_analysis_id  uuid;
   v_count        integer;
+  v_unanalyzed   integer := 0;
   v_marked       integer := 0;
   v_pt           jsonb;
   v_vi           jsonb;
@@ -204,12 +213,34 @@ begin
 
   v_count := coalesce(jsonb_array_length(p_message_ids), 0);
 
+  -- ★ idempotency guard (rev-H1/sec-G2): ล็อกแถวข้อความใน window แบบ FOR UPDATE
+  --   นับเฉพาะที่ยัง analyzed_at IS NULL — ถ้า 0 = window นี้ถูก cron อื่นวิเคราะห์ไปแล้ว
+  --   → return no-op (ไม่ insert ซ้ำ, ไม่จ่าย AI ซ้ำ, ไม่สร้าง analysis ซ้ำ)
+  if v_count > 0 then
+    select count(*) into v_unanalyzed
+    from public.chat_messages
+    where tenant_id = p_tenant_id
+      and chat_group_id = p_chat_group_id
+      and analyzed_at is null
+      and id in (select (jsonb_array_elements_text(p_message_ids))::uuid)
+    for update;
+
+    if v_unanalyzed = 0 then
+      return jsonb_build_object(
+        'analysis_id', null,
+        'message_count', v_count,
+        'marked_analyzed', 0,
+        'noop', true
+      );
+    end if;
+  end if;
+
   -- 1) insert ผลวิเคราะห์
   insert into public.ai_chat_analysis (
     tenant_id, chat_group_id, window_start, window_end, message_count, message_ids,
     summary, sentiment, urgency,
     customer_facts, ai_assumptions, evidence, flow_steps, problems,
-    confidence, model, provider, needs_human_review, insufficient_data, validated
+    confidence, model, provider, needs_human_review, insufficient_data, blocked_reason, validated
   ) values (
     p_tenant_id, p_chat_group_id, p_window_start, p_window_end, v_count,
     coalesce(p_message_ids, '[]'::jsonb),
@@ -226,6 +257,7 @@ begin
     p_analysis->>'provider',
     coalesce((p_analysis->>'needs_human_review')::boolean, false),
     coalesce((p_analysis->>'insufficient_data')::boolean, false),
+    nullif(p_analysis->>'blocked_reason',''),
     coalesce((p_analysis->>'validated')::boolean, false)
   )
   returning id into v_analysis_id;
@@ -276,6 +308,7 @@ begin
     update public.chat_messages
     set analyzed_at = now()
     where tenant_id = p_tenant_id
+      and chat_group_id = p_chat_group_id   -- rev-G1: defense-in-depth (จำกัดเฉพาะกลุ่มนี้)
       and analyzed_at is null
       and id in (
         select (jsonb_array_elements_text(p_message_ids))::uuid

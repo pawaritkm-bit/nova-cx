@@ -40,7 +40,9 @@ create table if not exists public.chat_groups (
   provider        text not null default 'line',
   group_ref       text not null,
   group_kind      text not null default 'group' check (group_kind in ('group', 'room')),
-  display_name    text,
+  -- ★ ชื่อกลุ่มเป็น PII (มักมีชื่อลูกค้า/บริษัท) → เก็บเป็น ciphertext เท่านั้น (encryptField)
+  --   ไม่มีคีย์ = ไม่เก็บชื่อ (ไม่มี plaintext); decrypt ทำฝั่ง server เท่านั้น (admin UI Phase หลัง)
+  display_name_enc text,
   joined_at       timestamptz,
   is_active       boolean not null default true,
   created_at      timestamptz not null default now(),

@@ -18,8 +18,6 @@ export type ChatMessageContext = {
 };
 
 export type ChatConversationContext = {
-  /** ชื่อกลุ่ม (redact แล้ว/ไม่มี PII) — บริบทคร่าว ๆ */
-  groupLabel?: string | null;
   messages: ChatMessageContext[];
 };
 
@@ -50,11 +48,11 @@ export function buildChatSystemPrompt(): string {
   ].join("\n");
 }
 
-/** user prompt: บทสนทนา (redact แล้ว) พร้อม msg_idx + เวลา + บทบาทผู้ส่ง */
+/** user prompt: บทสนทนา (redact แล้ว) พร้อม msg_idx + เวลา + บทบาทผู้ส่ง
+ *   ★ ไม่ส่งชื่อกลุ่ม/ชื่อลูกค้าเข้า AI (sec-H1): ชื่อกลุ่มมักมี PII และ flow ไม่จำเป็นต้องใช้ */
 export function buildChatUserPrompt(ctx: ChatConversationContext): string {
   const lines: string[] = [];
-  if (ctx.groupLabel) lines.push(`กลุ่ม: ${ctx.groupLabel}`);
-  lines.push("บทสนทนา (PII ถูกปิดบังด้วย placeholder เช่น [เบอร์โทร] [ชื่อ] [เลขบัญชี]):");
+  lines.push("บทสนทนา (PII ถูกปิดบังด้วย placeholder เช่น [เบอร์โทร] [ชื่อ] [เลข]):");
   lines.push("รูปแบบ: [msg_idx] (เวลา) บทบาท: ข้อความ");
   lines.push("");
   for (const m of ctx.messages) {

@@ -11,6 +11,7 @@ type ScanStore = {
   pendingGroups: Set<string>; // กลุ่มที่มี job ค้างอยู่
   inserts: Record<string, unknown>[];
   insertError?: boolean;
+  insertErrorCode?: string; // จำลอง 23505 (ชน partial unique index)
 };
 
 class QB {
@@ -53,6 +54,9 @@ class QB {
   }
   private result() {
     if (this.isInsert) {
+      if (this.store.insertErrorCode) {
+        return { data: null, error: { code: this.store.insertErrorCode, message: "conflict" } };
+      }
       return { data: null, error: this.store.insertError ? { message: "insert_fail" } : null };
     }
     if (this.table === "chat_messages") {
@@ -123,6 +127,19 @@ describe("chat-scan — enqueue window ต่อกลุ่ม (debounce + idem
     const summary = await scanChatAnalysis({ db: makeDb(store), now: () => NOW });
     expect(summary.existed).toBe(1);
     expect(summary.enqueued).toBe(0);
+  });
+
+  it("insert ชน partial unique index (23505 race) → existed ไม่นับ failed", async () => {
+    const store: ScanStore = {
+      unanalyzed: [{ chat_group_id: "g4", tenant_id: "t1", sent_at: "2026-07-18T11:00:00Z" }],
+      pendingGroups: new Set(), // hasPendingJob = false → พยายาม insert แต่ชน index
+      inserts: [],
+      insertErrorCode: "23505",
+    };
+    const summary = await scanChatAnalysis({ db: makeDb(store), now: () => NOW });
+    expect(summary.existed).toBe(1);
+    expect(summary.enqueued).toBe(0);
+    expect(summary.failed).toBe(0);
   });
 
   it("หลายกลุ่ม: aggregate แยกกลุ่ม → enqueue เท่าจำนวนกลุ่มที่นิ่ง", async () => {

@@ -29,8 +29,7 @@ import { RISK_KEYWORDS } from "./guardrail";
 export type AnalyzeChatInput = {
   /** ข้อความในหน้าต่างบทสนทนา (ดิบ ยังไม่ redact — analyze จะ redact เอง) */
   messages: ChatMessageContext[];
-  groupLabel?: string | null;
-  /** ชื่อที่ระบบรู้ว่าเป็น PII (ลูกค้า/ธุรกิจ/พนักงาน) เพื่อ redact ตรงตัว */
+  /** ชื่อที่ระบบรู้ว่าเป็น PII (ลูกค้า/ธุรกิจ/พนักงาน/สมาชิกกลุ่ม) เพื่อ redact ตรงตัว */
   knownNames?: string[];
 };
 
@@ -123,9 +122,8 @@ export async function analyzeChat(
     };
   }
 
-  // [3] build prompt (ใช้ข้อความที่ redact แล้วเท่านั้น)
+  // [3] build prompt (ใช้ข้อความที่ redact แล้วเท่านั้น — ไม่ส่งชื่อกลุ่มเข้า AI)
   const ctx: ChatConversationContext = {
-    groupLabel: input.groupLabel ?? null,
     messages: redactedMessages,
   };
   const system = buildChatSystemPrompt();

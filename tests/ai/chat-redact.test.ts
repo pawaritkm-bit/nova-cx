@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { redactChatText, hasResidualChatPii } from "@/lib/ai/chat-redact";
 
 describe("chat-redact — เสริม pattern แชต (เลขบัญชี/ยอดเงิน/ที่อยู่)", () => {
-  it("เลขบัญชี 10 หลัก → [เลขบัญชี]", () => {
+  it("เลขยาว 10 หลัก → [เลข] (placeholder กลาง, rev-M2)", () => {
     const out = redactChatText("โอนมาบัญชี 1234567890 นะครับ");
     expect(out).not.toContain("1234567890");
-    expect(out).toContain("[เลขบัญชี]");
+    expect(out).toContain("[เลข]");
   });
 
   it("ยอดเงินมีหน่วยบาท → [จำนวนเงิน]", () => {
