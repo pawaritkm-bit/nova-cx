@@ -41,6 +41,7 @@ const PROTECTED_PREFIXES = [
   "/dashboard",
   "/admin",
   "/cases",
+  "/chat-audit",
   "/reports",
   "/surveys",
   "/settings",

@@ -1,0 +1,362 @@
+/* ============================================================
+   Chat Audit (Phase 5a) — สไตล์เสริมของโมดูลตรวจแชต
+   scoped ใต้ .nova-dash (สืบทอดตัวแปรสี/การ์ดจาก dashboard.css)
+   ============================================================ */
+
+/* ---- Risk badges (4 ระดับ) ---- */
+.nova-dash .b-green {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.nova-dash .b-yellow {
+  background: #fef9c3;
+  color: #a16207;
+}
+.nova-dash .b-orange {
+  background: #ffedd5;
+  color: #ea580c;
+}
+.nova-dash .b-red {
+  background: var(--red-bg);
+  color: var(--red);
+}
+.nova-dash .b-blue {
+  background: var(--blue-bg);
+  color: var(--blue-600);
+}
+.nova-dash .b-gray {
+  background: #f1f5f9;
+  color: var(--muted);
+}
+.nova-dash .b-fact {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+.nova-dash .b-guess {
+  background: #f3e8ff;
+  color: #7e22ce;
+}
+.nova-dash .b-insufficient {
+  background: var(--amber-bg);
+  color: #92400e;
+  border: 1px dashed var(--amber);
+}
+
+.nova-dash .risk-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+/* ---- Bar fill variants (งานค้าง/คะแนน) ---- */
+.nova-dash .bar-fill.bad {
+  background: linear-gradient(90deg, #ef4444, #f87171);
+}
+
+/* ---- Chat timeline (viewer) ---- */
+.nova-dash .chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 620px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.nova-dash .msg {
+  display: flex;
+  flex-direction: column;
+  max-width: 82%;
+}
+.nova-dash .msg.customer {
+  align-self: flex-start;
+}
+.nova-dash .msg.accountant,
+.nova-dash .msg.lead {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+.nova-dash .msg .who {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.nova-dash .msg .bubble {
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.nova-dash .msg.customer .bubble {
+  background: #f1f5f9;
+  color: var(--text);
+  border-top-left-radius: 3px;
+}
+.nova-dash .msg.accountant .bubble {
+  background: var(--blue-bg);
+  color: var(--navy-900);
+  border-top-right-radius: 3px;
+}
+.nova-dash .msg.lead .bubble {
+  background: #ede9fe;
+  color: #4c1d95;
+  border-top-right-radius: 3px;
+}
+.nova-dash .msg.system .bubble,
+.nova-dash .msg.unknown .bubble {
+  background: #f8fafc;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.nova-dash .msg .bubble.redacted {
+  font-style: italic;
+  color: var(--muted-2);
+  border: 1px dashed var(--muted-2);
+  background: #f8fafc;
+}
+.nova-dash .msg .time {
+  font-size: 11px;
+  color: var(--muted-2);
+  margin-top: 2px;
+}
+
+/* ---- AI flow steps ---- */
+.nova-dash .steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.nova-dash .step {
+  display: flex;
+  gap: 10px;
+}
+.nova-dash .step .dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 800;
+  color: #fff;
+}
+.nova-dash .step .dot.ok {
+  background: var(--green);
+}
+.nova-dash .step .dot.bad {
+  background: var(--red);
+}
+.nova-dash .step .dot.warn {
+  background: var(--amber);
+}
+.nova-dash .step .dot.wait {
+  background: var(--muted-2);
+}
+.nova-dash .step .stitle {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.nova-dash .step .sdesc {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+.nova-dash .evidence {
+  margin-top: 5px;
+  padding: 6px 10px;
+  background: #f8fafc;
+  border-left: 3px solid var(--sky-400);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.nova-dash .evidence .q {
+  color: var(--navy-900);
+}
+.nova-dash .evidence .e-time {
+  color: var(--muted-2);
+}
+
+.nova-dash .pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.nova-dash .hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 14px 0;
+}
+
+/* note variants เพิ่ม (fact/guess/danger) */
+.nova-dash .note-box.fact {
+  background: #e0f2fe;
+  color: #075985;
+}
+.nova-dash .note-box.guess {
+  background: #f3e8ff;
+  color: #6b21a8;
+}
+.nova-dash .note-box.danger {
+  background: var(--red-bg);
+  color: #991b1b;
+}
+
+/* ---- Evaluation dimensions ---- */
+.nova-dash .dim-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.nova-dash .dim-row .dname {
+  width: 180px;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+.nova-dash .dim-row .dname small {
+  font-weight: 600;
+  color: var(--muted-2);
+  margin-left: 4px;
+}
+.nova-dash .dim-row .dscore {
+  width: 64px;
+  text-align: right;
+  font-weight: 800;
+  color: var(--navy-800);
+}
+
+/* ---- Score ring ---- */
+.nova-dash .score-hero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.nova-dash .score-ring {
+  width: 110px;
+  height: 110px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.nova-dash .score-ring .inner {
+  width: 84px;
+  height: 84px;
+  border-radius: 999px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.nova-dash .score-ring .inner .num {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+}
+.nova-dash .score-ring .inner .den {
+  font-size: 12px;
+  color: var(--muted-2);
+}
+
+/* ---- Feedback "better" variant ---- */
+.nova-dash .fb.better {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+.nova-dash .fb.better .fb-tag {
+  color: var(--blue-600);
+}
+
+/* ---- Checklist ---- */
+.nova-dash .checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.nova-dash .checklist li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 13px;
+  border-bottom: 1px dashed var(--line);
+}
+.nova-dash .checklist li:last-child {
+  border-bottom: none;
+}
+.nova-dash .checklist .cbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1.5px solid var(--muted-2);
+  flex-shrink: 0;
+}
+
+/* ---- Action buttons (review/appeal) ---- */
+.nova-dash .btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.nova-dash .btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--navy-800);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: filter 0.15s, background 0.15s;
+}
+.nova-dash .btn:hover {
+  background: #f5f9ff;
+}
+.nova-dash .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.nova-dash .btn.green {
+  background: var(--green);
+  color: #fff;
+  border-color: var(--green);
+}
+.nova-dash .btn.amber {
+  background: var(--amber);
+  color: #fff;
+  border-color: var(--amber);
+}
+.nova-dash .btn.danger {
+  background: var(--red);
+  color: #fff;
+  border-color: var(--red);
+}
+.nova-dash .btn.green:hover,
+.nova-dash .btn.amber:hover,
+.nova-dash .btn.danger:hover {
+  filter: brightness(1.05);
+  background-clip: padding-box;
+}
+
+.nova-dash .kv {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.nova-dash .kv .k {
+  color: var(--muted);
+  width: 120px;
+  flex-shrink: 0;
+}

@@ -2,6 +2,12 @@ import Link from "next/link";
 import { isAdminRole } from "@/lib/admin/guard";
 import { isPrivilegedRole } from "@/lib/dashboard/access";
 import { canExportReports } from "@/lib/reports";
+import {
+  canSeeExecDashboard,
+  canSeeTeamDashboard,
+  canSeeMeDashboard,
+  canSeeRiskDashboard,
+} from "@/lib/chat-dashboard/access";
 import type { RoleCode } from "@/lib/dashboard/types";
 import NovaMascot from "../liff/survey/[token]/NovaMascot";
 
@@ -40,6 +46,12 @@ export const ROLE_LABEL: Record<RoleCode, string> = {
 export type AppNavActive =
   | "dashboard"
   | "cases"
+  | "chat-exec"
+  | "chat-team"
+  | "chat-me"
+  | "chat-risk"
+  | "chat-viewer"
+  | "chat-eval"
   | "reports"
   | "surveys"
   | "admin"
@@ -59,6 +71,11 @@ const NAV_ITEMS: NavItem[] = [
   { key: "dashboard", href: "/dashboard", label: "Dashboard", canSee: () => true },
   // เคสร้องเรียนทั้งหมด — เฉพาะ privileged (executive/admin/cs)
   { key: "cases", href: "/cases", label: "เคสร้องเรียน", canSee: isPrivilegedRole },
+  // ตรวจแชต (โมดูล AI วิเคราะห์แชท) — แสดงตามบทบาทที่มีสิทธิ์ในแต่ละหน้า
+  { key: "chat-exec", href: "/chat-audit", label: "ตรวจแชต (ภาพรวม)", canSee: canSeeExecDashboard },
+  { key: "chat-team", href: "/chat-audit/team", label: "ตรวจแชต (ทีม)", canSee: canSeeTeamDashboard },
+  { key: "chat-me", href: "/chat-audit/me", label: "งานแชตของฉัน", canSee: canSeeMeDashboard },
+  { key: "chat-risk", href: "/chat-audit/risk", label: "ลูกค้าเสี่ยง", canSee: canSeeRiskDashboard },
   // รายงาน/Export — บทบาทที่ export ข้อมูลผูกลูกค้าได้
   { key: "reports", href: "/reports", label: "รายงาน", canSee: canExportReports },
   // แบบประเมิน — admin/executive
