@@ -74,6 +74,52 @@
 .action-msg.ok { color: #047857; }
 .action-msg.err { color: #b91c1c; }
 
+/* ตัวช่วย 2: ปุ่มแนะนำลูกค้าจากชื่อกลุ่ม (chips เหนือ dropdown) */
+.suggest-chips {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.suggest-chips .chip {
+  padding: 3px 10px;
+  border: 1px solid #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.suggest-chips .chip:hover { background: #dbeafe; }
+
+/* ตัวช่วย 1: กล่อง propagate ตัวตนสมาชิก (review-first) */
+.propagate-box {
+  background: #f8fafc;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 10px;
+  padding: 12px;
+}
+.propagate-box .group-preview { margin-top: 4px; }
+.propagate-box .group-preview summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.propagate-box .group-list {
+  margin-top: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.propagate-box .group-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 2px 0;
+}
+
 /* กระดาษรายงาน (สำหรับพรีวิว + print-to-PDF) */
 .sheet {
   background: #fff;

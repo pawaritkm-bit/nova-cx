@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useActionState } from "react";
 import Link from "next/link";
 import { EVAL_DIMENSIONS } from "@/lib/chat-dashboard/evaluation-detail";
@@ -18,6 +18,7 @@ import type { SlaRuleRow } from "@/lib/chat-admin/sla";
 
 type CustomerOpt = { id: string; name: string; code: string | null };
 type TeamOpt = { id: string; name: string };
+type CustomerSuggestionOpt = { customerId: string; customerName: string };
 
 const URGENCY_LABEL: Record<string, string> = {
   critical: "ด่วนมาก",
@@ -35,15 +36,50 @@ function Msg({ state }: { state: ActionResult | null }) {
 // ---------------------------------------------------------------------
 // แท็บ 1: จับคู่กลุ่ม → ลูกค้า
 // ---------------------------------------------------------------------
-function GroupRow({ group, customers }: { group: ChatGroupRow; customers: CustomerOpt[] }) {
+function GroupRow({
+  group,
+  customers,
+  suggestions,
+}: {
+  group: ChatGroupRow;
+  customers: CustomerOpt[];
+  suggestions: CustomerSuggestionOpt[];
+}) {
   const [state, formAction] = useActionState(mapGroupAction, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const [customerId, setCustomerId] = useState(group.customerId ?? "");
+
+  // กดปุ่มแนะนำ → ตั้งค่าลูกค้าแล้ว submit ฟอร์มเดิม (ผ่าน mapGroupAction + audit)
+  function pickSuggestion(id: string) {
+    setCustomerId(id);
+    // ให้ state อัปเดต value ก่อนแล้วค่อย submit
+    requestAnimationFrame(() => formRef.current?.requestSubmit());
+  }
+
   return (
     <tr>
       <td>{group.groupName ?? <span className="muted">— (ไม่มีชื่อ/ยังไม่มีคีย์ถอดรหัส) —</span>}</td>
       <td>
-        <form action={formAction} className="inline-form">
+        {/* ตัวช่วย 2: ปุ่มแนะนำลูกค้าจากชื่อกลุ่ม (เหนือ dropdown เดิม) — กดเลือกเร็ว */}
+        {!group.customerId && suggestions.length > 0 ? (
+          <div className="suggest-chips">
+            <span className="muted" style={{ fontSize: 11 }}>แนะนำ:</span>
+            {suggestions.map((s) => (
+              <button
+                key={s.customerId}
+                type="button"
+                className="chip"
+                title="กดเพื่อจับคู่ลูกค้ารายนี้"
+                onClick={() => pickSuggestion(s.customerId)}
+              >
+                {s.customerName}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <form action={formAction} className="inline-form" ref={formRef}>
           <input type="hidden" name="chat_group_id" value={group.id} />
-          <select name="customer_id" defaultValue={group.customerId ?? ""}>
+          <select name="customer_id" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
             <option value="">— ยังไม่จับคู่ —</option>
             {customers.map((c) => (
               <option key={c.id} value={c.id}>
@@ -70,7 +106,15 @@ function GroupRow({ group, customers }: { group: ChatGroupRow; customers: Custom
   );
 }
 
-function MappingPanel({ groups, customers }: { groups: ChatGroupRow[]; customers: CustomerOpt[] }) {
+function MappingPanel({
+  groups,
+  customers,
+  suggestionsByGroup,
+}: {
+  groups: ChatGroupRow[];
+  customers: CustomerOpt[];
+  suggestionsByGroup: Record<string, CustomerSuggestionOpt[]>;
+}) {
   const mapped = groups.filter((g) => g.customerId).length;
   return (
     <div className="card">
@@ -82,6 +126,7 @@ function MappingPanel({ groups, customers }: { groups: ChatGroupRow[]; customers
       </div>
       <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
         จับคู่กลุ่มที่บอทเข้าไปแล้วให้ตรงกับ &quot;ลูกค้า&quot; แล้วกด &quot;จัดการสมาชิก&quot; เพื่อระบุว่าใครคือนักบัญชี/ลูกค้า
+        — หรือใช้ <Link href="/chat-audit/admin/members" className="underline">จับคู่สมาชิก (ภาพรวม)</Link> เพื่อผูกนักบัญชีทีเดียวหลายกลุ่ม
       </p>
       {groups.length === 0 ? (
         <p className="empty">ยังไม่มีกลุ่ม LINE (รอบอทเข้ากลุ่มและเก็บข้อความ)</p>
@@ -99,7 +144,7 @@ function MappingPanel({ groups, customers }: { groups: ChatGroupRow[]; customers
             </thead>
             <tbody>
               {groups.map((g) => (
-                <GroupRow key={g.id} group={g} customers={customers} />
+                <GroupRow key={g.id} group={g} customers={customers} suggestions={suggestionsByGroup[g.id] ?? []} />
               ))}
             </tbody>
           </table>
@@ -300,12 +345,14 @@ export default function AdminConfig({
   teams,
   weights,
   slaRules,
+  suggestionsByGroup,
 }: {
   groups: ChatGroupRow[];
   customers: CustomerOpt[];
   teams: TeamOpt[];
   weights: Weights;
   slaRules: SlaRuleRow[];
+  suggestionsByGroup: Record<string, CustomerSuggestionOpt[]>;
 }) {
   const [tab, setTab] = useState<"mapping" | "weights" | "sla">("mapping");
   return (
@@ -316,7 +363,7 @@ export default function AdminConfig({
         <button className={`ca-tab${tab === "sla" ? " active" : ""}`} onClick={() => setTab("sla")}>SLA (เวลามาตรฐาน)</button>
       </div>
 
-      {tab === "mapping" ? <MappingPanel groups={groups} customers={customers} /> : null}
+      {tab === "mapping" ? <MappingPanel groups={groups} customers={customers} suggestionsByGroup={suggestionsByGroup} /> : null}
       {tab === "weights" ? <WeightsPanel weights={weights} /> : null}
       {tab === "sla" ? <SlaPanel rules={slaRules} teams={teams} /> : null}
     </div>

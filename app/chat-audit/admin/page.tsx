@@ -5,6 +5,7 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAdminContext } from "@/lib/admin/guard";
 import { listCustomers, listTeams } from "@/lib/admin/service";
 import { listChatGroups } from "@/lib/chat-admin/mapping";
+import { rankCustomerSuggestions } from "@/lib/chat-admin/customer-suggest";
 import { getActiveWeights } from "@/lib/chat-admin/weights";
 import { listSlaRules } from "@/lib/chat-admin/sla";
 import ChatAuditFrame from "../_Frame";
@@ -56,6 +57,17 @@ export default async function ChatAdminPage() {
       listSlaRules(service, tenantId),
     ]);
 
+    // ตัวช่วย 2: แนะนำลูกค้าจากชื่อกลุ่ม (คำนวณฝั่ง server จากชื่อที่ decrypt แล้ว — ไม่ query เพิ่ม)
+    const matchable = customers.map((c) => ({ id: c.id, name: c.name, business_name: c.business_name }));
+    const suggestionsByGroup: Record<string, { customerId: string; customerName: string }[]> = {};
+    for (const g of groups) {
+      if (g.customerId) continue; // จับคู่แล้ว ไม่ต้องแนะนำ
+      const ranked = rankCustomerSuggestions(g.groupName, matchable, 3);
+      if (ranked.length > 0) {
+        suggestionsByGroup[g.id] = ranked.map((s) => ({ customerId: s.customerId, customerName: s.customerName }));
+      }
+    }
+
     return (
       <ChatAuditFrame
         active="chat-admin"
@@ -70,6 +82,7 @@ export default async function ChatAdminPage() {
           teams={teams.map((t) => ({ id: t.id, name: t.name }))}
           weights={weights}
           slaRules={slaRules}
+          suggestionsByGroup={suggestionsByGroup}
         />
       </ChatAuditFrame>
     );
