@@ -2,6 +2,7 @@ import Link from "next/link";
 import { isAdminRole } from "@/lib/admin/guard";
 import { isPrivilegedRole } from "@/lib/dashboard/access";
 import { canExportReports } from "@/lib/reports";
+import { canSeeAccountantReport } from "@/lib/reports/report-access";
 import {
   canSeeExecDashboard,
   canSeeTeamDashboard,
@@ -52,6 +53,8 @@ export type AppNavActive =
   | "chat-risk"
   | "chat-viewer"
   | "chat-eval"
+  | "chat-admin"
+  | "chat-report"
   | "reports"
   | "surveys"
   | "admin"
@@ -76,6 +79,10 @@ const NAV_ITEMS: NavItem[] = [
   { key: "chat-team", href: "/chat-audit/team", label: "ตรวจแชต (ทีม)", canSee: canSeeTeamDashboard },
   { key: "chat-me", href: "/chat-audit/me", label: "งานแชตของฉัน", canSee: canSeeMeDashboard },
   { key: "chat-risk", href: "/chat-audit/risk", label: "ลูกค้าเสี่ยง", canSee: canSeeRiskDashboard },
+  // รายงานประเมินนักบัญชี (รายเดือน) — exec/admin/auditor/lead/hr/accountant (scope จริงในหน้า)
+  { key: "chat-report", href: "/chat-audit/reports", label: "รายงานประเมิน", canSee: canSeeAccountantReport },
+  // ตั้งค่าตรวจแชต (จับคู่กลุ่ม/น้ำหนัก/SLA) — admin/executive
+  { key: "chat-admin", href: "/chat-audit/admin", label: "ตั้งค่าตรวจแชต", canSee: isAdminRole },
   // รายงาน/Export — บทบาทที่ export ข้อมูลผูกลูกค้าได้
   { key: "reports", href: "/reports", label: "รายงาน", canSee: canExportReports },
   // แบบประเมิน — admin/executive
