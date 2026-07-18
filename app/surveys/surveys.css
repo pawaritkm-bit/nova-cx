@@ -1,0 +1,114 @@
+/* ---- หน้า /surveys — การ์ดฟอร์ม A/B/C/D + รายการคำถาม (read-only) ---- */
+
+.nova-dash .survey-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.nova-dash .survey-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nova-dash .survey-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.nova-dash .survey-type-chip {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--navy, #1e293b);
+}
+
+.nova-dash .survey-card-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.nova-dash .survey-card-title h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.nova-dash .survey-card-title p {
+  font-size: 12.5px;
+  margin: 2px 0 0;
+}
+
+.nova-dash .survey-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 13px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.nova-dash .survey-meta strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.nova-dash .survey-questions summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy, #1e293b);
+  user-select: none;
+}
+
+.nova-dash .survey-q-list {
+  list-style: decimal;
+  margin: 10px 0 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nova-dash .survey-q-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.nova-dash .survey-q-text {
+  color: var(--text);
+}
+
+.nova-dash .survey-q-type {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--muted);
+  background: #f1f5f9;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+.nova-dash .survey-empty-q {
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .nova-dash .survey-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,19 +1,27 @@
 import Link from "next/link";
 import { isAdminRole } from "@/lib/admin/guard";
+import { isPrivilegedRole } from "@/lib/dashboard/access";
+import { canExportReports } from "@/lib/reports";
 import type { RoleCode } from "@/lib/dashboard/types";
 import NovaMascot from "../liff/survey/[token]/NovaMascot";
 
 /**
- * AppNav — แถบเมนูนำทางร่วมของหน้าหลังบ้าน (dashboard + admin)
+ * AppNav — แถบเมนูนำทางร่วมของหน้าหลังบ้าน (dashboard + admin + cases + reports + surveys + settings)
  *
- * รวมทุกหน้าที่ต้อง login ไว้ในเมนูเดียว: พอเข้าสู่ระบบแล้วสลับ Dashboard ↔ จัดการข้อมูล ได้
+ * รวมทุกหน้าที่ต้อง login ไว้ในเมนูเดียว: พอเข้าสู่ระบบแล้วสลับหน้าได้จากที่เดียว
  * โดยไม่ต้องพิมพ์ URL เอง
  *   - โลโก้/ชื่อ NOVA-CX + มาสคอตน้อง NOVA (reuse NovaMascot variant="profile")
- *   - ลิงก์ Dashboard (เห็นเสมอ) + จัดการข้อมูล/Admin (เห็นเฉพาะ role ที่เข้าได้)
+ *   - ลิงก์แต่ละอันโผล่เฉพาะบทบาทที่เข้าได้ (allow-list) — กันงงว่ากดแล้วโดน redirect
+ *       · Dashboard          — ทุกบทบาทที่ login
+ *       · เคสร้องเรียน /cases — privileged (executive/admin/cs)
+ *       · รายงาน /reports     — export ได้ (executive/admin/acc_lead/sales_lead/cs)
+ *       · แบบประเมิน /surveys — admin/executive
+ *       · จัดการข้อมูล /admin  — admin/executive
+ *       · ตั้งค่า /settings    — admin/executive
  *   - ฝั่งขวา: ป้ายบทบาทผู้ใช้ + ปุ่มออกจากระบบ (POST /auth/logout)
  *
  * เป็น server component (ไม่มี state/hook) — รับ active/role/authed เป็น prop จากหน้าที่ resolve session แล้ว
- * ★ ไม่มีการเปลี่ยน URL/guard — เป็นชั้น presentation ล้วน ๆ
+ * ★ ไม่มีการเปลี่ยน URL/guard — เป็นชั้น presentation ล้วน ๆ (สิทธิ์จริงบังคับที่หน้า/view/RLS)
  */
 
 /** ป้ายบทบาทภาษาไทย (ตรงกับ roles.code — 7 บทบาท) */
@@ -27,7 +35,37 @@ export const ROLE_LABEL: Record<RoleCode, string> = {
   admin: "Admin",
 };
 
-export type AppNavActive = "dashboard" | "admin";
+export type AppNavActive =
+  | "dashboard"
+  | "cases"
+  | "reports"
+  | "surveys"
+  | "admin"
+  | "settings";
+
+/** นิยามลิงก์เมนูหนึ่งอัน + เงื่อนไขบทบาทที่เห็นได้ */
+type NavItem = {
+  key: AppNavActive;
+  href: string;
+  label: string;
+  /** true = แสดงลิงก์นี้สำหรับบทบาทนี้ (allow-list) */
+  canSee: (role: RoleCode) => boolean;
+};
+
+const NAV_ITEMS: NavItem[] = [
+  // Dashboard เห็นเสมอเมื่อ login (ทุกบทบาทมีหน้า dashboard ของตัวเอง)
+  { key: "dashboard", href: "/dashboard", label: "Dashboard", canSee: () => true },
+  // เคสร้องเรียนทั้งหมด — เฉพาะ privileged (executive/admin/cs)
+  { key: "cases", href: "/cases", label: "เคสร้องเรียน", canSee: isPrivilegedRole },
+  // รายงาน/Export — บทบาทที่ export ข้อมูลผูกลูกค้าได้
+  { key: "reports", href: "/reports", label: "รายงาน", canSee: canExportReports },
+  // แบบประเมิน — admin/executive
+  { key: "surveys", href: "/surveys", label: "แบบประเมิน", canSee: isAdminRole },
+  // จัดการข้อมูล — admin/executive
+  { key: "admin", href: "/admin", label: "จัดการข้อมูล", canSee: isAdminRole },
+  // ตั้งค่า — admin/executive
+  { key: "settings", href: "/settings", label: "ตั้งค่า", canSee: isAdminRole },
+];
 
 export default function AppNav({
   active,
@@ -47,8 +85,10 @@ export default function AppNav({
 }) {
   // แสดงเมนู/ควบคุมเฉพาะเมื่อ login จริงและมีบทบาท (หน้าถูก guard redirect อยู่แล้วถ้าไม่มี session)
   const showControls = authed && !!role;
-  // ลิงก์ Admin โผล่เฉพาะบทบาทที่เข้าได้ (admin/executive) — กันงงว่ากดแล้วโดน redirect
-  const canSeeAdmin = isAdminRole(role);
+  // เมนูที่บทบาทนี้เห็นได้ (กรองด้วย allow-list ของแต่ละลิงก์)
+  const visibleItems = role
+    ? NAV_ITEMS.filter((item) => item.canSee(role))
+    : [];
 
   return (
     <>
@@ -76,25 +116,19 @@ export default function AppNav({
         ) : null}
       </div>
 
-      {/* แถบเมนูร่วม — สลับหน้าได้จากที่เดียว */}
+      {/* แถบเมนูร่วม — สลับหน้าได้จากที่เดียว (wrap ได้บนจอแคบ) */}
       {showControls ? (
         <nav className="app-nav" aria-label="เมนูหลัก">
-          <Link
-            href="/dashboard"
-            aria-current={active === "dashboard" ? "page" : undefined}
-            className={`app-nav-link${active === "dashboard" ? " active" : ""}`}
-          >
-            Dashboard
-          </Link>
-          {canSeeAdmin ? (
+          {visibleItems.map((item) => (
             <Link
-              href="/admin"
-              aria-current={active === "admin" ? "page" : undefined}
-              className={`app-nav-link${active === "admin" ? " active" : ""}`}
+              key={item.key}
+              href={item.href}
+              aria-current={active === item.key ? "page" : undefined}
+              className={`app-nav-link${active === item.key ? " active" : ""}`}
             >
-              จัดการข้อมูล
+              {item.label}
             </Link>
-          ) : null}
+          ))}
         </nav>
       ) : null}
     </>

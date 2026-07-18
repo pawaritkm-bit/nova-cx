@@ -1,0 +1,113 @@
+/* ---- หน้า /settings — สถานะระบบ/การเชื่อมต่อ (read-only) ---- */
+
+.nova-dash .settings-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.nova-dash .settings-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 10px);
+  padding: 12px 14px;
+}
+
+.nova-dash .settings-kpi .label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.nova-dash .settings-kpi .value {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+/* ---- รายการสถานะการเชื่อมต่อ ---- */
+.nova-dash .status-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.nova-dash .status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13.5px;
+}
+
+.nova-dash .status-row:last-child {
+  border-bottom: none;
+}
+
+.nova-dash .status-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.nova-dash .status-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  text-align: right;
+}
+
+.nova-dash .status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.nova-dash .status-dot.on {
+  background: #16a34a;
+}
+
+.nova-dash .status-dot.off {
+  background: #cbd5e1;
+}
+
+.nova-dash .status-detail {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.nova-dash .settings-note {
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  line-height: 1.6;
+}
+
+/* ป้าย cron สถานะ unknown (เสริมจาก admin-badge on/off) */
+.nova-dash .admin-badge.unknown {
+  background: #f1f5f9;
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  .nova-dash .settings-kpis {
+    grid-template-columns: 1fr;
+  }
+  .nova-dash .status-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .nova-dash .status-value {
+    text-align: left;
+  }
+}

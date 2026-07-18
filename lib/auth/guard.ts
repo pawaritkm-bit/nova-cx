@@ -36,13 +36,20 @@ export function isPublicPath(pathname: string): boolean {
   );
 }
 
-/** เส้นทางที่ต้องมี session พนักงาน (หน้า dashboard + admin) */
+/** prefix ของหน้าหลังบ้านที่ต้องมี session พนักงาน (guard ที่ middleware) */
+const PROTECTED_PREFIXES = [
+  "/dashboard",
+  "/admin",
+  "/cases",
+  "/reports",
+  "/surveys",
+  "/settings",
+];
+
+/** เส้นทางที่ต้องมี session พนักงาน (หน้าหลังบ้านทั้งหมด) */
 export function isProtectedPath(pathname: string): boolean {
-  return (
-    pathname === "/dashboard" ||
-    pathname.startsWith("/dashboard/") ||
-    pathname === "/admin" ||
-    pathname.startsWith("/admin/")
+  return PROTECTED_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`)
   );
 }
 
