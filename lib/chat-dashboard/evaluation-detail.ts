@@ -10,6 +10,7 @@ import {
   canReviewEvaluation,
   canAppeal,
   canViewEvidence,
+  canViewEvaluation,
   type Viewer,
 } from "@/lib/evaluation/access";
 import type { AccountantEvaluationRow } from "./types";
@@ -96,6 +97,9 @@ export async function getEvaluationDetail(
   if (!evaluation) return null;
 
   const empId = evaluation.employee_id;
+  // ★ L4: defense-in-depth ที่ app-layer (ซ้ำ RLS tier-aware) — ให้เข้ากับส่วนอื่นของโมดูล
+  //   RLS ควรคืน 0 แถวอยู่แล้วถ้าไม่มีสิทธิ์ แต่ยืนยันซ้ำที่นี่แบบ default-deny
+  if (!canViewEvaluation(viewer, empId, evaluation.status)) return null;
   const canSeeEvidence = canViewEvidence(viewer, empId);
 
   const [{ data: wData }, { data: empData }, { data: revData }, { data: appData }] =

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveEvalViewer } from "@/lib/evaluation/context";
 import { applyManagerReview, resolveAppeal, EvalAuthError } from "@/lib/evaluation/review";
+import { isValidOverallScore } from "@/lib/chat-dashboard/eval-score";
 import { newRequestId, logServerError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -56,6 +57,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "invalid_action" }, { status: 400 });
     }
 
+    // ★ H1: action='edit' ต้องมี adjustedOverall เป็น "ตัวเลขจริง" ในช่วง 0–100
+    //   (กันฝั่ง client ส่งช่องว่าง/coerce เป็น 0 → คะแนนพนักงานกลายเป็น 0 เงียบ ๆ)
+    const adjustedOverall = isValidOverallScore(body.adjustedOverall) ? body.adjustedOverall : null;
+    if (action === "edit" && adjustedOverall === null) {
+      return NextResponse.json({ error: "invalid_score", message: "คะแนนรวมต้องเป็นตัวเลข 0–100" }, { status: 400 });
+    }
+
     const result = await applyManagerReview(serviceDb, viewer, {
       tenantId,
       evaluationId: String(body.evaluationId ?? ""),
@@ -64,7 +72,7 @@ export async function POST(request: NextRequest) {
         body.adjustedDimensionScores && typeof body.adjustedDimensionScores === "object"
           ? (body.adjustedDimensionScores as Record<string, number>)
           : null,
-      adjustedOverall: typeof body.adjustedOverall === "number" ? body.adjustedOverall : null,
+      adjustedOverall,
       note: typeof body.note === "string" ? body.note : null,
     });
     return NextResponse.json({ status: "ok", ...result }, { status: 200 });

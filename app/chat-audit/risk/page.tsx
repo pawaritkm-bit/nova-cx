@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import { resolveEvalViewer } from "@/lib/evaluation/context";
-import { canSeeRiskDashboard } from "@/lib/chat-dashboard/access";
+import { canSeeRiskDashboard, canAccessChatViewer } from "@/lib/chat-dashboard/access";
 import { getRiskDashboard } from "@/lib/chat-dashboard/queries";
 import ChatAuditFrame from "../_Frame";
 
@@ -41,6 +41,8 @@ export default async function ChatRiskPage() {
     );
   }
 
+  // ★ L2: cs เปิด chat viewer ไม่ได้ → ไม่แสดงลิงก์ "เปิดเคส" (กัน dead link)
+  const canOpenCase = canAccessChatViewer(viewer.role);
   let rows;
   try {
     rows = await getRiskDashboard(db, viewer);
@@ -88,7 +90,7 @@ export default async function ChatRiskPage() {
                         <td className="center"><span className={`badge ${b.cls}`}>{b.label}</span>{r.escalated ? <div style={{ fontSize: 10 }} className="muted">↑ escalate แล้ว</div> : null}</td>
                         <td>{r.reason ?? "—"}</td>
                         <td>{r.ownerName}</td>
-                        <td className="center">{r.caseId ? <Link href={`/chat-audit/cases/${r.caseId}`} className="underline">เปิด</Link> : "—"}</td>
+                        <td className="center">{r.caseId && canOpenCase ? <Link href={`/chat-audit/cases/${r.caseId}`} className="underline">เปิด</Link> : "—"}</td>
                       </tr>
                     );
                   })}

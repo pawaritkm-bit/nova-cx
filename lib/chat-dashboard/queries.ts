@@ -159,6 +159,62 @@ export function topProblemsFromViolations(
     .slice(0, 6);
 }
 
+/**
+ * ★ M2: อัตราทวงซ้ำ — คิดจาก "เคสเปิด" ชุดเดียวทั้งเศษ/ส่วน (ไม่ปนหน่วย)
+ *   = (เคสเปิดที่กลุ่มมี violation repeat_doc_request) ÷ (เคสเปิดทั้งหมด)
+ *   openCases = รายการเคสที่เปิดอยู่แล้ว (ผู้เรียกกรอง CLOSED ออกก่อน)
+ */
+export function computeRepeatRate(
+  openCases: ConversationCaseRow[],
+  violations: { violation_type: string; chat_group_id: string }[]
+): number | null {
+  if (openCases.length === 0) return null;
+  const repeatGroups = new Set(
+    violations.filter((v) => v.violation_type === "repeat_doc_request").map((v) => v.chat_group_id)
+  );
+  const n = openCases.filter((c) => repeatGroups.has(c.chat_group_id)).length;
+  return Math.min(1, Math.round((n / openCases.length) * 100) / 100);
+}
+
+/**
+ * ★ M1: attribute violation "ต่อเคส → owner" (ไม่ผูกที่ระดับ chat_group ซึ่ง last-write-wins)
+ *   - ทางหลัก: evidence_message_id → owner ของเคสที่ข้อความนั้นสังกัด (messageOwner)
+ *   - fallback: ถ้ากลุ่มมี owner เดียวชัดเจน (unambiguous) ใช้ groupSingleOwner
+ *   - ระบุ owner ไม่ได้ (กลุ่มหลายเจ้าของ + ไม่มี evidence) → ข้าม (ไม่เดา ไม่โยนผิดคน)
+ */
+export function attributeExpertViolations(
+  violations: { evidence_message_id: string | null; chat_group_id: string }[],
+  messageOwner: Map<string, string>,
+  groupSingleOwner: Map<string, string>
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const v of violations) {
+    const owner =
+      (v.evidence_message_id ? messageOwner.get(v.evidence_message_id) : undefined) ??
+      groupSingleOwner.get(v.chat_group_id);
+    if (owner) out.set(owner, (out.get(owner) ?? 0) + 1);
+  }
+  return out;
+}
+
+/** map chat_group_id → owner "เฉพาะกลุ่มที่มี owner เดียว" (กลุ่มหลายเจ้าของ = ข้าม) */
+export function buildGroupSingleOwner(
+  cases: { chat_group_id: string; owner_employee_id: string | null }[]
+): Map<string, string> {
+  const owners = new Map<string, Set<string>>();
+  for (const c of cases) {
+    if (!c.owner_employee_id) continue;
+    const s = owners.get(c.chat_group_id) ?? new Set<string>();
+    s.add(c.owner_employee_id);
+    owners.set(c.chat_group_id, s);
+  }
+  const out = new Map<string, string>();
+  for (const [gid, set] of owners.entries()) {
+    if (set.size === 1) out.set(gid, [...set][0]);
+  }
+  return out;
+}
+
 function logTruncate(context: string, n: number, cap: number): void {
   if (n >= cap) {
     console.warn(`[chat-dashboard] ${context}: ผลลัพธ์ถูกตัดที่ ${cap} แถว (อาจมีข้อมูลมากกว่านี้)`);
@@ -177,13 +233,13 @@ export async function getExecChatDashboard(
       db.from("conversation_cases").select(CASE_COLS).is("deleted_at", null).limit(CASE_LIMIT),
       db.from("chat_groups").select("id").is("deleted_at", null).eq("is_active", true).limit(CASE_LIMIT),
       db.from("risk_alerts").select("level, status").in("status", ACTIVE_RISK).limit(CASE_LIMIT),
-      db.from("sop_violations").select("violation_type").is("deleted_at", null).limit(CASE_LIMIT),
+      db.from("sop_violations").select("violation_type, chat_group_id").is("deleted_at", null).limit(CASE_LIMIT),
     ]);
 
   const cases = (caseData ?? []) as ConversationCaseRow[];
   logTruncate("exec cases", cases.length, CASE_LIMIT);
   const risks = (riskData ?? []) as { level: string; status: string }[];
-  const violations = (violData ?? []) as { violation_type: string }[];
+  const violations = (violData ?? []) as { violation_type: string; chat_group_id: string }[];
 
   const summary = summarizeExecCases(cases, nowMs);
   const names = await fetchEmployeeNames(db, cases.map((c) => c.owner_employee_id ?? "").filter(Boolean));
@@ -191,9 +247,10 @@ export async function getExecChatDashboard(
   const complaints = risks.filter((r) => r.level === "orange" || r.level === "red").length;
   const cancelRisk = risks.filter((r) => r.level === "red").length;
 
-  // อัตราทวงซ้ำ (ประมาณ) = เคสเปิดที่มี violation ประเภทถาม/ขอซ้ำ ÷ เคสเปิดทั้งหมด
-  const repeatCount = violations.filter((v) => v.violation_type === "repeat_doc_request").length;
-  const repeatRate = summary.openCases > 0 ? Math.min(1, Math.round((repeatCount / summary.openCases) * 100) / 100) : null;
+  // ★ M2: อัตราทวงซ้ำ = "เคสเปิด" ที่กลุ่มมี violation repeat_doc_request ÷ "เคสเปิด" ทั้งหมด
+  //   (numerator/denominator มาจากชุดเดียวกัน = เคสเปิด — ไม่ปนหน่วย)
+  const openCases = cases.filter((c) => !CLOSED.has(c.status));
+  const repeatRate = computeRepeatRate(openCases, violations);
 
   return {
     totalGroups: (groupData ?? []).length,
@@ -241,25 +298,41 @@ export async function getTeamChatDashboard(
   const cases = (caseData ?? []) as ConversationCaseRow[];
   const evals = (evalData ?? []) as (Pick<AccountantEvaluationRow, "id" | "employee_id" | "conversation_case_id" | "overall_score" | "status" | "needs_review">)[];
 
-  // owner ต่อ chat_group (สำหรับ attribute needs_expert_review)
-  const groupOwner = new Map<string, string>();
+  // ★ M1: attribute needs_expert_review "ต่อเคส → owner" (ไม่ใช่ chat_group last-write-wins)
+  //   1) caseOwner: caseId → owner ; 2) messageOwner: chat_message_id → owner (ผ่าน case_messages)
+  //   3) groupSingleOwner: กลุ่มที่มี owner เดียวเท่านั้น (fallback เมื่อ violation ไม่มี evidence)
+  const caseOwner = new Map<string, string>();
   for (const c of cases) {
-    if (c.owner_employee_id) groupOwner.set(c.chat_group_id, c.owner_employee_id);
+    if (c.owner_employee_id) caseOwner.set(c.id, c.owner_employee_id);
   }
-  const groupIds = [...groupOwner.keys()];
+  const caseIds = [...caseOwner.keys()];
+  const groupIds = [...new Set(cases.map((c) => c.chat_group_id))];
+  const groupSingleOwner = buildGroupSingleOwner(cases);
+
+  const messageOwner = new Map<string, string>();
+  if (caseIds.length > 0) {
+    const { data: linkData } = await db
+      .from("case_messages")
+      .select("case_id, chat_message_id")
+      .in("case_id", caseIds)
+      .limit(CASE_LIMIT);
+    for (const l of (linkData ?? []) as { case_id: string; chat_message_id: string }[]) {
+      const owner = caseOwner.get(l.case_id);
+      if (owner) messageOwner.set(l.chat_message_id, owner);
+    }
+  }
+
   let expertByOwner = new Map<string, number>();
   if (groupIds.length > 0) {
     const { data: violData } = await db
       .from("sop_violations")
-      .select("chat_group_id")
+      .select("evidence_message_id, chat_group_id")
       .eq("needs_expert_review", true)
       .in("chat_group_id", groupIds)
       .is("deleted_at", null)
       .limit(CASE_LIMIT);
-    for (const v of (violData ?? []) as { chat_group_id: string }[]) {
-      const owner = groupOwner.get(v.chat_group_id);
-      if (owner) expertByOwner.set(owner, (expertByOwner.get(owner) ?? 0) + 1);
-    }
+    const viols = (violData ?? []) as { evidence_message_id: string | null; chat_group_id: string }[];
+    expertByOwner = attributeExpertViolations(viols, messageOwner, groupSingleOwner);
   }
 
   const names = await fetchEmployeeNames(db, memberIds);

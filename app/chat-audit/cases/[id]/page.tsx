@@ -19,11 +19,39 @@ function stepDot(status: unknown): { cls: string; icon: string } {
   return { cls: "wait", icon: "…" };
 }
 
-function asArray(v: unknown): Record<string, unknown>[] {
-  return Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => !!x && typeof x === "object") : [];
-}
 function str(v: unknown): string {
   return v === null || v === undefined ? "" : String(v);
+}
+
+/** ขั้นตอน flow ที่ normalize แล้ว (รองรับทั้ง item เป็น string และ object) */
+type FlowStep = {
+  title: string;
+  status: unknown;
+  desc: string;
+  evidence: Record<string, unknown> | null;
+};
+
+/**
+ * ★ L1: normalize flow_steps — รับได้ทั้ง string array และ object array
+ *   (asArray เดิม filter object ทิ้ง → flow_steps ที่เป็น string array หายทั้งชุด)
+ */
+function normalizeFlowSteps(v: unknown, itemLabel: (x: unknown) => string): FlowStep[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x) => x !== null && x !== undefined)
+    .map((x, i) => {
+      if (typeof x === "object") {
+        const o = x as Record<string, unknown>;
+        return {
+          title: itemLabel(o.title ?? o.step ?? o.name ?? `ขั้นที่ ${i + 1}`),
+          status: o.status ?? o.state,
+          desc: str(o.desc ?? o.description),
+          evidence: (o.evidence ?? null) as Record<string, unknown> | null,
+        };
+      }
+      // item เป็น string (หรืออื่น ๆ) → ใช้เป็นชื่อขั้น
+      return { title: itemLabel(x), status: undefined, desc: "", evidence: null };
+    });
 }
 /** ข้อความในรายการที่อาจเป็น string หรือ object */
 function itemText(v: unknown): string {
@@ -82,7 +110,7 @@ export default async function ChatCaseViewerPage({ params }: { params: Promise<{
 
   const c = view.case;
   const a = view.analysis;
-  const flow = asArray(a?.flow_steps);
+  const flow = normalizeFlowSteps(a?.flow_steps, itemText);
   const problems = toList(a?.problems);
   const facts = toList(a?.customer_facts);
   const assumptions = toList(a?.ai_assumptions);
@@ -131,14 +159,14 @@ export default async function ChatCaseViewerPage({ params }: { params: Promise<{
                 {flow.length > 0 ? (
                   <div className="steps">
                     {flow.map((s, i) => {
-                      const dot = stepDot(s.status ?? s.state);
-                      const ev = (s.evidence ?? null) as Record<string, unknown> | null;
+                      const dot = stepDot(s.status);
+                      const ev = s.evidence;
                       return (
                         <div className="step" key={i}>
                           <div className={`dot ${dot.cls}`}>{dot.icon}</div>
                           <div className="sbody">
-                            <div className="stitle">{itemText(s.title ?? s.step ?? s.name ?? `ขั้นที่ ${i + 1}`)}</div>
-                            {s.desc || s.description ? <div className="sdesc">{str(s.desc ?? s.description)}</div> : null}
+                            <div className="stitle">{s.title}</div>
+                            {s.desc ? <div className="sdesc">{s.desc}</div> : null}
                             {ev ? (
                               <div className="evidence">
                                 {ev.quote || ev.text ? <span className="q">“{str(ev.quote ?? ev.text)}”</span> : null}

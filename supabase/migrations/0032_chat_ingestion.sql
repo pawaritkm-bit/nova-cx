@@ -198,8 +198,15 @@ create policy tenant_isolation on public.customer_group_mapping for all to authe
 -- =====================================================================
 -- GRANT posture (pattern 0013) — ตารางสร้างหลัง 0013 จึงต้องตั้งชัดเจน
 --   anon           : ปฏิเสธทั้งหมด (deny-by-default ตั้งแต่ชั้น GRANT)
---   authenticated  : select/insert/update/delete (RLS คุม row อีกชั้น)
+--   authenticated  : ★ SELECT เท่านั้น — เขียนผ่าน service_role/RPC (worker/webhook) เท่านั้น
+--                    (กัน client เขียน/แก้เนื้อหาแชตตรงผ่าน PostgREST; เนื้อหาเป็น ciphertext)
 --   service_role   : all (worker/webhook เบื้องหลัง)
+--
+-- ★ security-M1 (Phase 5a review): เดิม grant CRUD ให้ authenticated → client ยิง PostgREST
+--   ตรงเพื่อ "เขียน" หรือ "อ่าน metadata ข้ามทีม" ได้ (RLS ทำแค่ tenant isolation ไม่ scope owner/team)
+--   ทั้งโมดูลนี้ "เขียนผ่าน service_role/RPC เท่านั้น" อยู่แล้ว → revoke write ออกได้ทันที
+--   หมายเหตุ: การ "อ่าน metadata" ข้ามทีมในระดับ SELECT ยังยอมรับได้ในเฟสนี้
+--   (เนื้อหาจริงเข้ารหัส at-rest + UI scope ด้วย app-layer) — owner/team RLS = follow-up
 -- =====================================================================
 revoke all on public.chat_groups            from anon;
 revoke all on public.chat_members           from anon;
@@ -207,11 +214,11 @@ revoke all on public.chat_messages          from anon;
 revoke all on public.message_attachments    from anon;
 revoke all on public.customer_group_mapping from anon;
 
-grant select, insert, update, delete on public.chat_groups            to authenticated;
-grant select, insert, update, delete on public.chat_members           to authenticated;
-grant select, insert, update, delete on public.chat_messages          to authenticated;
-grant select, insert, update, delete on public.message_attachments    to authenticated;
-grant select, insert, update, delete on public.customer_group_mapping to authenticated;
+grant select on public.chat_groups            to authenticated;
+grant select on public.chat_members           to authenticated;
+grant select on public.chat_messages          to authenticated;
+grant select on public.message_attachments    to authenticated;
+grant select on public.customer_group_mapping to authenticated;
 
 grant all on public.chat_groups            to service_role;
 grant all on public.chat_members           to service_role;

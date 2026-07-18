@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { parseEditScore } from "@/lib/chat-dashboard/eval-score";
 
 /**
  * ปุ่มตัดสินของหัวหน้า [ยืนยัน][แก้ไข][ยกเลิก] + [อุทธรณ์] ของนักบัญชี
@@ -53,8 +54,9 @@ export default function ReviewActions({
   function doReview(action: "confirm" | "edit" | "reject") {
     const body: Record<string, unknown> = { action: "review", reviewAction: action, evaluationId };
     if (action === "edit") {
-      const n = Number(overall);
-      if (!Number.isFinite(n) || n < 0 || n > 100) {
+      // ★ H1: parseEditScore reject ช่องว่างก่อน Number() (กัน Number("")=0 เซฟ 0 เงียบ ๆ)
+      const n = parseEditScore(overall);
+      if (n === null) {
         setMsg("กรุณากรอกคะแนนรวม 0–100");
         return;
       }

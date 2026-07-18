@@ -157,16 +157,20 @@ create policy tenant_isolation on public.sop_violations for all to authenticated
 -- =====================================================================
 -- GRANT posture (pattern 0013) — ตารางสร้างหลัง 0013 ต้องตั้งชัดเจน
 --   anon          : ปฏิเสธทั้งหมด (deny-by-default)
---   authenticated : select/insert/update/delete (RLS คุม row อีกชั้น)
+--   authenticated : ★ SELECT เท่านั้น — เขียนผ่าน service_role/RPC (worker) เท่านั้น
 --   service_role  : all (worker เบื้องหลัง)
+--
+-- ★ security-M1 (Phase 5a review): ผลวิเคราะห์ AI เขียนผ่าน persist_chat_analysis()
+--   (service_role) เท่านั้น → revoke insert/update/delete จาก authenticated กันปลอมผลวิเคราะห์
+--   ตรงผ่าน PostgREST (การอ่านข้าม team ระดับ SELECT ยอมรับได้ในเฟสนี้ = follow-up owner/team RLS)
 -- =====================================================================
 revoke all on public.ai_chat_analysis   from anon;
 revoke all on public.customer_sentiment from anon;
 revoke all on public.sop_violations     from anon;
 
-grant select, insert, update, delete on public.ai_chat_analysis   to authenticated;
-grant select, insert, update, delete on public.customer_sentiment to authenticated;
-grant select, insert, update, delete on public.sop_violations     to authenticated;
+grant select on public.ai_chat_analysis   to authenticated;
+grant select on public.customer_sentiment to authenticated;
+grant select on public.sop_violations     to authenticated;
 
 grant all on public.ai_chat_analysis   to service_role;
 grant all on public.customer_sentiment to service_role;

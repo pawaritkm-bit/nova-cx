@@ -7,6 +7,9 @@ import {
   summarizeExecCases,
   computeOwnerBacklog,
   topProblemsFromViolations,
+  computeRepeatRate,
+  attributeExpertViolations,
+  buildGroupSingleOwner,
 } from "@/lib/chat-dashboard/queries";
 import type { ConversationCaseRow } from "@/lib/chat-dashboard/types";
 import type { Viewer } from "@/lib/evaluation/access";
@@ -212,5 +215,75 @@ describe("topProblemsFromViolations", () => {
     const top = topProblemsFromViolations(v);
     expect(top[0]).toEqual({ label: "ตอบช้าเกิน SLA", count: 2 });
     expect(top[1].count).toBe(1);
+  });
+});
+
+describe("computeRepeatRate — ★ M2 เศษ/ส่วนมาจากชุดเดียว (เคสเปิด)", () => {
+  it("นับเคสเปิดที่กลุ่มมี repeat_doc_request ÷ เคสเปิดทั้งหมด", () => {
+    const openCases = [
+      mkCase({ id: "1", chat_group_id: "g1" }),
+      mkCase({ id: "2", chat_group_id: "g2" }),
+      mkCase({ id: "3", chat_group_id: "g3" }),
+      mkCase({ id: "4", chat_group_id: "g4" }),
+    ];
+    const violations = [
+      { violation_type: "repeat_doc_request", chat_group_id: "g1" },
+      { violation_type: "repeat_doc_request", chat_group_id: "g2" },
+      { violation_type: "slow_reply", chat_group_id: "g3" }, // ไม่นับ (คนละชนิด)
+      { violation_type: "repeat_doc_request", chat_group_id: "gX" }, // กลุ่มไม่มีเคสเปิด → ไม่นับ
+    ];
+    // 2 ใน 4 เคสเปิด → 0.5
+    expect(computeRepeatRate(openCases, violations)).toBe(0.5);
+  });
+  it("ไม่มีเคสเปิด → null", () => {
+    expect(computeRepeatRate([], [{ violation_type: "repeat_doc_request", chat_group_id: "g1" }])).toBeNull();
+  });
+  it("หลาย violation ในกลุ่มเดียว นับเคสเดียว (ไม่ปนหน่วย/ไม่เกิน 1)", () => {
+    const openCases = [mkCase({ id: "1", chat_group_id: "g1" })];
+    const violations = [
+      { violation_type: "repeat_doc_request", chat_group_id: "g1" },
+      { violation_type: "repeat_doc_request", chat_group_id: "g1" },
+      { violation_type: "repeat_doc_request", chat_group_id: "g1" },
+    ];
+    expect(computeRepeatRate(openCases, violations)).toBe(1);
+  });
+});
+
+describe("attributeExpertViolations — ★ M1 attribute ต่อเคส→owner (ไม่ last-write-wins ที่กลุ่ม)", () => {
+  it("กลุ่มเดียวมี 2 เคสคนละเจ้าของ → violation โยนตามข้อความ (evidence) ไม่ใช่เจ้าของคนสุดท้าย", () => {
+    // g1 มีเคส c1(owner a) + c2(owner b) → group ambiguous
+    const cases = [
+      { chat_group_id: "g1", owner_employee_id: "a" },
+      { chat_group_id: "g1", owner_employee_id: "b" },
+    ];
+    const groupSingleOwner = buildGroupSingleOwner(cases);
+    expect(groupSingleOwner.has("g1")).toBe(false); // ★ กลุ่มหลายเจ้าของ = ไม่ fallback
+
+    // message m1 อยู่ในเคสของ a, m2 อยู่ในเคสของ b
+    const messageOwner = new Map([
+      ["m1", "a"],
+      ["m2", "b"],
+    ]);
+    const violations = [
+      { evidence_message_id: "m1", chat_group_id: "g1" }, // → a
+      { evidence_message_id: "m2", chat_group_id: "g1" }, // → b
+      { evidence_message_id: null, chat_group_id: "g1" }, // ระบุไม่ได้ (กลุ่ม ambiguous) → ข้าม
+    ];
+    const res = attributeExpertViolations(violations, messageOwner, groupSingleOwner);
+    expect(res.get("a")).toBe(1);
+    expect(res.get("b")).toBe(1);
+    // ★ ไม่มีใครได้ 2 (เดิม last-write-wins จะโยนทั้งหมดให้ b)
+    expect([...res.values()].every((n) => n === 1)).toBe(true);
+  });
+
+  it("กลุ่ม owner เดียว → fallback ใช้ groupSingleOwner เมื่อ violation ไม่มี evidence", () => {
+    const cases = [{ chat_group_id: "g9", owner_employee_id: "z" }];
+    const groupSingleOwner = buildGroupSingleOwner(cases);
+    const res = attributeExpertViolations(
+      [{ evidence_message_id: null, chat_group_id: "g9" }],
+      new Map(),
+      groupSingleOwner
+    );
+    expect(res.get("z")).toBe(1);
   });
 });
