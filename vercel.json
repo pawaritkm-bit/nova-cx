@@ -16,6 +16,10 @@
     {
       "path": "/api/cron/scan-invitations",
       "schedule": "30 1 * * *"
+    },
+    {
+      "path": "/api/cron/process-evaluations",
+      "schedule": "*/15 * * * *"
     }
   ],
   "functions": {

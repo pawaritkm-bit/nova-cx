@@ -1,0 +1,81 @@
+import { NextResponse, type NextRequest } from "next/server";
+import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
+import { resolveEvalViewer } from "@/lib/evaluation/context";
+import { applyManagerReview, resolveAppeal, EvalAuthError } from "@/lib/evaluation/review";
+import { newRequestId, logServerError } from "@/lib/http";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * POST /api/evaluations/review
+ *   หัวหน้า confirm/edit/reject ผลประเมิน หรือ resolve คำอุทธรณ์
+ *   ★ guard tier: resolve viewer จาก session (ห้ามเชื่อ client) → access.ts บังคับสิทธิ์
+ *   body: { action: 'review'|'resolve_appeal', ...params }
+ */
+export async function POST(request: NextRequest) {
+  const requestId = newRequestId();
+  try {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const tenantId = typeof body.tenantId === "string" ? body.tenantId : "";
+    if (!tenantId) {
+      return NextResponse.json({ error: "missing_tenant" }, { status: 400 });
+    }
+
+    const cookieDb = await createClient();
+    const viewer = await resolveEvalViewer(cookieDb);
+    if (!viewer.role) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+
+    const serviceDb = createServiceRoleClient();
+    const kind = body.action;
+
+    if (kind === "resolve_appeal") {
+      const decision = body.decision === "accepted" ? "accepted" : "rejected";
+      const result = await resolveAppeal(serviceDb, viewer, {
+        tenantId,
+        appealId: String(body.appealId ?? ""),
+        evaluationEmployeeId: String(body.evaluationEmployeeId ?? ""),
+        decision,
+        managerResponse: typeof body.managerResponse === "string" ? body.managerResponse : null,
+        adjustedOverall: typeof body.adjustedOverall === "number" ? body.adjustedOverall : null,
+        adjustedDimensionScores:
+          body.adjustedDimensionScores && typeof body.adjustedDimensionScores === "object"
+            ? (body.adjustedDimensionScores as Record<string, number>)
+            : null,
+      });
+      return NextResponse.json({ status: "ok", ...result }, { status: 200 });
+    }
+
+    // default: manager review (confirm/edit/reject)
+    const action =
+      body.reviewAction === "confirm" || body.reviewAction === "edit" || body.reviewAction === "reject"
+        ? body.reviewAction
+        : null;
+    if (!action) {
+      return NextResponse.json({ error: "invalid_action" }, { status: 400 });
+    }
+
+    const result = await applyManagerReview(serviceDb, viewer, {
+      tenantId,
+      evaluationId: String(body.evaluationId ?? ""),
+      action,
+      adjustedDimensionScores:
+        body.adjustedDimensionScores && typeof body.adjustedDimensionScores === "object"
+          ? (body.adjustedDimensionScores as Record<string, number>)
+          : null,
+      adjustedOverall: typeof body.adjustedOverall === "number" ? body.adjustedOverall : null,
+      note: typeof body.note === "string" ? body.note : null,
+    });
+    return NextResponse.json({ status: "ok", ...result }, { status: 200 });
+  } catch (e) {
+    if (e instanceof EvalAuthError) {
+      return NextResponse.json({ error: "forbidden", message: e.message }, { status: 403 });
+    }
+    logServerError("evaluations/review", requestId, e);
+    return NextResponse.json(
+      { error: "server_error", request_id: requestId },
+      { status: 500 }
+    );
+  }
+}
