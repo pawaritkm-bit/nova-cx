@@ -79,16 +79,17 @@ async function resolveChatChannelId(
 
 /**
  * resolve ตัวตนสมาชิกจาก line_user_id (best-effort)
- *   เทียบกับ line_users (บัญชี LINE ลูกค้าที่รู้จัก) → ถ้าเจอ + ผูกลูกค้าแล้ว = 'customer'
- *   ★ พนักงาน (accountant) ยัง resolve ไม่ได้ — LINE ไม่บอก และ employees ยังไม่มี line_user_id
- *     ต้องมี flow ลงทะเบียนสมาชิก→พนักงานใน Phase หลัง (member_kind คงเป็น 'unknown')
+ *   1) เทียบกับ line_users (บัญชี LINE ลูกค้าที่รู้จัก) → ถ้าเจอ + ผูกลูกค้าแล้ว = 'customer'
+ *   2) ★ auto-resolve (ตัวช่วย 1C): ถ้าทางเดิมยังไม่ได้พนักงาน → สืบทอดจาก chat_members อื่น
+ *      ใน tenant ที่ line_user_id เดียวกันและ "แอดมินยืนยันแล้ว" (employee_id ไม่ null)
+ *      → สืบทอด employee_id + member_kind. สืบทอดเฉพาะจากที่ยืนยันแล้วเท่านั้น ไม่เดาเอง
  *   order+limit(1) → best-effort ไม่ throw ถ้าเจอ >1 แถว
  */
 async function resolveMemberIdentity(
   db: SupabaseClient,
   tenantId: string,
   lineUserId: string
-): Promise<{ memberKind: string; lineUserRef: string | null }> {
+): Promise<{ memberKind: string; lineUserRef: string | null; employeeId: string | null }> {
   const { data } = await db
     .from("line_users")
     .select("id, customer_id")
@@ -100,13 +101,50 @@ async function resolveMemberIdentity(
     .maybeSingle();
 
   const row = data as { id?: string; customer_id?: string | null } | null;
-  if (row?.id) {
-    return {
-      memberKind: row.customer_id ? "customer" : "unknown",
-      lineUserRef: row.id,
-    };
+  const lineUserRef = row?.id ?? null;
+
+  // เป็นลูกค้าที่รู้จักแล้ว (line_users ผูก customer) → ไม่ต้องสืบทอดพนักงาน
+  if (row?.id && row.customer_id) {
+    return { memberKind: "customer", lineUserRef, employeeId: null };
   }
-  return { memberKind: "unknown", lineUserRef: null };
+
+  // สืบทอดจากการจับคู่ที่แอดมินยืนยันแล้ว (คนเดียวกัน คนละกลุ่ม)
+  const inherited = await inheritConfirmedIdentity(db, tenantId, lineUserId);
+  if (inherited) {
+    return { memberKind: inherited.memberKind, lineUserRef, employeeId: inherited.employeeId };
+  }
+
+  return { memberKind: "unknown", lineUserRef, employeeId: null };
+}
+
+/**
+ * lookup การจับคู่สมาชิกที่ "ยืนยันแล้ว" (employee_id ไม่ null) ของ line_user_id เดียวกัน
+ *   ใน tenant นี้ (กลุ่มใดก็ได้) → คืน employee_id + member_kind เพื่อสืบทอด
+ *   ★ ต้องยืนยันแล้วเท่านั้น (employee_id IS NOT NULL = แอดมินตั้งผ่านหน้าจับคู่) ไม่เดาเอง
+ *   order updated_at desc + limit(1) → เอาการยืนยันล่าสุด ไม่ throw ถ้าเจอหลายแถว
+ */
+async function inheritConfirmedIdentity(
+  db: SupabaseClient,
+  tenantId: string,
+  lineUserId: string
+): Promise<{ employeeId: string; memberKind: string } | null> {
+  const { data } = await db
+    .from("chat_members")
+    .select("employee_id, member_kind")
+    .eq("tenant_id", tenantId)
+    .eq("line_user_id", lineUserId)
+    .not("employee_id", "is", null)
+    .is("deleted_at", null)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const row = data as { employee_id?: string | null; member_kind?: string | null } | null;
+  if (!row?.employee_id) return null;
+  // member_kind ต้องเป็นค่า enum เดิม; ถ้าเป็นค่าที่ผูกพนักงานได้ให้ใช้ตามนั้น มิฉะนั้น fallback 'accountant'
+  const kind =
+    row.member_kind === "accountant" || row.member_kind === "lead" ? row.member_kind : "accountant";
+  return { employeeId: row.employee_id, memberKind: kind };
 }
 
 /**
@@ -257,7 +295,11 @@ export async function ingestGroupMessage(
       if (displayName) displayNameEnc = encryptField(displayName);
     }
 
-    const { memberKind, lineUserRef } = await resolveMemberIdentity(db, tenantId, senderLineUserId);
+    const { memberKind, lineUserRef, employeeId } = await resolveMemberIdentity(
+      db,
+      tenantId,
+      senderLineUserId
+    );
 
     const memberUpsert: Record<string, unknown> = {
       tenant_id: tenantId,
@@ -267,6 +309,8 @@ export async function ingestGroupMessage(
     };
     if (displayNameEnc) memberUpsert.display_name_enc = displayNameEnc;
     if (lineUserRef) memberUpsert.line_user_ref = lineUserRef;
+    // ★ สืบทอดพนักงานจากการจับคู่ที่ยืนยันแล้ว (ตัวช่วย 1C) — ผูกให้ระบุตัวตนได้ทันทีที่ ingest
+    if (employeeId) memberUpsert.employee_id = employeeId;
 
     const { data: memberRow, error: memberErr } = await db
       .from("chat_members")

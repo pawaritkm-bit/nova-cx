@@ -61,6 +61,31 @@ export const setMemberSchema = z
   );
 export type SetMemberInput = z.infer<typeof setMemberSchema>;
 
+// ---- 2b) propagate ตัวตนสมาชิกข้ามกลุ่ม (ตัวช่วย 1B) -----------------
+export const propagateMemberSchema = z
+  .object({
+    // line_user_id เป็น text ของ LINE (ไม่ใช่ uuid) — validate แค่ไม่ว่าง
+    line_user_id: z.string().trim().min(1, "ไม่พบสมาชิกที่เลือก").max(200, "รหัสสมาชิกไม่ถูกต้อง"),
+    member_kind: z.enum(MEMBER_KINDS, {
+      errorMap: () => ({ message: "เลือกบทบาทสมาชิก" }),
+    }),
+    employee_id: z.preprocess(
+      emptyToNull,
+      z.string().uuid("รหัสพนักงานไม่ถูกต้อง").nullable()
+    ),
+    // undefined/[] = ผูกทุกกลุ่มที่ยังไม่ผูก; มีค่า = เฉพาะกลุ่มที่เลือก
+    group_ids: z.array(z.string().uuid("รหัสกลุ่มไม่ถูกต้อง")).optional(),
+  })
+  .refine(
+    (v) => (v.member_kind === "accountant" || v.member_kind === "lead" ? true : v.employee_id === null),
+    { message: "บทบาทนี้ไม่ต้องผูกกับพนักงาน", path: ["employee_id"] }
+  )
+  .refine(
+    (v) => (v.member_kind === "accountant" || v.member_kind === "lead" ? v.employee_id !== null : true),
+    { message: "บทบาทนักบัญชี/หัวหน้า ต้องเลือกพนักงานที่ผูก", path: ["employee_id"] }
+  );
+export type PropagateMemberInput = z.infer<typeof propagateMemberSchema>;
+
 // ---- 3) น้ำหนักคะแนน 8 มิติ (รวม = 100) -----------------------------
 /** ค่าน้ำหนัก 1 มิติ (รับ number/string จากฟอร์ม → number 0-100) */
 const weightValue = z.preprocess(

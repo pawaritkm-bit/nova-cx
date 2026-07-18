@@ -18,12 +18,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   mapGroupSchema,
   setMemberSchema,
+  propagateMemberSchema,
   saveWeightsSchema,
   slaRuleSchema,
   updateSlaRuleSchema,
   firstZodError,
 } from "./schema";
 import { mapGroupToCustomer, setChatMember } from "./mapping";
+import { propagateMemberIdentity } from "./member-directory";
 import { saveWeights } from "./weights";
 import { createSlaRule, updateSlaRule, deleteSlaRule, setSlaRuleActive } from "./sla";
 import { DIMENSIONS, type Weights } from "@/lib/evaluation/weights";
@@ -89,6 +91,58 @@ export async function setMemberAction(
     setChatMember(db, tenantId, parsed.data, actor)
   );
   return res.ok ? { ok: true, message: "บันทึกบทบาทสมาชิกแล้ว" } : res;
+}
+
+// ---- propagate ตัวตนสมาชิกข้ามกลุ่ม (ตัวช่วย 1B, review-first) --------
+//   ไม่ใช้ withChatAdminWrite เพราะต้องคืน "จำนวนกลุ่มที่ผูก" ในข้อความ + revalidate หน้าภาพรวม
+export async function propagateMemberAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  // scope=selected → ผูกเฉพาะกลุ่มที่ติ๊ก (group_ids หลายค่า); อื่น = ทุกกลุ่มที่ยังไม่ผูก
+  const scope = String(formData.get("scope") ?? "all");
+  const groupIds =
+    scope === "selected"
+      ? formData.getAll("group_ids").map((v) => String(v)).filter(Boolean)
+      : undefined;
+
+  const parsed = propagateMemberSchema.safeParse({
+    line_user_id: formData.get("line_user_id"),
+    member_kind: formData.get("member_kind"),
+    employee_id: formData.get("employee_id"),
+    group_ids: groupIds,
+  });
+  if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
+  if (scope === "selected" && (!groupIds || groupIds.length === 0)) {
+    return { ok: false, message: "กรุณาเลือกอย่างน้อย 1 กลุ่ม" };
+  }
+
+  try {
+    const authed = await createClient();
+    const ctx = await requireAdminContext(authed); // 403 ถ้าไม่ใช่ admin/executive
+    const service = createServiceRoleClient();
+    const { affected } = await propagateMemberIdentity(
+      service,
+      ctx.tenantId,
+      {
+        lineUserId: parsed.data.line_user_id,
+        employeeId: parsed.data.employee_id,
+        memberKind: parsed.data.member_kind,
+        groupIds: parsed.data.group_ids,
+      },
+      ctx.userId
+    );
+    revalidatePath("/chat-audit/admin/members");
+    return {
+      ok: true,
+      message:
+        affected > 0
+          ? `ผูกตัวตนเรียบร้อย ${affected} กลุ่ม`
+          : "ไม่มีกลุ่มที่ต้องผูกเพิ่ม (อาจผูกครบแล้ว)",
+    };
+  } catch (e) {
+    return { ok: false, message: friendlyError(e) };
+  }
 }
 
 // ---- น้ำหนักคะแนน 8 มิติ ---------------------------------------------

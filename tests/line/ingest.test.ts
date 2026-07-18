@@ -203,6 +203,49 @@ describe("ingestGroupMessage", () => {
   });
 });
 
+describe("ingestGroupMessage — auto-resolve พนักงานจากการจับคู่ที่ยืนยันแล้ว (ตัวช่วย 1C)", () => {
+  it("มี chat_member ยืนยันแล้ว (employee_id ไม่ null) คน line_user เดียวกัน → สืบทอด employee_id + member_kind", async () => {
+    // line_users ไม่รู้จัก แต่มีการจับคู่ยืนยันแล้ว (accountant) ในกลุ่มอื่น
+    const store = baseStore({
+      chat_members: { employee_id: "emp-7", member_kind: "accountant" },
+    });
+    const res = await ingestGroupMessage({ db: makeDb(store), now: NOW }, "t-1", "care", groupTextEvent());
+    expect(res.status).toBe("stored");
+    const member = store.upserts.find((u) => u.table === "chat_members");
+    expect(member?.row.employee_id).toBe("emp-7");
+    expect(member?.row.member_kind).toBe("accountant");
+  });
+
+  it("ไม่มีการจับคู่ยืนยันแล้ว → member_kind 'unknown' และไม่ผูกพนักงาน (ของเดิมไม่พัง)", async () => {
+    const store = baseStore(); // chat_members ไม่ตั้งค่า → ไม่มีที่ยืนยันแล้ว
+    await ingestGroupMessage({ db: makeDb(store), now: NOW }, "t-1", "care", groupTextEvent());
+    const member = store.upserts.find((u) => u.table === "chat_members");
+    expect(member?.row.member_kind).toBe("unknown");
+    expect((member?.row as Record<string, unknown>).employee_id).toBeUndefined();
+  });
+
+  it("line_user เป็นลูกค้าที่รู้จัก (line_users ผูก customer) → คง 'customer' ไม่สืบทอดพนักงาน", async () => {
+    const store = baseStore({
+      line_users: { id: "lu-1", customer_id: "cust-9" },
+      chat_members: { employee_id: "emp-7", member_kind: "accountant" },
+    });
+    await ingestGroupMessage({ db: makeDb(store), now: NOW }, "t-1", "care", groupTextEvent());
+    const member = store.upserts.find((u) => u.table === "chat_members");
+    expect(member?.row.member_kind).toBe("customer");
+    expect((member?.row as Record<string, unknown>).employee_id).toBeUndefined();
+  });
+
+  it("idempotent: สืบทอดซ้ำได้ผลเดิม (เรียก 2 ครั้ง employee_id คงเดิม)", async () => {
+    const mk = () => baseStore({ chat_members: { employee_id: "emp-7", member_kind: "accountant" } });
+    const s1 = mk();
+    await ingestGroupMessage({ db: makeDb(s1), now: NOW }, "t-1", "care", groupTextEvent());
+    const s2 = mk();
+    await ingestGroupMessage({ db: makeDb(s2), now: NOW }, "t-1", "care", groupTextEvent());
+    expect(s1.upserts.find((u) => u.table === "chat_members")?.row.employee_id).toBe("emp-7");
+    expect(s2.upserts.find((u) => u.table === "chat_members")?.row.employee_id).toBe("emp-7");
+  });
+});
+
 describe("ingestGroupMessage — display_name เข้ารหัส (PDPA, sec-M2)", () => {
   const prev = process.env.CREDENTIAL_ENC_KEY;
   beforeEach(() => {
