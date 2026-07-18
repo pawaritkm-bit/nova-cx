@@ -17,6 +17,18 @@ import { ingestGroupMessage } from "@/lib/line/ingest";
 const DEFAULT_BATCH = 20;
 const BACKOFF_BASE_SEC = 30;
 
+/**
+ * คืน "รหัส error ที่ปลอดภัย" สำหรับเก็บลง job_queue.last_error
+ *   - Postgres/PostgREST error → ใช้ .code (SQLSTATE เช่น 23505) ไม่เอา message/detail ดิบ
+ *   - อื่น ๆ → 'unknown' (ไม่ leak ข้อความที่อาจฝัง PII)
+ * ★ ไม่คืน error.message เพราะข้อความ DB error อาจฝังค่าคอลัมน์ (เช่นชื่อ) = PII
+ */
+function sanitizeErrorCode(e: unknown): string {
+  const code = (e as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && /^[0-9A-Za-z_]{1,16}$/.test(code)) return code;
+  return "unknown";
+}
+
 export type LineEventWorkerDeps = {
   db: SupabaseClient;
   /** คืน client ของ OA (null = ไม่มี credential → ข้ามการดึงโปรไฟล์) */
@@ -138,7 +150,9 @@ async function processOne(
         break;
     }
   } catch (e) {
-    return fail(`line_event_failed: ${e instanceof Error ? e.message : "unknown"}`);
+    // ★ sanitize: ไม่เก็บ error message ดิบลง last_error (อาจมี PII เช่นชื่อในข้อความ DB error)
+    //   เก็บแค่ error code (เช่น Postgres SQLSTATE) หรือ generic ต่อชนิด event
+    return fail(`line_event_failed:${event.type}:${sanitizeErrorCode(e)}`);
   }
 
   await db

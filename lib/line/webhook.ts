@@ -180,6 +180,9 @@ export async function resolveOaTenantId(
       .eq("channel_ref", channelRef)
       .eq("is_active", true)
       .is("deleted_at", null)
+      // order+limit(1) → best-effort ไม่ throw ถ้ามีมากกว่า 1 แถว (แม้มี unique ก็กันเชิงรับ)
+      .order("created_at", { ascending: true })
+      .limit(1)
       .maybeSingle();
 
     const mappedTenantId = (channel as { tenant_id?: string } | null)?.tenant_id;

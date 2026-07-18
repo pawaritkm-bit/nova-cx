@@ -58,6 +58,7 @@ create trigger trg_chat_groups_updated before update on public.chat_groups
 -- ---------------------------------------------------------------------
 -- chat_members — สมาชิกในกลุ่ม
 --   line_user_id    : source.userId ของ LINE (อาจไม่ได้ครบทุกคนถ้าไม่ยินยอม)
+--   display_name_enc: ★ ciphertext ของชื่อที่แสดง (PDPA — ชื่อคนเป็น PII) ห้ามเก็บ plain
 --   member_kind     : ประเภทสมาชิก — default 'unknown' (LINE ไม่บอกว่าใครเป็นใคร)
 --   employee_id     : ผูกกับพนักงาน (nullable — ต้องมี flow ลงทะเบียนใน Phase หลัง)
 --   line_user_ref   : ผูกกับ line_users (บัญชี LINE ลูกค้าที่รู้จักแล้ว) nullable
@@ -68,7 +69,7 @@ create table if not exists public.chat_members (
   tenant_id           uuid not null references public.tenants(id) on delete cascade,
   chat_group_id       uuid not null references public.chat_groups(id) on delete cascade,
   line_user_id        text not null,
-  display_name        text,
+  display_name_enc    text,
   member_kind         text not null default 'unknown'
                         check (member_kind in ('customer', 'accountant', 'lead', 'system', 'unknown')),
   employee_id         uuid references public.employees(id) on delete set null,
@@ -132,7 +133,9 @@ create table if not exists public.message_attachments (
   storage_path     text,
   created_at       timestamptz not null default now(),
   updated_at       timestamptz not null default now(),
-  deleted_at       timestamptz
+  deleted_at       timestamptz,
+  -- idempotent: 1 message + 1 content_id = 1 attachment (กัน re-ingest สร้างซ้ำ)
+  unique (chat_message_id, line_content_id)
 );
 create index if not exists idx_message_attachments_tenant on public.message_attachments(tenant_id);
 create index if not exists idx_message_attachments_message on public.message_attachments(chat_message_id);

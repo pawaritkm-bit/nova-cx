@@ -73,27 +73,25 @@ export function decryptField(token: string): string {
   if (!secret) {
     throw new Error("CREDENTIAL_ENC_KEY not configured — cannot decrypt field");
   }
-  const [version, body] = splitOnce(token, ":");
-  if (version !== TOKEN_VERSION || !body) {
-    throw new Error("invalid ciphertext token: bad version");
+  // ★ normalize: token เพี้ยน/version ผิด/auth tag ไม่ผ่าน → โยน error เดียวกันเสมอ
+  //   (ไม่แยกสาเหตุ กัน oracle + ให้ caller จับง่าย)
+  try {
+    const [version, body] = splitOnce(token, ":");
+    if (version !== TOKEN_VERSION || !body) throw new Error("bad version");
+    const parts = body.split(".");
+    if (parts.length !== 3) throw new Error("bad structure");
+    const [ivB64, tagB64, ctB64] = parts;
+    const key = deriveKey(secret);
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64url"));
+    decipher.setAuthTag(Buffer.from(tagB64, "base64url"));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(ctB64, "base64url")),
+      decipher.final(),
+    ]);
+    return plaintext.toString("utf8");
+  } catch {
+    throw new Error("invalid ciphertext");
   }
-  const parts = body.split(".");
-  if (parts.length !== 3) {
-    throw new Error("invalid ciphertext token: bad structure");
-  }
-  const [ivB64, tagB64, ctB64] = parts;
-  const key = deriveKey(secret);
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    key,
-    Buffer.from(ivB64, "base64url")
-  );
-  decipher.setAuthTag(Buffer.from(tagB64, "base64url"));
-  const plaintext = Buffer.concat([
-    decipher.update(Buffer.from(ctB64, "base64url")),
-    decipher.final(),
-  ]);
-  return plaintext.toString("utf8");
 }
 
 /** แยก string ที่ตัวคั่นตัวแรกเท่านั้น (body อาจมี ':' ไม่ได้เพราะเป็น base64url จึงปลอดภัย) */
