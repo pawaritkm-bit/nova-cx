@@ -203,6 +203,27 @@ async function resolveOrCreateGroup(
   return { id: ins.id, customerId: ins.customer_id ?? null };
 }
 
+/**
+ * อ่าน member_kind เดิมของสมาชิก (chat_group_id, line_user_id) — best-effort
+ *   ใช้กันการ downgrade "ป้ายที่แอดมินตั้ง" (system/customer/accountant/lead) กลับเป็น unknown (Y1)
+ *   เรียกเฉพาะตอน resolve ได้ 'unknown' เท่านั้น (ไม่เพิ่ม query ในเคสที่ resolve ได้ค่าชัดเจน)
+ */
+async function selectExistingMemberKind(
+  db: SupabaseClient,
+  chatGroupId: string,
+  lineUserId: string
+): Promise<string | null> {
+  const { data } = await db
+    .from("chat_members")
+    .select("member_kind")
+    .eq("chat_group_id", chatGroupId)
+    .eq("line_user_id", lineUserId)
+    .is("deleted_at", null)
+    .limit(1)
+    .maybeSingle();
+  return (data as { member_kind?: string | null } | null)?.member_kind ?? null;
+}
+
 /** หา id ของ chat_message ตาม line_message_id (best-effort) → id หรือ null */
 async function selectExistingMessageId(
   db: SupabaseClient,
@@ -305,12 +326,20 @@ export async function ingestGroupMessage(
       tenant_id: tenantId,
       chat_group_id: chatGroupId,
       line_user_id: senderLineUserId,
-      member_kind: memberKind,
     };
     if (displayNameEnc) memberUpsert.display_name_enc = displayNameEnc;
     if (lineUserRef) memberUpsert.line_user_ref = lineUserRef;
     // ★ สืบทอดพนักงานจากการจับคู่ที่ยืนยันแล้ว (ตัวช่วย 1C) — ผูกให้ระบุตัวตนได้ทันทีที่ ingest
     if (employeeId) memberUpsert.employee_id = employeeId;
+
+    // member_kind: set ปกติ; แต่ถ้า resolve ได้ 'unknown' และแถวเดิมมีป้ายที่แอดมินตั้งไว้แล้ว
+    //   (system/customer/accountant/lead) → "อย่าเขียนทับ" ให้คงค่าเดิม (Y1) — ไม่ downgrade known→unknown
+    let includeMemberKind = true;
+    if (memberKind === "unknown") {
+      const existingKind = await selectExistingMemberKind(db, chatGroupId, senderLineUserId);
+      if (existingKind && existingKind !== "unknown") includeMemberKind = false;
+    }
+    if (includeMemberKind) memberUpsert.member_kind = memberKind;
 
     const { data: memberRow, error: memberErr } = await db
       .from("chat_members")
