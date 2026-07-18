@@ -82,8 +82,9 @@ export async function aggregateAccountantSignals(
   if (input.conversationCaseId) {
     q = q.eq("id", input.conversationCaseId);
   } else {
+    // ★ M3: ช่วงเป็น [start, end) — periodEnd exclusive กันนับซ้ำที่ขอบช่วง (รอบถัดไปเริ่มที่ end พอดี)
     if (input.periodStart) q = q.gte("opened_at", input.periodStart);
-    if (input.periodEnd) q = q.lte("opened_at", input.periodEnd);
+    if (input.periodEnd) q = q.lt("opened_at", input.periodEnd);
   }
 
   const { data: caseData } = await q;
@@ -137,6 +138,43 @@ export async function aggregateAccountantSignals(
     if (h.to_status === "reopened") reopenedCases.add(h.case_id);
   }
 
+  // 4.5) ★ M1: หา message id ของ "การตอบครั้งแรก" ต่อกลุ่ม (ไว้ให้ evidence อ้างข้อความจริง)
+  //   เลือกข้อความแรกที่ sent_at >= first_responded_at ของเคส (best-effort)
+  const respondedAtByGroup = new Map<string, number>();
+  for (const c of cases) {
+    if (c.first_responded_at) {
+      const ms = new Date(c.first_responded_at).getTime();
+      const prev = respondedAtByGroup.get(c.chat_group_id);
+      // เก็บเวลาตอบครั้งแรกที่ "เร็วสุด" ของกลุ่ม (เผื่อหลายเคส/กลุ่ม)
+      if (prev === undefined || ms < prev) respondedAtByGroup.set(c.chat_group_id, ms);
+    }
+  }
+  const firstMsgByCase = new Map<string, string>();
+  if (respondedAtByGroup.size > 0) {
+    const { data: msgData } = await db
+      .from("chat_messages")
+      .select("id, chat_group_id, sent_at")
+      .eq("tenant_id", input.tenantId)
+      .in("chat_group_id", [...respondedAtByGroup.keys()])
+      .is("deleted_at", null)
+      .order("sent_at", { ascending: true });
+    const msgs = (msgData ?? []) as { id: string; chat_group_id: string; sent_at: string | null }[];
+    // จับข้อความแรกที่ sent_at >= เวลาตอบครั้งแรกของเคสนั้น
+    for (const c of cases) {
+      if (!c.first_responded_at) continue;
+      const targetMs = new Date(c.first_responded_at).getTime();
+      let picked: string | null = null;
+      for (const m of msgs) {
+        if (m.chat_group_id !== c.chat_group_id || !m.sent_at) continue;
+        if (new Date(m.sent_at).getTime() >= targetMs) {
+          picked = m.id;
+          break; // msgs เรียง sent_at asc แล้ว → ตัวแรกที่ผ่านเงื่อนไข = ใกล้สุด
+        }
+      }
+      if (picked) firstMsgByCase.set(c.id, picked);
+    }
+  }
+
   // 5) ประกอบ CaseSignal
   let worstSentiment: number | undefined;
   const signals: CaseSignal[] = cases.map((c) => {
@@ -158,7 +196,7 @@ export async function aggregateAccountantSignals(
       flowSteps: asFlowSteps(a?.flow_steps),
       problemsCount: problemCount(a?.problems),
       sopViolations: sopByGroup.get(c.chat_group_id) ?? [],
-      firstResponseMessageId: null,
+      firstResponseMessageId: firstMsgByCase.get(c.id) ?? null,
     };
   });
 

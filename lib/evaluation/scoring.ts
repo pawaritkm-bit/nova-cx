@@ -59,7 +59,14 @@ export type ScoreInputs = {
   /** เป้าหมายเวลาตอบครั้งแรก (นาทีทำการ) — default 240 = 4 ชม.ทำการ */
   firstResponseTargetMinutes?: number;
   holidays?: ReadonlySet<string>;
+  /** เวลาปัจจุบัน (สำหรับตัดสินว่าเคสยังไม่ตอบเลย due หรือยัง) — default new Date() */
+  now?: Date;
 };
+
+/** ปัดทศนิยม 2 ตำแหน่งให้สม่ำเสมอกับ overall (L1) */
+function round2(v: number): number {
+  return Math.round(v * 100) / 100;
+}
 
 export type ScoreBreakdown = {
   scores: Partial<DimensionScores>;
@@ -93,20 +100,31 @@ function hasFollowUp(c: CaseSignal): boolean {
 function scoreSla(inp: ScoreInputs): { score?: number; considered: number; met: number } {
   const target = inp.firstResponseTargetMinutes ?? DEFAULT_FIRST_RESPONSE_TARGET_MIN;
   const holidays = inp.holidays ?? new Set<string>();
+  const nowMs = (inp.now ?? new Date()).getTime();
   let considered = 0;
   let met = 0;
   for (const c of inp.cases) {
-    considered += 1;
-    if (!c.firstRespondedAt) continue; // ยังไม่ตอบ = ไม่ผ่าน
-    const mins = businessMinutesBetween(
-      new Date(c.requestAt),
-      new Date(c.firstRespondedAt),
-      holidays
-    );
-    if (mins <= target) met += 1;
+    if (c.firstRespondedAt) {
+      // ตอบแล้ว → นับ + met ถ้าอยู่ในเป้าหมายเวลาทำการ
+      considered += 1;
+      const mins = businessMinutesBetween(
+        new Date(c.requestAt),
+        new Date(c.firstRespondedAt),
+        holidays
+      );
+      if (mins <= target) met += 1;
+      continue;
+    }
+    // ยังไม่ตอบ:
+    // ★ M2: อย่านับเคสที่ "ปิดโดยไม่ต้องตอบ" หรือ "ยังไม่ถึง due" เป็น fail
+    if (CLOSED_STATUSES.has(c.status)) continue; // ปิดโดยไม่มีการตอบครั้งแรก → ไม่คิดโทษ
+    if (c.firstResponseDueAt && new Date(c.firstResponseDueAt).getTime() < nowMs) {
+      considered += 1; // เลยกำหนดตอบแล้วยังไม่ตอบ = breach จริง
+    }
+    // ยังไม่ถึง due (pending) → ข้าม ไม่นับ
   }
   if (considered === 0) return { considered: 0, met: 0 };
-  return { score: clampScore((met / considered) * 100), considered, met };
+  return { score: round2((met / considered) * 100), considered, met };
 }
 
 /** มิติ ownership — มีเจ้าของ (50) + มีการติดตาม/อัปเดต (50) เฉลี่ยต่อเคส */
@@ -128,7 +146,7 @@ function scoreOwnership(cases: CaseSignal[]): {
     acc += o * 50 + f * 50;
   }
   return {
-    score: clampScore(acc / cases.length),
+    score: round2(clampScore(acc / cases.length)),
     considered: cases.length,
     withOwner,
     withFollowUp,
@@ -154,7 +172,12 @@ function scoreResolution(cases: CaseSignal[]): {
     if (c.reopened) s = Math.max(0, s - 30);
     acc += s;
   }
-  return { score: clampScore(acc / cases.length), considered: cases.length, closed, reopened };
+  return {
+    score: round2(clampScore(acc / cases.length)),
+    considered: cases.length,
+    closed,
+    reopened,
+  };
 }
 
 const SOP_PENALTY: Record<"low" | "medium" | "high", number> = {
@@ -163,18 +186,27 @@ const SOP_PENALTY: Record<"low" | "medium" | "high", number> = {
   high: 20,
 };
 
-/** มิติ SOP — เริ่ม 100 หักตาม severity ของ sop_violations (floor 0) */
+/**
+ * มิติ SOP — ★ เฉลี่ย "ต่อเคส" (เหมือน ownership/resolution)
+ *   แต่ละเคสเริ่ม 100 หักตาม severity ของ violation ในเคสนั้น (floor 0) แล้วเฉลี่ย
+ *   → คนปิดงานเยอะแต่ผิดน้อยไม่ถูกหักหนักจากผลรวม penalty ข้ามทุกเคส
+ */
 function scoreSop(cases: CaseSignal[]): { score?: number; violations: number; penalty: number } {
   if (cases.length === 0) return { violations: 0, penalty: 0 };
   let violations = 0;
-  let penalty = 0;
+  let totalPenalty = 0;
+  let acc = 0;
   for (const c of cases) {
+    let casePenalty = 0;
     for (const v of c.sopViolations) {
       violations += 1;
-      penalty += SOP_PENALTY[v.severity] ?? SOP_PENALTY.low;
+      const pen = SOP_PENALTY[v.severity] ?? SOP_PENALTY.low;
+      casePenalty += pen;
+      totalPenalty += pen;
     }
+    acc += Math.max(0, 100 - casePenalty);
   }
-  return { score: clampScore(100 - penalty), violations, penalty };
+  return { score: round2(acc / cases.length), violations, penalty: totalPenalty };
 }
 
 /** fallback คะแนนคุณภาพจาก sentiment เมื่อ AI ไม่ได้ให้คะแนน (กันมิติว่างทั้งหมด) */
@@ -195,7 +227,7 @@ function qualitativeScores(inp: ScoreInputs): Partial<DimensionScores> {
   const out: Partial<DimensionScores> = {};
   for (const d of ["correctness", "completeness", "clarity", "politeness"] as const) {
     const v = q[d];
-    if (v !== undefined && v !== null && Number.isFinite(v)) out[d] = clampScore(v);
+    if (v !== undefined && v !== null && Number.isFinite(v)) out[d] = round2(clampScore(v));
     else if (base !== undefined) out[d] = base;
   }
   return out;

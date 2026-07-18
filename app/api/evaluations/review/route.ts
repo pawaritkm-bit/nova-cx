@@ -16,16 +16,17 @@ export async function POST(request: NextRequest) {
   const requestId = newRequestId();
   try {
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    const tenantId = typeof body.tenantId === "string" ? body.tenantId : "";
-    if (!tenantId) {
-      return NextResponse.json({ error: "missing_tenant" }, { status: 400 });
-    }
 
     const cookieDb = await createClient();
     const viewer = await resolveEvalViewer(cookieDb);
-    if (!viewer.role) {
+    if (!viewer.role || !viewer.tenantId) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
+    // ★ tenant มาจาก session เท่านั้น (กันข้าม tenant) — ถ้า client ส่ง tenantId มาต้องตรงกัน
+    if (typeof body.tenantId === "string" && body.tenantId && body.tenantId !== viewer.tenantId) {
+      return NextResponse.json({ error: "tenant_mismatch" }, { status: 403 });
+    }
+    const tenantId = viewer.tenantId;
 
     const serviceDb = createServiceRoleClient();
     const kind = body.action;
@@ -35,7 +36,6 @@ export async function POST(request: NextRequest) {
       const result = await resolveAppeal(serviceDb, viewer, {
         tenantId,
         appealId: String(body.appealId ?? ""),
-        evaluationEmployeeId: String(body.evaluationEmployeeId ?? ""),
         decision,
         managerResponse: typeof body.managerResponse === "string" ? body.managerResponse : null,
         adjustedOverall: typeof body.adjustedOverall === "number" ? body.adjustedOverall : null,

@@ -46,6 +46,20 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------
+-- helper: ตรวจว่าทุกค่าใน dimension_scores อยู่ในช่วง 0-100 (L2 — กันคะแนนปรับเพี้ยน)
+--   ค่าที่ไม่ใช่ตัวเลขจะถูกข้าม; ว่าง = ผ่าน (true)
+-- ---------------------------------------------------------------------
+create or replace function public.eval_dimension_scores_valid(p jsonb)
+returns boolean
+language sql
+immutable
+as $$
+  select coalesce(bool_and((v.value)::numeric >= 0 and (v.value)::numeric <= 100), true)
+  from jsonb_each_text(coalesce(p, '{}'::jsonb)) v
+  where v.value ~ '^-?[0-9]+(\.[0-9]+)?$'
+$$;
+
+-- ---------------------------------------------------------------------
 -- evaluation_weights ★ — config น้ำหนัก 8 มิติต่อ tenant (ปรับผ่าน admin)
 --   weights : jsonb map มิติ→น้ำหนัก (รวมต้อง = 100 บังคับด้วย CHECK)
 --   default (แนะนำ): correctness 20 / completeness 10 / sla 15 / clarity 10 /
@@ -571,6 +585,19 @@ begin
     raise exception 'invalid_action' using errcode = 'P0001';
   end if;
 
+  -- ★ defense-in-depth: reviewer ต้องอยู่ใน tenant เดียวกัน (กัน reviewer ข้าม tenant)
+  if p_reviewer_emp_id is not null and not exists (
+    select 1 from public.employees where id = p_reviewer_emp_id and tenant_id = p_tenant_id
+  ) then
+    raise exception 'reviewer_not_in_tenant' using errcode = 'P0001';
+  end if;
+
+  -- ★ L2: adjusted_dimension_scores ต้องอยู่ 0-100
+  if p_adjusted_dimension is not null
+     and not public.eval_dimension_scores_valid(p_adjusted_dimension) then
+    raise exception 'dimension_score_out_of_range' using errcode = 'P0001';
+  end if;
+
   -- eval ต้องอยู่ใน tenant นี้ + ล็อกแถวกัน race
   select status, overall_score into v_old_status, v_old_overall
   from public.accountant_evaluations
@@ -578,6 +605,12 @@ begin
   for update;
   if not found then
     raise exception 'evaluation_not_found' using errcode = 'P0002';
+  end if;
+
+  -- ★ status guard: review/ทับได้เฉพาะ draft หรือหลัง confirm/edit เท่านั้น
+  --   บล็อกการทับ eval ที่กำลังอุทธรณ์/ตัดสินอุทธรณ์แล้ว/ถูก reject
+  if v_old_status not in ('ai_draft','manager_confirmed','manager_edited') then
+    raise exception 'evaluation_not_reviewable' using errcode = 'P0001';
   end if;
 
   v_new_status := case p_action
@@ -711,6 +744,19 @@ declare
 begin
   if p_decision not in ('accepted','rejected') then
     raise exception 'invalid_decision' using errcode = 'P0001';
+  end if;
+
+  -- ★ defense-in-depth: resolver ต้องอยู่ใน tenant เดียวกัน
+  if p_resolver_emp_id is not null and not exists (
+    select 1 from public.employees where id = p_resolver_emp_id and tenant_id = p_tenant_id
+  ) then
+    raise exception 'resolver_not_in_tenant' using errcode = 'P0001';
+  end if;
+
+  -- ★ L2: adjusted_dimension_scores ต้องอยู่ 0-100
+  if p_adjusted_dimension is not null
+     and not public.eval_dimension_scores_valid(p_adjusted_dimension) then
+    raise exception 'dimension_score_out_of_range' using errcode = 'P0001';
   end if;
 
   select evaluation_id, status into v_eval_id, v_status

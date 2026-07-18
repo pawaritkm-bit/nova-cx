@@ -22,8 +22,16 @@ function makeCase(o: Partial<CaseSignal> = {}): CaseSignal {
 
 describe("buildCoaching — โทนโค้ช ไม่จับผิด", () => {
   it("มิติอ่อน (<60) → improvements + example_answers + checklist + training_topics", () => {
-    const cases = [makeCase({ firstRespondedAt: null, status: "open", closedAt: null })];
-    const bd = computeDimensionScores({ cases });
+    const now = new Date("2026-07-20T12:00:00Z");
+    const cases = [
+      makeCase({
+        firstRespondedAt: null,
+        status: "open",
+        closedAt: null,
+        firstResponseDueAt: "2026-07-20T07:00:00Z", // เลย due → sla อ่อน
+      }),
+    ];
+    const bd = computeDimensionScores({ cases, now });
     const coaching = buildCoaching({ scores: bd.scores, breakdown: bd, cases });
     expect(coaching.improvements.length).toBeGreaterThan(0);
     expect(coaching.example_answers.length).toBe(coaching.improvements.length);

@@ -58,6 +58,12 @@ class QB {
   lte() {
     return this;
   }
+  lt() {
+    return this;
+  }
+  gt() {
+    return this;
+  }
   not() {
     return this;
   }

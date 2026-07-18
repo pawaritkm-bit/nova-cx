@@ -8,15 +8,32 @@ import {
 import type { Viewer } from "@/lib/evaluation/access";
 import { makeDb, makeStore, type Store } from "./fake-db";
 
-const lead: Viewer = { role: "acc_lead", employeeId: "L", teamMemberIds: new Set(["emp-1"]) };
-const admin: Viewer = { role: "admin", employeeId: "adm" };
-const accountant: Viewer = { role: "accountant", employeeId: "emp-1" };
+const lead: Viewer = {
+  role: "acc_lead",
+  employeeId: "L",
+  tenantId: "t1",
+  teamMemberIds: new Set(["emp-1"]),
+};
+const admin: Viewer = { role: "admin", employeeId: "adm", tenantId: "t1" };
+const accountant: Viewer = { role: "accountant", employeeId: "emp-1", tenantId: "t1" };
 
 function storeWithEval(status = "ai_draft", employeeId = "emp-1"): Store {
   return makeStore({
     data: {
       accountant_evaluations: [
         { id: "eval-1", tenant_id: "t1", employee_id: employeeId, status, deleted_at: null },
+      ],
+    },
+  });
+}
+
+/** store สำหรับ resolveAppeal: appeal → eval → employee_id (derive จาก DB) */
+function storeWithAppeal(employeeId = "emp-1"): Store {
+  return makeStore({
+    data: {
+      evaluation_appeals: [{ id: "ap-1", tenant_id: "t1", evaluation_id: "eval-1" }],
+      accountant_evaluations: [
+        { id: "eval-1", tenant_id: "t1", employee_id: employeeId, status: "appealed", deleted_at: null },
       ],
     },
   });
@@ -143,14 +160,13 @@ describe("submitAppeal — ★ เฉพาะเจ้าของ + สถา�
   });
 });
 
-describe("resolveAppeal — หัวหน้าตัดสินอุทธรณ์ + guard", () => {
+describe("resolveAppeal — หัวหน้าตัดสินอุทธรณ์ + guard (★ derive เจ้าของจาก DB)", () => {
   it("acc_lead ของทีม resolve accepted → เรียก resolve_evaluation_appeal", async () => {
-    const store = makeStore();
+    const store = storeWithAppeal("emp-1");
     store.rpcResults.resolve_evaluation_appeal = { data: { decision: "accepted" }, error: null };
     const res = await resolveAppeal(makeDb(store), lead, {
       tenantId: "t1",
       appealId: "ap-1",
-      evaluationEmployeeId: "emp-1",
       decision: "accepted",
       adjustedOverall: 80,
     });
@@ -159,14 +175,69 @@ describe("resolveAppeal — หัวหน้าตัดสินอุทธ�
   });
 
   it("★ accountant resolve ไม่ได้ → EvalAuthError", async () => {
-    const store = makeStore();
+    const store = storeWithAppeal("emp-1");
     await expect(
       resolveAppeal(makeDb(store), accountant, {
         tenantId: "t1",
         appealId: "ap-1",
-        evaluationEmployeeId: "emp-1",
         decision: "rejected",
       })
     ).rejects.toBeInstanceOf(EvalAuthError);
+    expect(store.rpcCalls).toHaveLength(0);
+  });
+
+  it("★ derive จาก DB: eval เจ้าของนอกทีม → lead resolve ไม่ได้ (แม้ client ไม่ได้ส่ง employeeId)", async () => {
+    const store = storeWithAppeal("emp-9"); // เจ้าของนอกทีมของ lead
+    await expect(
+      resolveAppeal(makeDb(store), lead, {
+        tenantId: "t1",
+        appealId: "ap-1",
+        decision: "accepted",
+      })
+    ).rejects.toBeInstanceOf(EvalAuthError);
+    expect(store.rpcCalls).toHaveLength(0);
+  });
+
+  it("ไม่พบ appeal ใน tenant → EvalAuthError", async () => {
+    const store = makeStore({ data: { evaluation_appeals: [], accountant_evaluations: [] } });
+    await expect(
+      resolveAppeal(makeDb(store), admin, { tenantId: "t1", appealId: "nope", decision: "rejected" })
+    ).rejects.toBeInstanceOf(EvalAuthError);
+  });
+});
+
+describe("★ cross-tenant guard — review/resolve ข้าม tenant ไม่ได้", () => {
+  it("eval อยู่ tenant อื่น → loadEvalMeta (scope tenant viewer) ไม่พบ → reject", async () => {
+    // eval เก็บใน tenant t2 แต่ viewer ถือ tenantId t1 → query .eq(tenant_id, t1) ไม่เจอ
+    const store = makeStore({
+      data: {
+        accountant_evaluations: [
+          { id: "eval-1", tenant_id: "t2", employee_id: "emp-1", status: "ai_draft", deleted_at: null },
+        ],
+      },
+    });
+    await expect(
+      applyManagerReview(makeDb(store), admin, {
+        tenantId: "t1", // viewer tenant
+        evaluationId: "eval-1",
+        action: "confirm",
+      })
+    ).rejects.toBeInstanceOf(EvalAuthError);
+    expect(store.rpcCalls).toHaveLength(0);
+  });
+
+  it("appeal อยู่ tenant อื่น → loadAppealMeta ไม่พบ → reject", async () => {
+    const store = makeStore({
+      data: {
+        evaluation_appeals: [{ id: "ap-1", tenant_id: "t2", evaluation_id: "eval-1" }],
+        accountant_evaluations: [
+          { id: "eval-1", tenant_id: "t2", employee_id: "emp-1", status: "appealed", deleted_at: null },
+        ],
+      },
+    });
+    await expect(
+      resolveAppeal(makeDb(store), admin, { tenantId: "t1", appealId: "ap-1", decision: "accepted" })
+    ).rejects.toBeInstanceOf(EvalAuthError);
+    expect(store.rpcCalls).toHaveLength(0);
   });
 });

@@ -9,16 +9,21 @@ import {
   type Viewer,
 } from "@/lib/evaluation/access";
 
-const accountant = (empId: string): Viewer => ({ role: "accountant", employeeId: empId });
+const accountant = (empId: string): Viewer => ({
+  role: "accountant",
+  employeeId: empId,
+  tenantId: "t1",
+});
 const lead = (empId: string, team: string[]): Viewer => ({
   role: "acc_lead",
   employeeId: empId,
+  tenantId: "t1",
   teamMemberIds: new Set(team),
 });
-const admin: Viewer = { role: "admin", employeeId: "adm" };
-const executive: Viewer = { role: "executive", employeeId: "exec" };
-const auditor: Viewer = { role: "auditor_qa", employeeId: "aud" };
-const hr: Viewer = { role: "hr", employeeId: "hr1" };
+const admin: Viewer = { role: "admin", employeeId: "adm", tenantId: "t1" };
+const executive: Viewer = { role: "executive", employeeId: "exec", tenantId: "t1" };
+const auditor: Viewer = { role: "auditor_qa", employeeId: "aud", tenantId: "t1" };
+const hr: Viewer = { role: "hr", employeeId: "hr1", tenantId: "t1" };
 
 describe("canViewEvaluation — tier (★ accountant เห็นเฉพาะตัวเอง)", () => {
   it("★ accountant เห็น eval ของตัวเอง", () => {
@@ -45,7 +50,9 @@ describe("canViewEvaluation — tier (★ accountant เห็นเฉพาะ
     expect(canViewEvaluation(hr, "e1", "appeal_resolved")).toBe(true);
   });
   it("role null → default deny", () => {
-    expect(canViewEvaluation({ role: null, employeeId: "x" }, "x", "ai_draft")).toBe(false);
+    expect(
+      canViewEvaluation({ role: null, employeeId: "x", tenantId: "t1" }, "x", "ai_draft")
+    ).toBe(false);
   });
 });
 

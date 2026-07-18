@@ -9,7 +9,7 @@ import type { Viewer } from "./access";
  *   ใช้ cookie client (authenticated) เพื่อให้ auth.uid()/RLS ทำงานตามผู้ล็อกอินจริง
  */
 export async function resolveEvalViewer(db: SupabaseClient): Promise<Viewer> {
-  const deny: Viewer = { role: null, employeeId: null, teamMemberIds: new Set() };
+  const deny: Viewer = { role: null, employeeId: null, tenantId: null, teamMemberIds: new Set() };
 
   try {
     const { data: auth } = await db.auth.getUser();
@@ -31,6 +31,7 @@ export async function resolveEvalViewer(db: SupabaseClient): Promise<Viewer> {
         : (rel as { code?: string } | null | undefined)?.code;
     const role = code && isRoleCode(code) ? code : null;
     const employeeId = r.employee_id ?? null;
+    const tenantId = r.tenant_id ?? null;
 
     const teamMemberIds = new Set<string>();
     if (role === "acc_lead" && employeeId && r.tenant_id) {
@@ -57,7 +58,7 @@ export async function resolveEvalViewer(db: SupabaseClient): Promise<Viewer> {
       }
     }
 
-    return { role, employeeId, teamMemberIds };
+    return { role, employeeId, tenantId, teamMemberIds };
   } catch {
     return deny; // fail-closed
   }

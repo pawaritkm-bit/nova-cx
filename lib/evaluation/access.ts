@@ -41,6 +41,8 @@ export type Viewer = {
   role: RoleCode | null;
   /** employee_id ของผู้ใช้ปัจจุบัน (null = ไม่ผูกพนักงาน เช่น admin บางราย) */
   employeeId: string | null;
+  /** ★ tenant ของผู้ใช้จาก session — ห้ามเชื่อค่า tenantId จาก client (กันข้าม tenant) */
+  tenantId: string | null;
   /** พนักงานที่ผู้ใช้ (acc_lead) เป็นหัวหน้าทีม — resolve มาจาก DB */
   teamMemberIds?: ReadonlySet<string>;
 };

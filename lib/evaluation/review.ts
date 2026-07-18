@@ -39,6 +39,36 @@ async function loadEvalMeta(
   return { employeeId: row.employee_id, status: row.status };
 }
 
+/**
+ * ★ derive เจ้าของ eval จาก appeal → eval (จาก DB, scope tenant) — ห้ามเชื่อ client
+ *   null = ไม่พบ appeal/eval ใน tenant นี้ (fail-closed)
+ */
+async function loadAppealMeta(
+  serviceDb: SupabaseClient,
+  tenantId: string,
+  appealId: string
+): Promise<{ evaluationEmployeeId: string } | null> {
+  const { data: appeal } = await serviceDb
+    .from("evaluation_appeals")
+    .select("evaluation_id")
+    .eq("id", appealId)
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  const evaluationId = (appeal as { evaluation_id?: string } | null)?.evaluation_id;
+  if (!evaluationId) return null;
+
+  const { data: ev } = await serviceDb
+    .from("accountant_evaluations")
+    .select("employee_id")
+    .eq("id", evaluationId)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  const employeeId = (ev as { employee_id?: string } | null)?.employee_id;
+  if (!employeeId) return null;
+  return { evaluationEmployeeId: employeeId };
+}
+
 export type ManagerReviewParams = {
   tenantId: string;
   evaluationId: string;
@@ -121,7 +151,6 @@ export async function submitAppeal(
 export type ResolveAppealParams = {
   tenantId: string;
   appealId: string;
-  evaluationEmployeeId: string; // เจ้าของ eval (ไว้ guard tier)
   decision: "accepted" | "rejected";
   managerResponse?: string | null;
   adjustedOverall?: number | null;
@@ -129,14 +158,18 @@ export type ResolveAppealParams = {
   actorUserId?: string | null;
 };
 
-/** หัวหน้าตัดสินคำอุทธรณ์ — guard tier + เรียก resolve_evaluation_appeal */
+/** หัวหน้าตัดสินคำอุทธรณ์ — guard tier + เรียก resolve_evaluation_appeal
+ *   ★ derive เจ้าของ eval จาก DB (ไม่เชื่อ client) ก่อน guard */
 export async function resolveAppeal(
   serviceDb: SupabaseClient,
   viewer: Viewer,
   params: ResolveAppealParams
 ): Promise<{ appealId: string; decision: string }> {
-  // ★ guard: หัวหน้าทีมของเจ้าของ eval หรือ admin/executive
-  if (!canResolveAppeal(viewer, params.evaluationEmployeeId)) {
+  const meta = await loadAppealMeta(serviceDb, params.tenantId, params.appealId);
+  if (!meta) throw new EvalAuthError("ไม่พบคำอุทธรณ์");
+
+  // ★ guard: หัวหน้าทีมของเจ้าของ eval (derive จาก DB) หรือ admin/executive
+  if (!canResolveAppeal(viewer, meta.evaluationEmployeeId)) {
     throw new EvalAuthError();
   }
 

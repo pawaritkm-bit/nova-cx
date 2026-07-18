@@ -16,18 +16,22 @@ export async function POST(request: NextRequest) {
   const requestId = newRequestId();
   try {
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    const tenantId = typeof body.tenantId === "string" ? body.tenantId : "";
     const evaluationId = typeof body.evaluationId === "string" ? body.evaluationId : "";
     const reason = typeof body.reason === "string" ? body.reason : "";
-    if (!tenantId || !evaluationId) {
+    if (!evaluationId) {
       return NextResponse.json({ error: "missing_params" }, { status: 400 });
     }
 
     const cookieDb = await createClient();
     const viewer = await resolveEvalViewer(cookieDb);
-    if (!viewer.role || !viewer.employeeId) {
+    if (!viewer.role || !viewer.employeeId || !viewer.tenantId) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
+    // ★ tenant จาก session เท่านั้น
+    if (typeof body.tenantId === "string" && body.tenantId && body.tenantId !== viewer.tenantId) {
+      return NextResponse.json({ error: "tenant_mismatch" }, { status: 403 });
+    }
+    const tenantId = viewer.tenantId;
 
     const serviceDb = createServiceRoleClient();
     const result = await submitAppeal(serviceDb, viewer, {
