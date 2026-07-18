@@ -4,8 +4,13 @@ import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAdminContext } from "@/lib/admin/guard";
 import { getSurveyOverview, type SurveyOverview } from "@/lib/surveys/overview";
+import {
+  getIndividualResponses,
+  type IndividualResponsesResult,
+} from "@/lib/surveys/responses";
 import type { RoleCode } from "@/lib/dashboard/types";
 import AppNav, { type AppNavActive } from "../_components/AppNav";
+import ResponsesTable from "./ResponsesTable";
 import "../dashboard/dashboard.css";
 import "../admin/admin.css";
 import "./surveys.css";
@@ -114,7 +119,18 @@ function SurveyCard({ form }: { form: SurveyOverview["forms"][number] }) {
   );
 }
 
-export default async function SurveysPage() {
+/** sub-view ของหน้า: ภาพรวมฟอร์ม (default) หรือ คำตอบรายบุคคล */
+type SubView = "overview" | "responses";
+
+export default async function SurveysPage({
+  searchParams,
+}: {
+  // Next 15: searchParams เป็น Promise
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = (await searchParams) ?? {};
+  const subView: SubView = sp.view === "responses" ? "responses" : "overview";
+
   // 1) ยังไม่ตั้ง env DB → degrade สุภาพ
   if (!getSupabaseEnv()) {
     return (
@@ -154,14 +170,21 @@ export default async function SurveysPage() {
     );
   }
 
-  // 3) โหลด config ฟอร์มด้วย service-role (config ไม่ใช่ PII) แต่ scope ด้วย tenant จาก session
-  let overview: SurveyOverview;
+  // 3) โหลดข้อมูลตาม sub-view ด้วย service-role — scope ด้วย tenant จาก session เสมอ
+  //    (service-role bypass RLS/column-REVOKE ได้; app-layer guard ด้านบนคือด่านกันสิทธิ์)
+  let overview: SurveyOverview | null = null;
+  let responses: IndividualResponsesResult = { rows: [], truncated: false, limit: 0 };
   try {
     const service = createServiceRoleClient();
-    overview = await getSurveyOverview(service, ctx.tenantId);
+    if (subView === "responses") {
+      responses = await getIndividualResponses(service, ctx.tenantId);
+    } else {
+      overview = await getSurveyOverview(service, ctx.tenantId);
+    }
   } catch {
     return (
       <Frame role={ctx.role} authed>
+        {renderTabs(subView)}
         <div className="card">
           อ่านข้อมูลแบบประเมินไม่สำเร็จ — ตรวจว่าตั้งค่า SUPABASE_SERVICE_ROLE_KEY
           แล้ว และ apply migration ครบ
@@ -172,48 +195,90 @@ export default async function SurveysPage() {
 
   return (
     <Frame role={ctx.role} authed>
+      {renderTabs(subView)}
       <section className="dash-views">
-        <div className="section-head">
-          <h2>แบบฟอร์มประเมิน (A/B/C/D)</h2>
-          <p>คลิก “ดูรายการคำถาม” เพื่อเปิดดูคำถามในแต่ละฟอร์ม (อ่านอย่างเดียว)</p>
-        </div>
-
-        <div className="survey-grid">
-          {overview.forms.map((form) => (
-            <SurveyCard key={form.surveyType} form={form} />
-          ))}
-        </div>
-
-        <div className="card">
-          <div className="section-title">รอบการส่ง (แคมเปญ)</div>
-          {overview.campaigns.length > 0 ? (
-            <div className="table-wrap">
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>ฟอร์ม</th>
-                    <th>รอบ</th>
-                    <th>เริ่ม</th>
-                    <th>สิ้นสุด</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {overview.campaigns.map((c, i) => (
-                    <tr key={`${c.surveyType}-${c.cycleLabel}-${i}`}>
-                      <td>{c.surveyType}</td>
-                      <td>{c.cycleLabel}</td>
-                      <td>{c.periodStart ?? "—"}</td>
-                      <td>{c.periodEnd ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {subView === "responses" ? (
+          <>
+            <div className="section-head">
+              <h2>คำตอบรายบุคคล</h2>
+              <p>
+                ดูได้ว่าแต่ละคำตอบเป็นของลูกค้าคนไหน (ครบทุกฟอร์ม A/B/C/D) —
+                กรอง/เรียงได้ที่หัวตาราง
+              </p>
             </div>
-          ) : (
-            <p className="muted">ยังไม่มีแคมเปญ</p>
-          )}
-        </div>
+            <ResponsesTable
+              rows={responses.rows}
+              truncated={responses.truncated}
+              limit={responses.limit}
+            />
+          </>
+        ) : (
+          <>
+            <div className="section-head">
+              <h2>แบบฟอร์มประเมิน (A/B/C/D)</h2>
+              <p>คลิก “ดูรายการคำถาม” เพื่อเปิดดูคำถามในแต่ละฟอร์ม (อ่านอย่างเดียว)</p>
+            </div>
+
+            <div className="survey-grid">
+              {overview!.forms.map((form) => (
+                <SurveyCard key={form.surveyType} form={form} />
+              ))}
+            </div>
+
+            <div className="card">
+              <div className="section-title">รอบการส่ง (แคมเปญ)</div>
+              {overview!.campaigns.length > 0 ? (
+                <div className="table-wrap">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>ฟอร์ม</th>
+                        <th>รอบ</th>
+                        <th>เริ่ม</th>
+                        <th>สิ้นสุด</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {overview!.campaigns.map((c, i) => (
+                        <tr key={`${c.surveyType}-${c.cycleLabel}-${i}`}>
+                          <td>{c.surveyType}</td>
+                          <td>{c.cycleLabel}</td>
+                          <td>{c.periodStart ?? "—"}</td>
+                          <td>{c.periodEnd ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="muted">ยังไม่มีแคมเปญ</p>
+              )}
+            </div>
+          </>
+        )}
       </section>
     </Frame>
+  );
+}
+
+/** แท็บสลับ sub-view (ใช้ลิงก์ ?view= เพื่อคงพฤติกรรม server component + shareable URL) */
+function renderTabs(active: SubView) {
+  return (
+    <nav className="survey-subtabs" aria-label="มุมมองแบบประเมิน">
+      <Link
+        href="/surveys"
+        className={`survey-subtab${active === "overview" ? " active" : ""}`}
+        aria-current={active === "overview" ? "page" : undefined}
+      >
+        ภาพรวมฟอร์ม
+      </Link>
+      <Link
+        href="/surveys?view=responses"
+        className={`survey-subtab${active === "responses" ? " active" : ""}`}
+        aria-current={active === "responses" ? "page" : undefined}
+      >
+        คำตอบรายบุคคล
+      </Link>
+    </nav>
   );
 }
