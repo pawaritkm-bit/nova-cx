@@ -26,6 +26,15 @@ export type LineClient = {
   reply(replyToken: string, messages: LineMessage[]): Promise<LineSendResult>;
   /** ดึงโปรไฟล์ผู้ใช้ (best-effort) — คืน null ถ้าล้ม */
   getProfile(userId: string): Promise<LineProfile | null>;
+  /**
+   * ดึงโปรไฟล์สมาชิกในกลุ่ม/ห้อง (best-effort) — คืน null ถ้าล้ม
+   *   endpoint แยกจาก getProfile: /group/{groupId}/member/{userId} หรือ /room/{roomId}/member/{userId}
+   */
+  getGroupMemberProfile(
+    sourceType: "group" | "room",
+    sourceId: string,
+    userId: string
+  ): Promise<LineProfile | null>;
 };
 
 /** จำแนกว่า HTTP status ควร retry ไหม (5xx/429 = retry, 4xx อื่น = ไม่) */
@@ -98,6 +107,19 @@ export function getLineClient(oa: LineOa): LineClient | null {
     async getProfile(userId) {
       try {
         const res = await fetch(`${LINE_API_BASE}/profile/${encodeURIComponent(userId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return null;
+        const data = (await res.json()) as { userId: string; displayName?: string };
+        return { userId: data.userId, displayName: data.displayName };
+      } catch {
+        return null;
+      }
+    },
+    async getGroupMemberProfile(sourceType, sourceId, userId) {
+      try {
+        const path = `/${sourceType}/${encodeURIComponent(sourceId)}/member/${encodeURIComponent(userId)}`;
+        const res = await fetch(`${LINE_API_BASE}${path}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) return null;

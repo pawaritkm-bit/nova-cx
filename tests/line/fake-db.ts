@@ -1,9 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Fake Supabase client (chainable + thenable) สำหรับ unit test worker LINE
+ * Fake Supabase client (chainable + thenable) สำหรับ unit test worker/ingest LINE
  * รองรับ: select/eq/in/not/is/lte/order/limit/maybeSingle/update/insert/upsert
  * บันทึก insert/update/upsert ให้ assert ได้
+ *
+ * insert/upsert เป็น chainable → รองรับ `.insert(row).select("id").maybeSingle()`
+ *   (คืน row พร้อม id สังเคราะห์; upsert single จะ merge กับ canned data ของ table นั้น
+ *    เพื่อจำลอง ON CONFLICT DO UPDATE ที่คืนค่าคอลัมน์เดิม เช่น customer_id)
  */
 
 export type Store = {
@@ -21,10 +25,14 @@ export function makeStore(data: Record<string, unknown> = {}): Store {
   return { data, inserts: [], updates: [], upserts: [] };
 }
 
+type Mode = "select" | "insert" | "update" | "upsert";
+
 class QB {
   private wantSingle = false;
-  private isUpdate = false;
+  private mode: Mode = "select";
   private updatePayload: Record<string, unknown> = {};
+  private insertRows: Record<string, unknown>[] = [];
+  private upsertRow: Record<string, unknown> = {};
   private filters: Record<string, unknown> = {};
   constructor(private table: string, private store: Store) {}
 
@@ -58,24 +66,39 @@ class QB {
     return this;
   }
   update(payload: Record<string, unknown>) {
-    this.isUpdate = true;
+    this.mode = "update";
     this.updatePayload = payload;
     return this;
   }
   insert(rows: Record<string, unknown> | Record<string, unknown>[]) {
     const arr = Array.isArray(rows) ? rows : [rows];
+    this.mode = "insert";
+    this.insertRows = arr;
     this.store.inserts.push({ table: this.table, rows: arr });
-    return Promise.resolve({ data: null, error: null });
+    return this;
   }
   upsert(row: Record<string, unknown>) {
+    this.mode = "upsert";
+    this.upsertRow = row;
     this.store.upserts.push({ table: this.table, row });
-    return Promise.resolve({ data: null, error: null });
+    return this;
+  }
+
+  /** canned single ของ table (object หรือ array[0]) */
+  private cannedSingle(): Record<string, unknown> | null {
+    const canned = this.store.data[this.table];
+    if (Array.isArray(canned)) return (canned[0] as Record<string, unknown>) ?? null;
+    return (canned as Record<string, unknown>) ?? null;
+  }
+
+  private withId(row: Record<string, unknown>): Record<string, unknown> {
+    return { id: row.id ?? `${this.table}-id`, ...row };
   }
 
   private result(): { data: unknown; error: unknown } {
     const err = this.store.errors?.[this.table] ?? null;
 
-    if (this.isUpdate) {
+    if (this.mode === "update") {
       this.store.updates.push({
         table: this.table,
         payload: this.updatePayload,
@@ -91,6 +114,25 @@ class QB {
 
     if (err) return { data: null, error: err };
 
+    if (this.mode === "insert") {
+      if (this.wantSingle) {
+        const first = this.insertRows[0] ?? {};
+        return { data: this.withId(first), error: null };
+      }
+      return { data: null, error: null };
+    }
+
+    if (this.mode === "upsert") {
+      if (this.wantSingle) {
+        // จำลอง ON CONFLICT DO UPDATE ... RETURNING: merge canned เดิม + ค่าที่ส่ง
+        const canned = this.cannedSingle() ?? {};
+        const merged = { ...canned, ...this.upsertRow };
+        return { data: this.withId(merged), error: null };
+      }
+      return { data: null, error: null };
+    }
+
+    // select
     const canned = this.store.data[this.table];
     if (this.wantSingle) {
       const single = Array.isArray(canned) ? canned[0] ?? null : canned ?? null;

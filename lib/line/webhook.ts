@@ -19,15 +19,17 @@ export type LineWebhookEvent = {
     roomId?: string;
   };
   message?: {
+    id?: string;
     type?: string;
     text?: string;
   };
 };
 
 /**
- * event ที่เก็บลง job_queue จริง (M2: trim PII)
- *   เก็บเฉพาะ field ที่ worker line_event ใช้ — ไม่เก็บ message.text (เนื้อหาแชตลูกค้า/PII)
- *   หรือ field เนื้อหาอื่นที่ไม่จำเป็น
+ * event ที่ผ่านการ trim แล้ว (ชั้นกลางก่อนเข้ารหัส) — ยัง "อาจ" มี message.text plaintext
+ *   ★ อย่านำ shape นี้ไปเก็บลง job_queue ตรง ๆ — ต้องผ่าน toQueuedEvent() เข้ารหัสก่อนเสมอ
+ *   follow/unfollow ใช้แค่ type + source.userId (คงพฤติกรรมเดิม)
+ *   message (group/room) เพิ่ม: message.id/type/text + source.groupId/roomId เพื่อส่งต่อ handler
  */
 export type TrimmedLineEvent = {
   type: string;
@@ -35,12 +37,44 @@ export type TrimmedLineEvent = {
   source?: {
     type?: string; // user | group | room
     userId?: string;
+    groupId?: string;
+    roomId?: string;
+  };
+  message?: {
+    id?: string;
+    type?: string;
+    text?: string;
   };
 };
 
 /**
- * ตัด event ดิบให้เหลือเฉพาะ field ที่ worker ใช้ (follow/unfollow อ้าง type + source.userId)
- *   ทิ้ง message.text/replyToken/groupId/roomId ที่ไม่ได้ใช้ (ลด PII ค้างในคิว)
+ * event ที่เก็บลง job_queue จริง — ★ ไม่มี plaintext เนื้อหาแชต
+ *   contentEnc = ciphertext ของ message.text (เข้ารหัสแล้ว) หรือ null ถ้าไม่ใช่ text/ไม่มีคีย์
+ */
+export type QueuedLineEvent = {
+  type: string;
+  timestamp?: number;
+  source?: {
+    type?: string;
+    userId?: string;
+    groupId?: string;
+    roomId?: string;
+  };
+  message?: {
+    id?: string;
+    type?: string;
+    /** ciphertext ของข้อความ (ไม่มี plaintext) — null ถ้าไม่ใช่ text หรือเข้ารหัสไม่ได้ */
+    contentEnc?: string | null;
+    /** true เมื่อมี text แต่เข้ารหัสไม่ได้ (ไม่มี CREDENTIAL_ENC_KEY) → ตัดทิ้งไม่เก็บ plaintext */
+    encSkipped?: boolean;
+  };
+};
+
+/**
+ * ตัด event ดิบให้เหลือเฉพาะ field ที่ worker ใช้
+ *   - follow/unfollow: type + source.userId (พฤติกรรมเดิม ไม่กระทบ)
+ *   - message: เก็บ message.id/type/text + source.type/groupId/roomId เพื่อส่งต่อ handler
+ *   ★ message.text ที่ติดมายังเป็น plaintext — ต้องส่งต่อ toQueuedEvent() เข้ารหัสก่อนเก็บ
  */
 export function trimLineEvent(event: LineWebhookEvent): TrimmedLineEvent {
   const trimmed: TrimmedLineEvent = { type: event.type };
@@ -49,8 +83,56 @@ export function trimLineEvent(event: LineWebhookEvent): TrimmedLineEvent {
     trimmed.source = {};
     if (event.source.type) trimmed.source.type = event.source.type;
     if (event.source.userId) trimmed.source.userId = event.source.userId;
+    if (event.source.groupId) trimmed.source.groupId = event.source.groupId;
+    if (event.source.roomId) trimmed.source.roomId = event.source.roomId;
+  }
+  if (event.type === "message" && event.message) {
+    trimmed.message = {};
+    if (event.message.id) trimmed.message.id = event.message.id;
+    if (event.message.type) trimmed.message.type = event.message.type;
+    if (typeof event.message.text === "string") trimmed.message.text = event.message.text;
   }
   return trimmed;
+}
+
+/** ฟังก์ชันเข้ารหัส field (inject ได้เพื่อ test) — คืน ciphertext จาก plaintext */
+export type EncryptFn = (plaintext: string) => string;
+
+/**
+ * แปลง TrimmedLineEvent → QueuedLineEvent สำหรับเก็บลง job_queue
+ *   ★ เข้ารหัส message.text เป็น contentEnc แล้ว "ตัด plaintext ทิ้ง" ก่อนคืนค่า
+ *   - encrypt = null (ไม่มี CREDENTIAL_ENC_KEY): มี text → ตัดทิ้ง (encSkipped=true) ไม่เก็บ plaintext
+ *   - event ที่ไม่ใช่ message: คืนค่าเหมือนเดิม (ไม่มี message เลย)
+ */
+export function toQueuedEvent(
+  event: TrimmedLineEvent,
+  encrypt: EncryptFn | null
+): QueuedLineEvent {
+  const queued: QueuedLineEvent = { type: event.type };
+  if (typeof event.timestamp === "number") queued.timestamp = event.timestamp;
+  if (event.source) queued.source = { ...event.source };
+
+  if (event.type === "message" && event.message) {
+    const { id, type, text } = event.message;
+    const msg: NonNullable<QueuedLineEvent["message"]> = {};
+    if (id) msg.id = id;
+    if (type) msg.type = type;
+
+    if (typeof text === "string" && text.length > 0) {
+      if (encrypt) {
+        msg.contentEnc = encrypt(text);
+      } else {
+        // ไม่มีคีย์ → ไม่เก็บ plaintext เด็ดขาด (เก็บแค่ envelope + flag)
+        msg.contentEnc = null;
+        msg.encSkipped = true;
+      }
+    } else {
+      msg.contentEnc = null;
+    }
+    queued.message = msg;
+  }
+
+  return queued;
 }
 
 export type LineWebhookBody = {

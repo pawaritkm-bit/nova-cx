@@ -3,7 +3,8 @@ import { getSupabaseEnv, getLineChannelSecret, type LineOa } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { newRequestId, logServerError } from "@/lib/http";
 import { verifyLineSignature } from "@/lib/line/signature";
-import { parseWebhookBody, resolveOaTenantId, trimLineEvent } from "@/lib/line/webhook";
+import { parseWebhookBody, resolveOaTenantId, trimLineEvent, toQueuedEvent } from "@/lib/line/webhook";
+import { encryptField, hasEncKey } from "@/lib/crypto/field";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -72,11 +73,14 @@ export async function POST(
     }
 
     // enqueue 1 job ต่อ 1 event (worker ประมวลผลภายหลัง)
-    // M2: trim PII — เก็บเฉพาะ field ที่ worker ใช้ (ตัด message.text ฯลฯ) ไม่เก็บ event ดิบ
+    // trim PII → เข้ารหัสเนื้อหาแชตก่อนเก็บ (ไม่เก็บ plaintext ลง job_queue)
+    //   มี CREDENTIAL_ENC_KEY: message.text → contentEnc (ciphertext)
+    //   ไม่มีคีย์: ตัด text ทิ้ง (encSkipped) — follow/unfollow ไม่กระทบ (ไม่มี text อยู่แล้ว)
+    const encrypt = hasEncKey() ? encryptField : null;
     const jobs = events.map((event) => ({
       tenant_id: tenantId,
       queue: "line_event",
-      payload: { oa, event: trimLineEvent(event) },
+      payload: { oa, event: toQueuedEvent(trimLineEvent(event), encrypt) },
     }));
     await db.from("job_queue").insert(jobs);
 

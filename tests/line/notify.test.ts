@@ -29,6 +29,9 @@ function makeClients(result: LineSendResult = { ok: true, messageId: "mid-1" }) 
     async getProfile() {
       return null;
     },
+    async getGroupMemberProfile() {
+      return null;
+    },
   });
   const getClient = (oa: LineOa) => build(oa);
   return { pushes, getClient };

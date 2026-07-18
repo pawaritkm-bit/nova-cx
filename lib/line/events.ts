@@ -1,13 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import type { LineClient } from "@/lib/line/client";
-import type { TrimmedLineEvent } from "@/lib/line/webhook";
+import type { QueuedLineEvent } from "@/lib/line/webhook";
+import { ingestGroupMessage } from "@/lib/line/ingest";
 
 /**
  * Worker: line_event — ประมวลผล event ที่ webhook enqueue ไว้ (job_queue queue='line_event')
  *   follow (แอดเพื่อน)     → upsert line_users + linked + unblock
  *   unfollow/block         → mark is_blocked = true
- *   message/อื่น           → no-op (mark done)
+ *   message (group/room)   → ingest แชตลง chat_* (เข้ารหัสแล้ว, idempotent) — Phase 1
+ *   message (1:1)/อื่น     → no-op (mark done)
  *
  * inject deps (db + getClient) เพื่อ test ได้โดยไม่ต้องมี env/network จริง
  */
@@ -34,7 +36,7 @@ export type LineEventSummary = {
 type JobRow = {
   id: string;
   tenant_id: string;
-  payload: { oa?: LineOa; event?: TrimmedLineEvent } | null;
+  payload: { oa?: LineOa; event?: QueuedLineEvent } | null;
   attempts: number;
   max_attempts: number;
 };
@@ -122,8 +124,17 @@ async function processOne(
         if (!userId) return fail("unfollow_missing_userId");
         await handleUnfollow(deps, job.tenant_id, userId);
         break;
+      case "message":
+        // Phase 1: เก็บแชตกลุ่ม/ห้อง (ingest จัดการ skip เองถ้าเป็น 1:1/ข้อมูลไม่ครบ)
+        await ingestGroupMessage(
+          { db, client: deps.getClient?.(oa) ?? null, now: () => now },
+          job.tenant_id,
+          oa,
+          event
+        );
+        break;
       default:
-        // message / postback / อื่น ๆ — ยังไม่ต้องทำอะไร (mark done)
+        // postback / อื่น ๆ — ยังไม่ต้องทำอะไร (mark done)
         break;
     }
   } catch (e) {
