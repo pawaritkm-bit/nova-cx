@@ -3,6 +3,8 @@ import { getSupabaseEnv } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { getAIProvider } from "@/lib/ai/provider";
 import { processAiAnalysisJobs } from "@/lib/ai/worker";
+import { processChatAnalysisJobs } from "@/lib/ai/chat-worker";
+import { scanChatAnalysis } from "@/lib/ai/chat-scan";
 import { newRequestId, logServerError, isValidCronAuth } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -45,8 +47,29 @@ async function handle(request: NextRequest) {
   try {
     const db = createServiceRoleClient();
     const provider = getAIProvider();
+
+    // 1) survey AI worker (เดิม — ไม่แตะ)
     const summary = await processAiAnalysisJobs({ db, provider });
-    return NextResponse.json({ status: "ok", ...summary }, { status: 200 });
+
+    // 2) chat (Phase 2) — additive: scan enqueue + chat worker
+    //    isolate ไว้: chat พังต้องไม่ทำให้ survey worker ล้ม (คืนผลแยกใน chat.error)
+    let chatScan;
+    let chatWorker;
+    try {
+      chatScan = await scanChatAnalysis({ db });
+      chatWorker = await processChatAnalysisJobs({ db, provider });
+    } catch (chatErr) {
+      logServerError("cron/process-ai:chat", requestId, chatErr);
+      return NextResponse.json(
+        { status: "ok", ...summary, chat: { error: true, request_id: requestId } },
+        { status: 200 }
+      );
+    }
+
+    return NextResponse.json(
+      { status: "ok", ...summary, chat: { scan: chatScan, worker: chatWorker } },
+      { status: 200 }
+    );
   } catch (e) {
     logServerError("cron/process-ai", requestId, e);
     // คืน 200 (Vercel Cron ไม่ retry แบบ error loop) + สถานะ error ให้ monitor เห็น

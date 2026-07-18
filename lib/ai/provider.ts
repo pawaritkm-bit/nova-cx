@@ -1,4 +1,3 @@
-import { AI_JSON_SCHEMA } from "./schema";
 import { OpenAIProvider } from "./openai";
 
 /**
@@ -7,11 +6,22 @@ import { OpenAIProvider } from "./openai";
  *   - การ parse/validate/retry/guardrail ทำใน analyze.ts (provider-agnostic)
  */
 
+/**
+ * รูป JSON schema spec สำหรับ OpenAI Structured Outputs (response_format=json_schema)
+ *   กว้างพอให้ทั้ง schema ของ survey (AI_JSON_SCHEMA) และ chat (CHAT_AI_JSON_SCHEMA) ใช้ร่วมได้
+ *   — เพิ่มแบบ additive ไม่ผูกกับ schema ตัวใดตัวหนึ่ง (ไม่ regress survey)
+ */
+export type JsonSchemaSpec = {
+  readonly name: string;
+  readonly strict?: boolean;
+  readonly schema: Record<string, unknown>;
+};
+
 export type GenerateJsonArgs = {
   system: string;
   user: string;
   /** JSON schema สำหรับ structured output (OpenAI json_schema) */
-  jsonSchema: typeof AI_JSON_SCHEMA;
+  jsonSchema: JsonSchemaSpec;
 };
 
 export interface AIProvider {
