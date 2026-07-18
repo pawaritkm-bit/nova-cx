@@ -10,7 +10,12 @@ import type {
   NpsCategory,
 } from "./aggregate";
 
-/** 7 บทบาทพนักงาน (ตรงกับ roles.code — 0002) */
+/**
+ * บทบาทพนักงาน (ตรงกับ roles.code — 0002 + 0030)
+ *   auditor_qa/hr เพิ่มใน 0030 (Phase 0 ของโมดูล AI วิเคราะห์แชท)
+ *   ★ เป็นเพียงการ "รู้จัก" บทบาท — สิทธิ์จริงยังคุมด้วย allow-list/RLS แยกต่างหาก
+ *     (2 บทบาทนี้ไม่อยู่ใน PRIVILEGED_ROLES/ADMIN_ROLES → default deny)
+ */
 export type RoleCode =
   | "executive"
   | "acc_lead"
@@ -18,7 +23,9 @@ export type RoleCode =
   | "sales_lead"
   | "sales"
   | "cs"
-  | "admin";
+  | "admin"
+  | "auditor_qa"
+  | "hr";
 
 export const ROLE_CODES: RoleCode[] = [
   "executive",
@@ -28,6 +35,8 @@ export const ROLE_CODES: RoleCode[] = [
   "sales",
   "cs",
   "admin",
+  "auditor_qa",
+  "hr",
 ];
 
 export function isRoleCode(v: string): v is RoleCode {

@@ -64,7 +64,8 @@ export async function POST(
     }
 
     const db = createServiceRoleClient();
-    const tenantId = await resolveOaTenantId(db, oa);
+    // destination = bot user id ของ OA ที่ควรรับ webhook นี้ → ใช้เป็น channel_ref หา tenant
+    const tenantId = await resolveOaTenantId(db, oa, body.destination);
     if (!tenantId) {
       logServerError("line/webhook", requestId, "no tenant resolved; events dropped");
       return NextResponse.json({ status: "ok", enqueued: 0 }, { status: 200 });

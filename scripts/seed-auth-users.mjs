@@ -3,6 +3,9 @@
  * seed-auth-users.mjs — สร้าง Supabase Auth user จริง 1 คนต่อบทบาท แล้วผูกกับ public.users
  *
  * ทำอะไร:
+ *   - รายชื่อผู้ใช้ไม่ได้ hardcode ในสคริปต์ — อ่านจาก public.users ทั้งหมดแบบ dynamic
+ *     ดังนั้นผู้ใช้ทดสอบบทบาทใหม่ (auditor_qa@finovas.demo / hr@finovas.demo ที่ seed
+ *     ไว้ใน seed.sql — Phase 0) จะถูกสร้าง auth ให้อัตโนมัติเมื่อรันสคริปต์นี้
  *   1) อ่าน public.users (join roles) ของ tenant Finovas ที่ active
  *   2) สำหรับแต่ละ user: สร้าง auth user ด้วยอีเมลเดิมของ users row (email_confirm:true)
  *      - ถ้ามีอยู่แล้ว → reuse (idempotent) แล้วอัปเดตรหัสผ่านให้ตรง SEED_AUTH_PASSWORD

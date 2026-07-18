@@ -24,7 +24,7 @@ import NovaMascot from "../liff/survey/[token]/NovaMascot";
  * ★ ไม่มีการเปลี่ยน URL/guard — เป็นชั้น presentation ล้วน ๆ (สิทธิ์จริงบังคับที่หน้า/view/RLS)
  */
 
-/** ป้ายบทบาทภาษาไทย (ตรงกับ roles.code — 7 บทบาท) */
+/** ป้ายบทบาทภาษาไทย (ตรงกับ roles.code — ต้องครบทุกบทบาทใน RoleCode) */
 export const ROLE_LABEL: Record<RoleCode, string> = {
   executive: "ผู้บริหาร",
   acc_lead: "หัวหน้าทีมบัญชี",
@@ -33,6 +33,8 @@ export const ROLE_LABEL: Record<RoleCode, string> = {
   sales: "เซลล์",
   cs: "CS",
   admin: "Admin",
+  auditor_qa: "ผู้ตรวจสอบ/QA",
+  hr: "ฝ่ายบุคคล",
 };
 
 export type AppNavActive =

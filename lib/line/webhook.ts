@@ -71,25 +71,50 @@ export function parseWebhookBody(rawBody: string): LineWebhookBody {
 
 /**
  * หา tenant_id สำหรับ enqueue line_event
- *   1) env LINE_TENANT_ID (multi-tenant future / บังคับชัด)
- *   2) tenant แรกในระบบ (เฟสแรก 1 tenant — Q2 default)
+ *   0) mapping จริงจากตาราง chat_channels ตาม channel_ref (OA→tenant) — วิธีที่ถูกต้อง
+ *   1) env LINE_TENANT_ID (multi-tenant future / บังคับชัด) — fallback
+ *   2) tenant แรกในระบบ (เฟสแรก 1 tenant — Q2 default) — fallback สุดท้าย
  * คืน null ถ้าไม่พบ tenant เลย (webhook จะ return 200 แต่ไม่ enqueue)
  *
- * M1 (guard): ถ้าไม่ตั้ง LINE_TENANT_ID และในระบบมี tenant มากกว่า 1 → route event
+ * channelRef: ค่าอ้างอิง channel จาก webhook (LINE = body.destination = bot user id)
+ *   ถ้าไม่ส่งมา/หา mapping ไม่เจอ → degrade ลง fallback เดิมอย่างนุ่มนวล (ไม่ทำ webhook พัง)
+ *
+ * M1 (guard): ถ้าตกมาถึง fallback tenant แรก และในระบบมี tenant มากกว่า 1 → route event
  *   ไปที่ tenant แรกเสมอ ซึ่ง "ไม่ปลอดภัยสำหรับ multi-tenant" (event ของ OA อาจไป
  *   ผิด tenant) → log warning ชัดเจนให้ ops รู้ตัว
- *
- * TODO(ก่อนเปิด multi-tenant): ทำ OA→tenant mapping จริง (คอลัมน์/ตาราง line_oa_channels
- *   เก็บ channel id ของแต่ละ OA → tenant_id) แล้ว resolve ด้วย mapping นั้นแทนการใช้ tenant แรก
  */
 export async function resolveOaTenantId(
   db: SupabaseClient,
-  _oa: LineOa
+  _oa: LineOa,
+  channelRef?: string | null
 ): Promise<string | null> {
+  // (0) mapping จริงจาก chat_channels — วิธีที่ถูกต้องสำหรับ multi-tenant
+  //     อ่านผ่าน service_role (bypass RLS) เฉพาะ channel ที่ active และยังไม่ถูกลบ
+  if (channelRef) {
+    const { data: channel } = await db
+      .from("chat_channels")
+      .select("tenant_id")
+      .eq("provider", "line")
+      .eq("channel_ref", channelRef)
+      .eq("is_active", true)
+      .is("deleted_at", null)
+      .maybeSingle();
+
+    const mappedTenantId = (channel as { tenant_id?: string } | null)?.tenant_id;
+    if (mappedTenantId) return mappedTenantId;
+
+    // ไม่พบ mapping → log แล้วตกลง fallback เดิม (ไม่ทำ webhook พัง)
+    console.warn(
+      `[line/webhook] no chat_channels mapping for channel_ref=${channelRef} (oa=${_oa}) — ` +
+        `falling back to LINE_TENANT_ID / first tenant.`
+    );
+  }
+
+  // (1) env override
   const override = getLineTenantId();
   if (override) return override;
 
-  // ดึงมา 2 แถวเพื่อตรวจว่ามี tenant มากกว่า 1 หรือไม่ (แต่ยังใช้แถวแรก)
+  // (2) fallback: tenant แรกในระบบ — ดึง 2 แถวเพื่อตรวจว่ามี tenant มากกว่า 1 หรือไม่
   const { data } = await db
     .from("tenants")
     .select("id")
@@ -103,8 +128,8 @@ export async function resolveOaTenantId(
 
   if (rows.length > 1) {
     console.warn(
-      `[line/webhook] multiple tenants but no LINE_TENANT_ID — using first tenant (${rows[0].id}), ` +
-        `unsafe for multi-tenant. Set LINE_TENANT_ID or implement OA→tenant mapping (line_oa_channels) before enabling multi-tenant.`
+      `[line/webhook] multiple tenants but no chat_channels mapping / LINE_TENANT_ID — using first tenant (${rows[0].id}), ` +
+        `unsafe for multi-tenant. Add a chat_channels row (provider='line', channel_ref=<OA destination>) or set LINE_TENANT_ID.`
     );
   }
 
