@@ -207,3 +207,180 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* ---- สวิตช์ส่งอัตโนมัติ ต่อลูกค้า ---- */
+.nova-dash .admin-toggle {
+  border: 1px solid var(--line);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  min-width: 54px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.nova-dash .admin-toggle.on {
+  background: var(--green-bg);
+  color: #166534;
+  border-color: #86efac;
+}
+.nova-dash .admin-toggle.off {
+  background: #f1f5f9;
+  color: var(--muted);
+}
+.nova-dash .admin-toggle:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ---- ปุ่มส่งแบบประเมินเอง ต่อลูกค้า ---- */
+.nova-dash .admin-manual-send {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.nova-dash .admin-manual-send form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.nova-dash .admin-manual-send select {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.nova-dash .admin-link-copy {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  align-items: center;
+}
+.nova-dash .admin-link-copy input {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  min-width: 180px;
+  color: var(--muted);
+}
+
+/* ---- ปุ่ม "แก้ไข" ต่อแถว (นำทาง ไม่ทำลาย → hover โทน navy) ---- */
+.nova-dash .admin-edit-btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--navy-800);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.nova-dash .admin-edit-btn:hover {
+  border-color: var(--navy-800);
+  background: var(--navy-800);
+  color: #fff;
+}
+
+/* ---- แผงแก้ไขลูกค้ารายคน (modal) ---- */
+.admin-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 32px 16px;
+  overflow-y: auto;
+}
+.admin-modal {
+  width: 100%;
+  max-width: 460px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
+  padding: 20px 22px 22px;
+  font-family: inherit;
+  animation: admin-modal-in 0.14s ease-out;
+}
+@keyframes admin-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.admin-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.admin-modal-header h3 {
+  margin: 0;
+  color: var(--navy-800);
+  font-size: 17px;
+  font-weight: 800;
+}
+.admin-modal-close {
+  border: none;
+  background: #f1f5f9;
+  color: var(--muted);
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.admin-modal-close:hover {
+  background: #e2e8f0;
+  color: var(--text);
+}
+/* ฟอร์มแก้ฟิลด์ใน modal — ใช้สไตล์ input/label/ปุ่ม ของ .admin-form เดิม */
+.admin-modal .admin-modal-form {
+  margin-bottom: 4px;
+}
+.admin-modal-section {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+  margin-top: 16px;
+}
+.admin-modal-section > strong {
+  display: block;
+  color: var(--navy-800);
+  font-size: 14px;
+  font-weight: 800;
+  margin-bottom: 2px;
+}
+.admin-modal-section .admin-hint {
+  margin-top: 4px;
+}
+.admin-modal-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.admin-modal-row > div {
+  flex: 1;
+}
+.admin-modal-danger strong {
+  color: #991b1b;
+}
+/* ฟอร์มแก้ฟิลด์ใน modal ไม่ควรโดน hover สีแดงของ .admin-row-btn ในส่วน danger */
+.admin-modal-danger .admin-row-btn:hover:not(:disabled) {
+  border-color: var(--red);
+  background: var(--red);
+  color: #fff;
+}

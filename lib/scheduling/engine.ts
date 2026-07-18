@@ -75,7 +75,12 @@ type CustomerRow = {
 // ---------------------------------------------------------------------
 
 /**
- * ลูกค้าที่ active + ไม่ถูกลบ (candidate สำหรับ A/B)
+ * ลูกค้าที่ active + ไม่ถูกลบ + "เปิดสวิตช์ส่งอัตโนมัติ" (candidate สำหรับ A/B)
+ *
+ * ★ Gate สวิตช์ต่อลูกค้า (0029): เฉพาะ auto_survey_enabled = true เท่านั้นที่เข้ารอบ
+ *   อัตโนมัติ (A ราย 3 เดือน / B รายเดือน) — ลูกค้าที่ปิดสวิตช์ = ไม่ถูกเลือก
+ *   ไม่สร้าง/ไม่ส่ง invitation รอบอัตโนมัติเลย. (deal-status C/D ไม่ผ่าน path นี้ →
+ *   ยัง auto เหมือนเดิม; ปุ่มส่งเองก็ไม่พึ่ง flag นี้)
  *
  * H1 — batch starvation: วนดึงเป็นชุดจนหมดด้วย order("id") + range(offset..)
  *   แทน limit(500) เดี่ยว ๆ ที่ตัดลูกค้ารายที่ 501+ ทิ้งถาวร (idempotency
@@ -91,6 +96,7 @@ async function loadActiveCustomers(db: DB, pageSize: number): Promise<CustomerRo
       .from("customers")
       .select("id, tenant_id, service_start_date, status, deleted_at")
       .eq("status", "active")
+      .eq("auto_survey_enabled", true) // ★ gate: ปิดสวิตช์ = ข้ามรอบอัตโนมัติ
       .is("deleted_at", null)
       .order("id", { ascending: true })
       .range(offset, offset + pageSize - 1);

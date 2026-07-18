@@ -214,6 +214,8 @@ export type CustomerRow = {
   business_name: string | null;
   service_start_date: string | null;
   status: string;
+  /** สวิตช์ส่งแบบประเมินอัตโนมัติ (A/B) — false = ปิด (ค่าเริ่มต้น, 0029) */
+  auto_survey_enabled: boolean;
   created_at: string;
 };
 
@@ -224,13 +226,34 @@ export async function listCustomers(
   const { data, error } = await db
     .from("customers")
     .select(
-      "id, customer_code, name, business_name, service_start_date, status, created_at"
+      "id, customer_code, name, business_name, service_start_date, status, auto_survey_enabled, created_at"
     )
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as CustomerRow[];
+}
+
+/**
+ * เปิด/ปิดสวิตช์ "ส่งแบบประเมินอัตโนมัติ" ต่อลูกค้า (0029)
+ *   - scope ด้วย tenant จาก session (กันแก้ข้าม tenant) + assertAffected กัน id ผิด
+ *   - ไม่แตะ deal-status/เซล C/D และไม่แตะปุ่มส่งเอง (flag นี้ควบคุมเฉพาะรอบ cron A/B)
+ */
+export async function setCustomerAutoSurvey(
+  db: DB,
+  tenantId: string,
+  customerId: string,
+  enabled: boolean
+): Promise<void> {
+  const { data, error } = await db
+    .from("customers")
+    .update({ auto_survey_enabled: enabled })
+    .eq("id", customerId)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .select("id");
+  assertAffected(data as unknown[] | null, error);
 }
 
 export async function createCustomer(
@@ -258,6 +281,55 @@ export async function createCustomer(
     throw new Error(error.message);
   }
   return data as { id: string };
+}
+
+/** ฟิลด์ลูกค้าที่แก้ไขได้ (patch) — key ที่ไม่ส่งมา (undefined) = ไม่แตะ */
+export type UpdateCustomerPatch = {
+  customer_code?: string | null;
+  name?: string;
+  business_name?: string | null;
+  service_start_date?: string | null;
+};
+
+/**
+ * แก้ไขฟิลด์ลูกค้ารายคน (edit panel)
+ *   - เขียนเฉพาะ key ที่ถูกส่งมา (undefined = ไม่แตะ) — null = เคลียร์ค่าใน DB
+ *   - "ห้าม" แก้ tenant_id/id (scope ด้วย tenant จาก session กันข้าม tenant)
+ *   - assertAffected กัน id ผิด/ข้าม tenant คืน success เท็จ
+ *   - error.code 23505 (รหัสลูกค้าซ้ำใน tenant) → ข้อความไทยสุภาพ เหมือน createCustomer
+ */
+export async function updateCustomer(
+  db: DB,
+  tenantId: string,
+  customerId: string,
+  patch: UpdateCustomerPatch
+): Promise<void> {
+  // เก็บเฉพาะ key ที่ถูกส่งมาจริง (undefined = ไม่แก้) — กันเผลอ overwrite เป็น null
+  const update: Record<string, unknown> = {};
+  if (patch.customer_code !== undefined) update.customer_code = patch.customer_code;
+  if (patch.name !== undefined) update.name = patch.name;
+  if (patch.business_name !== undefined) update.business_name = patch.business_name;
+  if (patch.service_start_date !== undefined)
+    update.service_start_date = patch.service_start_date;
+
+  // ไม่มีฟิลด์ให้แก้ → ยืนยันแค่ว่าลูกค้ามีจริงใน tenant (กัน id ผิด) แล้วจบแบบ no-op
+  if (Object.keys(update).length === 0) {
+    await assertBelongsToTenant(db, "customers", customerId, tenantId, "ลูกค้า");
+    return;
+  }
+
+  const { data, error } = await db
+    .from("customers")
+    .update(update)
+    .eq("id", customerId)
+    .eq("tenant_id", tenantId) // ★ scope tenant จาก session (ไม่แก้ข้าม tenant)
+    .is("deleted_at", null)
+    .select("id");
+  // unique (tenant_id, customer_code) ชน → แจ้งสุภาพ (ก่อน map error ทั่วไป)
+  if (error && (error as { code?: string }).code === "23505") {
+    throw new Error("รหัสลูกค้านี้ถูกใช้แล้วในสำนักงานของคุณ");
+  }
+  assertAffected(data as unknown[] | null, error);
 }
 
 export async function deactivateCustomer(

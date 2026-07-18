@@ -3,6 +3,7 @@ import {
   createTeamSchema,
   createEmployeeSchema,
   createCustomerSchema,
+  updateCustomerSchema,
   createAssignmentSchema,
   firstZodError,
 } from "@/lib/admin/schema";
@@ -90,6 +91,58 @@ describe("createCustomerSchema", () => {
   });
   it("ล้มเหลว: ชื่อว่าง", () => {
     const r = createCustomerSchema.safeParse({ name: "" });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe("updateCustomerSchema", () => {
+  it("ผ่าน: ครบทุกฟิลด์ถูกต้อง", () => {
+    const r = updateCustomerSchema.safeParse({
+      customerId: UUID,
+      customer_code: "C-001",
+      name: "บริษัท ก",
+      business_name: "ร้าน ก",
+      service_start_date: "2026-01-15",
+    });
+    expect(r.success).toBe(true);
+  });
+  it("customer_code ว่าง → null (เคลียร์ค่า)", () => {
+    const r = updateCustomerSchema.safeParse({
+      customerId: UUID,
+      customer_code: "   ",
+      name: "x",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.customer_code).toBeNull();
+  });
+  it("service_start_date ว่าง → null", () => {
+    const r = updateCustomerSchema.safeParse({
+      customerId: UUID,
+      name: "x",
+      service_start_date: "",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.service_start_date).toBeNull();
+  });
+  it("ล้มเหลว: name ส่งมาแต่ว่าง", () => {
+    const r = updateCustomerSchema.safeParse({ customerId: UUID, name: "   " });
+    expect(r.success).toBe(false);
+  });
+  it("name ไม่ส่ง (undefined) → optional ผ่าน", () => {
+    const r = updateCustomerSchema.safeParse({ customerId: UUID, customer_code: "C-2" });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.name).toBeUndefined();
+  });
+  it("ล้มเหลว: customerId ไม่ใช่ uuid", () => {
+    const r = updateCustomerSchema.safeParse({ customerId: "nope", name: "x" });
+    expect(r.success).toBe(false);
+  });
+  it("ล้มเหลว: วันที่ผิดรูปแบบ", () => {
+    const r = updateCustomerSchema.safeParse({
+      customerId: UUID,
+      name: "x",
+      service_start_date: "15/01/2026",
+    });
     expect(r.success).toBe(false);
   });
 });

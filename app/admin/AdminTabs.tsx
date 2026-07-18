@@ -16,13 +16,25 @@ import {
   createTeamAction,
   createEmployeeAction,
   createCustomerAction,
+  updateCustomerAction,
   createAssignmentAction,
   deactivateTeamAction,
   deactivateCustomerAction,
   toggleEmployeeActiveAction,
+  setCustomerAutoSurveyAction,
+  sendManualSurveyAction,
   endAssignmentAction,
   type ActionResult,
+  type ManualSurveyActionResult,
 } from "./actions";
+
+/** ชนิดแบบประเมินสำหรับปุ่มส่งเอง (A/B/C/D) */
+const SURVEY_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "A", label: "A — สำนักงาน" },
+  { value: "B", label: "B — นักบัญชี" },
+  { value: "C", label: "C — เซล (ขายได้)" },
+  { value: "D", label: "D — เซล (ขายไม่ได้)" },
+];
 
 // ---- ป้ายกำกับภาษาไทย -----------------------------------------------
 const TEAM_TYPE_LABEL: Record<string, string> = {
@@ -272,6 +284,11 @@ function CustomersTab({ customers }: { customers: CustomerRow[] }) {
     if (state?.ok) formRef.current?.reset();
   }, [state]);
 
+  // ลูกค้าที่กำลังเปิดแผงแก้ไข — เก็บเป็น id แล้ว lookup จาก list ล่าสุด
+  //   (หลัง revalidate ค่าใน editing จะ fresh; ถ้าลูกค้าถูกปิดใช้งาน list จะไม่มี → แผงปิดเอง)
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editing = customers.find((c) => c.id === editingId) ?? null;
+
   return (
     <div className="admin-grid">
       <form ref={formRef} action={action} className="card admin-form">
@@ -300,6 +317,10 @@ function CustomersTab({ customers }: { customers: CustomerRow[] }) {
 
       <div className="card">
         <h3>รายชื่อลูกค้า ({customers.length})</h3>
+        <p className="admin-hint">
+          กด “แก้ไข” เพื่อเปิดแผงจัดการลูกค้ารายคน — แก้ข้อมูล, สลับ “ส่งอัตโนมัติ”,
+          ส่งแบบประเมินเอง (A/B/C/D) และปิดใช้งาน รวมไว้ที่เดียว
+        </p>
         {customers.length === 0 ? (
           <p className="admin-empty">ยังไม่มีลูกค้า</p>
         ) : (
@@ -310,6 +331,7 @@ function CustomersTab({ customers }: { customers: CustomerRow[] }) {
                 <th>ชื่อ</th>
                 <th>ธุรกิจ</th>
                 <th>เริ่มบริการ</th>
+                <th>ส่งอัตโนมัติ</th>
                 <th></th>
               </tr>
             </thead>
@@ -321,12 +343,20 @@ function CustomersTab({ customers }: { customers: CustomerRow[] }) {
                   <td>{c.business_name ?? "—"}</td>
                   <td>{c.service_start_date ?? "—"}</td>
                   <td>
-                    <RowAction
-                      action={deactivateCustomerAction}
-                      fields={{ id: c.id }}
-                      label="ปิดใช้งาน"
-                      confirm="ปิดใช้งานลูกค้านี้?"
-                    />
+                    <span
+                      className={`admin-badge ${c.auto_survey_enabled ? "on" : "off"}`}
+                    >
+                      {c.auto_survey_enabled ? "เปิด" : "ปิด"}
+                    </span>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="admin-edit-btn"
+                      onClick={() => setEditingId(c.id)}
+                    >
+                      แก้ไข
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -334,6 +364,256 @@ function CustomersTab({ customers }: { customers: CustomerRow[] }) {
           </table>
         )}
       </div>
+
+      {editing && (
+        <CustomerEditPanel
+          customer={editing}
+          onClose={() => setEditingId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * แผงแก้ไขลูกค้ารายคน (modal) — รวมทุก control ของลูกค้าคนนั้นไว้ที่เดียว:
+ *   1) ฟอร์มแก้ฟิลด์ (รหัส/ชื่อ/ธุรกิจ/วันเริ่มบริการ) → updateCustomerAction
+ *   2) สวิตช์ "ส่งอัตโนมัติ"  3) ปุ่มส่งแบบประเมินเอง  4) ปิดใช้งานลูกค้า
+ * ค่าทั้งหมดมาจาก server (props) และ revalidate หลังเขียน — modal อ่านค่าล่าสุดเสมอ
+ */
+function CustomerEditPanel({
+  customer,
+  onClose,
+}: {
+  customer: CustomerRow;
+  onClose: () => void;
+}) {
+  const [state, action, pending] = useActionState(updateCustomerAction, null);
+
+  // ปิดแผงด้วยปุ่ม Escape
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="admin-modal-overlay" role="presentation" onClick={onClose}>
+      <div
+        className="admin-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`แก้ไขลูกค้า ${customer.name}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="admin-modal-header">
+          <h3>แก้ไขลูกค้า</h3>
+          <button
+            type="button"
+            className="admin-modal-close"
+            onClick={onClose}
+            aria-label="ปิดแผงแก้ไข"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* 1) แก้ฟิลด์ลูกค้า — key=id ให้ remount ค่า default เมื่อสลับลูกค้า */}
+        <form
+          key={customer.id}
+          action={action}
+          className="admin-form admin-modal-form"
+        >
+          <input type="hidden" name="customerId" value={customer.id} />
+          <label>
+            รหัสลูกค้า
+            <input
+              name="customer_code"
+              maxLength={200}
+              defaultValue={customer.customer_code ?? ""}
+              placeholder="เช่น C-00123"
+            />
+          </label>
+          <label>
+            ชื่อลูกค้า *
+            <input
+              name="name"
+              required
+              maxLength={200}
+              defaultValue={customer.name}
+            />
+          </label>
+          <label>
+            ชื่อธุรกิจ
+            <input
+              name="business_name"
+              maxLength={200}
+              defaultValue={customer.business_name ?? ""}
+              placeholder="เช่น ร้านอาหาร ก"
+            />
+          </label>
+          <label>
+            วันเริ่มบริการ
+            <input
+              type="date"
+              name="service_start_date"
+              defaultValue={customer.service_start_date ?? ""}
+            />
+          </label>
+          <button type="submit" disabled={pending}>
+            {pending ? "กำลังบันทึก…" : "บันทึกการแก้ไข"}
+          </button>
+          <ResultNote state={state} />
+        </form>
+
+        {/* 2) สวิตช์ส่งอัตโนมัติ */}
+        <div className="admin-modal-section admin-modal-row">
+          <div>
+            <strong>ส่งแบบประเมินอัตโนมัติ</strong>
+            <p className="admin-hint">
+              คุมเฉพาะรอบอัตโนมัติ (สำนักงานราย 3 เดือน / นักบัญชีรายเดือน) —
+              ปิดไว้ = ระบบจะไม่ส่งเองจนกว่าจะเปิด
+            </p>
+          </div>
+          <AutoSurveyToggle
+            customerId={customer.id}
+            enabled={customer.auto_survey_enabled}
+          />
+        </div>
+
+        {/* 3) ส่งแบบประเมินเอง (A/B/C/D) */}
+        <div className="admin-modal-section">
+          <strong>ส่งแบบประเมินเอง</strong>
+          <p className="admin-hint">
+            ส่งได้ทันทีไม่ว่าสวิตช์ส่งอัตโนมัติจะเปิดหรือปิด
+          </p>
+          <ManualSendCell customerId={customer.id} customerName={customer.name} />
+        </div>
+
+        {/* 4) ปิดใช้งานลูกค้า (destructive) */}
+        <div className="admin-modal-section admin-modal-danger admin-modal-row">
+          <div>
+            <strong>ปิดใช้งานลูกค้า</strong>
+            <p className="admin-hint">
+              ลูกค้าจะถูกซ่อนจากรายการและการมอบหมาย (เก็บประวัติไว้)
+            </p>
+          </div>
+          <RowAction
+            action={deactivateCustomerAction}
+            fields={{ id: customer.id }}
+            label="ปิดใช้งานลูกค้า"
+            confirm={`ปิดใช้งานลูกค้า “${customer.name}” ?`}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * สวิตช์ "ส่งอัตโนมัติ" ต่อลูกค้า — กดสลับสถานะ (ส่งค่าเป้าหมายไปเป็น hidden field)
+ * ค่าจริงมาจาก server (props) ไม่เชื่อ state ฝั่ง client; revalidate หลังบันทึก
+ */
+function AutoSurveyToggle({
+  customerId,
+  enabled,
+}: {
+  customerId: string;
+  enabled: boolean;
+}) {
+  const [, formAction, pending] = useActionState(
+    setCustomerAutoSurveyAction,
+    null
+  );
+  const next = !enabled;
+  return (
+    <form action={formAction}>
+      <input type="hidden" name="customer_id" value={customerId} />
+      <input type="hidden" name="enabled" value={String(next)} />
+      <button
+        type="submit"
+        className={`admin-toggle ${enabled ? "on" : "off"}`}
+        disabled={pending}
+        title={enabled ? "กดเพื่อปิดส่งอัตโนมัติ" : "กดเพื่อเปิดส่งอัตโนมัติ"}
+      >
+        {pending ? "…" : enabled ? "เปิด" : "ปิด"}
+      </button>
+    </form>
+  );
+}
+
+/**
+ * ปุ่ม "ส่งแบบประเมิน" (กดเอง) ต่อลูกค้า — เลือกชนิด A/B/C/D แล้วส่ง
+ *   สำเร็จ + push → แจ้ง "ส่งเข้า LINE แล้ว"
+ *   สำเร็จ + ไม่ push → แสดงลิงก์ + ปุ่มคัดลอกให้ส่งเอง
+ */
+function ManualSendCell({
+  customerId,
+  customerName,
+}: {
+  customerId: string;
+  customerName: string;
+}) {
+  const [state, formAction, pending] = useActionState<
+    ManualSurveyActionResult | null,
+    FormData
+  >(sendManualSurveyAction, null);
+  const [copied, setCopied] = useState(false);
+
+  const copyLink = async () => {
+    if (!state?.surveyUrl) return;
+    try {
+      await navigator.clipboard.writeText(state.surveyUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="admin-manual-send">
+      <form
+        action={formAction}
+        onSubmit={(e) => {
+          const type = new FormData(e.currentTarget).get("survey_type");
+          if (
+            !window.confirm(
+              `ส่งแบบประเมิน ${type} ให้ “${customerName}” ใช่หรือไม่?`
+            )
+          ) {
+            e.preventDefault();
+          }
+        }}
+      >
+        <input type="hidden" name="customer_id" value={customerId} />
+        <select name="survey_type" defaultValue="A" aria-label="ชนิดแบบประเมิน">
+          {SURVEY_TYPE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <button type="submit" className="admin-row-btn" disabled={pending}>
+          {pending ? "กำลังส่ง…" : "ส่ง"}
+        </button>
+      </form>
+
+      {state && (
+        <div className={`admin-note ${state.ok ? "ok" : "err"}`} role="status">
+          <span>{state.message}</span>
+          {state.ok && !state.pushed && state.surveyUrl && (
+            <div className="admin-link-copy">
+              <input readOnly value={state.surveyUrl} onFocus={(e) => e.currentTarget.select()} />
+              <button type="button" className="admin-row-btn" onClick={copyLink}>
+                {copied ? "คัดลอกแล้ว" : "คัดลอก"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

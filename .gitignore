@@ -37,3 +37,4 @@ Thumbs.db
 # Editor
 .idea/
 *.swp
+.env*

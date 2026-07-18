@@ -12,6 +12,12 @@ import { z } from "zod";
 const emptyToUndef = (v: unknown) =>
   typeof v === "string" && v.trim() === "" ? undefined : v;
 
+/** แปลง string ว่าง/space/absent → null (ฟิลด์ nullable ที่ "เคลียร์ค่า" ได้ตอนแก้ไข) */
+const emptyToNull = (v: unknown) =>
+  v === undefined || v === null || (typeof v === "string" && v.trim() === "")
+    ? null
+    : v;
+
 /** ข้อความสั้น ๆ บังคับกรอก (trim แล้วต้องมีอย่างน้อย 1 ตัวอักษร) */
 const requiredText = (label: string) =>
   z
@@ -77,6 +83,38 @@ export const createCustomerSchema = z.object({
 });
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
 
+// ---- ฟอร์ม 3b: แก้ไขลูกค้ารายคน (edit panel) ------------------------
+//   ต่างจาก create ตรงที่ฟิลด์ nullable "ว่าง = null (เคลียร์ค่า)" ไม่ใช่ undefined
+//   เพื่อให้ผู้ใช้ลบค่าเดิม (เช่น รหัสลูกค้า/วันเริ่มบริการ) ออกได้จริง
+//   name ถ้าส่งมาต้องไม่ว่าง (optional เพราะเป็น patch — แต่ฟอร์มจริงส่งเสมอ)
+export const updateCustomerSchema = z.object({
+  customerId: z.string().uuid("ไม่พบลูกค้าที่เลือก"),
+  // ว่าง → null (ลบรหัสเดิมออกได้)
+  customer_code: z.preprocess(
+    emptyToNull,
+    z.string().trim().max(200, "รหัสลูกค้ายาวเกินไป").nullable().optional()
+  ),
+  // ถ้าส่งมาต้องไม่ว่าง; ไม่ส่ง (undefined) = ไม่แก้
+  name: z.preprocess(
+    (v) => (v === null ? undefined : v),
+    requiredText("ชื่อลูกค้า").optional()
+  ),
+  business_name: z.preprocess(
+    emptyToNull,
+    z.string().trim().max(200, "ชื่อธุรกิจยาวเกินไป").nullable().optional()
+  ),
+  // ว่าง → null; ไม่งั้นต้องเป็น YYYY-MM-DD
+  service_start_date: z.preprocess(
+    emptyToNull,
+    z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "รูปแบบวันที่ไม่ถูกต้อง")
+      .nullable()
+      .optional()
+  ),
+});
+export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>;
+
 // ---- ฟอร์ม 4: มอบหมาย (ลูกค้า → นักบัญชี) ---------------------------
 export const createAssignmentSchema = z.object({
   customer_id: z.string().uuid("กรุณาเลือกลูกค้า"),
@@ -87,6 +125,27 @@ export const createAssignmentSchema = z.object({
   team_id: optionalUuid,
 });
 export type CreateAssignmentInput = z.infer<typeof createAssignmentSchema>;
+
+// ---- สวิตช์ส่งอัตโนมัติ (ต่อลูกค้า, 0029) ---------------------------
+export const setAutoSurveySchema = z.object({
+  customer_id: z.string().uuid("ไม่พบลูกค้าที่เลือก"),
+  // checkbox/hidden ส่งค่าเป้าหมาย → boolean
+  enabled: z.preprocess(
+    (v) => v === "on" || v === "true" || v === true,
+    z.boolean()
+  ),
+});
+export type SetAutoSurveyInput = z.infer<typeof setAutoSurveySchema>;
+
+// ---- ส่งแบบประเมินเอง (manual send) ---------------------------------
+export const SURVEY_TYPE_VALUES = ["A", "B", "C", "D"] as const;
+export const manualSurveySchema = z.object({
+  customer_id: z.string().uuid("กรุณาเลือกลูกค้า"),
+  survey_type: z.enum(SURVEY_TYPE_VALUES, {
+    errorMap: () => ({ message: "เลือกชนิดแบบประเมิน (A/B/C/D)" }),
+  }),
+});
+export type ManualSurveyInput = z.infer<typeof manualSurveySchema>;
 
 /** ดึงข้อความ error แรกจาก ZodError (แสดงต่อผู้ใช้แบบสุภาพ) */
 export function firstZodError(error: z.ZodError): string {

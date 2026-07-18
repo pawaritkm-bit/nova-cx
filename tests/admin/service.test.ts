@@ -3,9 +3,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   createTeam,
   createCustomer,
+  updateCustomer,
   createAssignment,
   deactivateTeam,
   setEmployeeActive,
+  setCustomerAutoSurvey,
   deactivateCustomer,
   endAssignment,
 } from "@/lib/admin/service";
@@ -144,6 +146,70 @@ describe("createCustomer", () => {
   });
 });
 
+describe("updateCustomer — แก้ไขฟิลด์ลูกค้ารายคน", () => {
+  it("update payload มีเฉพาะ key ที่ส่ง (undefined = ไม่แตะ) + สำเร็จเมื่อ 1 แถว", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(({ table, op, terminal }) => {
+      if (table === "customers" && op === "update" && terminal === "await")
+        return { data: [{ id: UUID_C }] };
+      return { data: null };
+    }, cap);
+
+    await expect(
+      updateCustomer(db, T, UUID_C, { name: "ชื่อใหม่", customer_code: "C-9" })
+    ).resolves.toBeUndefined();
+    const upd = cap.updates.find((u) => u.table === "customers");
+    expect(upd.payload.name).toBe("ชื่อใหม่");
+    expect(upd.payload.customer_code).toBe("C-9");
+    // ไม่ได้ส่ง business_name/service_start_date → ต้องไม่อยู่ใน payload
+    expect("business_name" in upd.payload).toBe(false);
+    expect("service_start_date" in upd.payload).toBe(false);
+  });
+
+  it("null = เคลียร์ค่า (customer_code:null อยู่ใน payload)", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(() => ({ data: [{ id: UUID_C }] }), cap);
+    await updateCustomer(db, T, UUID_C, { customer_code: null });
+    const upd = cap.updates.find((u) => u.table === "customers");
+    expect(upd.payload.customer_code).toBeNull();
+  });
+
+  it("0 แถว (id ผิด/ข้าม tenant) → throw ไม่พบรายการ", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(() => ({ data: [] }), cap);
+    await expect(updateCustomer(db, T, UUID_C, { name: "x" })).rejects.toThrow(
+      /ไม่พบรายการที่ต้องการแก้ไข/
+    );
+  });
+
+  it("รหัสลูกค้าซ้ำ (23505) → ข้อความสุภาพ", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(() => ({ error: { code: "23505", message: "duplicate" } }), cap);
+    await expect(
+      updateCustomer(db, T, UUID_C, { customer_code: "C-1" })
+    ).rejects.toThrow(/รหัสลูกค้านี้ถูกใช้แล้ว/);
+  });
+
+  it("patch ว่าง → ยืนยันลูกค้ามีจริง (maybeSingle) แล้ว no-op ไม่ update", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(({ table, terminal }) => {
+      if (table === "customers" && terminal === "maybeSingle") return { data: { id: UUID_C } };
+      return { data: null };
+    }, cap);
+    await expect(updateCustomer(db, T, UUID_C, {})).resolves.toBeUndefined();
+    expect(cap.updates.length).toBe(0);
+  });
+
+  it("patch ว่าง + ลูกค้าไม่พบใน tenant → throw", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(({ table, terminal }) => {
+      if (table === "customers" && terminal === "maybeSingle") return { data: null };
+      return { data: null };
+    }, cap);
+    await expect(updateCustomer(db, T, UUID_C, {})).rejects.toThrow(/ลูกค้า/);
+  });
+});
+
 describe("createAssignment — กันชน unique ผู้ดูแลปัจจุบัน", () => {
   it("ไม่มีของเดิม → insert อย่างเดียว, replacedPrevious=false, valid_from=วันนี้", async () => {
     const cap = { inserts: [] as any[], updates: [] as any[] };
@@ -254,6 +320,22 @@ describe("mutation ที่ match 0 แถว → throw (ไม่คืน suc
     await expect(
       setEmployeeActive(dbAffected([]), T, UUID_X, false)
     ).rejects.toThrow(/ไม่พบรายการที่ต้องการแก้ไข/);
+  });
+
+  it("setCustomerAutoSurvey: 0 แถว → throw (id ผิด/ข้าม tenant)", async () => {
+    await expect(
+      setCustomerAutoSurvey(dbAffected([]), T, UUID_X, true)
+    ).rejects.toThrow(/ไม่พบรายการที่ต้องการแก้ไข/);
+  });
+
+  it("setCustomerAutoSurvey: พบ → update auto_survey_enabled + scope tenant", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(() => ({ data: [{ id: UUID_X }] }), cap);
+    await expect(
+      setCustomerAutoSurvey(db, T, UUID_X, true)
+    ).resolves.toBeUndefined();
+    const upd = cap.updates.find((u) => u.table === "customers");
+    expect(upd.payload.auto_survey_enabled).toBe(true);
   });
 
   it("endAssignment: 0 แถว → throw", async () => {

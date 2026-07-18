@@ -18,19 +18,25 @@ import {
   createTeamSchema,
   createEmployeeSchema,
   createCustomerSchema,
+  updateCustomerSchema,
   createAssignmentSchema,
+  setAutoSurveySchema,
+  manualSurveySchema,
   firstZodError,
 } from "@/lib/admin/schema";
 import {
   createTeam,
   createEmployee,
   createCustomer,
+  updateCustomer,
   createAssignment,
   deactivateTeam,
   deactivateCustomer,
   setEmployeeActive,
+  setCustomerAutoSurvey,
   endAssignment,
 } from "@/lib/admin/service";
+import { sendManualSurvey, ManualSurveyError } from "@/lib/admin/manual-survey";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type ActionResult = { ok: boolean; message: string };
@@ -144,6 +150,26 @@ export async function createCustomerAction(
   return res.ok ? { ok: true, message: "เพิ่มลูกค้าสำเร็จ" } : res;
 }
 
+/** แก้ไขฟิลด์ลูกค้ารายคน (edit panel) — guard admin/executive + tenant จาก session */
+export async function updateCustomerAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const parsed = updateCustomerSchema.safeParse({
+    customerId: formData.get("customerId"),
+    customer_code: formData.get("customer_code"),
+    name: formData.get("name") ?? undefined,
+    business_name: formData.get("business_name"),
+    service_start_date: formData.get("service_start_date"),
+  });
+  if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
+  const { customerId, ...patch } = parsed.data;
+  const res = await withAdminWrite((db, tenantId) =>
+    updateCustomer(db, tenantId, customerId, patch)
+  );
+  return res.ok ? { ok: true, message: "บันทึกข้อมูลลูกค้าแล้ว" } : res;
+}
+
 export async function deactivateCustomerAction(
   _prev: ActionResult | null,
   formData: FormData
@@ -154,6 +180,72 @@ export async function deactivateCustomerAction(
     deactivateCustomer(db, tenantId, id)
   );
   return res.ok ? { ok: true, message: "ปิดใช้งานลูกค้าแล้ว" } : res;
+}
+
+/** เปิด/ปิดสวิตช์ "ส่งแบบประเมินอัตโนมัติ" ต่อลูกค้า (0029) */
+export async function setCustomerAutoSurveyAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const parsed = setAutoSurveySchema.safeParse({
+    customer_id: formData.get("customer_id"),
+    enabled: formData.get("enabled") ?? undefined,
+  });
+  if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
+  const res = await withAdminWrite((db, tenantId) =>
+    setCustomerAutoSurvey(db, tenantId, parsed.data.customer_id, parsed.data.enabled)
+  );
+  return res.ok
+    ? {
+        ok: true,
+        message: parsed.data.enabled
+          ? "เปิดส่งอัตโนมัติแล้ว"
+          : "ปิดส่งอัตโนมัติแล้ว",
+      }
+    : res;
+}
+
+/** ผลลัพธ์ปุ่มส่งเอง — เพิ่ม pushed/surveyUrl ให้ UI แสดงลิงก์เมื่อไม่ได้ push */
+export type ManualSurveyActionResult = ActionResult & {
+  pushed?: boolean;
+  surveyUrl?: string;
+};
+
+/**
+ * ปุ่ม "ส่งแบบประเมิน" (กดเอง) — guard admin/executive + tenant จาก session
+ *   push เข้า LINE ถ้าลูกค้าแอด OA / ไม่งั้นคืนลิงก์ให้ copy
+ */
+export async function sendManualSurveyAction(
+  _prev: ManualSurveyActionResult | null,
+  formData: FormData
+): Promise<ManualSurveyActionResult> {
+  const parsed = manualSurveySchema.safeParse({
+    customer_id: formData.get("customer_id"),
+    survey_type: formData.get("survey_type"),
+  });
+  if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
+
+  try {
+    const authed = await createClient();
+    const ctx = await requireAdminContext(authed); // admin/executive เท่านั้น
+    const service = createServiceRoleClient();
+    const out = await sendManualSurvey(service, ctx.tenantId, {
+      customerId: parsed.data.customer_id,
+      surveyType: parsed.data.survey_type,
+    });
+    revalidatePath("/admin");
+    return {
+      ok: true,
+      pushed: out.pushed,
+      surveyUrl: out.surveyUrl,
+      message: out.pushed
+        ? "ส่งเข้า LINE แล้ว"
+        : "ลูกค้ายังไม่ได้แอด LINE OA — คัดลอกลิงก์นี้ส่งให้ลูกค้า",
+    };
+  } catch (e) {
+    if (e instanceof ManualSurveyError) return { ok: false, message: e.message };
+    return { ok: false, message: friendlyError(e) };
+  }
 }
 
 // ---- มอบหมาย ---------------------------------------------------------
