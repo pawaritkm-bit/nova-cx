@@ -21,6 +21,8 @@ export function isAdminRole(role: string | null | undefined): role is RoleCode {
 export type AdminContext = {
   tenantId: string;
   role: RoleCode;
+  /** users.id ของผู้ล็อกอิน (ใช้เป็น actor/mapped_by ใน audit — ไม่ null เมื่อผ่าน guard) */
+  userId: string | null;
 };
 
 export type AdminResolution = {
@@ -30,6 +32,8 @@ export type AdminResolution = {
   role: RoleCode | null;
   /** tenant จาก session (null = ไม่มี) */
   tenantId: string | null;
+  /** users.id ของผู้ล็อกอิน (null = ไม่มี users row) */
+  userId: string | null;
   /** ผ่านเกณฑ์ admin ครบ (มี session + tenant + บทบาทใน allow-list) */
   isAdmin: boolean;
 };
@@ -53,6 +57,7 @@ export async function resolveAdminContext(
     hasSession: false,
     role: null,
     tenantId: null,
+    userId: null,
     isAdmin: false,
   };
 
@@ -62,7 +67,7 @@ export async function resolveAdminContext(
 
     const { data: row } = await db
       .from("users")
-      .select("tenant_id, roles(code)")
+      .select("id, tenant_id, roles(code)")
       .eq("auth_user_id", data.user.id)
       .is("deleted_at", null)
       .maybeSingle();
@@ -70,6 +75,7 @@ export async function resolveAdminContext(
     if (!row) return { ...deny, hasSession: true };
 
     const tenantId = (row as { tenant_id?: string | null }).tenant_id ?? null;
+    const userId = (row as { id?: string | null }).id ?? null;
     const rel = (row as { roles?: unknown }).roles;
     const code =
       Array.isArray(rel) && rel.length > 0
@@ -79,7 +85,7 @@ export async function resolveAdminContext(
     const role = code && isRoleCode(code) ? code : null;
     const isAdmin = !!tenantId && isAdminRole(role);
 
-    return { hasSession: true, role, tenantId, isAdmin };
+    return { hasSession: true, role, tenantId, userId, isAdmin };
   } catch {
     // อ่าน session/DB ไม่ได้ → ปฏิเสธ (fail-closed)
     return deny;
@@ -97,5 +103,5 @@ export async function requireAdminContext(
   if (!res.isAdmin || !res.tenantId || !res.role) {
     throw new AdminAuthError();
   }
-  return { tenantId: res.tenantId, role: res.role };
+  return { tenantId: res.tenantId, role: res.role, userId: res.userId };
 }

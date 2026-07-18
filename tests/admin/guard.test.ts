@@ -13,7 +13,7 @@ import {
  */
 function fakeDb(opts: {
   user: { id: string } | null;
-  row?: { tenant_id?: string | null; roles?: unknown } | null;
+  row?: { id?: string; tenant_id?: string | null; roles?: unknown } | null;
   throwOnAuth?: boolean;
 }): SupabaseClient {
   const builder = {
@@ -64,12 +64,13 @@ describe("isAdminRole — allow-list (default deny)", () => {
 describe("resolveAdminContext", () => {
   it("admin + tenant → isAdmin true พร้อม tenantId/role", async () => {
     const res = await resolveAdminContext(
-      fakeDb({ user: { id: "u1" }, row: { tenant_id: "t1", roles: { code: "admin" } } })
+      fakeDb({ user: { id: "u1" }, row: { id: "app-u1", tenant_id: "t1", roles: { code: "admin" } } })
     );
     expect(res).toEqual({
       hasSession: true,
       role: "admin",
       tenantId: "t1",
+      userId: "app-u1",
       isAdmin: true,
     });
   });
@@ -97,6 +98,7 @@ describe("resolveAdminContext", () => {
       hasSession: false,
       role: null,
       tenantId: null,
+      userId: null,
       isAdmin: false,
     });
   });
@@ -124,9 +126,9 @@ describe("resolveAdminContext", () => {
 describe("requireAdminContext", () => {
   it("admin → คืน context", async () => {
     const ctx = await requireAdminContext(
-      fakeDb({ user: { id: "u1" }, row: { tenant_id: "t1", roles: { code: "admin" } } })
+      fakeDb({ user: { id: "u1" }, row: { id: "app-u1", tenant_id: "t1", roles: { code: "admin" } } })
     );
-    expect(ctx).toEqual({ tenantId: "t1", role: "admin" });
+    expect(ctx).toEqual({ tenantId: "t1", role: "admin", userId: "app-u1" });
   });
 
   it("บทบาทไม่ผ่าน → throw AdminAuthError", async () => {

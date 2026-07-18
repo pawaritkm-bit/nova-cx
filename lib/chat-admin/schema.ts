@@ -53,6 +53,11 @@ export const setMemberSchema = z
     // ถ้าเป็น customer/system/unknown → ไม่ควรผูกพนักงาน (กันข้อมูลขัดกัน)
     (v) => (v.member_kind === "accountant" || v.member_kind === "lead" ? true : v.employee_id === null),
     { message: "บทบาทนี้ไม่ต้องผูกกับพนักงาน", path: ["employee_id"] }
+  )
+  .refine(
+    // ★ นักบัญชี/หัวหน้า "ต้อง" ผูกกับพนักงาน (ไม่งั้นระบบไม่รู้ว่าใครตอบช้า/เร็ว) — L1
+    (v) => (v.member_kind === "accountant" || v.member_kind === "lead" ? v.employee_id !== null : true),
+    { message: "บทบาทนักบัญชี/หัวหน้า ต้องเลือกพนักงานที่ผูก", path: ["employee_id"] }
   );
 export type SetMemberInput = z.infer<typeof setMemberSchema>;
 

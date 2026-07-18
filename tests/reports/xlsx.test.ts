@@ -14,6 +14,21 @@ describe("escapeXml", () => {
   it("escape อักขระพิเศษ", () => {
     expect(escapeXml('a & b < c > "d" \'e\'')).toBe("a &amp; b &lt; c &gt; &quot;d&quot; &apos;e&apos;");
   });
+
+  it("★ [L2] strip control char (U+0000–U+001F) แต่คง tab/newline/cr", () => {
+    const NUL = String.fromCharCode(0);
+    const BEL = String.fromCharCode(7);
+    const VT = String.fromCharCode(11);
+    const TAB = String.fromCharCode(9);
+    const LF = String.fromCharCode(10);
+    const CR = String.fromCharCode(13);
+    const input = `a${NUL}b${BEL}cd${TAB}E${LF}F${CR}G${VT}`;
+    const out = escapeXml(input);
+    expect(out).toBe(`abcd${TAB}E${LF}F${CR}G`);
+    // ไม่มี control char (U+0000–U+0008,U+000B,U+000C,U+000E–U+001F) หลงเหลือ
+    // eslint-disable-next-line no-control-regex
+    expect(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(out)).toBe(false);
+  });
 });
 
 describe("buildXlsx — สร้างไฟล์ .xlsx จริง (zip)", () => {
@@ -32,14 +47,12 @@ describe("buildXlsx — สร้างไฟล์ .xlsx จริง (zip)", (
   });
 
   it("มี End Of Central Directory signature (0x06054b50)", () => {
-    // EOCD อยู่ท้ายไฟล์ (ไม่มี comment → 22 ไบต์สุดท้าย)
     const eocd = buf.readUInt32LE(buf.length - 22);
     expect(eocd).toBe(0x06054b50);
   });
 
-  it("มี central directory + local file entries (นับ signature)", () => {
+  it("มี local file entries = 4 ส่วนหลัก + 1 sheet", () => {
     const text = buf.toString("latin1");
-    // local file header (PK\x03\x04) = 4 ส่วนหลัก + 1 sheet = 5 ส่วน
     const localCount = (text.match(/PK\x03\x04/g) ?? []).length;
     expect(localCount).toBe(5);
   });

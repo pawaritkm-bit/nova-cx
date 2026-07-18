@@ -35,9 +35,11 @@ export async function GET(req: Request) {
       { status: 503 }
     );
   }
-  if (!employeeId || !isValidPeriod(period)) {
+  // ★ validate employeeId เป็น uuid + period YYYY-MM (กัน injection/param เพี้ยน) — L2
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!UUID_RE.test(employeeId) || !isValidPeriod(period)) {
     return NextResponse.json(
-      { error: "invalid_params", message: "ต้องระบุ employeeId และ period (YYYY-MM)" },
+      { error: "invalid_params", message: "ต้องระบุ employeeId (uuid) และ period (YYYY-MM)" },
       { status: 400 }
     );
   }
@@ -57,7 +59,9 @@ export async function GET(req: Request) {
     const service = createServiceRoleClient();
     const report = await buildMonthlyReport(service, viewer, { employeeId, period });
     const xlsx = buildXlsx([reportToSheet(report)]);
-    const filename = `report-${period}-${employeeId.slice(0, 8)}.xlsx`;
+    // ★ strip อักขระที่ไม่ใช่ hex ในชื่อไฟล์ (employeeId ผ่าน uuid regex แล้ว — กันเหนียว)
+    const safeId = employeeId.replace(/[^0-9a-f]/gi, "").slice(0, 8);
+    const filename = `report-${period}-${safeId}.xlsx`;
 
     return new NextResponse(xlsx as unknown as BodyInit, {
       status: 200,

@@ -168,4 +168,56 @@ describe("buildMonthlyReport — hr ต้อง filter สถานะ confirme
     const v = viewer({ role: "accountant", employeeId: OTHER });
     await expect(buildMonthlyReport(db, v, { employeeId: EMP, period: "2026-07" })).rejects.toThrow(ReportAccessError);
   });
+
+  it("★ [High] hr → ไม่ query coaching + coaching ทุกช่องว่าง (mirror RLS ตัด evidence)", async () => {
+    const { db, capture } = makeFakeDb((q) => {
+      if (q.table === "employees" && q.terminal === "maybeSingle") return { data: { first_name: "พิม" } };
+      if (q.table === "conversation_cases") return { data: [] };
+      if (q.table === "accountant_evaluations") return { data: [] };
+      // ถ้าเผลอ query coaching จะได้ข้อมูล → เทสต์จะจับได้ว่าไม่ควรถูกเรียก
+      if (q.table === "coaching_recommendations") return { data: [{ strengths: ["ตอบเร็ว"], improvements: ["x"], repeated_errors: ["y"], training_topics: ["z"], checklist: ["w"] }] };
+      return { data: null };
+    }, makeCapture());
+    const r = await buildMonthlyReport(db, viewer({ role: "hr" }), { employeeId: EMP, period: "2026-07" });
+    expect(r.strengths).toEqual([]);
+    expect(r.improvements).toEqual([]);
+    expect(r.repeatedErrors).toEqual([]);
+    expect(r.trainingTopics).toEqual([]);
+    expect(r.nextPlan).toEqual([]);
+    // ต้องไม่แตะตาราง coaching_recommendations เลย
+    const touchedCoaching = capture.filters.some((f) => f.table === "coaching_recommendations");
+    expect(touchedCoaching).toBe(false);
+  });
+
+  it("non-hr → ได้ coaching ปกติ", async () => {
+    const { db } = makeFakeDb((q) => {
+      if (q.table === "employees" && q.terminal === "maybeSingle") return { data: { first_name: "พิม" } };
+      if (q.table === "conversation_cases") return { data: [] };
+      if (q.table === "accountant_evaluations") return { data: [] };
+      if (q.table === "coaching_recommendations") return { data: [{ strengths: ["ตอบเร็ว"], improvements: [], repeated_errors: [], training_topics: [], checklist: [] }] };
+      return { data: null };
+    });
+    const r = await buildMonthlyReport(db, viewer({ role: "acc_lead", employeeId: "lead-1", teamMemberIds: new Set([EMP]) }), { employeeId: EMP, period: "2026-07" });
+    expect(r.strengths).toEqual(["ตอบเร็ว"]);
+  });
+
+  it("★ [High] query ล้ม (error) → throw generic (ไม่กลืน error เป็นรายงานศูนย์)", async () => {
+    const { db } = makeFakeDb((q) => {
+      if (q.table === "employees" && q.terminal === "maybeSingle") return { data: { first_name: "พิม" } };
+      if (q.table === "conversation_cases") return { error: { message: "relation does not exist" } };
+      return { data: null };
+    });
+    await expect(buildMonthlyReport(db, viewer({ role: "admin" }), { employeeId: EMP, period: "2026-07" }))
+      .rejects.toThrow(/อ่านข้อมูลรายงานไม่สำเร็จ/);
+  });
+
+  it("empData error (DB ล้ม) → throw generic ไม่ใช่ ReportAccessError", async () => {
+    const { db } = makeFakeDb((q) => {
+      if (q.table === "employees" && q.terminal === "maybeSingle") return { error: { message: "db down" } };
+      return { data: null };
+    });
+    const p = buildMonthlyReport(db, viewer({ role: "admin" }), { employeeId: EMP, period: "2026-07" });
+    await expect(p).rejects.toThrow(/อ่านข้อมูลรายงานไม่สำเร็จ/);
+    await expect(p).rejects.not.toThrow(ReportAccessError);
+  });
 });

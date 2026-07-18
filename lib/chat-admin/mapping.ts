@@ -179,8 +179,8 @@ export async function mapGroupToCustomer(
     .select("id");
   assertAffected(data as unknown[] | null, error);
 
-  // 2) audit/history — เขียนเฉพาะเมื่อ "จับคู่" (มี customer_id); ยกเลิกจับคู่ไม่ต้องบันทึกซ้ำ
   if (input.customer_id) {
+    // 2a) จับคู่ → เขียน audit/history ใน customer_group_mapping (append-only)
     const { error: mapErr } = await db.from("customer_group_mapping").insert({
       tenant_id: tenantId,
       chat_group_id: input.chat_group_id,
@@ -189,6 +189,18 @@ export async function mapGroupToCustomer(
       note: "จับคู่ผ่านหน้าตั้งค่า (admin)",
     });
     if (mapErr) throw new Error(mapErr.message);
+  } else {
+    // 2b) ★ ยกเลิกจับคู่ → audit ใน audit_logs (customer_group_mapping รับ customer_id null ไม่ได้)
+    //   ให้มีร่องรอยการยกเลิกจับคู่เสมอ (M1)
+    const { error: auditErr } = await db.from("audit_logs").insert({
+      tenant_id: tenantId,
+      actor_user_id: mappedBy,
+      action: "chat_group_unmapped",
+      resource: "chat_group",
+      resource_id: input.chat_group_id,
+      meta: { customer_id: null },
+    });
+    if (auditErr) throw new Error(auditErr.message);
   }
 }
 

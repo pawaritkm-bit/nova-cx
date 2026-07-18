@@ -121,8 +121,12 @@ function diffMinutes(fromISO: string, toISO: string): number | null {
   return (b - a) / 60000;
 }
 
-/** สรุป KPI จาก cases (นับ over-SLA จากการเลยกำหนดจริง) */
-export function summarizeCases(cases: CaseRow[]): CaseSummary {
+/**
+ * สรุป KPI จาก cases (นับ over-SLA จากการเลยกำหนดจริง)
+ *   ★ now = เวลาอ้างอิงคงที่ (freeze ณ จุดสร้างรายงาน) เพื่อให้รายงานที่มีช่องเซ็นอนุมัติ
+ *     reproducible — เคส open ที่เลยกำหนดปิดวัดเทียบ now ค่าเดียว (ไม่ใช่ Date.now กระจาย)
+ */
+export function summarizeCases(cases: CaseRow[], now: number = Date.now()): CaseSummary {
   const customers = new Set<string>();
   let closed = 0;
   let overSla = 0;
@@ -159,7 +163,7 @@ export function summarizeCases(cases: CaseRow[]): CaseSummary {
     const resOverdueOpen =
       c.resolution_due_at &&
       !c.closed_at &&
-      Date.now() > new Date(c.resolution_due_at).getTime();
+      now > new Date(c.resolution_due_at).getTime();
     if (frLate || resLate || resOverdueOpen) overSla++;
   }
 
@@ -273,6 +277,13 @@ function strList(v: unknown): string[] {
     .filter((s) => s.trim().length > 0);
 }
 
+/** โยน error ถ้า query ล้ม — ไม่ปล่อยให้กลืน error แล้วได้ [] เงียบ (รายงานศูนย์ทั้งใบ) */
+function throwIfDbError(error: unknown, context: string): void {
+  if (error) {
+    throw new Error(`อ่านข้อมูลรายงานไม่สำเร็จ (${context})`);
+  }
+}
+
 /** โหลด cases + evals ของ employee ในช่วงเดือน (scope tenant + สถานะตาม tier) */
 async function loadCaseAndEval(
   db: DB,
@@ -283,7 +294,7 @@ async function loadCaseAndEval(
 ): Promise<{ cases: CaseRow[]; evals: EvalRow[] }> {
   const { start, end } = monthRange(period);
 
-  const { data: caseData } = await db
+  const { data: caseData, error: caseErr } = await db
     .from("conversation_cases")
     .select(
       "id, customer_id, status, opened_at, first_responded_at, first_response_due_at, resolution_due_at, closed_at"
@@ -293,6 +304,7 @@ async function loadCaseAndEval(
     .is("deleted_at", null)
     .gte("opened_at", start)
     .lt("opened_at", end);
+  throwIfDbError(caseErr, "conversation_cases");
 
   let evalQuery = db
     .from("accountant_evaluations")
@@ -305,7 +317,8 @@ async function loadCaseAndEval(
   if (confirmedOnly) {
     evalQuery = evalQuery.in("status", [...CONFIRMED_STATUSES]);
   }
-  const { data: evalData } = await evalQuery;
+  const { data: evalData, error: evalErr } = await evalQuery;
+  throwIfDbError(evalErr, "accountant_evaluations");
 
   return {
     cases: (caseData ?? []) as CaseRow[],
@@ -330,16 +343,21 @@ export async function buildMonthlyReport(
   if (!access.allowed) throw new ReportAccessError();
 
   // ยืนยันว่าพนักงานอยู่ใน tenant นี้จริง + ดึงชื่อ
-  const { data: empData } = await db
+  //   ★ แยก "DB error จริง" (throw generic) ออกจาก "ไม่พบพนักงาน" (ReportAccessError)
+  const { data: empData, error: empErr } = await db
     .from("employees")
     .select("id, first_name, nickname")
     .eq("id", args.employeeId)
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
     .maybeSingle();
+  throwIfDbError(empErr, "employees");
   const emp = empData as { first_name?: string; nickname?: string | null } | null;
   if (!emp) throw new ReportAccessError("ไม่พบพนักงานที่เลือก");
   const employeeName = emp.nickname || emp.first_name || args.employeeId;
+
+  // ★ freeze เวลา 1 ค่า ณ จุดสร้างรายงาน (reproducible + ส่งต่อ summarizeCases ทุกที่)
+  const now = Date.now();
 
   const { cases, evals } = await loadCaseAndEval(
     db,
@@ -349,18 +367,10 @@ export async function buildMonthlyReport(
     access.confirmedOnly
   );
 
-  // coaching ล่าสุดในช่วง (ถ้ามี) — จุดแข็ง/ควรปรับ/ปัญหาซ้ำ/แผน
-  const { start, end } = monthRange(args.period);
-  const { data: coachData } = await db
-    .from("coaching_recommendations")
-    .select("strengths, improvements, repeated_errors, training_topics, checklist, created_at")
-    .eq("tenant_id", tenantId)
-    .eq("employee_id", args.employeeId)
-    .gte("created_at", start)
-    .lt("created_at", end)
-    .order("created_at", { ascending: false })
-    .limit(1);
-  const coach = (coachData ?? [])[0] as
+  // ★ [High] coaching = evidence — RLS can_view_eval_evidence (0035) ตัด hr ออก
+  //   รายงาน/export ต้อง mirror: hr (confirmedOnly) เห็นแค่ "คะแนน" ไม่เห็น coaching
+  //   → ข้าม query coaching + คืนรายการว่างทั้งหมด
+  let coach:
     | {
         strengths?: unknown;
         improvements?: unknown;
@@ -369,6 +379,20 @@ export async function buildMonthlyReport(
         checklist?: unknown;
       }
     | undefined;
+  if (!access.confirmedOnly) {
+    const { start, end } = monthRange(args.period);
+    const { data: coachData, error: coachErr } = await db
+      .from("coaching_recommendations")
+      .select("strengths, improvements, repeated_errors, training_topics, checklist, created_at")
+      .eq("tenant_id", tenantId)
+      .eq("employee_id", args.employeeId)
+      .gte("created_at", start)
+      .lt("created_at", end)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    throwIfDbError(coachErr, "coaching_recommendations");
+    coach = (coachData ?? [])[0] as typeof coach;
+  }
 
   // เทียบเดือนก่อน (overall + เวลาตอบ + เกิน SLA)
   const prevPeriod = previousPeriod(args.period);
@@ -379,7 +403,7 @@ export async function buildMonthlyReport(
     prevPeriod,
     access.confirmedOnly
   );
-  const prevCases = summarizeCases(prev.cases);
+  const prevCases = summarizeCases(prev.cases, now);
   const prevScores = summarizeScores(prev.evals);
 
   return {
@@ -387,7 +411,7 @@ export async function buildMonthlyReport(
     employeeName,
     period: args.period,
     confirmedOnly: access.confirmedOnly,
-    cases: summarizeCases(cases),
+    cases: summarizeCases(cases, now),
     scores: summarizeScores(evals),
     strengths: strList(coach?.strengths),
     improvements: strList(coach?.improvements),

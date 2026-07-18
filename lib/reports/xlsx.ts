@@ -36,9 +36,13 @@ function crc32(buf: Buffer): number {
 
 // ---------------------------------------------------------------------
 // XML escape (สำหรับ inline string) — กัน & < > " ' ทำ XML พัง
+//   + strip control char (U+0000–U+001F ยกเว้น \t \n \r) ที่ XML 1.0 ไม่ยอมรับ
+//     ป้องกันไฟล์ .xlsx เสีย (Excel เปิดไม่ได้) จากข้อความที่มี control char หลุดมา
 // ---------------------------------------------------------------------
 export function escapeXml(raw: string): string {
-  return raw
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+  return cleaned
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

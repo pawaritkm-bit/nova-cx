@@ -39,11 +39,29 @@ describe("saveWeights", () => {
   it("CHECK constraint 23514 → ข้อความสุภาพเรื่องรวม 100", async () => {
     const cap = makeCapture();
     const { db } = makeFakeDb((q) => {
+      if (q.table === "evaluation_weights" && q.op === "select") return { data: [] };
       if (q.table === "evaluation_weights" && q.op === "update") return { error: null };
       if (q.table === "evaluation_weights" && q.op === "insert") return { error: { code: "23514", message: "check" } };
       return { data: null };
     }, cap);
     await expect(saveWeights(db, T, valid)).rejects.toThrow(/100/);
+  });
+
+  it("★ [M1] insert ล้ม → re-activate ชุดเดิมกลับ (rollback) ก่อน throw", async () => {
+    const cap = makeCapture();
+    const { db } = makeFakeDb((q) => {
+      // มีชุด active เดิม 1 ชุด (w-old)
+      if (q.table === "evaluation_weights" && q.op === "select") return { data: [{ id: "w-old" }] };
+      if (q.table === "evaluation_weights" && q.op === "update") return { error: null };
+      if (q.table === "evaluation_weights" && q.op === "insert") return { error: { message: "insert failed" } };
+      return { data: null };
+    }, cap);
+    await expect(saveWeights(db, T, valid)).rejects.toThrow();
+    // update ตัวแรก = ปิด active (false), ตัวสุดท้าย = rollback (true)
+    const activeUpdates = cap.updates.filter((u) => u.table === "evaluation_weights") as { payload: Record<string, unknown> }[];
+    expect(activeUpdates.length).toBe(2);
+    expect(activeUpdates[0].payload.is_active).toBe(false);
+    expect(activeUpdates[1].payload.is_active).toBe(true); // ★ re-activate ชุดเดิม
   });
 });
 

@@ -36,26 +36,10 @@ function friendlyError(e: unknown): string {
   return "บันทึกไม่สำเร็จ กรุณาลองใหม่ หรือติดต่อผู้ดูแลระบบ";
 }
 
-/** app user id (users.id) ของผู้ล็อกอิน — ใช้เป็น actor/mapped_by (audit) */
-async function resolveActorUserId(authed: SupabaseClient): Promise<string | null> {
-  try {
-    const { data } = await authed.auth.getUser();
-    if (!data?.user) return null;
-    const { data: row } = await authed
-      .from("users")
-      .select("id")
-      .eq("auth_user_id", data.user.id)
-      .is("deleted_at", null)
-      .maybeSingle();
-    return (row as { id?: string } | null)?.id ?? null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * wrapper: guard admin + service-role + revalidate
  *   fn รับ (serviceDb, tenantId, actorUserId) — ★ tenant/actor จาก session เท่านั้น
+ *   actorUserId = users.id ของผู้ล็อกอิน (มาจาก requireAdminContext — ไม่ query ซ้ำ)
  */
 async function withChatAdminWrite(
   fn: (db: SupabaseClient, tenantId: string, actorUserId: string | null) => Promise<void>
@@ -63,9 +47,8 @@ async function withChatAdminWrite(
   try {
     const authed = await createClient();
     const ctx = await requireAdminContext(authed); // 403 ถ้าไม่ใช่ admin/executive
-    const actorUserId = await resolveActorUserId(authed);
     const service = createServiceRoleClient();
-    await fn(service, ctx.tenantId, actorUserId);
+    await fn(service, ctx.tenantId, ctx.userId);
     revalidatePath("/chat-audit/admin");
     return { ok: true, message: "บันทึกสำเร็จ" };
   } catch (e) {
