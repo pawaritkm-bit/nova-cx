@@ -9,39 +9,34 @@ import {
   listCustomers,
   listCurrentAssignments,
 } from "@/lib/admin/service";
-import NovaMascot from "../liff/survey/[token]/NovaMascot";
+import type { RoleCode } from "@/lib/dashboard/types";
+import AppNav from "../_components/AppNav";
 import AdminTabs from "./AdminTabs";
 import "../dashboard/dashboard.css";
 import "./admin.css";
 
 export const dynamic = "force-dynamic";
 
-/** กรอบหน้า admin (ใช้ธีม .nova-dash เดียวกับ dashboard) */
-function Frame({ children }: { children: React.ReactNode }) {
+/** กรอบหน้า admin (ใช้ธีม .nova-dash + แถบเมนูร่วมเดียวกับ dashboard) */
+function Frame({
+  role = null,
+  authed = false,
+  children,
+}: {
+  role?: RoleCode | null;
+  authed?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <main className="nova-dash">
       <header>
-        <div className="dash-top">
-          <div className="dash-title">
-            <div className="dash-mascot" aria-hidden="true">
-              <NovaMascot variant="profile" width={52} />
-            </div>
-            <div>
-              <h1>NOVA-CX · จัดการข้อมูล</h1>
-              <p>ทีมบัญชี · พนักงาน · ลูกค้า · มอบหมายผู้ดูแล (ข้อมูลจริง)</p>
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <Link href="/dashboard" className="logout-btn">
-              ← กลับ Dashboard
-            </Link>
-            <form method="post" action="/auth/logout">
-              <button type="submit" className="logout-btn">
-                ออกจากระบบ
-              </button>
-            </form>
-          </div>
-        </div>
+        <AppNav
+          active="admin"
+          role={role}
+          authed={authed}
+          title="NOVA-CX · จัดการข้อมูล"
+          subtitle="ทีมบัญชี · พนักงาน · ลูกค้า · มอบหมายผู้ดูแล (ข้อมูลจริง)"
+        />
       </header>
       {children}
     </main>
@@ -70,7 +65,7 @@ export default async function AdminPage() {
   }
   if (!ctx.isAdmin || !ctx.tenantId) {
     return (
-      <Frame>
+      <Frame role={ctx.role} authed={ctx.hasSession && !!ctx.role}>
         <div className="card">
           <p style={{ fontWeight: 700, marginBottom: 4 }}>
             คุณไม่มีสิทธิ์เข้าถึงหน้าจัดการข้อมูล
@@ -101,7 +96,7 @@ export default async function AdminPage() {
     ]);
 
     return (
-      <Frame>
+      <Frame role={ctx.role} authed>
         <AdminTabs
           teams={teams}
           employees={employees}
@@ -112,7 +107,7 @@ export default async function AdminPage() {
     );
   } catch {
     return (
-      <Frame>
+      <Frame role={ctx.role} authed>
         <div className="card">
           อ่านข้อมูลไม่สำเร็จ — ตรวจว่าตั้งค่า SUPABASE_SERVICE_ROLE_KEY แล้ว
           และ apply migration ครบ

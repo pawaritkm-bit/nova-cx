@@ -13,23 +13,13 @@ import {
 } from "@/lib/dashboard/session";
 import { ROLE_CODES, type RoleCode } from "@/lib/dashboard/types";
 import { ExecView, MemberView, LeadView } from "./_components";
-import NovaMascot from "../liff/survey/[token]/NovaMascot";
+import AppNav, { ROLE_LABEL } from "../_components/AppNav";
 import "./dashboard.css";
 
 export const dynamic = "force-dynamic";
 
 // โหมด demo ?role= เปิดเฉพาะตอน dev เท่านั้น (production ต้อง login จริง)
 const DEV_FALLBACK = process.env.NODE_ENV !== "production";
-
-const ROLE_LABEL: Record<RoleCode, string> = {
-  executive: "ผู้บริหาร",
-  acc_lead: "หัวหน้าทีมบัญชี",
-  accountant: "นักบัญชี",
-  sales_lead: "หัวหน้าฝ่ายขาย",
-  sales: "เซลล์",
-  cs: "CS",
-  admin: "Admin",
-};
 
 function Frame({
   activeRole,
@@ -43,32 +33,14 @@ function Frame({
   return (
     <main className="nova-dash">
       <header>
-        <div className="dash-top">
-          <div className="dash-title">
-            {/* avatar น้อง NOVA (คาปิบาร่าวงกลม) ข้างหัวข้อ — ตรง prototype */}
-            <div className="dash-mascot" aria-hidden="true">
-              <NovaMascot variant="profile" width={52} />
-            </div>
-            <div>
-              <h1>NOVA-CX Dashboard</h1>
-              <p>
-                มุมมองตามบทบาท · แสดง Sample Size (n) ทุกคะแนน ·
-                คะแนนตัวอย่างน้อยไม่สรุปดี/แย่สุด
-              </p>
-            </div>
-          </div>
-          {/* แสดงบทบาท + ปุ่มออกจากระบบเฉพาะเมื่อ login จริง */}
-          {fromSession && activeRole ? (
-            <div className="flex shrink-0 items-center gap-3">
-              <span className="role-chip">{ROLE_LABEL[activeRole]}</span>
-              <form method="post" action="/auth/logout">
-                <button type="submit" className="logout-btn">
-                  ออกจากระบบ
-                </button>
-              </form>
-            </div>
-          ) : null}
-        </div>
+        {/* แถบเมนูนำทางร่วม (มาสคอต + ชื่อระบบ + ลิงก์ Dashboard/Admin + บทบาท + ออกจากระบบ) */}
+        <AppNav
+          active="dashboard"
+          role={activeRole}
+          authed={fromSession && !!activeRole}
+          title="NOVA-CX Dashboard"
+          subtitle="มุมมองตามบทบาท · แสดง Sample Size (n) ทุกคะแนน · คะแนนตัวอย่างน้อยไม่สรุปดี/แย่สุด"
+        />
 
         {/* โหมดตัวอย่าง (dev เท่านั้น) — ปุ่มสลับบทบาทเพื่อพรีวิวหน้าตา */}
         {!fromSession && DEV_FALLBACK ? (

@@ -102,6 +102,37 @@
   background: #f5f9ff;
 }
 
+/* ---- App nav (แถบเมนูนำทางร่วม dashboard ↔ admin) ---- */
+.nova-dash .app-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 5px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow-sm);
+}
+.nova-dash .app-nav-link {
+  padding: 9px 18px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--muted);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.nova-dash .app-nav-link:hover {
+  background: #f5f9ff;
+  color: var(--navy-800);
+}
+/* หน้าปัจจุบัน — เน้น navy ทึบ */
+.nova-dash .app-nav-link.active {
+  background: var(--navy-800);
+  color: #fff;
+}
+
 /* ---- Dev role switch (พรีวิว dev เท่านั้น) ---- */
 .nova-dash .role-switch {
   display: inline-flex;
