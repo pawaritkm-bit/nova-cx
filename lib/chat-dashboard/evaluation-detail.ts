@@ -102,7 +102,9 @@ export async function getEvaluationDetail(
   if (!canViewEvaluation(viewer, empId, evaluation.status)) return null;
   const canSeeEvidence = canViewEvidence(viewer, empId);
 
-  const [{ data: wData }, { data: empData }, { data: revData }, { data: appData }] =
+  // ★ perf: weights/ชื่อพนักงาน/reviews/appeals/evidence ไม่ขึ้นต่อกัน → ยิงขนานทั้งชุด
+  //   evidence เห็นเฉพาะผู้มีสิทธิ์ (hr ไม่เห็น) — ไม่ query เลยถ้าไม่มีสิทธิ์ (กัน leak)
+  const [{ data: wData }, { data: empData }, { data: revData }, { data: appData }, evRes] =
     await Promise.all([
       db.from("evaluation_weights").select("weights").eq("is_active", true).is("deleted_at", null).limit(1),
       db.from("employees").select("first_name, nickname").eq("id", empId).maybeSingle(),
@@ -118,18 +120,16 @@ export async function getEvaluationDetail(
         .eq("evaluation_id", evaluationId)
         .order("created_at", { ascending: false })
         .limit(20),
+      canSeeEvidence
+        ? db
+            .from("evaluation_evidence")
+            .select("id, chat_message_id, dimension, impact, note, sent_at")
+            .eq("evaluation_id", evaluationId)
+            .limit(100)
+        : Promise.resolve({ data: [] as EvidenceRow[] }),
     ]);
 
-  // evidence เห็นเฉพาะผู้มีสิทธิ์ (hr ไม่เห็น) — ไม่ query เลยถ้าไม่มีสิทธิ์ (กัน leak)
-  let evidence: EvidenceRow[] = [];
-  if (canSeeEvidence) {
-    const { data: evData } = await db
-      .from("evaluation_evidence")
-      .select("id, chat_message_id, dimension, impact, note, sent_at")
-      .eq("evaluation_id", evaluationId)
-      .limit(100);
-    evidence = (evData ?? []) as EvidenceRow[];
-  }
+  const evidence = (evRes.data ?? []) as EvidenceRow[];
 
   const weightsRow = (wData ?? [])[0] as { weights: Record<string, number> } | undefined;
   const weights = weightsRow?.weights ?? DEFAULT_WEIGHTS;

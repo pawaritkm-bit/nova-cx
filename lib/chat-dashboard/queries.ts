@@ -309,33 +309,34 @@ export async function getTeamChatDashboard(
   const groupIds = [...new Set(cases.map((c) => c.chat_group_id))];
   const groupSingleOwner = buildGroupSingleOwner(cases);
 
+  // ★ perf: 3 query นี้ไม่ขึ้นต่อกัน (link ↔ violation ↔ ชื่อสมาชิก) → ยิงขนาน
+  //   messageOwner ต้องประกอบก่อนค่อย attribute violation (คงลำดับพึ่งพาไว้)
+  type LinkRow = { case_id: string; chat_message_id: string };
+  type ViolRow = { evidence_message_id: string | null; chat_group_id: string };
+  const [linkRes, violRes, names] = await Promise.all([
+    caseIds.length > 0
+      ? db.from("case_messages").select("case_id, chat_message_id").in("case_id", caseIds).limit(CASE_LIMIT)
+      : Promise.resolve({ data: [] as LinkRow[] }),
+    groupIds.length > 0
+      ? db
+          .from("sop_violations")
+          .select("evidence_message_id, chat_group_id")
+          .eq("needs_expert_review", true)
+          .in("chat_group_id", groupIds)
+          .is("deleted_at", null)
+          .limit(CASE_LIMIT)
+      : Promise.resolve({ data: [] as ViolRow[] }),
+    fetchEmployeeNames(db, memberIds),
+  ]);
+
   const messageOwner = new Map<string, string>();
-  if (caseIds.length > 0) {
-    const { data: linkData } = await db
-      .from("case_messages")
-      .select("case_id, chat_message_id")
-      .in("case_id", caseIds)
-      .limit(CASE_LIMIT);
-    for (const l of (linkData ?? []) as { case_id: string; chat_message_id: string }[]) {
-      const owner = caseOwner.get(l.case_id);
-      if (owner) messageOwner.set(l.chat_message_id, owner);
-    }
+  for (const l of (linkRes.data ?? []) as LinkRow[]) {
+    const owner = caseOwner.get(l.case_id);
+    if (owner) messageOwner.set(l.chat_message_id, owner);
   }
 
-  let expertByOwner = new Map<string, number>();
-  if (groupIds.length > 0) {
-    const { data: violData } = await db
-      .from("sop_violations")
-      .select("evidence_message_id, chat_group_id")
-      .eq("needs_expert_review", true)
-      .in("chat_group_id", groupIds)
-      .is("deleted_at", null)
-      .limit(CASE_LIMIT);
-    const viols = (violData ?? []) as { evidence_message_id: string | null; chat_group_id: string }[];
-    expertByOwner = attributeExpertViolations(viols, messageOwner, groupSingleOwner);
-  }
-
-  const names = await fetchEmployeeNames(db, memberIds);
+  const viols = (violRes.data ?? []) as ViolRow[];
+  const expertByOwner = attributeExpertViolations(viols, messageOwner, groupSingleOwner);
 
   // สถิติต่อสมาชิก
   const stat = new Map<string, TeamMemberStat>();
@@ -529,19 +530,21 @@ export async function getRiskDashboard(db: DB, viewer: Viewer): Promise<RiskRow[
     escalated_at: string | null;
   }[];
 
-  const names = await fetchEmployeeNames(db, rows.map((r) => r.owner_employee_id ?? "").filter(Boolean));
-
   // ★ pseudonymity: แสดง "รหัสลูกค้า" ไม่ใช่ชื่อจริง
   const custIds = [...new Set(rows.map((r) => r.customer_id).filter((x): x is string => !!x))];
+
+  // ★ perf: ชื่อ owner กับ รหัสลูกค้า ต่างขึ้นกับ rows แต่ไม่ขึ้นต่อกัน → ยิงขนาน
+  type CustRow = { id: string; customer_code: string | null };
+  const [names, custRes] = await Promise.all([
+    fetchEmployeeNames(db, rows.map((r) => r.owner_employee_id ?? "").filter(Boolean)),
+    custIds.length > 0
+      ? db.from("customers").select("id, customer_code").in("id", custIds)
+      : Promise.resolve({ data: [] as CustRow[] }),
+  ]);
+
   const custCode = new Map<string, string>();
-  if (custIds.length > 0) {
-    const { data: custData } = await db
-      .from("customers")
-      .select("id, customer_code")
-      .in("id", custIds);
-    for (const c of (custData ?? []) as { id: string; customer_code: string | null }[]) {
-      custCode.set(c.id, c.customer_code ?? c.id.slice(0, 8));
-    }
+  for (const c of (custRes.data ?? []) as CustRow[]) {
+    custCode.set(c.id, c.customer_code ?? c.id.slice(0, 8));
   }
 
   const rank: Record<string, number> = { red: 0, orange: 1, yellow: 2, green: 3 };
@@ -608,18 +611,23 @@ export async function getCaseChatView(
     return denied;
 
   const canDecrypt = canDecryptChat(viewer, kase.owner_employee_id);
+  // capture ฟิลด์ที่ closure ด้านล่างใช้ (closure จะ re-widen kase เป็น nullable)
+  const chatGroupId = kase.chat_group_id;
+  const customerId = kase.customer_id;
+  const ownerEmployeeId = kase.owner_employee_id;
 
-  // ข้อความในเคส (ผ่าน case_messages → chat_messages) + สมาชิก (ชนิด+ชื่อ enc)
-  const { data: linkData } = await db
-    .from("case_messages")
-    .select("chat_message_id")
-    .eq("case_id", caseId)
-    .limit(MSG_LIMIT);
-  const msgIds = ((linkData ?? []) as { chat_message_id: string }[]).map((x) => x.chat_message_id);
-  logTruncate("case messages", msgIds.length, MSG_LIMIT);
+  // ไทม์ไลน์แชต = สาย query ที่พึ่งพากันจริง (case_messages → chat_messages → chat_members)
+  //   คงลำดับภายในไว้ แต่ทั้งสายนี้ไม่ขึ้นกับ analysis/violations/ชื่อ/ลูกค้า
+  async function loadTimeline(): Promise<TimelineMessage[]> {
+    const { data: linkData } = await db
+      .from("case_messages")
+      .select("chat_message_id")
+      .eq("case_id", caseId)
+      .limit(MSG_LIMIT);
+    const msgIds = ((linkData ?? []) as { chat_message_id: string }[]).map((x) => x.chat_message_id);
+    logTruncate("case messages", msgIds.length, MSG_LIMIT);
+    if (msgIds.length === 0) return [];
 
-  let timeline: TimelineMessage[] = [];
-  if (msgIds.length > 0) {
     const { data: msgData } = await db
       .from("chat_messages")
       .select("id, chat_member_id, sender_line_user_id, message_type, content_enc, sent_at")
@@ -661,39 +669,43 @@ export async function getCaseChatView(
       };
     });
     // ★ decrypt เฉพาะเมื่อ canDecrypt — buildTimeline จะซ่อนเนื้อหาถ้าไม่มีสิทธิ์
-    timeline = buildTimeline(raw, canDecrypt, decryptField);
+    return buildTimeline(raw, canDecrypt, decryptField);
   }
 
-  // ผลวิเคราะห์ AI ล่าสุดของกลุ่ม
-  const { data: aiData } = await db
-    .from("ai_chat_analysis")
-    .select(
-      "id, window_start, window_end, summary, sentiment, urgency, customer_facts, ai_assumptions, evidence, flow_steps, problems, confidence, insufficient_data, needs_human_review"
-    )
-    .eq("chat_group_id", kase.chat_group_id)
-    .is("deleted_at", null)
-    .order("window_end", { ascending: false })
-    .limit(1);
-  const analysis = ((aiData ?? [])[0] as AiChatAnalysisRow | undefined) ?? null;
-
-  const { data: violData } = await db
-    .from("sop_violations")
-    .select("id, violation_type, severity, evidence_message_id, description, needs_expert_review")
-    .eq("chat_group_id", kase.chat_group_id)
-    .is("deleted_at", null)
-    .limit(100);
-  const violations = (violData ?? []) as SopViolationRow[];
-
-  const names = await fetchEmployeeNames(db, [kase.owner_employee_id ?? ""].filter(Boolean));
-  let customerLabel = "—";
-  if (kase.customer_id) {
+  async function loadCustomerLabel(): Promise<string> {
+    if (!customerId) return "—";
     const { data: cust } = await db
       .from("customers")
       .select("customer_code")
-      .eq("id", kase.customer_id)
+      .eq("id", customerId)
       .maybeSingle();
-    customerLabel = (cust as { customer_code: string | null } | null)?.customer_code ?? "—";
+    return (cust as { customer_code: string | null } | null)?.customer_code ?? "—";
   }
+
+  // ★ perf: ไทม์ไลน์ / ผลวิเคราะห์ AI / violations / ชื่อ owner / รหัสลูกค้า ต่างขึ้นกับ kase
+  //   แต่ไม่ขึ้นต่อกัน → ยิงขนานทั้งชุด (ผลลัพธ์เท่าเดิม)
+  const [timeline, aiRes, violRes, names, customerLabel] = await Promise.all([
+    loadTimeline(),
+    db
+      .from("ai_chat_analysis")
+      .select(
+        "id, window_start, window_end, summary, sentiment, urgency, customer_facts, ai_assumptions, evidence, flow_steps, problems, confidence, insufficient_data, needs_human_review"
+      )
+      .eq("chat_group_id", chatGroupId)
+      .is("deleted_at", null)
+      .order("window_end", { ascending: false })
+      .limit(1),
+    db
+      .from("sop_violations")
+      .select("id, violation_type, severity, evidence_message_id, description, needs_expert_review")
+      .eq("chat_group_id", chatGroupId)
+      .is("deleted_at", null)
+      .limit(100),
+    fetchEmployeeNames(db, [ownerEmployeeId ?? ""].filter(Boolean)),
+    loadCustomerLabel(),
+  ]);
+  const analysis = ((aiRes.data ?? [])[0] as AiChatAnalysisRow | undefined) ?? null;
+  const violations = (violRes.data ?? []) as SopViolationRow[];
 
   return {
     case: kase,

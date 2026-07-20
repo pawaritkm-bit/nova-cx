@@ -294,7 +294,7 @@ async function loadCaseAndEval(
 ): Promise<{ cases: CaseRow[]; evals: EvalRow[] }> {
   const { start, end } = monthRange(period);
 
-  const { data: caseData, error: caseErr } = await db
+  const caseQuery = db
     .from("conversation_cases")
     .select(
       "id, customer_id, status, opened_at, first_responded_at, first_response_due_at, resolution_due_at, closed_at"
@@ -304,7 +304,6 @@ async function loadCaseAndEval(
     .is("deleted_at", null)
     .gte("opened_at", start)
     .lt("opened_at", end);
-  throwIfDbError(caseErr, "conversation_cases");
 
   let evalQuery = db
     .from("accountant_evaluations")
@@ -317,7 +316,13 @@ async function loadCaseAndEval(
   if (confirmedOnly) {
     evalQuery = evalQuery.in("status", [...CONFIRMED_STATUSES]);
   }
-  const { data: evalData, error: evalErr } = await evalQuery;
+
+  // ★ perf: cases กับ evals ไม่ขึ้นต่อกัน → ยิงขนาน (ผลลัพธ์เท่าเดิม)
+  const [
+    { data: caseData, error: caseErr },
+    { data: evalData, error: evalErr },
+  ] = await Promise.all([caseQuery, evalQuery]);
+  throwIfDbError(caseErr, "conversation_cases");
   throwIfDbError(evalErr, "accountant_evaluations");
 
   return {
@@ -341,6 +346,8 @@ export async function buildMonthlyReport(
 
   const access = resolveReportAccess(viewer, args.employeeId);
   if (!access.allowed) throw new ReportAccessError();
+  // capture หลัง narrow (closure loadCoaching จะ re-widen access เป็น union)
+  const confirmedOnly = access.confirmedOnly;
 
   // ยืนยันว่าพนักงานอยู่ใน tenant นี้จริง + ดึงชื่อ
   //   ★ แยก "DB error จริง" (throw generic) ออกจาก "ไม่พบพนักงาน" (ReportAccessError)
@@ -359,18 +366,7 @@ export async function buildMonthlyReport(
   // ★ freeze เวลา 1 ค่า ณ จุดสร้างรายงาน (reproducible + ส่งต่อ summarizeCases ทุกที่)
   const now = Date.now();
 
-  const { cases, evals } = await loadCaseAndEval(
-    db,
-    tenantId,
-    args.employeeId,
-    args.period,
-    access.confirmedOnly
-  );
-
-  // ★ [High] coaching = evidence — RLS can_view_eval_evidence (0035) ตัด hr ออก
-  //   รายงาน/export ต้อง mirror: hr (confirmedOnly) เห็นแค่ "คะแนน" ไม่เห็น coaching
-  //   → ข้าม query coaching + คืนรายการว่างทั้งหมด
-  let coach:
+  type CoachRow =
     | {
         strengths?: unknown;
         improvements?: unknown;
@@ -379,7 +375,12 @@ export async function buildMonthlyReport(
         checklist?: unknown;
       }
     | undefined;
-  if (!access.confirmedOnly) {
+
+  // ★ [High] coaching = evidence — RLS can_view_eval_evidence (0035) ตัด hr ออก
+  //   รายงาน/export ต้อง mirror: hr (confirmedOnly) เห็นแค่ "คะแนน" ไม่เห็น coaching
+  //   → ข้าม query coaching + คืนรายการว่างทั้งหมด (ต้องไม่แตะตาราง coaching เลย)
+  async function loadCoaching(): Promise<CoachRow> {
+    if (confirmedOnly) return undefined;
     const { start, end } = monthRange(args.period);
     const { data: coachData, error: coachErr } = await db
       .from("coaching_recommendations")
@@ -391,18 +392,17 @@ export async function buildMonthlyReport(
       .order("created_at", { ascending: false })
       .limit(1);
     throwIfDbError(coachErr, "coaching_recommendations");
-    coach = (coachData ?? [])[0] as typeof coach;
+    return (coachData ?? [])[0] as CoachRow;
   }
 
-  // เทียบเดือนก่อน (overall + เวลาตอบ + เกิน SLA)
+  // ★ perf: เดือนปัจจุบัน + เดือนก่อน + coaching ไม่ขึ้นต่อกัน → ยิงขนาน (ผลลัพธ์เท่าเดิม)
   const prevPeriod = previousPeriod(args.period);
-  const prev = await loadCaseAndEval(
-    db,
-    tenantId,
-    args.employeeId,
-    prevPeriod,
-    access.confirmedOnly
-  );
+  const [{ cases, evals }, prev, coach] = await Promise.all([
+    loadCaseAndEval(db, tenantId, args.employeeId, args.period, confirmedOnly),
+    loadCaseAndEval(db, tenantId, args.employeeId, prevPeriod, confirmedOnly),
+    loadCoaching(),
+  ]);
+
   const prevCases = summarizeCases(prev.cases, now);
   const prevScores = summarizeScores(prev.evals);
 
@@ -410,7 +410,7 @@ export async function buildMonthlyReport(
     employeeId: args.employeeId,
     employeeName,
     period: args.period,
-    confirmedOnly: access.confirmedOnly,
+    confirmedOnly,
     cases: summarizeCases(cases, now),
     scores: summarizeScores(evals),
     strengths: strList(coach?.strengths),

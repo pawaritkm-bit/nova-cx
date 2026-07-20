@@ -360,3 +360,71 @@
   width: 120px;
   flex-shrink: 0;
 }
+
+/* ============================================================
+   Loading skeleton — โครงหน้าขณะรอ query (loading.tsx ทุก route)
+   แถบเทา pulse ในธีมเดิม (การ์ด .card/.kpi) กันจอค้างขาว
+   ============================================================ */
+@keyframes chat-skel-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.nova-dash .skel {
+  background: #e2e8f0;
+  border-radius: 6px;
+  animation: chat-skel-pulse 1.2s ease-in-out infinite;
+  /* กันไม่ให้ข้อความ (ถ้ามี) โผล่ระหว่างโหลด */
+  color: transparent;
+  user-select: none;
+}
+/* แถบข้อความหลายความยาว */
+.nova-dash .skel-line {
+  height: 12px;
+  margin: 8px 0;
+}
+.nova-dash .skel-line.w-40 {
+  width: 40%;
+}
+.nova-dash .skel-line.w-60 {
+  width: 60%;
+}
+.nova-dash .skel-line.w-80 {
+  width: 80%;
+}
+.nova-dash .skel-line.w-100 {
+  width: 100%;
+}
+/* กล่องค่า KPI ตัวใหญ่ */
+.nova-dash .skel-value {
+  height: 30px;
+  width: 55%;
+  margin: 8px 0 4px;
+}
+/* หัวข้อ section */
+.nova-dash .skel-title {
+  height: 16px;
+  width: 45%;
+  margin-bottom: 14px;
+}
+/* แถบเมนูด้านบน (แทน AppNav ระหว่างโหลด) */
+.nova-dash .skel-nav {
+  height: 56px;
+  border-radius: var(--radius);
+  margin-bottom: 18px;
+}
+/* แถวในตาราง/รายการ */
+.nova-dash .skel-row {
+  height: 40px;
+  margin: 10px 0;
+}
+/* วงคะแนน (หน้า eval/case) */
+.nova-dash .skel-ring {
+  width: 110px;
+  height: 110px;
+  border-radius: 999px;
+}
