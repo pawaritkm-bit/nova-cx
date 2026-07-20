@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TeamLeaderOption } from "@/lib/register-staff/service";
+
+/** ความยาวขั้นต่ำของรหัสก่อนจะ auto-โหลดรายชื่อทีม (กันยิง 403 รัวตอนพิมพ์ยังไม่ครบ) */
+const MIN_CODE_LEN = 6;
+/** หน่วงหลังพิมพ์หยุด ก่อน auto-โหลด (ms) */
+const LOAD_DEBOUNCE_MS = 700;
 
 /**
  * RegisterClient — ฟอร์มลงทะเบียนนักบัญชีผ่าน LIFF
@@ -82,29 +87,36 @@ export default function RegisterClient({
   const [teamName, setTeamName] = useState("");
   const [code, setCode] = useState("");
 
-  // dropdown "เลือกหัวหน้าทีม" — โหลดหลังกรอกรหัส (endpoint verify code ก่อนคืนรายชื่อ)
+  // dropdown "เลือกหัวหน้าทีม" — auto-โหลดเมื่อกรอกรหัสครบ (endpoint verify code ก่อนคืนรายชื่อ)
   const [teamOptions, setTeamOptions] = useState<TeamLeaderOption[] | null>(null);
   const [teamsLoading, setTeamsLoading] = useState(false);
   const [teamsError, setTeamsError] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState("");
+  // รหัสที่ "เริ่มโหลดไปแล้ว" (สำเร็จ/กำลังโหลด) — กันยิงซ้ำรหัสเดิม (idempotent)
+  const loadedCodeRef = useRef<string>("");
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [success, setSuccess] = useState<SuccessInfo | null>(null);
 
-  // โหลดรายชื่อทีม+หัวหน้า (ต้องกรอกรหัสก่อน — endpoint verify code)
-  async function loadTeams() {
-    if (!code.trim()) {
-      setTeamsError("กรุณากรอกรหัสลงทะเบียนก่อน");
-      return;
-    }
+  /**
+   * โหลดรายชื่อทีม+หัวหน้าสำหรับรหัสที่ให้มา (auto — จาก debounce/onBlur)
+   *   - ยิงเฉพาะรหัสยาวพอ (>= MIN_CODE_LEN) และยังไม่เคยยิงรหัสนี้ (idempotent)
+   *   - 403 = รหัสผิด → คง ref ไว้ (ยิงซ้ำรหัสเดิมได้ผลเดิม); network error → เคลียร์ ref ให้ลองใหม่
+   */
+  const loadTeams = useCallback(async (rawCode: string) => {
+    const c = rawCode.trim();
+    if (c.length < MIN_CODE_LEN) return;
+    if (c === loadedCodeRef.current) return; // ยิง/โหลดรหัสนี้ไปแล้ว
+    loadedCodeRef.current = c;
+
     setTeamsLoading(true);
     setTeamsError(null);
     try {
       const res = await fetch("/api/register-staff/teams", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code: c }),
       });
       const data = await res.json();
       if (res.ok && data?.ok) {
@@ -118,11 +130,21 @@ export default function RegisterClient({
         setTeamsError(data?.message ?? "โหลดรายชื่อทีมไม่สำเร็จ");
       }
     } catch {
+      loadedCodeRef.current = ""; // network error = ให้ลองใหม่ได้
       setTeamsError("เชื่อมต่อไม่สำเร็จ กรุณาลองใหม่");
     } finally {
       setTeamsLoading(false);
     }
-  }
+  }, []);
+
+  // auto-โหลดหลังพิมพ์รหัสหยุด ~700ms (ยิงเฉพาะรหัสครบ + ยังไม่เคยยิงรหัสนี้)
+  useEffect(() => {
+    const c = code.trim();
+    if (c.length < MIN_CODE_LEN) return;
+    if (c === loadedCodeRef.current) return;
+    const t = setTimeout(() => loadTeams(c), LOAD_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [code, loadTeams]);
 
   // ---- init LIFF + login + ดึง idToken/profile ----
   useEffect(() => {
@@ -332,18 +354,20 @@ export default function RegisterClient({
             value={code}
             onChange={(e) => {
               setCode(e.target.value);
-              // รหัสเปลี่ยน → รายชื่อทีมเดิมใช้ไม่ได้แล้ว รีเซ็ตให้โหลดใหม่
+              // รหัสเปลี่ยน → รายชื่อทีมเดิมใช้ไม่ได้แล้ว รีเซ็ต + ให้ auto-โหลดใหม่
               setTeamOptions(null);
               setSelectedTeamId("");
               setTeamsError(null);
+              loadedCodeRef.current = ""; // เคลียร์ guard → debounce/blur โหลดรหัสใหม่ได้
             }}
+            onBlur={() => loadTeams(code)} // ออกจากช่อง = โหลดทันที (ไม่ต้องรอ debounce)
             placeholder="รหัสลับที่ได้รับจากแอดมิน"
             style={inputStyle}
             autoComplete="off"
           />
         </Field>
 
-        {/* เลือกหัวหน้าทีม — โหลดหลังกรอกรหัส (endpoint verify code ก่อนคืนรายชื่อ) */}
+        {/* เลือกหัวหน้าทีม — auto-โหลดเมื่อกรอกรหัสครบ (ไม่ต้องกดปุ่ม) */}
         <Field label="หัวหน้าทีมของคุณ">
           {teamOptions && teamOptions.length > 0 ? (
             <select
@@ -358,25 +382,15 @@ export default function RegisterClient({
                 </option>
               ))}
             </select>
+          ) : teamsLoading ? (
+            <span style={{ display: "block", fontSize: 13, color: "#5b6b88" }}>
+              กำลังโหลดรายชื่อหัวหน้า…
+            </span>
+          ) : teamsError ? (
+            <span style={{ display: "block", color: "#b91c1c", fontSize: 13 }}>{teamsError}</span>
           ) : (
-            <button
-              type="button"
-              onClick={loadTeams}
-              disabled={teamsLoading || !code.trim()}
-              style={{
-                ...inputStyle,
-                cursor: teamsLoading || !code.trim() ? "default" : "pointer",
-                background: "#eef1f8",
-                fontWeight: 600,
-                textAlign: "left",
-              }}
-            >
-              {teamsLoading ? "กำลังโหลด…" : "แตะเพื่อโหลดรายชื่อหัวหน้าทีม"}
-            </button>
-          )}
-          {teamsError && (
-            <span style={{ display: "block", color: "#b91c1c", fontSize: 12, marginTop: 4 }}>
-              {teamsError}
+            <span style={{ display: "block", fontSize: 13, color: "#8a97b3" }}>
+              กรอกรหัสลงทะเบียนให้ครบ ระบบจะโหลดรายชื่อหัวหน้าทีมให้อัตโนมัติ
             </span>
           )}
         </Field>
