@@ -98,13 +98,14 @@ async function upsertEmployeeByLineUser(
   const existingId = (existing as { id?: string } | null)?.id ?? null;
 
   if (existingId) {
-    // มีอยู่แล้ว → อัปเดตชื่อ/ชื่อเล่น + คง active (idempotent)
+    // มีอยู่แล้ว → อัปเดตแค่ชื่อ/ชื่อเล่น (idempotent)
+    // ★ [M3] ห้าม force is_active=true — ถ้าแอดมินปิดพนักงานคนนี้ไว้ ต้องคงปิดต่อ
+    //   (การลงทะเบียนซ้ำต้องไม่ reactivate คนที่ถูกปิดโดยเจตนา)
     const { error } = await db
       .from("employees")
       .update({
         first_name: input.name,
         nickname: input.nickname ?? null,
-        is_active: true,
       })
       .eq("id", existingId)
       .eq("tenant_id", tenantId);
@@ -132,9 +133,10 @@ async function upsertEmployeeByLineUser(
       const { data: after } = await selectExisting();
       const afterId = (after as { id?: string } | null)?.id ?? null;
       if (afterId) {
+        // ★ [M3] race path ก็ต้องไม่ reactivate เช่นกัน (คง is_active เดิม)
         await db
           .from("employees")
-          .update({ first_name: input.name, nickname: input.nickname ?? null, is_active: true })
+          .update({ first_name: input.name, nickname: input.nickname ?? null })
           .eq("id", afterId)
           .eq("tenant_id", tenantId);
         return { id: afterId, created: false };
@@ -157,12 +159,14 @@ async function resolveTeam(
   input: RegisterStaffInput
 ): Promise<{ id: string; name: string } | null> {
   // 2a) teamId ตรง ๆ → verify อยู่ tenant นี้ + เป็นทีมบัญชี
+  //   ★ [sec-a] บังคับ type='accounting' ให้ตรงกับเส้น teamName (กันผูกทีมที่ไม่ใช่บัญชี)
   if (input.teamId) {
     const { data } = await db
       .from("teams")
       .select("id, name")
       .eq("id", input.teamId)
       .eq("tenant_id", tenantId)
+      .eq("type", "accounting")
       .is("deleted_at", null)
       .maybeSingle();
     const row = data as { id?: string; name?: string } | null;

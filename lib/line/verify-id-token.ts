@@ -51,8 +51,10 @@ export async function verifyLineIdToken(
     const userId = typeof data.sub === "string" ? data.sub.trim() : "";
     if (!userId) return null;
 
-    // aud ต้องตรง client_id ที่เราตั้งใจ (LINE ตรวจให้แล้ว แต่ตรวจซ้ำกัน misconfig)
-    if (typeof data.aud === "string" && data.aud !== clientId) return null;
+    // ★ [sec-b] aud ต้องเป็น string ที่ตรง client_id "เป๊ะ" เท่านั้น —
+    //   ปฏิเสธทุกกรณีที่ไม่ตรง (aud หายไป/ไม่ใช่ string/เป็น array/คนละค่า)
+    //   clientId เป็น string เสมอ → เทียบตรง ๆ ครอบคลุมทุกเคสข้างต้น (fail-closed)
+    if (data.aud !== clientId) return null;
 
     const name = typeof data.name === "string" && data.name.trim() ? data.name.trim() : undefined;
     return { userId, name };

@@ -89,7 +89,22 @@ describe("registerStaff", () => {
     expect(capture.inserts.find((i) => i.table === "employees")).toBeUndefined();
     const empUpdate = capture.updates.find((u) => u.table === "employees");
     expect(empUpdate).toBeDefined();
-    expect((empUpdate!.payload as Record<string, unknown>).first_name).toBe("สมชาย ใหม่");
+    const upd = empUpdate!.payload as Record<string, unknown>;
+    expect(upd.first_name).toBe("สมชาย ใหม่");
+    // ★ [M3] ลงทะเบียนซ้ำต้องไม่ reactivate — update ต้อง "ไม่มี" is_active
+    //   (คงค่าเดิม; ถ้าแอดมินปิดพนักงานคนนี้ไว้ ต้องปิดต่อ)
+    expect("is_active" in upd).toBe(false);
+  });
+
+  it("[M3] create ใหม่ยังตั้ง is_active=true ตามปกติ", async () => {
+    const capture: Capture = { inserts: [], updates: [], filters: [] };
+    const { db } = makeFakeDb(
+      makeResolver({ existingEmployee: null, newEmployeeId: "emp-new" }),
+      capture
+    );
+    await registerStaff(db, TENANT, baseInput());
+    const empInsert = capture.inserts.find((i) => i.table === "employees");
+    expect((empInsert!.payload as Record<string, unknown>).is_active).toBe(true);
   });
 
   it("propagate → update chat_members (employee_id + member_kind=accountant)", async () => {

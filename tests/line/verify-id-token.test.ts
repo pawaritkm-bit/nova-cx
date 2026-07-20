@@ -34,6 +34,19 @@ describe("verifyLineIdToken", () => {
     expect(await verifyLineIdToken("id.jwt.token", CHANNEL, f)).toBeNull();
   });
 
+  it("[sec-b] aud หายไป (ไม่มี aud) → null", async () => {
+    const f = fakeFetch({ ok: true, json: async () => ({ sub: "Uabc123" }) });
+    expect(await verifyLineIdToken("id.jwt.token", CHANNEL, f)).toBeNull();
+  });
+
+  it("[sec-b] aud เป็น array → null (ไม่ยอมรับแม้มี clientId อยู่ในนั้น)", async () => {
+    const f = fakeFetch({
+      ok: true,
+      json: async () => ({ sub: "Uabc123", aud: [CHANNEL] }),
+    });
+    expect(await verifyLineIdToken("id.jwt.token", CHANNEL, f)).toBeNull();
+  });
+
   it("HTTP ไม่ ok (400 จาก LINE) → null", async () => {
     const f = fakeFetch({ ok: false, json: async () => ({ error: "invalid_request" }) });
     expect(await verifyLineIdToken("bad.token", CHANNEL, f)).toBeNull();
