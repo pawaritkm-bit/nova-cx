@@ -52,6 +52,52 @@ export async function resolveRegisterTenantId(
   return (data as { id?: string } | null)?.id ?? null;
 }
 
+/** 1 ตัวเลือกใน dropdown "เลือกหัวหน้าทีม" ของหน้าลงทะเบียน */
+export type TeamLeaderOption = {
+  teamId: string;
+  teamName: string;
+  /** ชื่อหัวหน้าทีม (ชื่อเล่นถ้ามี ไม่งั้นชื่อจริง) — null = ทีมยังไม่ตั้งหัวหน้า */
+  leaderName: string | null;
+};
+
+/**
+ * รายชื่อทีมบัญชี + ชื่อหัวหน้า สำหรับ dropdown หน้าลงทะเบียน (scope tenant)
+ *   - เฉพาะ teams type='accounting' ที่ยังไม่ถูกลบ
+ *   - join lead_employee_id → employees เพื่อได้ชื่อหัวหน้า (nickname ก่อน first_name)
+ *   ★ ผู้เรียก (route) ต้อง verify code ก่อนเรียก — ห้าม leak ชื่อหัวหน้าให้คนไม่มีรหัส
+ */
+export async function listAccountingTeamsWithLeader(
+  db: DB,
+  tenantId: string
+): Promise<TeamLeaderOption[]> {
+  const { data, error } = await db
+    .from("teams")
+    .select("id, name, employees:lead_employee_id(first_name, nickname)")
+    .eq("tenant_id", tenantId)
+    .eq("type", "accounting")
+    .is("deleted_at", null)
+    .order("name", { ascending: true });
+  if (error) throw new Error(error.message);
+
+  type Row = {
+    id: string;
+    name: string;
+    // Supabase คืน object (to-one) หรือ array แล้วแต่ shape — รองรับทั้งสอง
+    employees:
+      | { first_name?: string | null; nickname?: string | null }
+      | { first_name?: string | null; nickname?: string | null }[]
+      | null;
+  };
+
+  return ((data ?? []) as unknown as Row[]).map((r) => {
+    const emp = Array.isArray(r.employees) ? r.employees[0] ?? null : r.employees;
+    const leaderName = emp
+      ? (emp.nickname?.trim() || emp.first_name?.trim() || null)
+      : null;
+    return { teamId: r.id, teamName: r.name, leaderName };
+  });
+}
+
 export type RegisterStaffInput = {
   /** LINE userId จริง (มาจาก verifyLineIdToken เท่านั้น) */
   userId: string;

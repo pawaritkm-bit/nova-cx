@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   registerStaff,
   resolveRegisterTenantId,
+  listAccountingTeamsWithLeader,
   type RegisterStaffInput,
 } from "@/lib/register-staff/service";
 import { makeFakeDb, type ResolverArg, type Capture } from "../helpers/fake-supabase";
@@ -145,6 +146,28 @@ describe("registerStaff", () => {
     expect((tmInsert!.payload as Record<string, unknown>).team_id).toBe("team-A");
   });
 
+  it("ระบุ teamId (จาก dropdown) → ผูก team_members ตาม teamId + teamLinked=true", async () => {
+    const capture: Capture = { inserts: [], updates: [], filters: [] };
+    const { db } = makeFakeDb(
+      makeResolver({
+        existingEmployee: { id: "emp-1" },
+        // teamId path ใช้ maybeSingle → resolver คืน teams[0]
+        teams: [{ id: "team-X", name: "ทีมพี่ทัช" }],
+        existingTeamMember: null,
+      }),
+      capture
+    );
+    const res = await registerStaff(db, TENANT, baseInput({ teamId: "team-X" }));
+
+    expect(res.teamLinked).toBe(true);
+    expect(res.teamName).toBe("ทีมพี่ทัช");
+    const tmInsert = capture.inserts.find((i) => i.table === "team_members");
+    expect((tmInsert!.payload as Record<string, unknown>).team_id).toBe("team-X");
+    // ★ teamId path ต้อง scope type=accounting (sec-a) → มี filter type=accounting
+    const teamFilters = capture.filters.filter((f) => f.table === "teams");
+    expect(teamFilters.some((f) => f.column === "type" && f.value === "accounting")).toBe(true);
+  });
+
   it("teamName กำกวม (>1 ทีมชื่อเดียวกัน) → ไม่ผูกทีม (degrade) ไม่ throw", async () => {
     const capture: Capture = { inserts: [], updates: [], filters: [] };
     const { db } = makeFakeDb(
@@ -185,5 +208,45 @@ describe("resolveRegisterTenantId", () => {
       q.table === "tenants" ? { data: { id: "t-first" } } : { data: null }
     );
     expect(await resolveRegisterTenantId(db)).toBe("t-first");
+  });
+});
+
+describe("listAccountingTeamsWithLeader", () => {
+  it("คืน teamId/teamName/leaderName (ชื่อเล่นก่อนชื่อจริง) + scope type=accounting", async () => {
+    const capture: Capture = { inserts: [], updates: [], filters: [] };
+    const { db } = makeFakeDb(
+      (q) =>
+        q.table === "teams"
+          ? {
+              data: [
+                { id: "team-A", name: "ทีม A", employees: { first_name: "ธัช ก.", nickname: "พี่ทัช" } },
+                { id: "team-B", name: "ทีม B", employees: { first_name: "สมหญิง", nickname: null } },
+                { id: "team-C", name: "ทีม C", employees: null },
+              ],
+            }
+          : { data: null },
+      capture
+    );
+    const teams = await listAccountingTeamsWithLeader(db, TENANT);
+
+    expect(teams).toEqual([
+      { teamId: "team-A", teamName: "ทีม A", leaderName: "พี่ทัช" },
+      { teamId: "team-B", teamName: "ทีม B", leaderName: "สมหญิง" },
+      { teamId: "team-C", teamName: "ทีม C", leaderName: null }, // ยังไม่ตั้งหัวหน้า
+    ]);
+    // scope: tenant + type=accounting
+    const tf = capture.filters.filter((f) => f.table === "teams");
+    expect(tf.some((f) => f.column === "tenant_id" && f.value === TENANT)).toBe(true);
+    expect(tf.some((f) => f.column === "type" && f.value === "accounting")).toBe(true);
+  });
+
+  it("รองรับ join ที่คืนเป็น array (Supabase to-one shape) → หยิบตัวแรก", async () => {
+    const { db } = makeFakeDb((q) =>
+      q.table === "teams"
+        ? { data: [{ id: "team-A", name: "ทีม A", employees: [{ first_name: "ธัช", nickname: "พี่ทัช" }] }] }
+        : { data: null }
+    );
+    const teams = await listAccountingTeamsWithLeader(db, TENANT);
+    expect(teams[0].leaderName).toBe("พี่ทัช");
   });
 });

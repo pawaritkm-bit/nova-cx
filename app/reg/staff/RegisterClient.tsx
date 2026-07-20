@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { TeamLeaderOption } from "@/lib/register-staff/service";
 
 /**
  * RegisterClient — ฟอร์มลงทะเบียนนักบัญชีผ่าน LIFF
@@ -81,9 +82,47 @@ export default function RegisterClient({
   const [teamName, setTeamName] = useState("");
   const [code, setCode] = useState("");
 
+  // dropdown "เลือกหัวหน้าทีม" — โหลดหลังกรอกรหัส (endpoint verify code ก่อนคืนรายชื่อ)
+  const [teamOptions, setTeamOptions] = useState<TeamLeaderOption[] | null>(null);
+  const [teamsLoading, setTeamsLoading] = useState(false);
+  const [teamsError, setTeamsError] = useState<string | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState("");
+
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [success, setSuccess] = useState<SuccessInfo | null>(null);
+
+  // โหลดรายชื่อทีม+หัวหน้า (ต้องกรอกรหัสก่อน — endpoint verify code)
+  async function loadTeams() {
+    if (!code.trim()) {
+      setTeamsError("กรุณากรอกรหัสลงทะเบียนก่อน");
+      return;
+    }
+    setTeamsLoading(true);
+    setTeamsError(null);
+    try {
+      const res = await fetch("/api/register-staff/teams", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (res.ok && data?.ok) {
+        setTeamOptions(data.teams as TeamLeaderOption[]);
+        if ((data.teams as TeamLeaderOption[]).length === 0) {
+          setTeamsError("ยังไม่มีทีมบัญชีในระบบ — พิมพ์ชื่อทีมเองด้านล่างได้");
+        }
+      } else if (res.status === 403) {
+        setTeamsError("รหัสลงทะเบียนไม่ถูกต้อง");
+      } else {
+        setTeamsError(data?.message ?? "โหลดรายชื่อทีมไม่สำเร็จ");
+      }
+    } catch {
+      setTeamsError("เชื่อมต่อไม่สำเร็จ กรุณาลองใหม่");
+    } finally {
+      setTeamsLoading(false);
+    }
+  }
 
   // ---- init LIFF + login + ดึง idToken/profile ----
   useEffect(() => {
@@ -155,7 +194,9 @@ export default function RegisterClient({
           idToken,
           name: name.trim(),
           nickname: nickname.trim() || undefined,
-          teamName: teamName.trim() || undefined,
+          // เลือกจาก dropdown = ส่ง teamId (แม่นสุด); ไม่ได้เลือก = fallback พิมพ์ชื่อทีม
+          teamId: selectedTeamId || undefined,
+          teamName: selectedTeamId ? undefined : teamName.trim() || undefined,
           code,
         }),
       });
@@ -284,26 +325,74 @@ export default function RegisterClient({
             style={inputStyle}
           />
         </Field>
-        <Field label="ทีมบัญชี (พิมพ์ชื่อทีม ถ้ามี)">
-          <input
-            maxLength={200}
-            value={teamName}
-            onChange={(e) => setTeamName(e.target.value)}
-            placeholder="เช่น ทีมบัญชี A"
-            style={inputStyle}
-          />
-        </Field>
         <Field label="รหัสลงทะเบียน *">
           <input
             required
             maxLength={200}
             value={code}
-            onChange={(e) => setCode(e.target.value)}
+            onChange={(e) => {
+              setCode(e.target.value);
+              // รหัสเปลี่ยน → รายชื่อทีมเดิมใช้ไม่ได้แล้ว รีเซ็ตให้โหลดใหม่
+              setTeamOptions(null);
+              setSelectedTeamId("");
+              setTeamsError(null);
+            }}
             placeholder="รหัสลับที่ได้รับจากแอดมิน"
             style={inputStyle}
             autoComplete="off"
           />
         </Field>
+
+        {/* เลือกหัวหน้าทีม — โหลดหลังกรอกรหัส (endpoint verify code ก่อนคืนรายชื่อ) */}
+        <Field label="หัวหน้าทีมของคุณ">
+          {teamOptions && teamOptions.length > 0 ? (
+            <select
+              value={selectedTeamId}
+              onChange={(e) => setSelectedTeamId(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="">— เลือกหัวหน้าทีม —</option>
+              {teamOptions.map((t) => (
+                <option key={t.teamId} value={t.teamId}>
+                  {t.leaderName ? `${t.leaderName} · ${t.teamName}` : t.teamName}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <button
+              type="button"
+              onClick={loadTeams}
+              disabled={teamsLoading || !code.trim()}
+              style={{
+                ...inputStyle,
+                cursor: teamsLoading || !code.trim() ? "default" : "pointer",
+                background: "#eef1f8",
+                fontWeight: 600,
+                textAlign: "left",
+              }}
+            >
+              {teamsLoading ? "กำลังโหลด…" : "แตะเพื่อโหลดรายชื่อหัวหน้าทีม"}
+            </button>
+          )}
+          {teamsError && (
+            <span style={{ display: "block", color: "#b91c1c", fontSize: 12, marginTop: 4 }}>
+              {teamsError}
+            </span>
+          )}
+        </Field>
+
+        {/* fallback: พิมพ์ชื่อทีมเอง (เมื่อไม่มี dropdown/ไม่มีทีมในรายการ) */}
+        {(!teamOptions || teamOptions.length === 0) && (
+          <Field label="หรือพิมพ์ชื่อทีมบัญชีเอง (ไม่บังคับ)">
+            <input
+              maxLength={200}
+              value={teamName}
+              onChange={(e) => setTeamName(e.target.value)}
+              placeholder="เช่น ทีมบัญชี A"
+              style={inputStyle}
+            />
+          </Field>
+        )}
 
         {submitError && (
           <p style={{ color: "#b91c1c", fontSize: 13, marginTop: 4 }}>{submitError}</p>
