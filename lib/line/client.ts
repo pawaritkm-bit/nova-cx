@@ -18,6 +18,9 @@ export type LineSendResult =
 
 export type LineProfile = { userId: string; displayName?: string };
 
+/** สรุปข้อมูลกลุ่ม LINE (ชื่อกลุ่ม + รูป) จาก group summary API */
+export type LineGroupSummary = { groupName: string; pictureUrl?: string };
+
 export type LineClient = {
   oa: LineOa;
   /** push ไปยัง userId / groupId / roomId */
@@ -35,6 +38,12 @@ export type LineClient = {
     sourceId: string,
     userId: string
   ): Promise<LineProfile | null>;
+  /**
+   * ดึงสรุปข้อมูลกลุ่ม (ชื่อกลุ่ม/รูป) แบบ best-effort — คืน null ถ้าล้ม/ไม่ใช่กลุ่ม
+   *   endpoint: GET /group/{groupId}/summary (ต้อง Verified/Premium OA)
+   *   ★ room ไม่มี summary API → caller ต้องเรียกเฉพาะ group
+   */
+  getGroupSummary(groupId: string): Promise<LineGroupSummary | null>;
 };
 
 /** จำแนกว่า HTTP status ควร retry ไหม (5xx/429 = retry, 4xx อื่น = ไม่) */
@@ -125,6 +134,22 @@ export function getLineClient(oa: LineOa): LineClient | null {
         if (!res.ok) return null;
         const data = (await res.json()) as { userId: string; displayName?: string };
         return { userId: data.userId, displayName: data.displayName };
+      } catch {
+        return null;
+      }
+    },
+    async getGroupSummary(groupId) {
+      try {
+        const res = await fetch(
+          `${LINE_API_BASE}/group/${encodeURIComponent(groupId)}/summary`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        // ไม่ผ่าน (เช่น 404 = ไม่ใช่กลุ่ม/บอทไม่อยู่ในกลุ่ม, 403 = OA ไม่ verified) → null
+        if (!res.ok) return null;
+        const data = (await res.json()) as { groupName?: string; pictureUrl?: string };
+        // ไม่มีชื่อกลุ่ม = ถือว่าดึงไม่ได้ (ไม่คืน object เปล่า)
+        if (!data.groupName) return null;
+        return { groupName: data.groupName, pictureUrl: data.pictureUrl };
       } catch {
         return null;
       }

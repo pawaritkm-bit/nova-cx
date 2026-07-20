@@ -19,6 +19,9 @@ function clientWithProfile(displayName: string | null) {
     async getGroupMemberProfile(_type, _sourceId, userId) {
       return displayName ? { userId, displayName } : { userId };
     },
+    async getGroupSummary() {
+      return displayName ? { groupName: displayName } : null;
+    },
   });
   return getClient;
 }
@@ -81,6 +84,18 @@ describe("processLineEventJobs", () => {
     const summary = await processLineEventJobs({ db: makeDb(store) });
     expect(summary.done).toBe(1);
     expect(store.upserts).toHaveLength(0);
+  });
+
+  it("join (source=group) → สร้าง chat_group (ไม่เป็น no-op เดิม) + ปิดงาน", async () => {
+    const store = eventJob({ type: "join", source: { type: "group", groupId: "Cnew1" } });
+    // ยังไม่มีกลุ่มนี้ → ต้อง insert
+    store.data.chat_groups = null;
+    const summary = await processLineEventJobs({
+      db: makeDb(store),
+      getClient: () => null, // ไม่มี credential → สร้างกลุ่มได้แต่ไม่ดึงชื่อ
+    });
+    expect(summary.done).toBe(1);
+    expect(store.inserts.find((i) => i.table === "chat_groups")?.rows[0].group_ref).toBe("Cnew1");
   });
 
   it("follow ไม่มี userId → retry (fail)", async () => {

@@ -158,20 +158,24 @@ async function resolveOrCreateGroup(
   groupRef: string,
   groupKind: "group" | "room",
   chatChannelId: string | null
-): Promise<{ id: string; customerId: string | null } | null> {
+): Promise<{ id: string; customerId: string | null; hasName: boolean } | null> {
   const selectExisting = () =>
     db
       .from("chat_groups")
-      .select("id, customer_id")
+      .select("id, customer_id, display_name_enc")
       .eq("provider", PROVIDER)
       .eq("group_ref", groupRef)
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle();
 
+  type GroupRow = { id?: string; customer_id?: string | null; display_name_enc?: string | null };
+
   const { data: existing } = await selectExisting();
-  const ex = existing as { id?: string; customer_id?: string | null } | null;
-  if (ex?.id) return { id: ex.id, customerId: ex.customer_id ?? null };
+  const ex = existing as GroupRow | null;
+  if (ex?.id) {
+    return { id: ex.id, customerId: ex.customer_id ?? null, hasName: !!ex.display_name_enc };
+  }
 
   const row: Record<string, unknown> = {
     tenant_id: tenantId,
@@ -185,22 +189,72 @@ async function resolveOrCreateGroup(
   const { data: inserted, error } = await db
     .from("chat_groups")
     .insert(row)
-    .select("id, customer_id")
+    .select("id, customer_id, display_name_enc")
     .maybeSingle();
 
   if (error) {
     // race: อีก event สร้างกลุ่มพร้อมกัน → re-select เอา id เดิม (ไม่ throw)
     if (isUniqueViolation(error)) {
       const { data: after } = await selectExisting();
-      const a = after as { id?: string; customer_id?: string | null } | null;
-      if (a?.id) return { id: a.id, customerId: a.customer_id ?? null };
+      const a = after as GroupRow | null;
+      if (a?.id) return { id: a.id, customerId: a.customer_id ?? null, hasName: !!a.display_name_enc };
     }
     throw error;
   }
 
-  const ins = inserted as { id?: string; customer_id?: string | null } | null;
+  const ins = inserted as GroupRow | null;
   if (!ins?.id) return null;
-  return { id: ins.id, customerId: ins.customer_id ?? null };
+  // กลุ่มที่เพิ่งสร้าง ยังไม่มีชื่อเสมอ (hasName=false → caller จะไปดึงชื่อ)
+  return { id: ins.id, customerId: ins.customer_id ?? null, hasName: !!ins.display_name_enc };
+}
+
+/**
+ * ดึงชื่อกลุ่มจาก LINE แล้วเก็บเป็น ciphertext ลง chat_groups.display_name_enc — best-effort
+ *   เรียกเฉพาะตอน "ยังไม่มีชื่อ" (display_name_enc null) เพื่อไม่ยิง API ซ้ำทุกข้อความ
+ *   เงื่อนไขที่ทำงาน:
+ *     - มี client (มี LINE credential) และมีคีย์เข้ารหัส (hasEncKey) — ไม่มีคีย์ = ไม่เก็บ (ตาม pattern เดิม)
+ *     - เฉพาะ group เท่านั้น (LINE ไม่มี summary API สำหรับ room)
+ *   update ใช้ guard `.is(display_name_enc, null)` กันเขียนทับชื่อที่มีอยู่แล้ว (กัน race)
+ *   ★ best-effort: ทุก error กลืน (log warn) ไม่ให้ ingest/worker พัง
+ */
+export async function ensureGroupName(
+  db: SupabaseClient,
+  tenantId: string,
+  chatGroupId: string,
+  groupRef: string,
+  groupKind: "group" | "room",
+  client: LineClient | null
+): Promise<void> {
+  if (!client || !hasEncKey()) return;
+  if (groupKind !== "group") return; // room ไม่มีชื่อ/ไม่มี summary API
+
+  try {
+    const summary = await client.getGroupSummary(groupRef);
+    const groupName = summary?.groupName ?? null;
+    if (!groupName) return; // ดึงไม่ได้ → คงว่างไว้ (ลองใหม่รอบหน้า)
+
+    const displayNameEnc = encryptField(groupName);
+    const { error } = await db
+      .from("chat_groups")
+      .update({ display_name_enc: displayNameEnc })
+      .eq("id", chatGroupId)
+      .eq("tenant_id", tenantId)
+      .is("display_name_enc", null); // เขียนเฉพาะตอนยังว่าง (กันทับ + กัน race)
+    if (error) {
+      console.warn(
+        `[line/ingest] set group display_name_enc failed (code=${
+          (error as { code?: string }).code ?? "unknown"
+        }) chat_group_id=${chatGroupId}`
+      );
+    }
+  } catch (e) {
+    // best-effort: ห้ามทำ ingest พัง — ไม่ log plaintext/ชื่อ
+    console.warn(
+      `[line/ingest] ensureGroupName error (${
+        e instanceof Error ? e.name : "unknown"
+      }) chat_group_id=${chatGroupId}`
+    );
+  }
 }
 
 /**
@@ -303,6 +357,11 @@ export async function ingestGroupMessage(
   const chatGroupId = group.id;
   const customerId = group.customerId; // resolve group→customer (source of truth)
 
+  // fetch-if-missing: ยังไม่มีชื่อกลุ่ม → ดึงจาก LINE แล้วเก็บ ciphertext (best-effort, ไม่ยิงซ้ำถ้ามีแล้ว)
+  if (!group.hasName) {
+    await ensureGroupName(db, tenantId, chatGroupId, groupRef, sourceType, deps.client ?? null);
+  }
+
   // --- (2) upsert chat_member (best-effort ระบุตัวตน + display_name เข้ารหัส) ---
   let chatMemberId: string | null = null;
   const senderLineUserId = event.source?.userId;
@@ -397,4 +456,41 @@ export async function ingestGroupMessage(
   }
 
   return { status: "stored", chatGroupId, lineMessageId, customerId };
+}
+
+export type JoinResult =
+  | { status: "skipped"; reason: string }
+  | { status: "created"; chatGroupId: string };
+
+/**
+ * ประมวลผล event 'join' (บอทถูกเชิญเข้ากลุ่ม/ห้อง) — สร้าง chat_group + ดึงชื่อทันที
+ *   เพื่อให้กลุ่มโผล่ในหน้า admin พร้อมชื่อทันทีที่เชิญบอท ไม่ต้องรอข้อความแรก
+ *   ★ additive: ไม่แตะ flow message/follow เดิม; ใช้ resolveOrCreateGroup + ensureGroupName ร่วมกัน
+ *   degrade: ไม่ใช่กลุ่ม/ข้อมูลไม่ครบ = skip (ไม่ throw)
+ */
+export async function ingestGroupJoin(
+  deps: IngestDeps,
+  tenantId: string,
+  oa: LineOa,
+  event: QueuedLineEvent
+): Promise<JoinResult> {
+  const db = deps.db;
+
+  const sourceType = event.source?.type;
+  if (sourceType !== "group" && sourceType !== "room") {
+    return { status: "skipped", reason: "not_group_or_room" };
+  }
+  const groupRef = sourceType === "group" ? event.source?.groupId : event.source?.roomId;
+  if (!groupRef) return { status: "skipped", reason: "missing_group_ref" };
+
+  const chatChannelId = await resolveChatChannelId(db, tenantId, oa);
+  const group = await resolveOrCreateGroup(db, tenantId, groupRef, sourceType, chatChannelId);
+  if (!group) return { status: "skipped", reason: "chat_group_upsert_failed" };
+
+  // ดึงชื่อทันทีถ้ายังไม่มี (best-effort — ไม่ยิงซ้ำถ้ากลุ่มเก่ามีชื่อแล้ว)
+  if (!group.hasName) {
+    await ensureGroupName(db, tenantId, group.id, groupRef, sourceType, deps.client ?? null);
+  }
+
+  return { status: "created", chatGroupId: group.id };
 }

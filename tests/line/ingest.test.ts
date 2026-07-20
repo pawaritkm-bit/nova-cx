@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { LineOa } from "@/lib/env";
 import type { LineClient } from "@/lib/line/client";
 import type { QueuedLineEvent } from "@/lib/line/webhook";
-import { ingestGroupMessage } from "@/lib/line/ingest";
+import { ingestGroupMessage, ingestGroupJoin } from "@/lib/line/ingest";
+import { decryptField } from "@/lib/crypto/field";
 import { makeDb, makeStore, type Store } from "./fake-db";
 
 /**
@@ -41,7 +42,35 @@ function clientWithName(displayName: string | null): LineClient {
     async getGroupMemberProfile(_type, _sourceId, userId) {
       return displayName ? { userId, displayName } : { userId };
     },
+    async getGroupSummary() {
+      return null;
+    },
   };
+}
+
+/** client ปลอมที่คืนชื่อกลุ่ม (best-effort) + นับจำนวนครั้งที่ถูกเรียก getGroupSummary */
+function clientWithSummary(groupName: string | null): LineClient & { summaryCalls: number } {
+  const c = {
+    oa: "care" as LineOa,
+    summaryCalls: 0,
+    async push() {
+      return { ok: true as const };
+    },
+    async reply() {
+      return { ok: true as const };
+    },
+    async getProfile() {
+      return null;
+    },
+    async getGroupMemberProfile() {
+      return null;
+    },
+    async getGroupSummary() {
+      c.summaryCalls += 1;
+      return groupName ? { groupName } : null;
+    },
+  };
+  return c;
 }
 
 /** store พื้นฐาน: กลุ่มมีอยู่แล้ว (มี id), ยังไม่มีข้อความซ้ำ, ไม่รู้จัก line_user */
@@ -309,5 +338,127 @@ describe("ingestGroupMessage — display_name เข้ารหัส (PDPA, se
     const member = store.upserts.find((u) => u.table === "chat_members");
     expect((member?.row as Record<string, unknown>).display_name_enc).toBeUndefined();
     expect(JSON.stringify(member?.row)).not.toContain("คุณสมชาย");
+  });
+});
+
+describe("ingestGroupMessage — fetch-if-missing ชื่อกลุ่ม (display_name_enc)", () => {
+  const prev = process.env.CREDENTIAL_ENC_KEY;
+  beforeEach(() => {
+    process.env.CREDENTIAL_ENC_KEY = ENC_KEY;
+  });
+  afterEach(() => {
+    if (prev === undefined) delete process.env.CREDENTIAL_ENC_KEY;
+    else process.env.CREDENTIAL_ENC_KEY = prev;
+  });
+
+  it("กลุ่มยังไม่มีชื่อ (display_name_enc null) + มีคีย์ → ดึงชื่อ + เก็บ ciphertext (ถอดได้ = ชื่อจริง)", async () => {
+    const store = baseStore(); // chat_groups: { id, customer_id:null } → ไม่มี display_name_enc
+    const client = clientWithSummary("บจ.นอร่า299 [สนง.บัญชี Finovas]");
+    const res = await ingestGroupMessage({ db: makeDb(store), client, now: NOW }, "t-1", "care", groupTextEvent());
+    expect(res.status).toBe("stored");
+    expect(client.summaryCalls).toBe(1);
+
+    const upd = store.updates.find(
+      (u) => u.table === "chat_groups" && "display_name_enc" in u.payload
+    );
+    expect(upd).toBeDefined();
+    const enc = upd!.payload.display_name_enc as string;
+    expect(enc.startsWith("v1:")).toBe(true);
+    // ★ ไม่มี plaintext ชื่อกลุ่มหลงเหลือใน payload
+    expect(JSON.stringify(upd!.payload)).not.toContain("นอร่า");
+    // ถอดกลับได้เป็นชื่อจริง
+    expect(decryptField(enc)).toBe("บจ.นอร่า299 [สนง.บัญชี Finovas]");
+  });
+
+  it("กลุ่มมีชื่อแล้ว (display_name_enc ไม่ null) → skip ไม่ยิง getGroupSummary (ไม่ยิงซ้ำทุกข้อความ)", async () => {
+    const store = baseStore({ chat_groups: { id: "g-1", customer_id: null, display_name_enc: "v1:existing.abc.def" } });
+    const client = clientWithSummary("ชื่อใหม่");
+    await ingestGroupMessage({ db: makeDb(store), client, now: NOW }, "t-1", "care", groupTextEvent());
+    expect(client.summaryCalls).toBe(0);
+    const upd = store.updates.find((u) => u.table === "chat_groups" && "display_name_enc" in u.payload);
+    expect(upd).toBeUndefined();
+  });
+
+  it("ไม่มีคีย์เข้ารหัส → ไม่ดึง/ไม่เก็บชื่อกลุ่ม (ตาม pattern เดิม)", async () => {
+    delete process.env.CREDENTIAL_ENC_KEY;
+    const store = baseStore();
+    const client = clientWithSummary("บจ.นอร่า299");
+    await ingestGroupMessage({ db: makeDb(store), client, now: NOW }, "t-1", "care", groupTextEvent());
+    expect(client.summaryCalls).toBe(0);
+    expect(store.updates.find((u) => u.table === "chat_groups")).toBeUndefined();
+  });
+
+  it("getGroupSummary คืน null (ดึงไม่ได้) → ไม่ throw, ไม่เขียน display_name_enc (คงว่างไว้)", async () => {
+    const store = baseStore();
+    const client = clientWithSummary(null);
+    const res = await ingestGroupMessage({ db: makeDb(store), client, now: NOW }, "t-1", "care", groupTextEvent());
+    expect(res.status).toBe("stored"); // ingest ยังทำงานปกติ
+    expect(store.updates.find((u) => u.table === "chat_groups" && "display_name_enc" in u.payload)).toBeUndefined();
+  });
+
+  it("room → ไม่ยิง getGroupSummary (LINE ไม่มี summary API สำหรับ room)", async () => {
+    const store = baseStore({ chat_groups: null });
+    const client = clientWithSummary("ชื่อห้อง");
+    await ingestGroupMessage(
+      { db: makeDb(store), client, now: NOW },
+      "t-1",
+      "care",
+      groupTextEvent({ source: { type: "room", roomId: "Rroom1", userId: "Uabc" } })
+    );
+    expect(client.summaryCalls).toBe(0);
+  });
+});
+
+describe("ingestGroupJoin — บอทถูกเชิญเข้ากลุ่ม → สร้างกลุ่ม + ดึงชื่อทันที", () => {
+  const prev = process.env.CREDENTIAL_ENC_KEY;
+  beforeEach(() => {
+    process.env.CREDENTIAL_ENC_KEY = ENC_KEY;
+  });
+  afterEach(() => {
+    if (prev === undefined) delete process.env.CREDENTIAL_ENC_KEY;
+    else process.env.CREDENTIAL_ENC_KEY = prev;
+  });
+
+  function joinEvent(overrides: Partial<QueuedLineEvent> = {}): QueuedLineEvent {
+    return {
+      type: "join",
+      timestamp: Date.parse("2026-07-18T09:59:00Z"),
+      source: { type: "group", groupId: "Cnew1" },
+      ...overrides,
+    };
+  }
+
+  it("กลุ่มใหม่ → insert chat_groups + ดึงชื่อเก็บ ciphertext", async () => {
+    const store = baseStore({ chat_groups: null }); // ยังไม่มีกลุ่มนี้
+    const client = clientWithSummary("บจ.ทดสอบ");
+    const res = await ingestGroupJoin({ db: makeDb(store), client, now: NOW }, "t-1", "care", joinEvent());
+    expect(res.status).toBe("created");
+    // สร้างกลุ่มใหม่ (insert ไม่ใช่ upsert — กันทับ flag)
+    const grp = store.inserts.find((i) => i.table === "chat_groups");
+    expect(grp?.rows[0].group_ref).toBe("Cnew1");
+    // ดึงชื่อ + เก็บ ciphertext
+    expect(client.summaryCalls).toBe(1);
+    const upd = store.updates.find((u) => u.table === "chat_groups" && "display_name_enc" in u.payload);
+    expect(upd).toBeDefined();
+    expect(decryptField(upd!.payload.display_name_enc as string)).toBe("บจ.ทดสอบ");
+  });
+
+  it("กลุ่มเก่าที่มีชื่ออยู่แล้ว → ไม่ยิง getGroupSummary ซ้ำ", async () => {
+    const store = baseStore({ chat_groups: { id: "g-1", customer_id: null, display_name_enc: "v1:x.y.z" } });
+    const client = clientWithSummary("ชื่อใหม่");
+    const res = await ingestGroupJoin({ db: makeDb(store), client, now: NOW }, "t-1", "care", joinEvent());
+    expect(res.status).toBe("created");
+    expect(client.summaryCalls).toBe(0);
+  });
+
+  it("ไม่ใช่กลุ่ม/ห้อง (source.type=user) → skip", async () => {
+    const store = baseStore();
+    const res = await ingestGroupJoin(
+      { db: makeDb(store), now: NOW },
+      "t-1",
+      "care",
+      joinEvent({ source: { type: "user", userId: "Uabc" } })
+    );
+    expect(res.status).toBe("skipped");
   });
 });

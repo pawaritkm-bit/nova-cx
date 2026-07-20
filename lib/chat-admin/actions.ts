@@ -25,6 +25,8 @@ import {
   firstZodError,
 } from "./schema";
 import { mapGroupToCustomer, setChatMember } from "./mapping";
+import { backfillGroupNames } from "./group-names";
+import { getLineClient } from "@/lib/line/client";
 import { propagateMemberIdentity } from "./member-directory";
 import { saveWeights } from "./weights";
 import { createSlaRule, updateSlaRule, deleteSlaRule, setSlaRuleActive } from "./sla";
@@ -139,6 +141,37 @@ export async function propagateMemberAction(
         affected > 0
           ? `ผูกตัวตนเรียบร้อย ${affected} กลุ่ม`
           : "ไม่มีกลุ่มที่ต้องผูกเพิ่ม (อาจผูกครบแล้ว)",
+    };
+  } catch (e) {
+    return { ok: false, message: friendlyError(e) };
+  }
+}
+
+// ---- backfill ชื่อกลุ่มที่ยังไม่มีชื่อ (ช่วยกลุ่มเก่าที่เชิญบอทก่อนมีฟีเจอร์ดึงชื่อ) ----
+export async function backfillGroupNamesAction(
+  _prev: ActionResult | null,
+  _formData: FormData
+): Promise<ActionResult> {
+  try {
+    const authed = await createClient();
+    const ctx = await requireAdminContext(authed); // 403 ถ้าไม่ใช่ admin/executive
+    const service = createServiceRoleClient();
+    const { updated, scanned, reason } = await backfillGroupNames(
+      service,
+      ctx.tenantId,
+      getLineClient,
+      ctx.userId
+    );
+    revalidatePath("/chat-audit/admin");
+    if (reason) return { ok: false, message: reason };
+    return {
+      ok: true,
+      message:
+        updated > 0
+          ? `ดึงชื่อกลุ่มสำเร็จ ${updated} กลุ่ม (จากที่ยังไม่มีชื่อ ${scanned} กลุ่ม)`
+          : scanned === 0
+            ? "ไม่มีกลุ่มที่ยังไม่มีชื่อ (ครบแล้ว)"
+            : `ยังดึงชื่อไม่ได้ (${scanned} กลุ่ม) — ตรวจว่าบอทยังอยู่ในกลุ่ม และ OA เป็น Verified/Premium`,
     };
   } catch (e) {
     return { ok: false, message: friendlyError(e) };

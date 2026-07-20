@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import type { LineClient } from "@/lib/line/client";
 import type { QueuedLineEvent } from "@/lib/line/webhook";
-import { ingestGroupMessage } from "@/lib/line/ingest";
+import { ingestGroupMessage, ingestGroupJoin } from "@/lib/line/ingest";
 
 /**
  * Worker: line_event — ประมวลผล event ที่ webhook enqueue ไว้ (job_queue queue='line_event')
@@ -139,6 +139,15 @@ async function processOne(
       case "message":
         // Phase 1: เก็บแชตกลุ่ม/ห้อง (ingest จัดการ skip เองถ้าเป็น 1:1/ข้อมูลไม่ครบ)
         await ingestGroupMessage(
+          { db, client: deps.getClient?.(oa) ?? null, now: () => now },
+          job.tenant_id,
+          oa,
+          event
+        );
+        break;
+      case "join":
+        // บอทถูกเชิญเข้ากลุ่ม/ห้อง → สร้าง chat_group + ดึงชื่อทันที (โผล่ในหน้า admin ไม่ต้องรอข้อความแรก)
+        await ingestGroupJoin(
           { db, client: deps.getClient?.(oa) ?? null, now: () => now },
           job.tenant_id,
           oa,

@@ -11,6 +11,7 @@ import {
   createSlaRuleAction,
   deleteSlaRuleAction,
   toggleSlaRuleAction,
+  backfillGroupNamesAction,
   type ActionResult,
 } from "@/lib/chat-admin/actions";
 import type { ChatGroupRow } from "@/lib/chat-admin/mapping";
@@ -116,6 +117,8 @@ function MappingPanel({
   suggestionsByGroup: Record<string, CustomerSuggestionOpt[]>;
 }) {
   const mapped = groups.filter((g) => g.customerId).length;
+  const noName = groups.filter((g) => !g.groupName).length;
+  const [backfillState, backfillAction] = useActionState(backfillGroupNamesAction, null);
   return (
     <div className="card">
       <div className="section-title">
@@ -128,6 +131,13 @@ function MappingPanel({
         จับคู่กลุ่มที่บอทเข้าไปแล้วให้ตรงกับ &quot;ลูกค้า&quot; แล้วกด &quot;จัดการสมาชิก&quot; เพื่อระบุว่าใครคือนักบัญชี/ลูกค้า
         — หรือใช้ <Link href="/chat-audit/admin/members" className="underline">จับคู่สมาชิก (ภาพรวม)</Link> เพื่อผูกนักบัญชีทีเดียวหลายกลุ่ม
       </p>
+      {/* backfill: ดึงชื่อกลุ่มที่ยังไม่มีชื่อ (ช่วยกลุ่มเก่าที่เชิญบอทก่อนมีฟีเจอร์ดึงชื่ออัตโนมัติ) */}
+      <div className="btn-row" style={{ marginBottom: 12, alignItems: "center", gap: 8 }}>
+        <form action={backfillAction}>
+          <button type="submit" className="btn">ดึงชื่อกลุ่มที่ยังไม่มีชื่อ{noName > 0 ? ` (${noName})` : ""}</button>
+        </form>
+        <Msg state={backfillState} />
+      </div>
       {groups.length === 0 ? (
         <p className="empty">ยังไม่มีกลุ่ม LINE (รอบอทเข้ากลุ่มและเก็บข้อความ)</p>
       ) : (
