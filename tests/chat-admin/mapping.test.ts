@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { makeFakeDb, makeCapture } from "../helpers/fake-supabase";
-import { mapGroupToCustomer, setChatMember } from "@/lib/chat-admin/mapping";
+import { mapGroupToCustomer, setChatMember, setGroupAccountant } from "@/lib/chat-admin/mapping";
 
 const T = "tenant-1";
 const GROUP = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
@@ -104,5 +104,68 @@ describe("setChatMember — จับคู่พนักงาน + audit_logs
     await expect(
       setChatMember(db, T, { chat_member_id: MEMBER, member_kind: "accountant", employee_id: EMP }, ACTOR)
     ).rejects.toThrow(/ไม่พบรายการ/);
+  });
+});
+
+describe("setGroupAccountant — ผูกนักบัญชีผู้ดูแลกลุ่ม + audit_logs", () => {
+  it("ผูกนักบัญชี (accountant active) → update responsible_employee_id + audit", async () => {
+    const cap = makeCapture();
+    const { db } = makeFakeDb((q) => {
+      if (q.table === "chat_groups" && q.terminal === "maybeSingle") return { data: { id: GROUP } };
+      if (q.table === "employees" && q.terminal === "maybeSingle")
+        return { data: { id: EMP, employee_type: "accountant", is_active: true } };
+      if (q.table === "chat_groups" && q.op === "update") return { data: [{ id: GROUP }] };
+      if (q.table === "audit_logs" && q.op === "insert") return { error: null };
+      return { data: null };
+    }, cap);
+
+    await setGroupAccountant(db, T, { chat_group_id: GROUP, employee_id: EMP }, ACTOR);
+    const upd = cap.updates.find((u) => u.table === "chat_groups") as { payload: Record<string, unknown> };
+    expect(upd.payload.responsible_employee_id).toBe(EMP);
+    const audit = cap.inserts.find((i) => i.table === "audit_logs") as { payload: Record<string, unknown> };
+    expect(audit.payload.action).toBe("chat_group_accountant_set");
+    expect(audit.payload.tenant_id).toBe(T);
+  });
+
+  it("ยกเลิกผู้ดูแล (employee_id null) → update null + audit unset (ไม่เช็คพนักงาน)", async () => {
+    const cap = makeCapture();
+    const { db } = makeFakeDb((q) => {
+      if (q.table === "chat_groups" && q.terminal === "maybeSingle") return { data: { id: GROUP } };
+      if (q.table === "chat_groups" && q.op === "update") return { data: [{ id: GROUP }] };
+      if (q.table === "audit_logs" && q.op === "insert") return { error: null };
+      return { data: null };
+    }, cap);
+
+    await setGroupAccountant(db, T, { chat_group_id: GROUP, employee_id: null }, ACTOR);
+    const upd = cap.updates.find((u) => u.table === "chat_groups") as { payload: Record<string, unknown> };
+    expect(upd.payload.responsible_employee_id).toBeNull();
+    const audit = cap.inserts.find((i) => i.table === "audit_logs") as { payload: Record<string, unknown> };
+    expect(audit.payload.action).toBe("chat_group_accountant_unset");
+  });
+
+  it("พนักงานไม่ใช่ accountant/cs → throw (ไม่แตะ update)", async () => {
+    const cap = makeCapture();
+    const { db } = makeFakeDb((q) => {
+      if (q.table === "chat_groups" && q.terminal === "maybeSingle") return { data: { id: GROUP } };
+      if (q.table === "employees" && q.terminal === "maybeSingle")
+        return { data: { id: EMP, employee_type: "sales", is_active: true } };
+      return { data: null };
+    }, cap);
+    await expect(
+      setGroupAccountant(db, T, { chat_group_id: GROUP, employee_id: EMP }, ACTOR)
+    ).rejects.toThrow(/นักบัญชี/);
+    expect(cap.updates.length).toBe(0);
+  });
+
+  it("กลุ่มอยู่นอก tenant → throw", async () => {
+    const cap = makeCapture();
+    const { db } = makeFakeDb((q) => {
+      if (q.table === "chat_groups" && q.terminal === "maybeSingle") return { data: null };
+      return { data: null };
+    }, cap);
+    await expect(
+      setGroupAccountant(db, T, { chat_group_id: GROUP, employee_id: EMP }, ACTOR)
+    ).rejects.toThrow(/กลุ่ม/);
+    expect(cap.updates.length).toBe(0);
   });
 });

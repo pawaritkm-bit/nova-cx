@@ -41,6 +41,17 @@ export const deleteGroupSchema = z.object({
 });
 export type DeleteGroupInput = z.infer<typeof deleteGroupSchema>;
 
+// ---- 1c) ผูกนักบัญชีผู้ดูแลกลุ่ม ------------------------------------
+export const setGroupAccountantSchema = z.object({
+  chat_group_id: z.string().uuid("ไม่พบกลุ่มที่เลือก"),
+  // employee_id ว่าง = ยกเลิกผู้ดูแล (null); ไม่ว่าง = uuid
+  employee_id: z.preprocess(
+    emptyToNull,
+    z.string().uuid("กรุณาเลือกนักบัญชี").nullable()
+  ),
+});
+export type SetGroupAccountantInput = z.infer<typeof setGroupAccountantSchema>;
+
 // ---- 2) จับคู่สมาชิก → พนักงาน / ระบุบทบาท --------------------------
 export const MEMBER_KINDS = ["customer", "accountant", "lead", "system", "unknown"] as const;
 export const setMemberSchema = z

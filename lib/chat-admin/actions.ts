@@ -17,6 +17,7 @@ import { requireAdminContext, AdminAuthError } from "@/lib/admin/guard";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   mapGroupSchema,
+  setGroupAccountantSchema,
   deleteGroupSchema,
   setMemberSchema,
   propagateMemberSchema,
@@ -25,7 +26,7 @@ import {
   updateSlaRuleSchema,
   firstZodError,
 } from "./schema";
-import { mapGroupToCustomer, setChatMember } from "./mapping";
+import { mapGroupToCustomer, setChatMember, setGroupAccountant } from "./mapping";
 import { deleteChatGroup } from "./group";
 import { backfillGroupNames } from "./group-names";
 import { getLineClient } from "@/lib/line/client";
@@ -77,6 +78,24 @@ export async function mapGroupAction(
   );
   return res.ok
     ? { ok: true, message: parsed.data.customer_id ? "จับคู่ลูกค้าแล้ว" : "ยกเลิกการจับคู่แล้ว" }
+    : res;
+}
+
+// ---- ผูกนักบัญชีผู้ดูแลกลุ่ม (มิเรอร์ mapGroup — tenant/role จาก session) --
+export async function setGroupAccountantAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const parsed = setGroupAccountantSchema.safeParse({
+    chat_group_id: formData.get("chat_group_id"),
+    employee_id: formData.get("employee_id"),
+  });
+  if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
+  const res = await withChatAdminWrite((db, tenantId, actor) =>
+    setGroupAccountant(db, tenantId, parsed.data, actor)
+  );
+  return res.ok
+    ? { ok: true, message: parsed.data.employee_id ? "ผูกนักบัญชีผู้ดูแลแล้ว" : "ยกเลิกผู้ดูแลแล้ว" }
     : res;
 }
 

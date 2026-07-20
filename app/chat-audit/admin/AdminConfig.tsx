@@ -7,6 +7,7 @@ import { EVAL_DIMENSIONS } from "@/lib/chat-dashboard/evaluation-detail";
 import { DIMENSIONS, type Weights } from "@/lib/evaluation/weights";
 import {
   mapGroupAction,
+  setGroupAccountantAction,
   deleteChatGroupAction,
   saveWeightsAction,
   createSlaRuleAction,
@@ -19,8 +20,10 @@ import type { ChatGroupRow } from "@/lib/chat-admin/mapping";
 import type { SlaRuleRow } from "@/lib/chat-admin/sla";
 
 type CustomerOpt = { id: string; name: string; code: string | null };
+type EmployeeOpt = { id: string; name: string };
 type TeamOpt = { id: string; name: string };
 type CustomerSuggestionOpt = { customerId: string; customerName: string };
+type AccountantSuggestionOpt = { employeeId: string; employeeName: string };
 
 const URGENCY_LABEL: Record<string, string> = {
   critical: "ด่วนมาก",
@@ -41,17 +44,26 @@ function Msg({ state }: { state: ActionResult | null }) {
 function GroupRow({
   group,
   customers,
+  accountants,
   suggestions,
+  accountantSuggestion,
 }: {
   group: ChatGroupRow;
   customers: CustomerOpt[];
+  accountants: EmployeeOpt[];
   suggestions: CustomerSuggestionOpt[];
+  accountantSuggestion: AccountantSuggestionOpt | null;
 }) {
   const [state, formAction] = useActionState(mapGroupAction, null);
   const [delState, delAction] = useActionState(deleteChatGroupAction, null);
+  const [accState, accAction] = useActionState(setGroupAccountantAction, null);
   const formRef = useRef<HTMLFormElement>(null);
   const delFormRef = useRef<HTMLFormElement>(null);
   const [customerId, setCustomerId] = useState(group.customerId ?? "");
+  // ค่าเริ่มต้น dropdown นักบัญชี: ผูกแล้ว→คนนั้น, ยังไม่ผูก→คนที่ระบบเดา (ยังไม่บันทึกจนกดปุ่ม)
+  const [employeeId, setEmployeeId] = useState(
+    group.responsibleEmployeeId ?? accountantSuggestion?.employeeId ?? ""
+  );
 
   // กดปุ่มแนะนำ → ตั้งค่าลูกค้าแล้ว submit ฟอร์มเดิม (ผ่าน mapGroupAction + audit)
   function pickSuggestion(id: string) {
@@ -103,6 +115,32 @@ function GroupRow({
         </form>
         <Msg state={state} />
       </td>
+      <td>
+        {/* ตัวช่วย 3: นักบัญชีผู้ดูแล — preselect คนที่ระบบเดา (badge "เดา:") ยังไม่บันทึกจนกดปุ่ม */}
+        {!group.responsibleEmployeeId && accountantSuggestion ? (
+          <div className="suggest-chips">
+            <span className="muted" style={{ fontSize: 11 }}>เดา: {accountantSuggestion.employeeName}</span>
+          </div>
+        ) : null}
+        <form action={accAction} className="inline-form">
+          <input type="hidden" name="chat_group_id" value={group.id} />
+          <select name="employee_id" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
+            <option value="">— ยังไม่ผูก —</option>
+            {accountants.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+          <button type="submit" className="btn">บันทึกนักบัญชี</button>
+        </form>
+        <div style={{ marginTop: 4 }}>
+          {group.responsibleEmployeeId ? (
+            <span className="badge b-green">✓ ผูกแล้ว ({group.responsibleName ?? "—"})</span>
+          ) : (
+            <span className="badge b-orange">รอผูกนักบัญชี</span>
+          )}
+        </div>
+        <Msg state={accState} />
+      </td>
       <td className="center">{group.memberCount}</td>
       <td className="center">
         {group.customerId ? (
@@ -131,11 +169,15 @@ function GroupRow({
 function MappingPanel({
   groups,
   customers,
+  accountants,
   suggestionsByGroup,
+  accountantSuggestionByGroup,
 }: {
   groups: ChatGroupRow[];
   customers: CustomerOpt[];
+  accountants: EmployeeOpt[];
   suggestionsByGroup: Record<string, CustomerSuggestionOpt[]>;
+  accountantSuggestionByGroup: Record<string, AccountantSuggestionOpt>;
 }) {
   const mapped = groups.filter((g) => g.customerId).length;
   const noName = groups.filter((g) => !g.groupName).length;
@@ -168,6 +210,7 @@ function MappingPanel({
               <tr>
                 <th>กลุ่ม LINE</th>
                 <th>ลูกค้าที่จับคู่</th>
+                <th>นักบัญชีผู้ดูแล</th>
                 <th className="center">สมาชิก</th>
                 <th className="center">สถานะ</th>
                 <th className="center"></th>
@@ -175,7 +218,14 @@ function MappingPanel({
             </thead>
             <tbody>
               {groups.map((g) => (
-                <GroupRow key={g.id} group={g} customers={customers} suggestions={suggestionsByGroup[g.id] ?? []} />
+                <GroupRow
+                  key={g.id}
+                  group={g}
+                  customers={customers}
+                  accountants={accountants}
+                  suggestions={suggestionsByGroup[g.id] ?? []}
+                  accountantSuggestion={accountantSuggestionByGroup[g.id] ?? null}
+                />
               ))}
             </tbody>
           </table>
@@ -373,17 +423,21 @@ function SlaPanel({ rules, teams }: { rules: SlaRuleRow[]; teams: TeamOpt[] }) {
 export default function AdminConfig({
   groups,
   customers,
+  accountants,
   teams,
   weights,
   slaRules,
   suggestionsByGroup,
+  accountantSuggestionByGroup,
 }: {
   groups: ChatGroupRow[];
   customers: CustomerOpt[];
+  accountants: EmployeeOpt[];
   teams: TeamOpt[];
   weights: Weights;
   slaRules: SlaRuleRow[];
   suggestionsByGroup: Record<string, CustomerSuggestionOpt[]>;
+  accountantSuggestionByGroup: Record<string, AccountantSuggestionOpt>;
 }) {
   const [tab, setTab] = useState<"mapping" | "weights" | "sla">("mapping");
   return (
@@ -394,7 +448,15 @@ export default function AdminConfig({
         <button className={`ca-tab${tab === "sla" ? " active" : ""}`} onClick={() => setTab("sla")}>SLA (เวลามาตรฐาน)</button>
       </div>
 
-      {tab === "mapping" ? <MappingPanel groups={groups} customers={customers} suggestionsByGroup={suggestionsByGroup} /> : null}
+      {tab === "mapping" ? (
+        <MappingPanel
+          groups={groups}
+          customers={customers}
+          accountants={accountants}
+          suggestionsByGroup={suggestionsByGroup}
+          accountantSuggestionByGroup={accountantSuggestionByGroup}
+        />
+      ) : null}
       {tab === "weights" ? <WeightsPanel weights={weights} /> : null}
       {tab === "sla" ? <SlaPanel rules={slaRules} teams={teams} /> : null}
     </div>

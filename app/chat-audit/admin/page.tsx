@@ -3,9 +3,10 @@ import { redirect } from "next/navigation";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAdminContext } from "@/lib/admin/guard";
-import { listCustomers, listTeams } from "@/lib/admin/service";
+import { listCustomers, listTeams, listEmployees } from "@/lib/admin/service";
 import { listChatGroups } from "@/lib/chat-admin/mapping";
 import { rankCustomerSuggestions } from "@/lib/chat-admin/customer-suggest";
+import { rankAccountantSuggestions } from "@/lib/chat-admin/accountant-suggest";
 import { getActiveWeights } from "@/lib/chat-admin/weights";
 import { listSlaRules } from "@/lib/chat-admin/sla";
 import ChatAuditFrame from "../_Frame";
@@ -49,10 +50,11 @@ export default async function ChatAdminPage() {
   try {
     const service = createServiceRoleClient();
     const tenantId = ctx.tenantId;
-    const [groups, customers, teams, weights, slaRules] = await Promise.all([
+    const [groups, customers, teams, employees, weights, slaRules] = await Promise.all([
       listChatGroups(service, tenantId),
       listCustomers(service, tenantId),
       listTeams(service, tenantId),
+      listEmployees(service, tenantId),
       getActiveWeights(service, tenantId),
       listSlaRules(service, tenantId),
     ]);
@@ -68,6 +70,27 @@ export default async function ChatAdminPage() {
       }
     }
 
+    // ตัวช่วย 3: นักบัญชีผู้ดูแล — รายชื่อ accountant/cs ที่ active + เดาจากชื่อกลุ่ม (ฝั่ง server)
+    const accountants = employees.filter(
+      (e) => (e.employee_type === "accountant" || e.employee_type === "cs") && e.is_active
+    );
+    const accountantMatchable = accountants.map((e) => ({
+      id: e.id,
+      nickname: e.nickname,
+      first_name: e.first_name,
+    }));
+    const accountantSuggestionByGroup: Record<string, { employeeId: string; employeeName: string }> = {};
+    for (const g of groups) {
+      if (g.responsibleEmployeeId) continue; // ผูกผู้ดูแลแล้ว ไม่ต้องเดา
+      const ranked = rankAccountantSuggestions(g.groupName, accountantMatchable, 1);
+      if (ranked.length > 0) {
+        accountantSuggestionByGroup[g.id] = {
+          employeeId: ranked[0].employeeId,
+          employeeName: ranked[0].employeeName,
+        };
+      }
+    }
+
     return (
       <ChatAuditFrame
         active="chat-admin"
@@ -79,10 +102,12 @@ export default async function ChatAdminPage() {
         <AdminConfig
           groups={groups}
           customers={customers.map((c) => ({ id: c.id, name: c.name, code: c.customer_code }))}
+          accountants={accountants.map((e) => ({ id: e.id, name: e.nickname || e.first_name }))}
           teams={teams.map((t) => ({ id: t.id, name: t.name }))}
           weights={weights}
           slaRules={slaRules}
           suggestionsByGroup={suggestionsByGroup}
+          accountantSuggestionByGroup={accountantSuggestionByGroup}
         />
       </ChatAuditFrame>
     );

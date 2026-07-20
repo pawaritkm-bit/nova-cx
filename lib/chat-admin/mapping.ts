@@ -11,7 +11,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptField, hasEncKey } from "@/lib/crypto/field";
-import type { MapGroupInput, SetMemberInput } from "./schema";
+import type { MapGroupInput, SetMemberInput, SetGroupAccountantInput } from "./schema";
 
 type DB = SupabaseClient;
 
@@ -58,6 +58,10 @@ export type ChatGroupRow = {
   groupName: string | null;
   customerId: string | null;
   customerName: string | null;
+  /** นักบัญชีผู้ดูแลกลุ่ม (chat_groups.responsible_employee_id) — null = ยังไม่ผูก */
+  responsibleEmployeeId: string | null;
+  /** ชื่อผู้ดูแล (nickname ก่อน) เพื่อแสดงผล — decrypt ไม่ต้อง (ชื่อพนักงานไม่ enc) */
+  responsibleName: string | null;
   memberCount: number;
   joinedAt: string | null;
   isActive: boolean;
@@ -66,19 +70,24 @@ export type ChatGroupRow = {
 export async function listChatGroups(db: DB, tenantId: string): Promise<ChatGroupRow[]> {
   const { data, error } = await db
     .from("chat_groups")
-    .select("id, display_name_enc, customer_id, joined_at, is_active, customers(name)")
+    .select(
+      "id, display_name_enc, customer_id, responsible_employee_id, joined_at, is_active, customers(name), responsible:employees!responsible_employee_id(first_name, nickname)"
+    )
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
     .order("joined_at", { ascending: false });
   if (error) throw new Error(error.message);
 
+  type EmpEmbed = { first_name?: string; nickname?: string | null };
   type Raw = {
     id: string;
     display_name_enc: string | null;
     customer_id: string | null;
+    responsible_employee_id: string | null;
     joined_at: string | null;
     is_active: boolean;
     customers: { name?: string } | { name?: string }[] | null;
+    responsible: EmpEmbed | EmpEmbed[] | null;
   };
   const rows = (data ?? []) as unknown as Raw[];
   if (rows.length === 0) return [];
@@ -98,11 +107,14 @@ export async function listChatGroups(db: DB, tenantId: string): Promise<ChatGrou
 
   return rows.map((r) => {
     const cust = Array.isArray(r.customers) ? r.customers[0] : r.customers;
+    const resp = Array.isArray(r.responsible) ? r.responsible[0] : r.responsible;
     return {
       id: r.id,
       groupName: safeDecrypt(r.display_name_enc),
       customerId: r.customer_id,
       customerName: cust?.name ?? null,
+      responsibleEmployeeId: r.responsible_employee_id,
+      responsibleName: resp ? resp.nickname || resp.first_name || null : null,
       memberCount: countByGroup.get(r.id) ?? 0,
       joinedAt: r.joined_at,
       isActive: r.is_active,
@@ -239,6 +251,60 @@ export async function setChatMember(
     resource: "chat_member",
     resource_id: input.chat_member_id,
     meta: { member_kind: input.member_kind, employee_id: employeeId },
+  });
+  if (auditErr) throw new Error(auditErr.message);
+}
+
+// =====================================================================
+// WRITE — ผูก "นักบัญชีผู้ดูแล" ให้กลุ่ม (chat_groups.responsible_employee_id)
+//   ★ ต่างจาก setChatMember: นี่คือ "ผู้ดูแล" ที่แอดมินกำหนด ไม่ใช่สมาชิกจริงในกลุ่ม
+// =====================================================================
+export async function setGroupAccountant(
+  db: DB,
+  tenantId: string,
+  input: SetGroupAccountantInput,
+  actorUserId: string | null
+): Promise<void> {
+  // กลุ่มต้องอยู่ใน tenant นี้
+  await assertInTenant(db, "chat_groups", input.chat_group_id, tenantId, "กลุ่ม");
+
+  // ถ้าผูกพนักงาน → ต้องอยู่ใน tenant + เป็นนักบัญชี/CS + ยัง active
+  if (input.employee_id) {
+    const { data: emp, error: empErr } = await db
+      .from("employees")
+      .select("id, employee_type, is_active")
+      .eq("id", input.employee_id)
+      .eq("tenant_id", tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (empErr) throw new Error(empErr.message);
+    const row = emp as { employee_type?: string; is_active?: boolean } | null;
+    if (!row) throw new Error("ไม่พบพนักงานที่เลือก (หรืออยู่นอกสำนักงานของคุณ)");
+    if (row.employee_type !== "accountant" && row.employee_type !== "cs") {
+      throw new Error("ผู้ดูแลกลุ่มต้องเป็นนักบัญชีหรือทีมบริการลูกค้า (CS)");
+    }
+    if (!row.is_active) {
+      throw new Error("พนักงานที่เลือกถูกปิดใช้งานอยู่");
+    }
+  }
+
+  const { data, error } = await db
+    .from("chat_groups")
+    .update({ responsible_employee_id: input.employee_id })
+    .eq("id", input.chat_group_id)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .select("id");
+  assertAffected(data as unknown[] | null, error);
+
+  // audit (append-only) — บันทึกการเปลี่ยนผู้ดูแลกลุ่ม (ไม่ log ชื่อ = ไม่มี PII)
+  const { error: auditErr } = await db.from("audit_logs").insert({
+    tenant_id: tenantId,
+    actor_user_id: actorUserId,
+    action: input.employee_id ? "chat_group_accountant_set" : "chat_group_accountant_unset",
+    resource: "chat_group",
+    resource_id: input.chat_group_id,
+    meta: { employee_id: input.employee_id },
   });
   if (auditErr) throw new Error(auditErr.message);
 }
