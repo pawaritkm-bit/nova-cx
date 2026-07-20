@@ -67,13 +67,15 @@ export type TeamRow = {
   name: string;
   type: string;
   lead_employee_id: string | null;
+  /** ทีมดูแลลูกค้าประเภทไหน (0037): 'company'/'individual'/null (ทั้งสอง) */
+  handles_customer_type: string | null;
   created_at: string;
 };
 
 export async function listTeams(db: DB, tenantId: string): Promise<TeamRow[]> {
   const { data, error } = await db
     .from("teams")
-    .select("id, name, type, lead_employee_id, created_at")
+    .select("id, name, type, lead_employee_id, handles_customer_type, created_at")
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
@@ -102,6 +104,7 @@ export async function createTeam(
       name: input.name,
       type: input.type,
       lead_employee_id: input.lead_employee_id ?? null,
+      handles_customer_type: input.handles_customer_type ?? null, // null = ดูแลทั้งสองประเภท
     })
     .select("id")
     .single();
@@ -216,6 +219,8 @@ export type CustomerRow = {
   status: string;
   /** สวิตช์ส่งแบบประเมินอัตโนมัติ (A/B) — false = ปิด (ค่าเริ่มต้น, 0029) */
   auto_survey_enabled: boolean;
+  /** ประเภทลูกค้า (0037): 'company'/'individual'/null (ยังไม่จัดประเภท) */
+  customer_type: string | null;
   created_at: string;
 };
 
@@ -226,7 +231,7 @@ export async function listCustomers(
   const { data, error } = await db
     .from("customers")
     .select(
-      "id, customer_code, name, business_name, service_start_date, status, auto_survey_enabled, created_at"
+      "id, customer_code, name, business_name, service_start_date, status, auto_survey_enabled, customer_type, created_at"
     )
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
@@ -269,6 +274,7 @@ export async function createCustomer(
       name: input.name,
       business_name: input.business_name ?? null,
       service_start_date: input.service_start_date ?? null,
+      customer_type: input.customer_type ?? null, // null = ยังไม่จัดประเภท
       status: "active",
     })
     .select("id")
@@ -289,6 +295,8 @@ export type UpdateCustomerPatch = {
   name?: string;
   business_name?: string | null;
   service_start_date?: string | null;
+  /** ประเภทลูกค้า (0037): null = เคลียร์เป็น "ยังไม่จัดประเภท" */
+  customer_type?: string | null;
 };
 
 /**
@@ -311,6 +319,7 @@ export async function updateCustomer(
   if (patch.business_name !== undefined) update.business_name = patch.business_name;
   if (patch.service_start_date !== undefined)
     update.service_start_date = patch.service_start_date;
+  if (patch.customer_type !== undefined) update.customer_type = patch.customer_type;
 
   // ไม่มีฟิลด์ให้แก้ → ยืนยันแค่ว่าลูกค้ามีจริงใน tenant (กัน id ผิด) แล้วจบแบบ no-op
   if (Object.keys(update).length === 0) {

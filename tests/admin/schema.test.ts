@@ -36,6 +36,32 @@ describe("createTeamSchema", () => {
     });
     expect(r.success).toBe(false);
   });
+  it("handles_customer_type ว่าง → undefined (ดูแลทั้งสองประเภท)", () => {
+    const r = createTeamSchema.safeParse({
+      name: "ทีม",
+      type: "accounting",
+      handles_customer_type: "",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.handles_customer_type).toBeUndefined();
+  });
+  it("handles_customer_type = company → ผ่าน", () => {
+    const r = createTeamSchema.safeParse({
+      name: "ทีม",
+      type: "accounting",
+      handles_customer_type: "company",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.handles_customer_type).toBe("company");
+  });
+  it("ล้มเหลว: handles_customer_type นอก enum", () => {
+    const r = createTeamSchema.safeParse({
+      name: "ทีม",
+      type: "accounting",
+      handles_customer_type: "vip",
+    });
+    expect(r.success).toBe(false);
+  });
 });
 
 describe("createEmployeeSchema", () => {
@@ -93,6 +119,23 @@ describe("createCustomerSchema", () => {
     const r = createCustomerSchema.safeParse({ name: "" });
     expect(r.success).toBe(false);
   });
+  it("customer_type ว่าง → undefined (ยังไม่จัดประเภท)", () => {
+    const r = createCustomerSchema.safeParse({ name: "x", customer_type: "" });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.customer_type).toBeUndefined();
+  });
+  it("customer_type = individual → ผ่าน", () => {
+    const r = createCustomerSchema.safeParse({
+      name: "x",
+      customer_type: "individual",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.customer_type).toBe("individual");
+  });
+  it("ล้มเหลว: customer_type นอก enum", () => {
+    const r = createCustomerSchema.safeParse({ name: "x", customer_type: "vip" });
+    expect(r.success).toBe(false);
+  });
 });
 
 describe("updateCustomerSchema", () => {
@@ -142,6 +185,30 @@ describe("updateCustomerSchema", () => {
       customerId: UUID,
       name: "x",
       service_start_date: "15/01/2026",
+    });
+    expect(r.success).toBe(false);
+  });
+  it("customer_type ว่าง → null (เคลียร์เป็นยังไม่ระบุ)", () => {
+    const r = updateCustomerSchema.safeParse({
+      customerId: UUID,
+      name: "x",
+      customer_type: "",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.customer_type).toBeNull();
+  });
+  it("customer_type = company → ผ่าน", () => {
+    const r = updateCustomerSchema.safeParse({
+      customerId: UUID,
+      customer_type: "company",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.customer_type).toBe("company");
+  });
+  it("ล้มเหลว: customer_type นอก enum", () => {
+    const r = updateCustomerSchema.safeParse({
+      customerId: UUID,
+      customer_type: "vip",
     });
     expect(r.success).toBe(false);
   });

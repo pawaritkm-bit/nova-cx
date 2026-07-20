@@ -79,6 +79,7 @@ export async function createTeamAction(
     name: formData.get("name"),
     type: formData.get("type"),
     lead_employee_id: formData.get("lead_employee_id"),
+    handles_customer_type: formData.get("handles_customer_type"),
   });
   if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
   const res = await withAdminWrite((db, tenantId) =>
@@ -142,6 +143,7 @@ export async function createCustomerAction(
     name: formData.get("name"),
     business_name: formData.get("business_name"),
     service_start_date: formData.get("service_start_date"),
+    customer_type: formData.get("customer_type"),
   });
   if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
   const res = await withAdminWrite((db, tenantId) =>
@@ -161,6 +163,7 @@ export async function updateCustomerAction(
     name: formData.get("name") ?? undefined,
     business_name: formData.get("business_name"),
     service_start_date: formData.get("service_start_date"),
+    customer_type: formData.get("customer_type"),
   });
   if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
   const { customerId, ...patch } = parsed.data;

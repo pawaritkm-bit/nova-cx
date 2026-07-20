@@ -9,6 +9,7 @@ import {
   listCustomers,
   listCurrentAssignments,
 } from "@/lib/admin/service";
+import { getAccountantWorkload } from "@/lib/admin/workload";
 import type { RoleCode } from "@/lib/dashboard/types";
 import AppNav from "../_components/AppNav";
 import AdminTabs from "./AdminTabs";
@@ -88,12 +89,14 @@ export default async function AdminPage() {
   try {
     const service = createServiceRoleClient();
     const tenantId = ctx.tenantId;
-    const [teams, employees, customers, assignments] = await Promise.all([
-      listTeams(service, tenantId),
-      listEmployees(service, tenantId),
-      listCustomers(service, tenantId),
-      listCurrentAssignments(service, tenantId),
-    ]);
+    const [teams, employees, customers, assignments, workload] =
+      await Promise.all([
+        listTeams(service, tenantId),
+        listEmployees(service, tenantId),
+        listCustomers(service, tenantId),
+        listCurrentAssignments(service, tenantId),
+        getAccountantWorkload(service, tenantId),
+      ]);
 
     return (
       <Frame role={ctx.role} authed>
@@ -102,6 +105,7 @@ export default async function AdminPage() {
           employees={employees}
           customers={customers}
           assignments={assignments}
+          workload={workload}
         />
       </Frame>
     );

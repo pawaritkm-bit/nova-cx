@@ -5,13 +5,14 @@
  * - แต่ละฟอร์มยิง server action ผ่าน useActionState (React 19) → แสดงผลสำเร็จ/ผิดพลาด
  * - list มาจาก server (props) และ revalidate หลังเขียน; ฟอร์ม reset เมื่อบันทึกสำเร็จ
  */
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import type {
   TeamRow,
   EmployeeRow,
   CustomerRow,
   AssignmentRow,
 } from "@/lib/admin/service";
+import type { WorkloadRow } from "@/lib/admin/workload";
 import {
   createTeamAction,
   createEmployeeAction,
@@ -53,14 +54,25 @@ const ROLE_LABEL: Record<string, string> = {
   member: "นักบัญชี/สมาชิก (member)",
   coordinator: "ผู้ประสานงาน (coordinator)",
 };
+/** ป้ายประเภทลูกค้า (0037) — ใช้ทั้งลูกค้าและทีม */
+const CUSTOMER_TYPE_LABEL: Record<string, string> = {
+  company: "นิติบุคคล",
+  individual: "บุคคลธรรมดา",
+};
 
-type TabKey = "teams" | "employees" | "customers" | "assignments";
+type TabKey =
+  | "teams"
+  | "employees"
+  | "customers"
+  | "assignments"
+  | "workload";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "teams", label: "ทีมบัญชี" },
   { key: "employees", label: "พนักงาน" },
   { key: "customers", label: "ลูกค้า" },
   { key: "assignments", label: "มอบหมาย" },
+  { key: "workload", label: "ภาระงาน" },
 ];
 
 /** กล่องแจ้งผล (สำเร็จ/ผิดพลาด) */
@@ -122,6 +134,14 @@ function TeamsTab({
             ))}
           </select>
         </label>
+        <label>
+          ทีมนี้ดูแลประเภท
+          <select name="handles_customer_type" defaultValue="">
+            <option value="">ทั้งสองประเภท (ไม่ระบุ)</option>
+            <option value="company">นิติบุคคล</option>
+            <option value="individual">บุคคลธรรมดา</option>
+          </select>
+        </label>
         <button type="submit" disabled={pending}>
           {pending ? "กำลังบันทึก…" : "เพิ่มทีม"}
         </button>
@@ -138,6 +158,7 @@ function TeamsTab({
               <tr>
                 <th>ชื่อทีม</th>
                 <th>ประเภท</th>
+                <th>ดูแลประเภท</th>
                 <th>หัวหน้าทีม</th>
                 <th></th>
               </tr>
@@ -147,6 +168,12 @@ function TeamsTab({
                 <tr key={t.id}>
                   <td>{t.name}</td>
                   <td>{TEAM_TYPE_LABEL[t.type] ?? t.type}</td>
+                  <td>
+                    {t.handles_customer_type
+                      ? CUSTOMER_TYPE_LABEL[t.handles_customer_type] ??
+                        t.handles_customer_type
+                      : "ทั้งสอง"}
+                  </td>
                   <td>{empName(t.lead_employee_id)}</td>
                   <td>
                     <RowAction
@@ -289,6 +316,17 @@ function CustomersTab({ customers }: { customers: CustomerRow[] }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const editing = customers.find((c) => c.id === editingId) ?? null;
 
+  // ตัวกรองตามประเภทลูกค้า (ทั้งหมด/นิติบุคคล/บุคคลธรรมดา/ยังไม่ระบุ)
+  const [typeFilter, setTypeFilter] = useState<
+    "all" | "company" | "individual" | "none"
+  >("all");
+  const filtered = useMemo(() => {
+    if (typeFilter === "all") return customers;
+    if (typeFilter === "none")
+      return customers.filter((c) => !c.customer_type);
+    return customers.filter((c) => c.customer_type === typeFilter);
+  }, [customers, typeFilter]);
+
   return (
     <div className="admin-grid">
       <form ref={formRef} action={action} className="card admin-form">
@@ -306,6 +344,14 @@ function CustomersTab({ customers }: { customers: CustomerRow[] }) {
           <input name="business_name" maxLength={200} placeholder="เช่น ร้านอาหาร ก" />
         </label>
         <label>
+          ประเภทลูกค้า
+          <select name="customer_type" defaultValue="">
+            <option value="">— ยังไม่ระบุ —</option>
+            <option value="company">นิติบุคคล (บริษัท)</option>
+            <option value="individual">บุคคลธรรมดา</option>
+          </select>
+        </label>
+        <label>
           วันเริ่มบริการ
           <input type="date" name="service_start_date" />
         </label>
@@ -316,19 +362,38 @@ function CustomersTab({ customers }: { customers: CustomerRow[] }) {
       </form>
 
       <div className="card">
-        <h3>รายชื่อลูกค้า ({customers.length})</h3>
+        <h3>รายชื่อลูกค้า ({filtered.length}/{customers.length})</h3>
         <p className="admin-hint">
           กด “แก้ไข” เพื่อเปิดแผงจัดการลูกค้ารายคน — แก้ข้อมูล, สลับ “ส่งอัตโนมัติ”,
           ส่งแบบประเมินเอง (A/B/C/D) และปิดใช้งาน รวมไว้ที่เดียว
         </p>
+        <label className="admin-filter">
+          กรองตามประเภท
+          <select
+            value={typeFilter}
+            onChange={(e) =>
+              setTypeFilter(
+                e.target.value as "all" | "company" | "individual" | "none"
+              )
+            }
+          >
+            <option value="all">ทั้งหมด</option>
+            <option value="company">นิติบุคคล</option>
+            <option value="individual">บุคคลธรรมดา</option>
+            <option value="none">ยังไม่ระบุ</option>
+          </select>
+        </label>
         {customers.length === 0 ? (
           <p className="admin-empty">ยังไม่มีลูกค้า</p>
+        ) : filtered.length === 0 ? (
+          <p className="admin-empty">ไม่มีลูกค้าตรงกับตัวกรองที่เลือก</p>
         ) : (
           <table className="admin-table">
             <thead>
               <tr>
                 <th>รหัส</th>
                 <th>ชื่อ</th>
+                <th>ประเภท</th>
                 <th>ธุรกิจ</th>
                 <th>เริ่มบริการ</th>
                 <th>ส่งอัตโนมัติ</th>
@@ -336,10 +401,19 @@ function CustomersTab({ customers }: { customers: CustomerRow[] }) {
               </tr>
             </thead>
             <tbody>
-              {customers.map((c) => (
+              {filtered.map((c) => (
                 <tr key={c.id}>
                   <td>{c.customer_code ?? "—"}</td>
                   <td>{c.name}</td>
+                  <td>
+                    {c.customer_type ? (
+                      <span className="admin-badge type">
+                        {CUSTOMER_TYPE_LABEL[c.customer_type] ?? c.customer_type}
+                      </span>
+                    ) : (
+                      <span className="admin-badge off">ยังไม่ระบุ</span>
+                    )}
+                  </td>
                   <td>{c.business_name ?? "—"}</td>
                   <td>{c.service_start_date ?? "—"}</td>
                   <td>
@@ -453,6 +527,17 @@ function CustomerEditPanel({
               defaultValue={customer.business_name ?? ""}
               placeholder="เช่น ร้านอาหาร ก"
             />
+          </label>
+          <label>
+            ประเภทลูกค้า
+            <select
+              name="customer_type"
+              defaultValue={customer.customer_type ?? ""}
+            >
+              <option value="">— ยังไม่ระบุ —</option>
+              <option value="company">นิติบุคคล (บริษัท)</option>
+              <option value="individual">บุคคลธรรมดา</option>
+            </select>
           </label>
           <label>
             วันเริ่มบริการ
@@ -746,6 +831,81 @@ function AssignmentsTab({
   );
 }
 
+// =====================================================================
+// แท็บ 5: ภาระงาน (นักบัญชีแต่ละคนดูแลลูกค้ากี่ราย)
+// =====================================================================
+function WorkloadTab({ workload }: { workload: WorkloadRow[] }) {
+  // ยอดรวมท้ายตาราง (นับทั้งทีม) — ช่วยเห็นภาพรวม
+  const totals = workload.reduce(
+    (acc, r) => {
+      acc.total += r.total;
+      acc.company += r.company;
+      acc.individual += r.individual;
+      acc.unspecified += r.unspecified;
+      return acc;
+    },
+    { total: 0, company: 0, individual: 0, unspecified: 0 }
+  );
+
+  return (
+    <div className="admin-grid">
+      <div className="card admin-card-wide">
+        <h3>ภาระงานนักบัญชี ({workload.length} คน)</h3>
+        <p className="admin-hint">
+          นับจาก “ผู้ดูแลปัจจุบัน” ของลูกค้าที่ยังใช้งานอยู่ — แยกตามประเภทลูกค้า
+          (นิติบุคคล / บุคคลธรรมดา / ยังไม่ระบุ) เรียงจากมากไปน้อย
+        </p>
+        {workload.length === 0 ? (
+          <p className="admin-empty">ยังไม่มีการมอบหมายลูกค้าให้นักบัญชี</p>
+        ) : (
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>นักบัญชี</th>
+                <th>ทีม</th>
+                <th className="num">รวม</th>
+                <th className="num">นิติบุคคล</th>
+                <th className="num">บุคคลธรรมดา</th>
+                <th className="num">ยังไม่ระบุ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {workload.map((r) => (
+                <tr key={r.employee_id}>
+                  <td>
+                    {r.employee_name ?? "—"}
+                    {r.employee_nickname ? ` (${r.employee_nickname})` : ""}
+                  </td>
+                  <td>{r.team_name ?? "—"}</td>
+                  <td className="num">
+                    <strong>{r.total}</strong>
+                  </td>
+                  <td className="num">{r.company}</td>
+                  <td className="num">{r.individual}</td>
+                  <td className="num">{r.unspecified}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={2}>
+                  <strong>รวมทั้งหมด</strong>
+                </td>
+                <td className="num">
+                  <strong>{totals.total}</strong>
+                </td>
+                <td className="num">{totals.company}</td>
+                <td className="num">{totals.individual}</td>
+                <td className="num">{totals.unspecified}</td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /**
  * ปุ่มทำ action ต่อแถว (ปิดใช้งาน/สลับสถานะ/สิ้นสุด) — ใช้ form + hidden fields
  * ยืนยันก่อนทำถ้ากำหนด confirm
@@ -787,11 +947,13 @@ export default function AdminTabs({
   employees,
   customers,
   assignments,
+  workload,
 }: {
   teams: TeamRow[];
   employees: EmployeeRow[];
   customers: CustomerRow[];
   assignments: AssignmentRow[];
+  workload: WorkloadRow[];
 }) {
   const [tab, setTab] = useState<TabKey>("teams");
 
@@ -823,6 +985,7 @@ export default function AdminTabs({
           teams={teams}
         />
       )}
+      {tab === "workload" && <WorkloadTab workload={workload} />}
     </>
   );
 }

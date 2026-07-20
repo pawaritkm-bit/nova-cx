@@ -51,12 +51,24 @@ const optionalDate = z.preprocess(
 export const TEAM_TYPES = ["accounting", "sales", "cs"] as const;
 export const EMPLOYEE_TYPES = ["accountant", "sales", "cs", "other"] as const;
 export const ASSIGNMENT_ROLES = ["lead", "member", "coordinator"] as const;
+/** ประเภทลูกค้า (ตรง CHECK ใน 0037): company = นิติบุคคล, individual = บุคคลธรรมดา */
+export const CUSTOMER_TYPES = ["company", "individual"] as const;
+
+/** ประเภทลูกค้า optional (ว่าง = undefined) — ใช้ตอนสร้าง/ตั้งค่าทีม */
+const optionalCustomerType = z.preprocess(
+  emptyToUndef,
+  z.enum(CUSTOMER_TYPES, {
+    errorMap: () => ({ message: "เลือกประเภทลูกค้า (นิติบุคคล/บุคคลธรรมดา)" }),
+  }).optional()
+);
 
 // ---- ฟอร์ม 1: ทีมบัญชี ----------------------------------------------
 export const createTeamSchema = z.object({
   name: requiredText("ชื่อทีม"),
   type: z.enum(TEAM_TYPES, { errorMap: () => ({ message: "เลือกประเภททีม" }) }),
   lead_employee_id: optionalUuid, // หัวหน้าทีม (optional)
+  // ทีมนี้ดูแลลูกค้าประเภทไหน (ว่าง = ทั้งสองประเภท/ไม่ระบุ)
+  handles_customer_type: optionalCustomerType,
 });
 export type CreateTeamInput = z.infer<typeof createTeamSchema>;
 
@@ -80,6 +92,8 @@ export const createCustomerSchema = z.object({
   name: requiredText("ชื่อลูกค้า"),
   business_name: optionalText,
   service_start_date: optionalDate,
+  // ประเภทลูกค้า (ว่าง = ยังไม่จัดประเภท)
+  customer_type: optionalCustomerType,
 });
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
 
@@ -109,6 +123,16 @@ export const updateCustomerSchema = z.object({
     z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, "รูปแบบวันที่ไม่ถูกต้อง")
+      .nullable()
+      .optional()
+  ),
+  // ประเภทลูกค้า: ว่าง → null (เคลียร์เป็น "ยังไม่จัดประเภท") ; ไม่งั้นต้องอยู่ใน enum
+  customer_type: z.preprocess(
+    emptyToNull,
+    z
+      .enum(CUSTOMER_TYPES, {
+        errorMap: () => ({ message: "เลือกประเภทลูกค้า (นิติบุคคล/บุคคลธรรมดา)" }),
+      })
       .nullable()
       .optional()
   ),

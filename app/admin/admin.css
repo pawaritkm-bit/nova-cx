@@ -184,6 +184,46 @@
   background: #f1f5f9;
   color: var(--muted);
 }
+/* badge ประเภทลูกค้า (นิติบุคคล/บุคคลธรรมดา, 0037) */
+.nova-dash .admin-badge.type {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+/* ---- ตัวกรอง (dropdown เหนือตาราง) ---- */
+.nova-dash .admin-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.nova-dash .admin-filter select {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+}
+
+/* ---- ตารางภาระงาน: การ์ดกว้างเต็ม + คอลัมน์ตัวเลขชิดขวา ---- */
+.nova-dash .admin-card-wide {
+  grid-column: 1 / -1;
+}
+.nova-dash .admin-table th.num,
+.nova-dash .admin-table td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+.nova-dash .admin-table tfoot td {
+  border-top: 2px solid var(--line);
+  border-bottom: none;
+  padding-top: 10px;
+}
 
 /* ---- ปุ่มต่อแถว ---- */
 .nova-dash .admin-row-btn {
