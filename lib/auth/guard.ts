@@ -12,6 +12,8 @@ const PUBLIC_PREFIXES = [
   "/login",
   "/api/liff",
   "/liff",
+  "/reg", // หน้าลงทะเบียนนักบัญชีผ่าน QR (LIFF) — เปิดสาธารณะ, gate ด้วยรหัส+idToken ที่ API
+  "/api/register-staff",
   "/api/survey",
   "/api/integrations",
   "/api/cron",

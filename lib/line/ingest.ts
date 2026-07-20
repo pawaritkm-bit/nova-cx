@@ -80,7 +80,10 @@ async function resolveChatChannelId(
 /**
  * resolve ตัวตนสมาชิกจาก line_user_id (best-effort)
  *   1) เทียบกับ line_users (บัญชี LINE ลูกค้าที่รู้จัก) → ถ้าเจอ + ผูกลูกค้าแล้ว = 'customer'
- *   2) ★ auto-resolve (ตัวช่วย 1C): ถ้าทางเดิมยังไม่ได้พนักงาน → สืบทอดจาก chat_members อื่น
+ *   2) ★ นักบัญชีที่ลงทะเบียนผ่าน QR: sender line_user_id ตรงกับ employees.line_user_id
+ *      → ผูก employee ทันที (member_kind='accountant') แม้เพิ่งเข้ากลุ่มใหม่/ยังไม่เคยถูก map
+ *      (0038 — เชื่อถือได้สุด เพราะผู้ใช้ยืนยันตัวตนผ่าน LINE login + รหัสลงทะเบียนมาแล้ว)
+ *   3) ★ auto-resolve (ตัวช่วย 1C): ถ้าทางเดิมยังไม่ได้พนักงาน → สืบทอดจาก chat_members อื่น
  *      ใน tenant ที่ line_user_id เดียวกันและ "แอดมินยืนยันแล้ว" (employee_id ไม่ null)
  *      → สืบทอด employee_id + member_kind. สืบทอดเฉพาะจากที่ยืนยันแล้วเท่านั้น ไม่เดาเอง
  *   order+limit(1) → best-effort ไม่ throw ถ้าเจอ >1 แถว
@@ -108,6 +111,12 @@ async function resolveMemberIdentity(
     return { memberKind: "customer", lineUserRef, employeeId: null };
   }
 
+  // นักบัญชีที่ลงทะเบียน QR แล้ว (employees.line_user_id ตรง) → ผูก employee ทันที
+  const registered = await matchRegisteredEmployee(db, tenantId, lineUserId);
+  if (registered) {
+    return { memberKind: "accountant", lineUserRef, employeeId: registered };
+  }
+
   // สืบทอดจากการจับคู่ที่แอดมินยืนยันแล้ว (คนเดียวกัน คนละกลุ่ม)
   const inherited = await inheritConfirmedIdentity(db, tenantId, lineUserId);
   if (inherited) {
@@ -115,6 +124,28 @@ async function resolveMemberIdentity(
   }
 
   return { memberKind: "unknown", lineUserRef, employeeId: null };
+}
+
+/**
+ * หา employee ที่ผูก LINE userId นี้ไว้ (จากการลงทะเบียนผ่าน QR — 0038) → employee_id หรือ null
+ *   เฉพาะพนักงานที่ active และยังไม่ถูกลบ. order+limit(1) → best-effort ไม่ throw
+ */
+async function matchRegisteredEmployee(
+  db: SupabaseClient,
+  tenantId: string,
+  lineUserId: string
+): Promise<string | null> {
+  const { data } = await db
+    .from("employees")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("line_user_id", lineUserId)
+    .eq("is_active", true)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return (data as { id?: string } | null)?.id ?? null;
 }
 
 /**

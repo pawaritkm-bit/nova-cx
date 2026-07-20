@@ -62,6 +62,40 @@ export function isLineDevMode(): boolean {
   return !getLiffId("care") && !getLiffId("sale");
 }
 
+/**
+ * LIFF ID สำหรับหน้า "ลงทะเบียนนักบัญชีผ่าน QR" (/reg/staff)
+ *   ลำดับ: LINE_STAFF_REG_LIFF_ID (dedicated LIFF ที่ endpoint ชี้ /reg/staff)
+ *          → fallback LINE_CARE_LIFF_ID (ถ้ายังไม่แยก LIFF)
+ *   ⚠️ ต้องเป็น LIFF บน LINE Login channel ที่อยู่ "provider เดียวกับ Care OA"
+ *      ไม่งั้น userId จาก login จะไม่ตรงกับ userId ในกลุ่มแชต (ดู provider note)
+ */
+export function getStaffRegLiffId(): string | undefined {
+  return process.env.LINE_STAFF_REG_LIFF_ID || getLiffId("care") || undefined;
+}
+
+/**
+ * channel id ของ LINE Login channel ที่ออก idToken ให้หน้า reg (ใช้ verify idToken
+ * ฝั่ง server เป็น `client_id`). ลำดับ:
+ *   LINE_LOGIN_CHANNEL_ID → ดึงจาก prefix ของ staff-reg LIFF id (`<channelId>-<random>`)
+ * คืน undefined ถ้าเดาไม่ได้ → route จะตอบ 503 (verify idToken ไม่ได้ = ปิดฟีเจอร์)
+ */
+export function getLineLoginChannelId(): string | undefined {
+  const explicit = process.env.LINE_LOGIN_CHANNEL_ID;
+  if (explicit) return explicit;
+  const liffId = getStaffRegLiffId();
+  const prefix = liffId?.split("-")[0]?.trim();
+  return prefix || undefined;
+}
+
+/**
+ * รหัสลงทะเบียนนักบัญชี (secret) — ผู้ลงทะเบียนต้องกรอกให้ตรงถึงจะผูก LINE↔พนักงานได้
+ * กันลูกค้า/คนนอกในกลุ่มแอบลงทะเบียนเป็นนักบัญชี
+ * คืน undefined ถ้ายังไม่ตั้ง → ปิดฟีเจอร์ทั้งหมด (fail-safe: route ตอบ 503)
+ */
+export function getStaffRegisterCode(): string | undefined {
+  return process.env.STAFF_REGISTER_CODE || undefined;
+}
+
 export type LineOaCredentials = {
   /** channel id (optional — ใช้เฉพาะบางการเรียก) */
   channelId?: string;

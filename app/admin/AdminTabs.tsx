@@ -13,6 +13,7 @@ import type {
   AssignmentRow,
 } from "@/lib/admin/service";
 import type { WorkloadRow } from "@/lib/admin/workload";
+import type { StaffRegInfo } from "./page";
 import {
   filterLeadCandidates,
   leadEmployeeTypeForTeam,
@@ -69,7 +70,8 @@ type TabKey =
   | "employees"
   | "customers"
   | "assignments"
-  | "workload";
+  | "workload"
+  | "staffReg";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "teams", label: "ทีมบัญชี" },
@@ -77,6 +79,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "customers", label: "ลูกค้า" },
   { key: "assignments", label: "มอบหมาย" },
   { key: "workload", label: "ภาระงาน" },
+  { key: "staffReg", label: "ลงทะเบียน QR" },
 ];
 
 /** กล่องแจ้งผล (สำเร็จ/ผิดพลาด) */
@@ -1053,6 +1056,106 @@ function WorkloadTab({ workload }: { workload: WorkloadRow[] }) {
   );
 }
 
+// =====================================================================
+// แท็บ 6: ลงทะเบียนนักบัญชีผ่าน QR (LIFF)
+// =====================================================================
+/**
+ * แสดง QR + ลิงก์หน้า /reg/staff ให้แอดมิน copy/แชร์ให้นักบัญชีสแกน
+ *   - นักบัญชีสแกน → login LINE → กรอกชื่อ/ทีม/รหัส → ระบบผูก LINE↔พนักงานอัตโนมัติ
+ *   - เตือนถ้ายังไม่ตั้ง STAFF_REGISTER_CODE / LIFF id (ฟีเจอร์ยังไม่พร้อม)
+ */
+function StaffRegTab({ staffReg }: { staffReg: StaffRegInfo }) {
+  const [copied, setCopied] = useState<"liff" | "web" | null>(null);
+
+  const copy = async (text: string, which: "liff" | "web") => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(which);
+      setTimeout(() => setCopied(null), 1500);
+    } catch {
+      setCopied(null);
+    }
+  };
+
+  return (
+    <div className="admin-grid">
+      <div className="card">
+        <h3>QR ลงทะเบียนนักบัญชี</h3>
+        <p className="admin-hint">
+          ให้นักบัญชีสแกน QR นี้ด้วยแอป LINE → เข้าสู่ระบบ LINE → กรอกชื่อ + ทีม +
+          รหัสลงทะเบียน → ระบบจะผูกบัญชี LINE ของเขากับพนักงาน และเริ่มจับ+ประเมินแชต
+          ของเขาในทุกกลุ่มโดยอัตโนมัติ (ไม่ต้อง map ทีละกลุ่ม)
+        </p>
+
+        {!staffReg.codeSet && (
+          <p className="admin-note err" role="status">
+            ⚠️ ยังไม่ได้ตั้งรหัสลงทะเบียน (env <code>STAFF_REGISTER_CODE</code>) —
+            ฟีเจอร์นี้จะยังไม่เปิดจนกว่าจะตั้งค่า และแจ้งรหัสนี้ให้เฉพาะนักบัญชีเท่านั้น
+            (กันลูกค้า/คนนอกลงทะเบียน)
+          </p>
+        )}
+        {!staffReg.liffIdSet && (
+          <p className="admin-note err" role="status">
+            ⚠️ ยังไม่ได้ตั้ง LIFF id (env <code>LINE_STAFF_REG_LIFF_ID</code> หรือ{" "}
+            <code>LINE_CARE_LIFF_ID</code>) — ต้องสร้าง LIFF ที่ endpoint ชี้ไป{" "}
+            <code>/reg/staff</code> บน LINE Login channel ที่อยู่ provider เดียวกับ Care OA
+          </p>
+        )}
+
+        {staffReg.qrSvg && (
+          <div
+            className="staffreg-qr"
+            style={{ display: "flex", justifyContent: "center", margin: "12px 0" }}
+            // qrSvg มาจาก qrcode lib ฝั่ง server (ไม่มี input ผู้ใช้) — ปลอดภัยที่จะ render
+            dangerouslySetInnerHTML={{ __html: staffReg.qrSvg }}
+          />
+        )}
+
+        {staffReg.liffUrl && (
+          <div className="admin-link-copy" style={{ marginTop: 8 }}>
+            <input
+              readOnly
+              value={staffReg.liffUrl}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+            <button
+              type="button"
+              className="admin-row-btn"
+              onClick={() => copy(staffReg.liffUrl!, "liff")}
+            >
+              {copied === "liff" ? "คัดลอกแล้ว" : "คัดลอกลิงก์ LIFF"}
+            </button>
+          </div>
+        )}
+
+        <p className="admin-hint" style={{ marginTop: 12 }}>
+          ลิงก์เว็บสำรอง (เปิดในเบราว์เซอร์ที่ล็อกอิน LINE ได้):
+        </p>
+        <div className="admin-link-copy">
+          <input
+            readOnly
+            value={staffReg.webUrl}
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <button
+            type="button"
+            className="admin-row-btn"
+            onClick={() => copy(staffReg.webUrl, "web")}
+          >
+            {copied === "web" ? "คัดลอกแล้ว" : "คัดลอก"}
+          </button>
+        </div>
+
+        <p className="admin-hint" style={{ marginTop: 12 }}>
+          หมายเหตุ: userId ที่ได้จากการ login LIFF จะตรงกับ userId ในกลุ่มแชต
+          ก็ต่อเมื่อ LINE Login channel (ของ LIFF) กับ Care OA อยู่ provider เดียวกัน —
+          หน้าลงทะเบียนจะแสดง userId ย่อให้เทียบกับข้อมูลในระบบได้
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /**
  * ปุ่มทำ action ต่อแถว (ปิดใช้งาน/สลับสถานะ/สิ้นสุด) — ใช้ form + hidden fields
  * ยืนยันก่อนทำถ้ากำหนด confirm
@@ -1095,12 +1198,14 @@ export default function AdminTabs({
   customers,
   assignments,
   workload,
+  staffReg,
 }: {
   teams: TeamRow[];
   employees: EmployeeRow[];
   customers: CustomerRow[];
   assignments: AssignmentRow[];
   workload: WorkloadRow[];
+  staffReg: StaffRegInfo;
 }) {
   const [tab, setTab] = useState<TabKey>("teams");
 
@@ -1133,6 +1238,7 @@ export default function AdminTabs({
         />
       )}
       {tab === "workload" && <WorkloadTab workload={workload} />}
+      {tab === "staffReg" && <StaffRegTab staffReg={staffReg} />}
     </>
   );
 }

@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getSupabaseEnv } from "@/lib/env";
+import QRCode from "qrcode";
+import {
+  getSupabaseEnv,
+  getStaffRegLiffId,
+  getStaffRegisterCode,
+  getAppBaseUrl,
+} from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAdminContext } from "@/lib/admin/guard";
 import {
@@ -17,6 +23,46 @@ import "../dashboard/dashboard.css";
 import "./admin.css";
 
 export const dynamic = "force-dynamic";
+
+export type StaffRegInfo = {
+  /** ลิงก์ LIFF สำหรับสแกน/แชร์ (null = ยังไม่ตั้ง LIFF id) */
+  liffUrl: string | null;
+  /** QR เป็น SVG string (render ผ่าน dangerouslySetInnerHTML) — null = สร้างไม่ได้ */
+  qrSvg: string | null;
+  /** ลิงก์เว็บสำรอง (เปิดนอก LINE ได้เมื่อผู้ใช้ login LINE) */
+  webUrl: string;
+  /** ตั้งรหัสลงทะเบียน (STAFF_REGISTER_CODE) แล้วหรือยัง */
+  codeSet: boolean;
+  /** ตั้ง LIFF id แล้วหรือยัง */
+  liffIdSet: boolean;
+};
+
+/** เตรียมข้อมูล QR + ลิงก์หน้า /reg/staff ให้แอดมิน copy/แชร์ (best-effort) */
+async function buildStaffRegInfo(): Promise<StaffRegInfo> {
+  const liffId = getStaffRegLiffId() ?? null;
+  const liffUrl = liffId ? `https://liff.line.me/${liffId}` : null;
+  const webUrl = `${getAppBaseUrl()}/reg/staff`;
+  let qrSvg: string | null = null;
+  if (liffUrl) {
+    try {
+      qrSvg = await QRCode.toString(liffUrl, {
+        type: "svg",
+        margin: 1,
+        width: 220,
+        errorCorrectionLevel: "M",
+      });
+    } catch {
+      qrSvg = null; // สร้าง QR ไม่ได้ → โชว์แค่ลิงก์
+    }
+  }
+  return {
+    liffUrl,
+    qrSvg,
+    webUrl,
+    codeSet: !!getStaffRegisterCode(),
+    liffIdSet: !!liffId,
+  };
+}
 
 /** กรอบหน้า admin (ใช้ธีม .nova-dash + แถบเมนูร่วมเดียวกับ dashboard) */
 function Frame({
@@ -89,13 +135,14 @@ export default async function AdminPage() {
   try {
     const service = createServiceRoleClient();
     const tenantId = ctx.tenantId;
-    const [teams, employees, customers, assignments, workload] =
+    const [teams, employees, customers, assignments, workload, staffReg] =
       await Promise.all([
         listTeams(service, tenantId),
         listEmployees(service, tenantId),
         listCustomers(service, tenantId),
         listCurrentAssignments(service, tenantId),
         getAccountantWorkload(service, tenantId),
+        buildStaffRegInfo(),
       ]);
 
     return (
@@ -106,6 +153,7 @@ export default async function AdminPage() {
           customers={customers}
           assignments={assignments}
           workload={workload}
+          staffReg={staffReg}
         />
       </Frame>
     );
