@@ -14,6 +14,10 @@ import type {
 } from "@/lib/admin/service";
 import type { WorkloadRow } from "@/lib/admin/workload";
 import {
+  filterLeadCandidates,
+  leadEmployeeTypeForTeam,
+} from "@/lib/admin/team-lead-filter";
+import {
   createTeamAction,
   createEmployeeAction,
   createCustomerAction,
@@ -97,8 +101,31 @@ function TeamsTab({
 }) {
   const [state, action, pending] = useActionState(createTeamAction, null);
   const formRef = useRef<HTMLFormElement>(null);
+
+  // ประเภททีม + หัวหน้าที่เลือก คุมด้วย state เพื่อกรอง dropdown หัวหน้าตามประเภท
+  const [teamType, setTeamType] = useState<string>("accounting");
+  const [leadId, setLeadId] = useState<string>("");
+  // เปิด/ปิดฟอร์มเพิ่มพนักงานแบบ inline (ไม่ต้องสลับแท็บ)
+  const [showAddEmployee, setShowAddEmployee] = useState(false);
+
+  // หัวหน้าที่เลือกได้ = พนักงานที่ประเภทตรงกับประเภททีม (กันตันถ้าไม่มี mapping)
+  const leadCandidates = useMemo(
+    () => filterLeadCandidates(employees, teamType),
+    [employees, teamType]
+  );
+
+  // ถ้าหัวหน้าที่เลือกไว้ไม่อยู่ในรายชื่อที่กรองได้แล้ว (เปลี่ยนประเภททีม) → reset
   useEffect(() => {
-    if (state?.ok) formRef.current?.reset();
+    if (leadId && !leadCandidates.some((e) => e.id === leadId)) setLeadId("");
+  }, [leadCandidates, leadId]);
+
+  useEffect(() => {
+    if (state?.ok) {
+      formRef.current?.reset();
+      // reset ค่าที่คุมด้วย state เองด้วย (form.reset ไม่แตะ controlled)
+      setTeamType("accounting");
+      setLeadId("");
+    }
   }, [state]);
 
   const empName = (id: string | null) => {
@@ -117,7 +144,11 @@ function TeamsTab({
         </label>
         <label>
           ประเภททีม *
-          <select name="type" defaultValue="accounting">
+          <select
+            name="type"
+            value={teamType}
+            onChange={(e) => setTeamType(e.target.value)}
+          >
             <option value="accounting">บัญชี</option>
             <option value="sales">ขาย</option>
             <option value="cs">บริการลูกค้า (CS)</option>
@@ -125,14 +156,33 @@ function TeamsTab({
         </label>
         <label>
           หัวหน้าทีม (ไม่บังคับ)
-          <select name="lead_employee_id" defaultValue="">
-            <option value="">— ไม่ระบุ —</option>
-            {employees.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.nickname ? `${e.first_name} (${e.nickname})` : e.first_name}
-              </option>
-            ))}
-          </select>
+          <div className="admin-inline-row">
+            <select
+              name="lead_employee_id"
+              value={leadId}
+              onChange={(e) => setLeadId(e.target.value)}
+            >
+              <option value="">— ไม่ระบุ —</option>
+              {leadCandidates.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.nickname ? `${e.first_name} (${e.nickname})` : e.first_name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="admin-row-btn"
+              onClick={() => setShowAddEmployee(true)}
+              title="เพิ่มพนักงาน/หัวหน้าใหม่โดยไม่ต้องสลับแท็บ"
+            >
+              + เพิ่มพนักงาน
+            </button>
+          </div>
+          {leadCandidates.length === 0 && (
+            <span className="admin-hint">
+              ยังไม่มีพนักงานประเภทนี้ — กด “+ เพิ่มพนักงาน” เพื่อสร้าง
+            </span>
+          )}
         </label>
         <label>
           ทีมนี้ดูแลประเภท
@@ -147,6 +197,14 @@ function TeamsTab({
         </button>
         <ResultNote state={state} />
       </form>
+
+      {showAddEmployee && (
+        <AddEmployeeInlineModal
+          // default ประเภทพนักงาน = ตามประเภททีมที่เลือกอยู่ (ถ้ามี mapping)
+          defaultEmployeeType={leadEmployeeTypeForTeam(teamType) ?? "accountant"}
+          onClose={() => setShowAddEmployee(false)}
+        />
+      )}
 
       <div className="card">
         <h3>รายการทีม ({teams.length})</h3>
@@ -188,6 +246,95 @@ function TeamsTab({
             </tbody>
           </table>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ฟอร์มเพิ่มพนักงาน/หัวหน้าแบบ modal เล็ก (เรียกจากฟอร์มทีม — ไม่ต้องสลับแท็บ)
+ * - reuse createEmployeeAction เดิม (guard/schema/audit เดิมทั้งหมด)
+ * - สำเร็จ → revalidatePath('/admin') ใน action ทำให้ props employees อัปเดต
+ *   → พนักงานใหม่โผล่ใน dropdown หัวหน้าให้เลือกได้ทันที แล้วปิด modal
+ * หมายเหตุ: แยกเป็น modal (นอก <form> ทีม) เพื่อเลี่ยง nested form ที่ HTML ไม่รองรับ
+ */
+function AddEmployeeInlineModal({
+  defaultEmployeeType,
+  onClose,
+}: {
+  defaultEmployeeType: string;
+  onClose: () => void;
+}) {
+  const [state, action, pending] = useActionState(createEmployeeAction, null);
+
+  // สำเร็จ → ปิด modal (list refresh จาก revalidate ของ action)
+  useEffect(() => {
+    if (state?.ok) onClose();
+  }, [state, onClose]);
+
+  // ปิดด้วยปุ่ม Escape
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="admin-modal-overlay" role="presentation" onClick={onClose}>
+      <div
+        className="admin-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="เพิ่มพนักงาน/หัวหน้า"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="admin-modal-header">
+          <h3>เพิ่มพนักงาน/หัวหน้า</h3>
+          <button
+            type="button"
+            className="admin-modal-close"
+            onClick={onClose}
+            aria-label="ปิด"
+          >
+            ✕
+          </button>
+        </div>
+
+        <form action={action} className="admin-form admin-modal-form">
+          <label>
+            ชื่อ-นามสกุล *
+            <input
+              name="first_name"
+              required
+              maxLength={200}
+              placeholder="เช่น สมชาย ใจดี"
+            />
+          </label>
+          <label>
+            ชื่อเล่น
+            <input name="nickname" maxLength={200} placeholder="เช่น ชาย" />
+          </label>
+          <label>
+            ประเภทพนักงาน *
+            <select name="employee_type" defaultValue={defaultEmployeeType}>
+              <option value="accountant">นักบัญชี</option>
+              <option value="sales">เซล</option>
+              <option value="cs">CS</option>
+              <option value="other">อื่น ๆ</option>
+            </select>
+          </label>
+          {/* บันทึกเป็น active เสมอ ให้เลือกเป็นหัวหน้าได้เลย */}
+          <input type="hidden" name="is_active" value="true" />
+          <button type="submit" disabled={pending}>
+            {pending ? "กำลังบันทึก…" : "บันทึกพนักงาน"}
+          </button>
+          <ResultNote state={state} />
+          <p className="admin-hint">
+            บันทึกแล้วพนักงานจะปรากฏใน dropdown หัวหน้าทีมให้เลือกได้ทันที
+          </p>
+        </form>
       </div>
     </div>
   );

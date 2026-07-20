@@ -80,6 +80,21 @@
   border-color: var(--blue-500);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
 }
+/* select + ปุ่ม "+ เพิ่มพนักงาน" เรียงแนวนอนใต้ป้ายหัวหน้าทีม */
+.nova-dash .admin-form .admin-inline-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 5px;
+}
+.nova-dash .admin-form .admin-inline-row select {
+  flex: 1 1 auto;
+  margin-top: 0;
+}
+.nova-dash .admin-form .admin-inline-row .admin-row-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .nova-dash .admin-form label.admin-check {
   display: flex;
   align-items: center;
