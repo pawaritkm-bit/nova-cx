@@ -428,3 +428,49 @@
   height: 110px;
   border-radius: 999px;
 }
+
+/* ── Top progress bar (แทน skeleton เต็มจอ) ─────────────────────────────
+   แถบโหลดบางๆ ด้านบน โทน navy ของ NOVA-CX แสดงตอนกำลังเปลี่ยนหน้า
+   CSS ล้วน (keyframe/transition) ไม่พึ่ง lib ภายนอก */
+.nav-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 3px;
+  width: 0;
+  background: linear-gradient(90deg, var(--navy-800, #1e3a8a), var(--navy-900, #172554));
+  box-shadow: 0 0 8px rgba(30, 58, 138, 0.5);
+  z-index: 2000;
+  opacity: 0;
+  pointer-events: none;
+}
+/* กำลังโหลด: คืบไปหยุดที่ ~90% (ยังไม่จบจนกว่าหน้าใหม่พร้อม) */
+.nav-progress.loading {
+  opacity: 1;
+  animation: nav-progress-creep 8s cubic-bezier(0.1, 0.7, 0.3, 1) forwards;
+}
+/* โหลดเสร็จ: วิ่งเต็ม 100% แล้ว fade หาย */
+.nav-progress.done {
+  width: 100%;
+  opacity: 0;
+  transition: width 0.2s ease-out, opacity 0.3s ease-out 0.2s;
+}
+@keyframes nav-progress-creep {
+  0% { width: 0; }
+  40% { width: 60%; }
+  70% { width: 82%; }
+  100% { width: 90%; }
+}
+/* เคารพผู้ใช้ที่ปิด motion: ไม่ใช้ keyframe ครีป ใช้แค่ opacity เบาๆ */
+@media (prefers-reduced-motion: reduce) {
+  .nav-progress.loading {
+    width: 90%;
+    opacity: 1;
+    animation: none;
+  }
+  .nav-progress.done {
+    width: 100%;
+    opacity: 0;
+    transition: opacity 0.15s linear;
+  }
+}
