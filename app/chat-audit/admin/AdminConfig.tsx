@@ -7,6 +7,7 @@ import { EVAL_DIMENSIONS } from "@/lib/chat-dashboard/evaluation-detail";
 import { DIMENSIONS, type Weights } from "@/lib/evaluation/weights";
 import {
   mapGroupAction,
+  deleteChatGroupAction,
   saveWeightsAction,
   createSlaRuleAction,
   deleteSlaRuleAction,
@@ -47,7 +48,9 @@ function GroupRow({
   suggestions: CustomerSuggestionOpt[];
 }) {
   const [state, formAction] = useActionState(mapGroupAction, null);
+  const [delState, delAction] = useActionState(deleteChatGroupAction, null);
   const formRef = useRef<HTMLFormElement>(null);
+  const delFormRef = useRef<HTMLFormElement>(null);
   const [customerId, setCustomerId] = useState(group.customerId ?? "");
 
   // กดปุ่มแนะนำ → ตั้งค่าลูกค้าแล้ว submit ฟอร์มเดิม (ผ่าน mapGroupAction + audit)
@@ -55,6 +58,14 @@ function GroupRow({
     setCustomerId(id);
     // ให้ state อัปเดต value ก่อนแล้วค่อย submit
     requestAnimationFrame(() => formRef.current?.requestSubmit());
+  }
+
+  // กดลบ → confirm ก่อนเสมอ (soft-delete กลุ่ม + ข้อมูลแชตในกลุ่ม) สำหรับกลุ่มทดสอบ
+  function confirmDelete() {
+    const label = group.groupName ? `"${group.groupName}"` : "กลุ่มนี้";
+    if (window.confirm(`ลบ${label} และข้อมูลแชตในกลุ่ม? ใช้สำหรับกลุ่มทดสอบ`)) {
+      delFormRef.current?.requestSubmit();
+    }
   }
 
   return (
@@ -101,7 +112,17 @@ function GroupRow({
         )}
       </td>
       <td className="center">
-        <Link href={`/chat-audit/admin/groups/${group.id}`} className="btn">จัดการสมาชิก</Link>
+        <div className="inline-form" style={{ justifyContent: "center" }}>
+          <Link href={`/chat-audit/admin/groups/${group.id}`} className="btn">จัดการสมาชิก</Link>
+          {/* ปุ่มลบ (เคลียร์กลุ่มทดสอบ) — confirm ก่อนเสมอ, submit ผ่าน delFormRef */}
+          <form action={delAction} ref={delFormRef}>
+            <input type="hidden" name="chat_group_id" value={group.id} />
+            <button type="button" className="btn danger" onClick={confirmDelete} title="ลบกลุ่มทดสอบและข้อมูลแชตในกลุ่ม">
+              ลบ
+            </button>
+          </form>
+        </div>
+        <Msg state={delState} />
       </td>
     </tr>
   );

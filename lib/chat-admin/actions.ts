@@ -17,6 +17,7 @@ import { requireAdminContext, AdminAuthError } from "@/lib/admin/guard";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   mapGroupSchema,
+  deleteGroupSchema,
   setMemberSchema,
   propagateMemberSchema,
   saveWeightsSchema,
@@ -25,6 +26,7 @@ import {
   firstZodError,
 } from "./schema";
 import { mapGroupToCustomer, setChatMember } from "./mapping";
+import { deleteChatGroup } from "./group";
 import { backfillGroupNames } from "./group-names";
 import { getLineClient } from "@/lib/line/client";
 import { propagateMemberIdentity } from "./member-directory";
@@ -76,6 +78,23 @@ export async function mapGroupAction(
   return res.ok
     ? { ok: true, message: parsed.data.customer_id ? "จับคู่ลูกค้าแล้ว" : "ยกเลิกการจับคู่แล้ว" }
     : res;
+}
+
+// ---- ลบกลุ่ม (soft-delete) — สำหรับเคลียร์กลุ่มทดสอบ ------------------
+//   guard admin/executive + tenant จาก session (reuse withChatAdminWrite)
+//   soft-delete กลุ่ม + ข้อมูลในกลุ่ม (best-effort) + audit_logs
+export async function deleteChatGroupAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const parsed = deleteGroupSchema.safeParse({
+    chat_group_id: formData.get("chat_group_id"),
+  });
+  if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
+  const res = await withChatAdminWrite((db, tenantId, actor) =>
+    deleteChatGroup(db, tenantId, parsed.data.chat_group_id, actor)
+  );
+  return res.ok ? { ok: true, message: "ลบกลุ่มและข้อมูลแชตในกลุ่มแล้ว" } : res;
 }
 
 // ---- จับคู่สมาชิก → พนักงาน / ระบุบทบาท -----------------------------

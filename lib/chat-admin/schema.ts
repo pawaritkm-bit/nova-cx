@@ -35,6 +35,12 @@ export const mapGroupSchema = z.object({
 });
 export type MapGroupInput = z.infer<typeof mapGroupSchema>;
 
+// ---- 1b) ลบกลุ่ม (soft-delete) — สำหรับเคลียร์กลุ่มทดสอบ -------------
+export const deleteGroupSchema = z.object({
+  chat_group_id: z.string().uuid("ไม่พบกลุ่มที่เลือก"),
+});
+export type DeleteGroupInput = z.infer<typeof deleteGroupSchema>;
+
 // ---- 2) จับคู่สมาชิก → พนักงาน / ระบุบทบาท --------------------------
 export const MEMBER_KINDS = ["customer", "accountant", "lead", "system", "unknown"] as const;
 export const setMemberSchema = z
