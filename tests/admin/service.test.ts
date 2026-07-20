@@ -4,6 +4,7 @@ import {
   createTeam,
   createCustomer,
   updateCustomer,
+  updateEmployee,
   createAssignment,
   deactivateTeam,
   setEmployeeActive,
@@ -15,6 +16,8 @@ import {
 const T = "tenant-1";
 const UUID_C = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const UUID_E = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+const UUID_TEAM = "aaaa1111-aaaa-1111-aaaa-111111111111";
+const UUID_TEAM_OLD = "bbbb2222-bbbb-2222-bbbb-222222222222";
 
 /**
  * ผลลัพธ์ที่ resolver จะคืนต่อ (table, op, terminal)
@@ -267,6 +270,144 @@ describe("updateCustomer — แก้ไขฟิลด์ลูกค้าร
       return { data: null };
     }, cap);
     await expect(updateCustomer(db, T, UUID_C, {})).rejects.toThrow(/ลูกค้า/);
+  });
+});
+
+describe("updateEmployee — แก้ไขพนักงานรายคน + ย้ายทีม", () => {
+  it("แก้ field: update payload เฉพาะ key ที่ส่ง + ไม่ส่ง teamId = ไม่แตะ team_members", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(({ table, op, terminal }) => {
+      if (table === "employees" && op === "update" && terminal === "await")
+        return { data: [{ id: UUID_E }] };
+      return { data: null };
+    }, cap);
+
+    await expect(
+      updateEmployee(db, T, UUID_E, {
+        first_name: "สมชาย ใหม่",
+        nickname: "ชาย",
+        employee_type: "sales",
+      })
+    ).resolves.toBeUndefined();
+
+    const upd = cap.updates.find((u) => u.table === "employees");
+    expect(upd.payload.first_name).toBe("สมชาย ใหม่");
+    expect(upd.payload.nickname).toBe("ชาย");
+    expect(upd.payload.employee_type).toBe("sales");
+    // ไม่ได้ส่ง position → ต้องไม่อยู่ใน payload
+    expect("position" in upd.payload).toBe(false);
+    // teamId undefined → ไม่แตะ team_members เลย
+    expect(cap.inserts.find((i) => i.table === "team_members")).toBeUndefined();
+    expect(cap.updates.find((u) => u.table === "team_members")).toBeUndefined();
+  });
+
+  it("nickname:null = เคลียร์ค่า (อยู่ใน payload)", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(({ table, op, terminal }) => {
+      if (table === "employees" && op === "update" && terminal === "await")
+        return { data: [{ id: UUID_E }] };
+      return { data: null };
+    }, cap);
+    await updateEmployee(db, T, UUID_E, { nickname: null });
+    const upd = cap.updates.find((u) => u.table === "employees");
+    expect(upd.payload.nickname).toBeNull();
+  });
+
+  it("เปลี่ยนทีม: ปิด membership เดิม (valid_to=วันนี้) + insert ใหม่ role=member", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(({ table, op, terminal }) => {
+      if (table === "employees" && op === "update" && terminal === "await")
+        return { data: [{ id: UUID_E }] };
+      // ตรวจทีมอยู่ tenant เดียวกัน
+      if (table === "teams" && terminal === "maybeSingle")
+        return { data: { id: UUID_TEAM } };
+      // membership ปัจจุบัน = อยู่ทีมเก่า
+      if (table === "team_members" && op === "select" && terminal === "await")
+        return { data: [{ id: "m-old", team_id: UUID_TEAM_OLD }] };
+      if (table === "team_members" && op === "update" && terminal === "await")
+        return { error: null };
+      if (table === "team_members" && op === "insert" && terminal === "await")
+        return { error: null };
+      return { data: null };
+    }, cap);
+
+    await expect(
+      updateEmployee(db, T, UUID_E, { first_name: "x", teamId: UUID_TEAM })
+    ).resolves.toBeUndefined();
+
+    // ปิดของเดิม
+    const tmUpd = cap.updates.find((u) => u.table === "team_members");
+    expect(tmUpd.payload.valid_to).toBe(todayISO());
+    // insert ทีมใหม่
+    const tmIns = cap.inserts.find((i) => i.table === "team_members");
+    expect(tmIns.payload.tenant_id).toBe(T);
+    expect(tmIns.payload.team_id).toBe(UUID_TEAM);
+    expect(tmIns.payload.employee_id).toBe(UUID_E);
+    expect(tmIns.payload.role_in_team).toBe("member");
+    expect(tmIns.payload.valid_from).toBe(todayISO());
+  });
+
+  it("teamId=null: เอาออกจากทีม (ปิดของเดิม, ไม่ insert ใหม่)", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(({ table, op, terminal }) => {
+      // ไม่มี field employees ให้แก้ → ยืนยันพนักงานมีจริง (maybeSingle)
+      if (table === "employees" && terminal === "maybeSingle")
+        return { data: { id: UUID_E } };
+      if (table === "team_members" && op === "select" && terminal === "await")
+        return { data: [{ id: "m-old", team_id: UUID_TEAM_OLD }] };
+      if (table === "team_members" && op === "update" && terminal === "await")
+        return { error: null };
+      return { data: null };
+    }, cap);
+
+    await expect(
+      updateEmployee(db, T, UUID_E, { teamId: null })
+    ).resolves.toBeUndefined();
+    // ปิดของเดิม แต่ไม่ insert ใหม่
+    expect(cap.updates.find((u) => u.table === "team_members")).toBeTruthy();
+    expect(cap.inserts.find((i) => i.table === "team_members")).toBeUndefined();
+  });
+
+  it("อยู่ทีมเดิมอยู่แล้ว (teamId เท่ากับปัจจุบัน) → ไม่ปิด/ไม่ insert (no-op)", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(({ table, op, terminal }) => {
+      if (table === "teams" && terminal === "maybeSingle")
+        return { data: { id: UUID_TEAM } };
+      if (table === "employees" && terminal === "maybeSingle")
+        return { data: { id: UUID_E } };
+      if (table === "team_members" && op === "select" && terminal === "await")
+        return { data: [{ id: "m-cur", team_id: UUID_TEAM }] };
+      return { data: null };
+    }, cap);
+
+    await updateEmployee(db, T, UUID_E, { teamId: UUID_TEAM });
+    expect(cap.updates.find((u) => u.table === "team_members")).toBeUndefined();
+    expect(cap.inserts.find((i) => i.table === "team_members")).toBeUndefined();
+  });
+
+  it("0 แถว (id ผิด/ข้าม tenant) เมื่อแก้ field → throw ไม่พบรายการ", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(() => ({ data: [] }), cap);
+    await expect(
+      updateEmployee(db, T, UUID_E, { first_name: "x" })
+    ).rejects.toThrow(/ไม่พบรายการที่ต้องการแก้ไข/);
+  });
+
+  it("ย้ายเข้าทีมนอก tenant → throw (assertBelongsToTenant ทีมไม่พบ)", async () => {
+    const cap = { inserts: [] as any[], updates: [] as any[] };
+    const db = makeDb(({ table, op, terminal }) => {
+      if (table === "employees" && op === "update" && terminal === "await")
+        return { data: [{ id: UUID_E }] };
+      // teams maybeSingle → ไม่พบ (นอก tenant)
+      if (table === "teams" && terminal === "maybeSingle") return { data: null };
+      return { data: null };
+    }, cap);
+
+    await expect(
+      updateEmployee(db, T, UUID_E, { first_name: "x", teamId: UUID_TEAM })
+    ).rejects.toThrow(/ทีม/);
+    // ต้องไม่ insert team_members เมื่อ guard ทีมไม่ผ่าน
+    expect(cap.inserts.find((i) => i.table === "team_members")).toBeUndefined();
   });
 });
 

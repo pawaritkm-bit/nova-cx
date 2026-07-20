@@ -17,6 +17,7 @@ import { requireAdminContext, AdminAuthError } from "@/lib/admin/guard";
 import {
   createTeamSchema,
   createEmployeeSchema,
+  updateEmployeeSchema,
   createCustomerSchema,
   updateCustomerSchema,
   createAssignmentSchema,
@@ -27,6 +28,7 @@ import {
 import {
   createTeam,
   createEmployee,
+  updateEmployee,
   createCustomer,
   updateCustomer,
   createAssignment,
@@ -116,6 +118,28 @@ export async function createEmployeeAction(
     createEmployee(db, tenantId, parsed.data).then(() => undefined)
   );
   return res.ok ? { ok: true, message: "เพิ่มพนักงานสำเร็จ" } : res;
+}
+
+/** แก้ไขพนักงานรายคน (edit panel) — guard admin/executive + tenant จาก session */
+export async function updateEmployeeAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const parsed = updateEmployeeSchema.safeParse({
+    employeeId: formData.get("employeeId"),
+    first_name: formData.get("first_name") ?? undefined,
+    nickname: formData.get("nickname"),
+    position: formData.get("position"),
+    // ไม่ส่งมา (null) = ไม่แก้ประเภท — กัน null ตกไปชน enum
+    employee_type: formData.get("employee_type") ?? undefined,
+    teamId: formData.get("teamId"),
+  });
+  if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
+  const { employeeId, ...patch } = parsed.data;
+  const res = await withAdminWrite((db, tenantId) =>
+    updateEmployee(db, tenantId, employeeId, patch)
+  );
+  return res.ok ? { ok: true, message: "บันทึกข้อมูลพนักงานแล้ว" } : res;
 }
 
 export async function toggleEmployeeActiveAction(

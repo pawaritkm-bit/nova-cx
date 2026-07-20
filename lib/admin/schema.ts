@@ -86,6 +86,42 @@ export const createEmployeeSchema = z.object({
 });
 export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>;
 
+// ---- ฟอร์ม 2b: แก้ไขพนักงานรายคน (edit panel) ----------------------
+//   patch style เหมือน updateCustomer: key ที่ไม่ส่ง (undefined) = ไม่แก้
+//   - first_name ถ้าส่งมาต้องไม่ว่าง (ไม่ส่ง = ไม่แก้)
+//   - nickname/position: ว่าง → null (เคลียร์ค่าเดิมออกได้)
+//   - employee_type: ถ้าส่งต้องอยู่ใน enum
+//   - teamId: undefined = ไม่แตะทีม ; null (ส่งค่าว่าง) = เอาออกจากทีม ; uuid = ผูกทีมนั้น
+export const updateEmployeeSchema = z.object({
+  employeeId: z.string().uuid("ไม่พบพนักงานที่เลือก"),
+  first_name: z.preprocess(
+    (v) => (v === null ? undefined : v),
+    requiredText("ชื่อ-นามสกุล").optional()
+  ),
+  nickname: z.preprocess(
+    emptyToNull,
+    z.string().trim().max(200, "ชื่อเล่นยาวเกินไป").nullable().optional()
+  ),
+  position: z.preprocess(
+    emptyToNull,
+    z.string().trim().max(200, "ตำแหน่งยาวเกินไป").nullable().optional()
+  ),
+  employee_type: z.preprocess(
+    emptyToUndef,
+    z
+      .enum(EMPLOYEE_TYPES, {
+        errorMap: () => ({ message: "เลือกประเภทพนักงาน" }),
+      })
+      .optional()
+  ),
+  // ว่าง ("") → null (เอาออกจากทีม) ; ไม่ส่ง (undefined) → คงไว้ไม่แตะ ; ไม่งั้นต้องเป็น uuid
+  teamId: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? null : v),
+    z.string().uuid("รหัสทีมไม่ถูกต้อง").nullable().optional()
+  ),
+});
+export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>;
+
 // ---- ฟอร์ม 3: ลูกค้า -------------------------------------------------
 export const createCustomerSchema = z.object({
   customer_code: optionalText,

@@ -136,6 +136,9 @@ export type EmployeeRow = {
   position: string | null;
   employee_type: string;
   is_active: boolean;
+  /** ทีมปัจจุบันที่ผูกอยู่ (team_members valid_to null) — null = ยังไม่อยู่ทีมใด
+   *  ใช้ตั้งค่า default ให้ dropdown ทีมในแผงแก้ไขพนักงาน */
+  team_id: string | null;
   created_at: string;
 };
 
@@ -143,14 +146,29 @@ export async function listEmployees(
   db: DB,
   tenantId: string
 ): Promise<EmployeeRow[]> {
+  // ดึงพนักงาน + membership ทีม (nested) เพื่อรู้ทีมปัจจุบันของแต่ละคน
   const { data, error } = await db
     .from("employees")
-    .select("id, first_name, nickname, position, employee_type, is_active, created_at")
+    .select(
+      "id, first_name, nickname, position, employee_type, is_active, created_at, team_members(team_id, valid_to, deleted_at)"
+    )
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
-  return (data ?? []) as EmployeeRow[];
+
+  type RawMember = { team_id: string; valid_to: string | null; deleted_at: string | null };
+  type Raw = Omit<EmployeeRow, "team_id"> & { team_members?: RawMember[] | null };
+
+  return ((data ?? []) as unknown as Raw[]).map((r) => {
+    // ทีมปัจจุบัน = membership ที่ยังไม่สิ้นสุด (valid_to null) และไม่ถูกลบ
+    const current = (r.team_members ?? []).find(
+      (m) => !m.valid_to && !m.deleted_at
+    );
+    const { team_members: _drop, ...rest } = r;
+    void _drop;
+    return { ...rest, team_id: current?.team_id ?? null } as EmployeeRow;
+  });
 }
 
 export async function createEmployee(
@@ -205,6 +223,114 @@ export async function setEmployeeActive(
     .eq("tenant_id", tenantId)
     .select("id");
   assertAffected(data as unknown[] | null, error);
+}
+
+/** ฟิลด์พนักงานที่แก้ไขได้ (patch) — key ที่ไม่ส่ง (undefined) = ไม่แตะ */
+export type UpdateEmployeePatch = {
+  first_name?: string;
+  nickname?: string | null;
+  position?: string | null;
+  employee_type?: string;
+  /** undefined = ไม่แตะทีม ; null = เอาออกจากทีม ; uuid = ย้าย/ผูกเข้าทีมนั้น */
+  teamId?: string | null;
+};
+
+/**
+ * แก้ไขพนักงานรายคน (edit panel)
+ *   - อัปเดตฟิลด์ employees เฉพาะ key ที่ส่งมา (undefined = ไม่แตะ) + scope tenant + assertAffected
+ *   - แก้ทีมผ่าน team_members (effective-dated): เปลี่ยนทีม = ปิด membership เดิม + insert ใหม่
+ *   - ตรวจทีมอยู่ tenant เดียวกัน (assertBelongsToTenant) กัน cross-tenant
+ */
+export async function updateEmployee(
+  db: DB,
+  tenantId: string,
+  employeeId: string,
+  patch: UpdateEmployeePatch
+): Promise<void> {
+  // 1) อัปเดตฟิลด์ employees (เก็บเฉพาะ key ที่ส่งมาจริง)
+  const update: Record<string, unknown> = {};
+  if (patch.first_name !== undefined) update.first_name = patch.first_name;
+  if (patch.nickname !== undefined) update.nickname = patch.nickname;
+  if (patch.position !== undefined) update.position = patch.position;
+  if (patch.employee_type !== undefined) update.employee_type = patch.employee_type;
+
+  if (Object.keys(update).length > 0) {
+    const { data, error } = await db
+      .from("employees")
+      .update(update)
+      .eq("id", employeeId)
+      .eq("tenant_id", tenantId) // ★ scope tenant จาก session (ไม่แก้ข้าม tenant)
+      .is("deleted_at", null)
+      .select("id");
+    assertAffected(data as unknown[] | null, error);
+  } else {
+    // ไม่มีฟิลด์ employees ให้แก้ → ยืนยันพนักงานมีจริงใน tenant (กัน id ผิด/ข้าม tenant)
+    await assertBelongsToTenant(db, "employees", employeeId, tenantId, "พนักงาน");
+  }
+
+  // 2) แก้ทีม (เฉพาะเมื่อส่ง teamId มา — undefined = ไม่แตะทีม)
+  if (patch.teamId !== undefined) {
+    await setEmployeeTeam(db, tenantId, employeeId, patch.teamId);
+  }
+}
+
+/**
+ * ตั้งทีมของพนักงาน (team_members, effective-dated)
+ *   - teamId = null → เอาออกจากทีม (ปิด membership ปัจจุบัน ไม่ insert ใหม่)
+ *   - teamId = uuid → ถ้าอยู่ทีมนั้นอยู่แล้ว = no-op ; ไม่งั้นปิดของเดิม + insert ใหม่
+ *   - เก็บ history ด้วยการปิด (valid_to = วันนี้) ไม่ลบทิ้ง
+ */
+async function setEmployeeTeam(
+  db: DB,
+  tenantId: string,
+  employeeId: string,
+  teamId: string | null
+): Promise<void> {
+  // ระบุทีม → ต้องอยู่ tenant เดียวกัน (กัน cross-tenant)
+  if (teamId) {
+    await assertBelongsToTenant(db, "teams", teamId, tenantId, "ทีม");
+  }
+
+  // membership ปัจจุบัน (valid_to null) ของพนักงานคนนี้
+  const { data: current, error: findErr } = await db
+    .from("team_members")
+    .select("id, team_id")
+    .eq("tenant_id", tenantId)
+    .eq("employee_id", employeeId)
+    .is("valid_to", null)
+    .is("deleted_at", null);
+  if (findErr) throw new Error(findErr.message);
+  const currentRows = (current ?? []) as { id: string; team_id: string }[];
+
+  // อยู่ทีมเดิมอยู่แล้ว (ทีมเดียว ตรงกัน) → ไม่ต้องทำอะไร
+  if (teamId && currentRows.length === 1 && currentRows[0].team_id === teamId) {
+    return;
+  }
+
+  // ปิด membership ปัจจุบันทั้งหมด (set valid_to = วันนี้) — เก็บ history
+  if (currentRows.length > 0) {
+    const { error: closeErr } = await db
+      .from("team_members")
+      .update({ valid_to: todayISO() })
+      .eq("tenant_id", tenantId)
+      .eq("employee_id", employeeId)
+      .is("valid_to", null)
+      .is("deleted_at", null);
+    if (closeErr) throw new Error(closeErr.message);
+  }
+
+  // เอาออกจากทีม (null) → จบแค่ปิดของเดิม
+  if (!teamId) return;
+
+  // insert membership ใหม่ (role_in_team = member เหมือนตอน createEmployee)
+  const { error: insErr } = await db.from("team_members").insert({
+    tenant_id: tenantId,
+    team_id: teamId,
+    employee_id: employeeId,
+    role_in_team: "member",
+    valid_from: todayISO(),
+  });
+  if (insErr) throw new Error(insErr.message);
 }
 
 // =====================================================================

@@ -21,6 +21,7 @@ import {
 import {
   createTeamAction,
   createEmployeeAction,
+  updateEmployeeAction,
   createCustomerAction,
   updateCustomerAction,
   createAssignmentAction,
@@ -359,6 +360,10 @@ function EmployeesTab({
     if (state?.ok) formRef.current?.reset();
   }, [state]);
 
+  // พนักงานที่กำลังเปิดแผงแก้ไข — เก็บเป็น id แล้ว lookup จาก list ล่าสุด (ค่า fresh หลัง revalidate)
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editing = employees.find((e) => e.id === editingId) ?? null;
+
   return (
     <div className="admin-grid">
       <form ref={formRef} action={action} className="card admin-form">
@@ -407,6 +412,10 @@ function EmployeesTab({
 
       <div className="card">
         <h3>รายชื่อพนักงาน ({employees.length})</h3>
+        <p className="admin-hint">
+          กด “แก้ไข” เพื่อเปิดแผงจัดการพนักงานรายคน — แก้ชื่อ/ชื่อเล่น/ตำแหน่ง/ประเภท,
+          ย้ายทีม และปิด/เปิดใช้งาน รวมไว้ที่เดียว
+        </p>
         {employees.length === 0 ? (
           <p className="admin-empty">ยังไม่มีพนักงาน</p>
         ) : (
@@ -435,17 +444,164 @@ function EmployeesTab({
                     </span>
                   </td>
                   <td>
-                    <RowAction
-                      action={toggleEmployeeActiveAction}
-                      fields={{ id: e.id, next: String(!e.is_active) }}
-                      label={e.is_active ? "ปิดใช้งาน" : "เปิดใช้งาน"}
-                    />
+                    <button
+                      type="button"
+                      className="admin-edit-btn"
+                      onClick={() => setEditingId(e.id)}
+                    >
+                      แก้ไข
+                    </button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+      </div>
+
+      {editing && (
+        <EmployeeEditPanel
+          employee={editing}
+          teams={teams}
+          onClose={() => setEditingId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * แผงแก้ไขพนักงานรายคน (modal) — รวม control ของพนักงานคนนั้นไว้ที่เดียว:
+ *   1) ฟอร์มแก้ฟิลด์ (ชื่อ/ชื่อเล่น/ตำแหน่ง/ประเภท/ทีม) → updateEmployeeAction
+ *   2) ปิด/เปิดใช้งานพนักงาน (reuse toggleEmployeeActiveAction เดิม, มี confirm)
+ * ค่าทั้งหมดมาจาก server (props) และ revalidate หลังเขียน — modal อ่านค่าล่าสุดเสมอ
+ * ทำ pattern เดียวกับ CustomerEditPanel (overlay/X/Escape + key=id ให้ remount default)
+ */
+function EmployeeEditPanel({
+  employee,
+  teams,
+  onClose,
+}: {
+  employee: EmployeeRow;
+  teams: TeamRow[];
+  onClose: () => void;
+}) {
+  const [state, action, pending] = useActionState(updateEmployeeAction, null);
+
+  // ปิดแผงด้วยปุ่ม Escape
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="admin-modal-overlay" role="presentation" onClick={onClose}>
+      <div
+        className="admin-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`แก้ไขพนักงาน ${employee.first_name}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="admin-modal-header">
+          <h3>แก้ไขพนักงาน</h3>
+          <button
+            type="button"
+            className="admin-modal-close"
+            onClick={onClose}
+            aria-label="ปิดแผงแก้ไข"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* 1) แก้ฟิลด์พนักงาน — key=id ให้ remount ค่า default เมื่อสลับพนักงาน */}
+        <form
+          key={employee.id}
+          action={action}
+          className="admin-form admin-modal-form"
+        >
+          <input type="hidden" name="employeeId" value={employee.id} />
+          <label>
+            ชื่อ-นามสกุล *
+            <input
+              name="first_name"
+              required
+              maxLength={200}
+              defaultValue={employee.first_name}
+              placeholder="เช่น สมชาย ใจดี"
+            />
+          </label>
+          <label>
+            ชื่อเล่น
+            <input
+              name="nickname"
+              maxLength={200}
+              defaultValue={employee.nickname ?? ""}
+              placeholder="เช่น ชาย"
+            />
+          </label>
+          <label>
+            ตำแหน่ง
+            <input
+              name="position"
+              maxLength={200}
+              defaultValue={employee.position ?? ""}
+              placeholder="เช่น นักบัญชีอาวุโส"
+            />
+          </label>
+          <label>
+            ประเภทพนักงาน *
+            <select name="employee_type" defaultValue={employee.employee_type}>
+              <option value="accountant">นักบัญชี</option>
+              <option value="sales">เซล</option>
+              <option value="cs">CS</option>
+              <option value="other">อื่น ๆ</option>
+            </select>
+          </label>
+          <label>
+            ทีมที่ผูก
+            <select name="teamId" defaultValue={employee.team_id ?? ""}>
+              <option value="">— ไม่อยู่ทีมใด —</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" disabled={pending}>
+            {pending ? "กำลังบันทึก…" : "บันทึกการแก้ไข"}
+          </button>
+          <ResultNote state={state} />
+        </form>
+
+        {/* 2) ปิด/เปิดใช้งานพนักงาน (destructive เมื่อปิด) */}
+        <div className="admin-modal-section admin-modal-danger admin-modal-row">
+          <div>
+            <strong>
+              {employee.is_active ? "ปิดใช้งานพนักงาน" : "เปิดใช้งานพนักงาน"}
+            </strong>
+            <p className="admin-hint">
+              {employee.is_active
+                ? "พนักงานจะถูกซ่อนจากการมอบหมายใหม่ (เก็บประวัติไว้)"
+                : "เปิดกลับมาให้เลือกมอบหมายได้อีกครั้ง"}
+            </p>
+          </div>
+          <RowAction
+            action={toggleEmployeeActiveAction}
+            fields={{ id: employee.id, next: String(!employee.is_active) }}
+            label={employee.is_active ? "ปิดใช้งานพนักงาน" : "เปิดใช้งานพนักงาน"}
+            confirm={
+              employee.is_active
+                ? `ปิดใช้งานพนักงาน “${employee.first_name}” ?`
+                : undefined
+            }
+          />
+        </div>
       </div>
     </div>
   );
