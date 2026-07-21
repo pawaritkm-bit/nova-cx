@@ -53,6 +53,7 @@ export type AppNavActive =
   | "chat-me"
   | "chat-risk"
   | "chat-office"
+  | "chat-knowledge"
   | "chat-viewer"
   | "chat-eval"
   | "chat-admin"
@@ -110,6 +111,8 @@ const NAV_GROUPS: NavGroup[] = [
       { key: "chat-report", href: "/chat-audit/reports", label: "รายงานประเมิน", canSee: canSeeAccountantReport },
       // ★ ประเมินสำนักงาน (แชต 1-1 ฝั่งลูกค้า) — คนละส่วนกับประเมินนักบัญชี/ทีม — admin/executive
       { key: "chat-office", href: "/chat-audit/office", label: "ประเมินสำนักงาน", canSee: isAdminRole },
+      // ★ คลังคำตอบ AI (คู่ถาม-ตอบจากแชตกลุ่ม) — เก็บ+เรียนรู้เท่านั้น — admin/executive
+      { key: "chat-knowledge", href: "/chat-audit/knowledge", label: "คลังคำตอบ AI", canSee: isAdminRole },
       // แบบประเมิน — admin/executive
       { key: "surveys", href: "/surveys", label: "แบบประเมิน", canSee: isAdminRole },
     ],

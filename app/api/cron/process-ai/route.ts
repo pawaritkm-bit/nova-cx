@@ -5,7 +5,9 @@ import { getAIProvider } from "@/lib/ai/provider";
 import { processAiAnalysisJobs } from "@/lib/ai/worker";
 import { processChatAnalysisJobs } from "@/lib/ai/chat-worker";
 import { processOfficeInboundJobs } from "@/lib/ai/office-worker";
+import { processKnowledgeExtractJobs } from "@/lib/ai/knowledge-worker";
 import { scanChatAnalysis } from "@/lib/ai/chat-scan";
+import { scanKnowledgeExtract } from "@/lib/ai/knowledge-scan";
 import { newRequestId, logServerError, isValidCronAuth } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -70,11 +72,33 @@ async function handle(request: NextRequest) {
       );
     }
 
+    // 3) reply knowledge (Phase 1) — pass ใหม่ additive แยกจากประเมิน/office โดยสิ้นเชิง
+    //    scan เฉพาะ group/room (marker knowledge_extracted_at) → worker สกัดคู่ Q&A
+    //    isolate: knowledge พังต้องไม่ทำให้ chat/office/survey ที่สำเร็จแล้วล้ม
+    let knowledgeScan;
+    let knowledgeWorker;
+    try {
+      knowledgeScan = await scanKnowledgeExtract({ db });
+      knowledgeWorker = await processKnowledgeExtractJobs({ db, provider });
+    } catch (kErr) {
+      logServerError("cron/process-ai:knowledge", requestId, kErr);
+      return NextResponse.json(
+        {
+          status: "ok",
+          ...summary,
+          chat: { scan: chatScan, worker: chatWorker, office: officeWorker },
+          knowledge: { error: true, request_id: requestId },
+        },
+        { status: 200 }
+      );
+    }
+
     return NextResponse.json(
       {
         status: "ok",
         ...summary,
         chat: { scan: chatScan, worker: chatWorker, office: officeWorker },
+        knowledge: { scan: knowledgeScan, worker: knowledgeWorker },
       },
       { status: 200 }
     );
