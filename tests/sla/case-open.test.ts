@@ -134,49 +134,59 @@ describe("shouldOpenChatCase / chatCaseLevel", () => {
   });
 });
 
-describe("resolveCaseOwner — owner จาก customer_assignments (effective-dated, tenant-scoped)", () => {
-  it("customerId null → null", async () => {
+describe("resolveCaseOwner — owner จากนักบัญชีผู้ดูแลกลุ่มแชต (chat_groups.responsible_employee_id)", () => {
+  it("chatGroupId null → null", async () => {
     const store = makeStore();
-    expect(await resolveCaseOwner(makeDb(store), "t1", null, NOW)).toBeNull();
+    expect(await resolveCaseOwner(makeDb(store), "t1", null)).toBeNull();
   });
 
-  it("เลือกผู้ดูแลตรง (member) ก่อนหัวหน้า (lead) + คืน team", async () => {
+  it("กลุ่มมีผู้ดูแล → คืน employeeId + team ปัจจุบันจาก team_members", async () => {
     const store = makeStore({
       data: {
-        customer_assignments: [
-          { tenant_id: "t1", customer_id: "c1", employee_id: "lead-emp", team_id: "team-1", role: "lead", valid_from: "2026-01-01", valid_to: null },
-          { tenant_id: "t1", customer_id: "c1", employee_id: "acc-emp", team_id: "team-1", role: "member", valid_from: "2026-01-01", valid_to: null },
+        chat_groups: [
+          { tenant_id: "t1", id: "g1", responsible_employee_id: "acc-emp", group_kind: "group" },
+        ],
+        team_members: [
+          { tenant_id: "t1", employee_id: "acc-emp", team_id: "team-1", valid_to: null },
         ],
       },
     });
-    const owner = await resolveCaseOwner(makeDb(store), "t1", "c1", NOW);
+    const owner = await resolveCaseOwner(makeDb(store), "t1", "g1");
     expect(owner).toEqual({ employeeId: "acc-emp", teamId: "team-1" });
   });
 
-  it("กรอง assignment ที่หมดอายุแล้ว (valid_to < now)", async () => {
+  it("กลุ่มมีผู้ดูแลแต่ยังไม่อยู่ทีมใด → teamId null", async () => {
     const store = makeStore({
       data: {
-        customer_assignments: [
-          { tenant_id: "t1", customer_id: "c1", employee_id: "old-emp", team_id: "team-x", role: "member", valid_from: "2025-01-01", valid_to: "2026-06-30" },
+        chat_groups: [
+          { tenant_id: "t1", id: "g1", responsible_employee_id: "acc-emp", group_kind: "group" },
         ],
       },
     });
-    expect(await resolveCaseOwner(makeDb(store), "t1", "c1", NOW)).toBeNull();
+    const owner = await resolveCaseOwner(makeDb(store), "t1", "g1");
+    expect(owner).toEqual({ employeeId: "acc-emp", teamId: null });
   });
 
-  it("M4: ใช้ 'วันไทย' เทียบ valid_to — ช่วงดึก UTC ไม่ off-by-one", async () => {
-    // 2026-07-20T18:30:00Z = 2026-07-21 01:30 เวลาไทย → วันไทย = 2026-07-21
-    //   assignment valid_to='2026-07-20' = หมดอายุแล้วตามเวลาไทย → ต้องถูกกรองออก
-    //   (ถ้าใช้วัน UTC='2026-07-20' จะเข้าใจผิดว่ายัง active)
-    const lateNight = new Date("2026-07-20T18:30:00Z");
+  it("กลุ่มยังไม่มีผู้ดูแล (responsible null) → null", async () => {
     const store = makeStore({
       data: {
-        customer_assignments: [
-          { tenant_id: "t1", customer_id: "c1", employee_id: "expired", team_id: "team-1", role: "member", valid_from: "2026-01-01", valid_to: "2026-07-20" },
+        chat_groups: [
+          { tenant_id: "t1", id: "g1", responsible_employee_id: null, group_kind: "group" },
         ],
       },
     });
-    expect(await resolveCaseOwner(makeDb(store), "t1", "c1", lateNight)).toBeNull();
+    expect(await resolveCaseOwner(makeDb(store), "t1", "g1")).toBeNull();
+  });
+
+  it("ไม่พบกลุ่มใน tenant → null (ไม่ leak ข้าม tenant)", async () => {
+    const store = makeStore({
+      data: {
+        chat_groups: [
+          { tenant_id: "t2", id: "g1", responsible_employee_id: "acc-emp", group_kind: "group" },
+        ],
+      },
+    });
+    expect(await resolveCaseOwner(makeDb(store), "t1", "g1")).toBeNull();
   });
 });
 
@@ -218,11 +228,14 @@ describe("openCaseFromChatAnalysis — orchestrator", () => {
     expect(store.rpcCalls).toHaveLength(0);
   });
 
-  it("เปิดเคส: resolve owner จาก assignment + match rule + เรียก RPC ด้วย due ที่คำนวณ", async () => {
+  it("เปิดเคส: resolve owner จากกลุ่มแชต + match rule + เรียก RPC ด้วย due ที่คำนวณ", async () => {
     const store = makeStore({
       data: {
-        customer_assignments: [
-          { tenant_id: "t1", customer_id: "c1", employee_id: "acc-emp", team_id: "team-1", role: "member", valid_from: "2026-01-01", valid_to: null },
+        chat_groups: [
+          { tenant_id: "t1", id: "g1", responsible_employee_id: "acc-emp", group_kind: "group" },
+        ],
+        team_members: [
+          { tenant_id: "t1", employee_id: "acc-emp", team_id: "team-1", valid_to: null },
         ],
         sla_rules: [
           { id: "rule-high", customer_type: null, urgency: "high", work_type: null, team_id: null, first_response_minutes: 120, resolution_minutes: 300, priority: 500, is_active: true },
@@ -290,8 +303,8 @@ describe("openCaseFromChatAnalysis — orchestrator", () => {
     expect(store.alertInserts).toHaveLength(0);
   });
 
-  it("customerId null → เปิดเคสได้แต่ owner null (ยังจับคู่ไม่ได้)", async () => {
-    const store = makeStore();
+  it("กลุ่มยังไม่มีผู้ดูแล → เปิดเคสได้แต่ owner null", async () => {
+    const store = makeStore(); // ไม่มี chat_groups → resolve owner ไม่เจอ
     const res = await openCaseFromChatAnalysis(
       makeDb(store),
       {

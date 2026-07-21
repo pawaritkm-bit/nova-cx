@@ -1,12 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Resolve owner/หัวหน้าทีมของเคส จาก customer_assignments (effective-dated)
- *   ★ owner ของเคส = นักบัญชีที่ดูแลลูกค้ารายนั้น "ณ เวลานั้น"
- *     (แม้ยัง map สมาชิก LINE→พนักงานไม่ได้ ก็รู้ owner ผ่าน assignment ได้)
+ * Resolve owner/หัวหน้าทีมของเคส
+ *   ★ owner ของเคส = นักบัญชีผู้ดูแล "กลุ่มแชต" ที่เคสนั้นอยู่
+ *     (chat_groups.responsible_employee_id — แอดมินตั้งผ่านหน้ามอบหมาย)
  *
- * effective-dated: valid_from <= at และ (valid_to is null หรือ valid_to >= at)
- *   เลือกผู้ดูแลตรง (member/coordinator) ก่อน แล้วค่อย lead — best-effort (หาไม่เจอ = null)
+ *   เดิม owner มาจาก customer_assignments (effective-dated) แต่ระบบย้ายการมอบหมาย
+ *   มาผูกที่ระดับ "กลุ่มแชต" แล้ว (group-based) → customer_assignments ไม่ถูกเขียนอีก
+ *   จึงต้อง resolve owner จากกลุ่มแทน ไม่งั้น owner=null และประเมิน/SLA พัง
+ *
+ *   หมายเหตุ: resolveTeamLead (escalation) ยังอ่าน customer_assignments อยู่ (คนละเรื่อง)
  */
 
 export type CaseOwner = {
@@ -53,30 +56,54 @@ async function loadEffectiveAssignments(
   return rows.filter((r) => r.valid_to === null || r.valid_to >= atStr);
 }
 
-/** ลำดับความสำคัญของ role ในการเป็น "owner" (ผู้ดูแลตรงก่อนหัวหน้า) */
-function ownerRank(role: string): number {
-  if (role === "member") return 0;
-  if (role === "coordinator") return 1;
-  if (role === "lead") return 2;
-  return 3;
+/**
+ * ทีมปัจจุบันของนักบัญชี (best-effort เอาทีมแรกที่ยัง active)
+ *   team_members: valid_to is null + deleted_at is null + tenant ตรง
+ *   คืน null ถ้าไม่พบ (พนักงานยังไม่อยู่ทีมใด)
+ */
+async function resolveCurrentTeamId(
+  db: SupabaseClient,
+  tenantId: string,
+  employeeId: string
+): Promise<string | null> {
+  const { data } = await db
+    .from("team_members")
+    .select("team_id")
+    .eq("tenant_id", tenantId)
+    .eq("employee_id", employeeId)
+    .is("valid_to", null)
+    .is("deleted_at", null)
+    .limit(1);
+  const rows = (data ?? []) as { team_id: string | null }[];
+  return rows[0]?.team_id ?? null;
 }
 
 /**
- * หา owner ของเคส (นักบัญชีผู้ดูแลลูกค้า ณ เวลานั้น)
- *   customerId = null → null (ยังจับคู่กลุ่ม↔ลูกค้าไม่ได้ → ไม่มี owner)
+ * หา owner ของเคส = นักบัญชีผู้ดูแลกลุ่มแชต (chat_groups.responsible_employee_id)
+ *   chatGroupId = null → null (ไม่ทราบกลุ่ม → ไม่มี owner)
+ *   กลุ่มไม่มีผู้ดูแล (responsible_employee_id null) → null
+ *   teamId = ทีมปัจจุบันของนักบัญชีคนนั้น (best-effort จาก team_members)
  */
 export async function resolveCaseOwner(
   db: SupabaseClient,
   tenantId: string,
-  customerId: string | null,
-  at: Date
+  chatGroupId: string | null
 ): Promise<CaseOwner | null> {
-  if (!customerId) return null;
-  const rows = await loadEffectiveAssignments(db, tenantId, customerId, at);
-  if (rows.length === 0) return null;
-  rows.sort((a, b) => ownerRank(a.role) - ownerRank(b.role));
-  const pick = rows[0];
-  return { employeeId: pick.employee_id, teamId: pick.team_id };
+  if (!chatGroupId) return null;
+  const { data } = await db
+    .from("chat_groups")
+    .select("responsible_employee_id")
+    .eq("tenant_id", tenantId)
+    .eq("id", chatGroupId)
+    .is("deleted_at", null)
+    // เฉพาะกลุ่มจริง (group/room) — บทสนทนา 1-1 (group_kind='user') ไม่มีนักบัญชีผู้ดูแล
+    .in("group_kind", ["group", "room"])
+    .maybeSingle();
+  const employeeId = (data as { responsible_employee_id: string | null } | null)
+    ?.responsible_employee_id;
+  if (!employeeId) return null;
+  const teamId = await resolveCurrentTeamId(db, tenantId, employeeId);
+  return { employeeId, teamId };
 }
 
 /**
@@ -84,6 +111,10 @@ export async function resolveCaseOwner(
  *   1) teams.lead_employee_id ของทีมที่ผูกกับ assignment (ถ้ามี team)
  *   2) fallback: assignment role='lead' ของลูกค้ารายนั้น ณ เวลานั้น
  *   คืน employeeId ของหัวหน้า (best-effort → null ถ้าหาไม่เจอ)
+ *
+ *   ★ ยังอ่านจาก customer_assignments อยู่ (escalation เป็นคนละโดเมนกับ owner)
+ *     เมื่อ customer_assignments ว่าง fallback (2) จะคืน null — เป็น follow-up
+ *     แยกต่างหากถ้าจะย้าย escalation มาใช้ group/team ของ owner ด้วย
  */
 export async function resolveTeamLead(
   db: SupabaseClient,

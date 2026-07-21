@@ -8,7 +8,7 @@ import { upsertRiskAlert } from "./alert";
 /**
  * เปิด/อัปเดต conversation_case จากผลวิเคราะห์แชต (Phase 3)
  *   - ตัดสินใจว่าควรเปิดเคสไหม (มีคำขอ/งาน/ปัญหา หรือ urgency สูง)
- *   - resolve owner (นักบัญชีผู้ดูแล ณ เวลานั้น จาก customer_assignments)
+ *   - resolve owner (นักบัญชีผู้ดูแลกลุ่มแชต จาก chat_groups.responsible_employee_id)
  *   - เลือก sla_rule ที่ match → คำนวณ due (fallback default business-hours)
  *   - เรียก RPC open_or_update_conversation_case (atomic + idempotent)
  *
@@ -90,8 +90,8 @@ export async function openCaseFromChatAnalysis(
 
   const level = chatCaseLevel(input.analysis.urgency);
 
-  // resolve owner จาก customer_assignments (ณ เวลาเปิดเคส)
-  const owner = await resolveCaseOwner(db, input.tenantId, input.customerId, now);
+  // resolve owner จากนักบัญชีผู้ดูแลกลุ่มแชต (chat_groups.responsible_employee_id)
+  const owner = await resolveCaseOwner(db, input.tenantId, input.chatGroupId);
 
   // เลือก SLA rule → คำนวณ due (fallback default)
   const rules = await loadActiveRules(db, input.tenantId);
