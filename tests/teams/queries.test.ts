@@ -44,9 +44,10 @@ function member(teamId: string, empId: string, roleInTeam: string, first: string
     employees: { first_name: first, nickname: nick ?? null, deleted_at: null },
   };
 }
-function assign(empId: string, custId: string, code: string | null, name: string, deleted = false) {
+/** แถวจับคู่กลุ่ม→ลูกค้า+ผู้ดูแล (chat_groups linkage) — แหล่งข้อมูลใหม่ของหน้านี้ */
+function link(empId: string, custId: string, code: string | null, name: string, deleted = false) {
   return {
-    employee_id: empId,
+    responsible_employee_id: empId,
     customer_id: custId,
     customers: { customer_code: code, name, deleted_at: deleted ? "2026-01-01" : null },
   };
@@ -61,9 +62,9 @@ describe("assembleTeamStructure — ประกอบผังทีม", () =>
         member("t1", "e-lead", "lead", "ลีดเดอร์", "ลี"),
       ],
       [
-        assign("e-lead", "c1", "C001", "บริษัท ก"),
-        assign("e-a", "c2", "C002", "บริษัท ข"),
-        assign("e-a", "c3", "C003", "บริษัท ค"),
+        link("e-lead", "c1", "C001", "บริษัท ก"),
+        link("e-a", "c2", "C002", "บริษัท ข"),
+        link("e-a", "c3", "C003", "บริษัท ค"),
       ]
     );
 
@@ -83,18 +84,37 @@ describe("assembleTeamStructure — ประกอบผังทีม", () =>
     expect(t.totalCustomers).toBe(3);
   });
 
-  it("ข้ามลูกค้าที่ถูกปิดใช้งาน (customers.deleted_at) + dedup customer_id ต่อคน", () => {
+  it("ข้ามลูกค้าที่ถูกปิดใช้งาน (customers.deleted_at) + dedup customer_id (ลูกค้าเดียวหลายกลุ่ม)", () => {
     const out = assembleTeamStructure(
       [team({ id: "t1", lead_employee_id: "e1" })],
       [member("t1", "e1", "lead", "เอ")],
       [
-        assign("e1", "c1", "C001", "ลูกค้า 1"),
-        assign("e1", "c1", "C001", "ลูกค้า 1"), // ซ้ำ customer_id เดิม → นับครั้งเดียว
-        assign("e1", "c2", "C002", "ลูกค้าปิด", true), // ปิดใช้งาน → ไม่นับ
+        link("e1", "c1", "C001", "ลูกค้า 1"),
+        link("e1", "c1", "C001", "ลูกค้า 1"), // ลูกค้าเดิมจากอีกกลุ่ม → นับครั้งเดียว
+        link("e1", "c2", "C002", "ลูกค้าปิด", true), // ปิดใช้งาน → ไม่นับ
       ]
     );
     expect(out[0].members[0].customerCount).toBe(1);
     expect(out[0].totalCustomers).toBe(1);
+  });
+
+  it("totalCustomers นับ distinct ระดับทีม (ลูกค้าเดียวถูกดูแลโดยหลายคน → นับครั้งเดียว)", () => {
+    const out = assembleTeamStructure(
+      [team({ id: "t1", lead_employee_id: "e1" })],
+      [member("t1", "e1", "lead", "เอ"), member("t1", "e2", "member", "บี")],
+      [
+        link("e1", "c1", "C001", "ลูกค้าร่วม"),
+        link("e2", "c1", "C001", "ลูกค้าร่วม"), // คนละคนดูแลลูกค้าเดียวกัน
+        link("e2", "c2", "C002", "ลูกค้าเดี่ยว"),
+      ]
+    );
+    // สมาชิกแต่ละคนนับลูกค้าของตัวเอง
+    const e1 = out[0].members.find((m) => m.employeeId === "e1");
+    const e2 = out[0].members.find((m) => m.employeeId === "e2");
+    expect(e1?.customerCount).toBe(1);
+    expect(e2?.customerCount).toBe(2);
+    // ทีมนับ distinct = c1, c2 = 2 (ไม่ใช่ 1+2)
+    expect(out[0].totalCustomers).toBe(2);
   });
 
   it("หัวหน้าจาก lead_employee_id แม้ role_in_team ไม่ใช่ 'lead'", () => {
@@ -146,6 +166,10 @@ function makeDb(dataByTable: Record<string, unknown[]>, calls: CallRec[]): Supab
       rec.filters.push(["lte", c, v]);
       return b;
     };
+    b.not = (c: string, op: string, v: unknown) => {
+      rec.filters.push(["not", c, [op, v]]);
+      return b;
+    };
     b.is = () => b;
     b.order = () => b;
     b.limit = () => b;
@@ -188,8 +212,8 @@ describe("getTeamStructure — tenant scope + ขอบเขตบทบาท"
         team_members: [
           { team_id: "t-1", employee_id: "e1", role_in_team: "lead", employees: { first_name: "เอ", nickname: null, deleted_at: null } },
         ],
-        customer_assignments: [
-          { employee_id: "e1", customer_id: "c1", customers: { customer_code: "C1", name: "ลูกค้า", deleted_at: null } },
+        chat_groups: [
+          { responsible_employee_id: "e1", customer_id: "c1", customers: { customer_code: "C1", name: "ลูกค้า", deleted_at: null } },
         ],
       },
       calls
@@ -200,11 +224,13 @@ describe("getTeamStructure — tenant scope + ขอบเขตบทบาท"
     // ทุก query กรอง tenant_id = t1
     expect(hasFilter(calls, "teams", "eq", "tenant_id", "t1")).toBe(true);
     expect(hasFilter(calls, "team_members", "eq", "tenant_id", "t1")).toBe(true);
-    expect(hasFilter(calls, "customer_assignments", "eq", "tenant_id", "t1")).toBe(true);
+    expect(hasFilter(calls, "chat_groups", "eq", "tenant_id", "t1")).toBe(true);
     // executive ไม่ query team_members ของตัวเองเพื่อจำกัดทีม (ไม่มี eq employee_id=eX บน team_members)
     expect(hasFilter(calls, "team_members", "eq", "employee_id", "eX")).toBe(false);
-    // customer_assignments ต้องกรอง active
-    expect(hasFilter(calls, "customer_assignments", "is", "valid_to", null) || true).toBe(true);
+    // chat_groups ต้องผูกนักบัญชี (in responsible_employee_id) + กรองกลุ่มจริง + มีลูกค้าจับคู่
+    expect(hasFilter(calls, "chat_groups", "in", "responsible_employee_id", ["e1"])).toBe(true);
+    expect(hasFilter(calls, "chat_groups", "in", "group_kind", ["group", "room"])).toBe(true);
+    expect(hasFilter(calls, "chat_groups", "not", "customer_id", ["is", null])).toBe(true);
     expect(out).toHaveLength(1);
     expect(out[0].members[0].customerCount).toBe(1);
   });
@@ -219,7 +245,7 @@ describe("getTeamStructure — tenant scope + ขอบเขตบทบาท"
           { team_id: "t-mine", employee_id: "acc-1", role_in_team: "member", employees: { first_name: "ฉัน", nickname: null, deleted_at: null } },
         ],
         teams: [{ id: "t-mine", name: "ทีมฉัน", handles_customer_type: "individual", lead_employee_id: null }],
-        customer_assignments: [],
+        chat_groups: [],
       },
       calls
     );

@@ -11,9 +11,14 @@
  *       · role อื่น/null                             → คืน [] (หน้าโชว์ deny)
  *   - customers.name เป็น plaintext (ไม่ต้อง decrypt) — ตามสเปกตาราง customers
  *
- * ★ การนับ "ลูกค้าที่ดูแลปัจจุบัน" ใช้นิยามเดียวกับ lib/admin/workload.ts:
- *     valid_to null (ยังดูแลอยู่) + deleted_at null + valid_from ≤ วันนี้ (เริ่มมีผลแล้ว)
+ * ★ การนับ "ลูกค้าที่นักบัญชีดูแล" มาจากการจับคู่กลุ่มในหน้า /chat-audit/admin:
+ *     นับ distinct customer จาก chat_groups ที่
+ *       responsible_employee_id = พนักงานคนนั้น  (กลุ่มนี้มีนักบัญชีผู้ดูแล)
+ *       customer_id is not null                   (กลุ่มนี้จับคู่ลูกค้าแล้ว)
+ *       group_kind in ('group','room')            (กลุ่มจริง ไม่ใช่บทสนทนา 1-1)
+ *       deleted_at is null (กลุ่มยังใช้งานอยู่) + tenant_id ตรง session
  *     และลูกค้าต้องยังไม่ถูกปิดใช้งาน (customers.deleted_at null)
+ *     ★ ไม่ใช้ customer_assignments แล้วในหน้านี้ (ownership คนละแหล่งกับการจับคู่กลุ่ม)
  *
  * ★ ฟังก์ชัน assembleTeamStructure เป็นฟังก์ชันบริสุทธิ์ (ไม่แตะ DB) → unit test ได้แน่นอน
  */
@@ -92,8 +97,9 @@ type MemberRow = {
   employees: { first_name?: string | null; nickname?: string | null; deleted_at?: string | null } | null;
 };
 
-type AssignmentRow = {
-  employee_id: string;
+/** แถวจับคู่ "กลุ่ม → ลูกค้า + นักบัญชีผู้ดูแล" จาก chat_groups (แหล่งข้อมูลใหม่) */
+type GroupLinkRow = {
+  responsible_employee_id: string;
   customer_id: string;
   customers: { customer_code?: string | null; name?: string | null; deleted_at?: string | null } | null;
 };
@@ -102,11 +108,6 @@ type AssignmentRow = {
 function readOne<T>(rel: unknown): T | null {
   if (Array.isArray(rel)) return (rel[0] as T) ?? null;
   return (rel as T) ?? null;
-}
-
-/** วันที่วันนี้ YYYY-MM-DD (ใช้กรอง active assignment) */
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
 }
 
 /** ชื่อแสดงผลของนักบัญชี: "ชื่อจริง (ชื่อเล่น)" ถ้ามีชื่อเล่น */
@@ -129,26 +130,27 @@ const TYPE_ORDER: Record<string, number> = { company: 0, individual: 1 };
 // assemble (ฟังก์ชันบริสุทธิ์ — ไม่แตะ DB)
 // ---------------------------------------------------------------------
 /**
- * ประกอบผังทีมจากแถวดิบ 3 ชุด (teams + team_members + customer_assignments)
- *   - นับ/ลิสต์ลูกค้าต่อนักบัญชี (dedup ตาม customer_id, ข้ามลูกค้าที่ถูกปิดใช้งาน)
+ * ประกอบผังทีมจากแถวดิบ 3 ชุด (teams + team_members + chat_groups linkage)
+ *   - นับ/ลิสต์ลูกค้าต่อนักบัญชี จากกลุ่มที่นักบัญชีดูแล (dedup ตาม customer_id
+ *     เพราะลูกค้าเดียวอาจถูกผูกหลายกลุ่ม) ข้ามลูกค้าที่ถูกปิดใช้งาน
  *   - หัวหน้าทีม = role_in_team 'lead' หรือ employee ตรงกับ teams.lead_employee_id
  *   - เรียง: หัวหน้าอยู่บนสุด → ลูกค้ามาก→น้อย → ชื่อ; ทีมเรียงตามประเภทแล้วชื่อ
  */
 export function assembleTeamStructure(
   teams: TeamRow[],
   members: MemberRow[],
-  assignments: AssignmentRow[]
+  groupLinks: GroupLinkRow[]
 ): TeamNode[] {
-  // 1) ลูกค้าต่อนักบัญชี — dedup ตาม customer_id, ข้ามลูกค้าที่ถูกปิดใช้งาน
+  // 1) ลูกค้าต่อนักบัญชี — จากกลุ่มที่ดูแล, dedup ตาม customer_id, ข้ามลูกค้าที่ถูกปิดใช้งาน
   const seenByEmployee = new Map<string, Set<string>>(); // employeeId → set(customerId)
   const customersByEmployee = new Map<string, TeamCustomer[]>();
-  for (const a of assignments) {
+  for (const link of groupLinks) {
     const cust = readOne<{ customer_code?: string | null; name?: string | null; deleted_at?: string | null }>(
-      a.customers
+      link.customers
     );
     if (cust?.deleted_at) continue; // ลูกค้าปิดใช้งาน → ไม่นับ
-    const empId = a.employee_id;
-    if (!empId || !a.customer_id) continue;
+    const empId = link.responsible_employee_id;
+    if (!empId || !link.customer_id) continue;
 
     let seen = seenByEmployee.get(empId);
     if (!seen) {
@@ -156,8 +158,8 @@ export function assembleTeamStructure(
       seenByEmployee.set(empId, seen);
       customersByEmployee.set(empId, []);
     }
-    if (seen.has(a.customer_id)) continue; // กันนับซ้ำ
-    seen.add(a.customer_id);
+    if (seen.has(link.customer_id)) continue; // ลูกค้าเดียวหลายกลุ่ม → นับครั้งเดียว
+    seen.add(link.customer_id);
     customersByEmployee.get(empId)!.push({
       code: cust?.customer_code ?? null,
       name: (cust?.name ?? "").trim() || "ไม่ระบุชื่อลูกค้า",
@@ -283,22 +285,23 @@ export async function getTeamStructure(db: DB, tenantId: string, viewer: Viewer)
   if (memErr) throw new Error(memErr.message);
   const members = (memberData ?? []) as unknown as MemberRow[];
 
-  // 3) ลูกค้าที่ดูแลปัจจุบันของสมาชิกเหล่านี้
+  // 3) ลูกค้าที่ดูแล — จากกลุ่มที่นักบัญชีเหล่านี้เป็นผู้ดูแล (chat_groups linkage)
+  //    เงื่อนไข: มีลูกค้าจับคู่แล้ว (customer_id not null) + กลุ่มจริง (group/room) + ยังไม่ถูกลบ
   const employeeIds = [...new Set(members.map((m) => m.employee_id).filter(Boolean))];
-  let assignments: AssignmentRow[] = [];
+  let groupLinks: GroupLinkRow[] = [];
   if (employeeIds.length > 0) {
-    const { data: assignData, error: assignErr } = await db
-      .from("customer_assignments")
-      .select("employee_id, customer_id, customers(customer_code, name, deleted_at)")
+    const { data: linkData, error: linkErr } = await db
+      .from("chat_groups")
+      .select("responsible_employee_id, customer_id, customers(customer_code, name, deleted_at)")
       .eq("tenant_id", tenantId)
-      .in("employee_id", employeeIds)
-      .is("valid_to", null)
+      .in("responsible_employee_id", employeeIds)
+      .not("customer_id", "is", null)
+      .in("group_kind", ["group", "room"])
       .is("deleted_at", null)
-      .lte("valid_from", todayISO())
       .limit(TEAM_LIMIT);
-    if (assignErr) throw new Error(assignErr.message);
-    assignments = (assignData ?? []) as unknown as AssignmentRow[];
+    if (linkErr) throw new Error(linkErr.message);
+    groupLinks = (linkData ?? []) as unknown as GroupLinkRow[];
   }
 
-  return assembleTeamStructure(teams, members, assignments);
+  return assembleTeamStructure(teams, members, groupLinks);
 }
