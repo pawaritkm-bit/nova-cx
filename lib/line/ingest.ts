@@ -187,7 +187,7 @@ async function resolveOrCreateGroup(
   db: SupabaseClient,
   tenantId: string,
   groupRef: string,
-  groupKind: "group" | "room",
+  groupKind: "group" | "room" | "user",
   chatChannelId: string | null
 ): Promise<{ id: string; customerId: string | null; hasName: boolean } | null> {
   const selectExisting = () =>
@@ -482,6 +482,186 @@ export async function ingestGroupMessage(
   const chatMessageId = (msgRow as { id?: string } | null)?.id;
 
   // --- (5) media → metadata ใน message_attachments (idempotent; Phase 1 ยังไม่ดึง binary) ---
+  if (chatMessageId && isMedia) {
+    await ensureAttachment(db, tenantId, chatMessageId, messageType, lineMessageId);
+  }
+
+  return { status: "stored", chatGroupId, lineMessageId, customerId };
+}
+
+/**
+ * resolve ตัวตนผู้ส่งใน "แชต 1-1" (best-effort) — บังคับเป็น customer เสมอ
+ *   ★ ข้อจำกัด LINE: ใน 1-1 ผู้ส่งขาเข้าคือ "ลูกค้า/ผู้ติดต่อ" เสมอ (OA/พนักงานตอบกลับเราไม่เห็น)
+ *     ดังนั้น member_kind = 'customer' เด็ดขาด และ "ห้ามผูก employee/accountant ไม่ว่ากรณีใด"
+ *     (แม้ line_user_id จะบังเอิญตรง employees.line_user_id ก็ห้าม — นี่คือฝั่งลูกค้า)
+ *   - ถ้า match line_users → ผูก line_user_ref (และมี customer_id = ลูกค้าที่รู้จัก)
+ *   - ไม่เจอ = customer ที่ยังไม่ผูก (degrade อย่างสุภาพ ไม่ throw)
+ */
+async function resolveDirectCustomerIdentity(
+  db: SupabaseClient,
+  tenantId: string,
+  lineUserId: string
+): Promise<{ lineUserRef: string | null; customerId: string | null }> {
+  const { data } = await db
+    .from("line_users")
+    .select("id, customer_id")
+    .eq("tenant_id", tenantId)
+    .eq("line_user_id", lineUserId)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const row = data as { id?: string; customer_id?: string | null } | null;
+  return { lineUserRef: row?.id ?? null, customerId: row?.customer_id ?? null };
+}
+
+/**
+ * ดึงชื่อโปรไฟล์ผู้ใช้ใน 1-1 แล้วเก็บ ciphertext ลง chat_groups.display_name_enc — best-effort
+ *   ต่างจาก ensureGroupName (กลุ่ม) ตรงที่ใช้ getProfile(userId) ของ OA
+ *   เงื่อนไข: มี client + มีคีย์เข้ารหัส; guard `.is(display_name_enc, null)` กันเขียนทับ/กัน race
+ *   ★ best-effort: ทุก error กลืน (log warn) ไม่ให้ ingest พัง; ไม่ log plaintext/ชื่อ
+ */
+async function ensureDirectName(
+  db: SupabaseClient,
+  tenantId: string,
+  chatGroupId: string,
+  userId: string,
+  client: LineClient | null
+): Promise<void> {
+  if (!client || !hasEncKey()) return;
+  try {
+    const profile = await client.getProfile(userId);
+    const displayName = profile?.displayName ?? null;
+    if (!displayName) return;
+    const displayNameEnc = encryptField(displayName);
+    const { error } = await db
+      .from("chat_groups")
+      .update({ display_name_enc: displayNameEnc })
+      .eq("id", chatGroupId)
+      .eq("tenant_id", tenantId)
+      .is("display_name_enc", null);
+    if (error) {
+      console.warn(
+        `[line/ingest] set direct display_name_enc failed (code=${
+          (error as { code?: string }).code ?? "unknown"
+        }) chat_group_id=${chatGroupId}`
+      );
+    }
+  } catch (e) {
+    console.warn(
+      `[line/ingest] ensureDirectName error (${
+        e instanceof Error ? e.name : "unknown"
+      }) chat_group_id=${chatGroupId}`
+    );
+  }
+}
+
+/**
+ * ประมวลผล message event จากแชต 1-1 (source.type='user') — persist ลง chat_*
+ *   ★ แยกจาก ingestGroupMessage เพื่อไม่แตะ logic กลุ่มเดิม (กัน regress)
+ *   - ensure บทสนทนา 1-1: chat_groups group_kind='user', group_ref = userId (คีย์ต่อ user)
+ *   - เก็บข้อความลูกค้า (content_enc เข้ารหัสจาก payload เหมือนเดิม)
+ *   - member_kind = 'customer' เสมอ; ห้ามผูก employee (ดู resolveDirectCustomerIdentity)
+ *   - degrade อย่างสุภาพ: ไม่มี userId/ข้อมูลไม่ครบ = skip (ไม่ throw)
+ */
+export async function ingestDirectMessage(
+  deps: IngestDeps,
+  tenantId: string,
+  oa: LineOa,
+  event: QueuedLineEvent
+): Promise<IngestResult> {
+  const now = deps.now ? deps.now() : new Date();
+  const db = deps.db;
+
+  if (event.source?.type !== "user") {
+    return { status: "skipped", reason: "not_direct" };
+  }
+  // ใน 1-1 groupId/roomId ไม่มี — ใช้ userId เป็นคีย์ของบทสนทนา (group_ref)
+  const userId = event.source?.userId;
+  if (!userId) return { status: "skipped", reason: "missing_user_id" };
+
+  const lineMessageId = event.message?.id;
+  if (!lineMessageId) return { status: "skipped", reason: "missing_message_id" };
+
+  const messageType = event.message?.type ?? "text";
+  const isMedia = MEDIA_TYPES.has(messageType);
+
+  // --- (1) ensure บทสนทนา 1-1 (group_kind='user', group_ref=userId) ---
+  const chatChannelId = await resolveChatChannelId(db, tenantId, oa);
+  const group = await resolveOrCreateGroup(db, tenantId, userId, "user", chatChannelId);
+  if (!group) return { status: "skipped", reason: "chat_group_upsert_failed" };
+  const chatGroupId = group.id;
+
+  // ดึงชื่อผู้ใช้ (best-effort) ถ้ายังไม่มี — เก็บ ciphertext เท่านั้น
+  if (!group.hasName) {
+    await ensureDirectName(db, tenantId, chatGroupId, userId, deps.client ?? null);
+  }
+
+  // --- (2) upsert สมาชิก = ลูกค้าเสมอ (ห้ามผูก employee) ---
+  let displayNameEnc: string | null = null;
+  const client = deps.client ?? null;
+  if (client && hasEncKey()) {
+    const profile = await client.getProfile(userId);
+    const displayName = profile?.displayName ?? null;
+    if (displayName) displayNameEnc = encryptField(displayName);
+  }
+
+  const { lineUserRef, customerId } = await resolveDirectCustomerIdentity(db, tenantId, userId);
+
+  const memberUpsert: Record<string, unknown> = {
+    tenant_id: tenantId,
+    chat_group_id: chatGroupId,
+    line_user_id: userId,
+    member_kind: "customer", // ★ 1-1 = ฝั่งลูกค้าเสมอ (ห้าม employee/accountant)
+  };
+  if (displayNameEnc) memberUpsert.display_name_enc = displayNameEnc;
+  if (lineUserRef) memberUpsert.line_user_ref = lineUserRef;
+
+  const { data: memberRow, error: memberErr } = await db
+    .from("chat_members")
+    .upsert(memberUpsert, { onConflict: "chat_group_id,line_user_id" })
+    .select("id")
+    .maybeSingle();
+  if (memberErr) throw memberErr;
+  const chatMemberId = (memberRow as { id?: string } | null)?.id ?? null;
+
+  // --- (3) idempotency (pre-check): line_message_id ซ้ำ → duplicate ---
+  const existingId = await selectExistingMessageId(db, lineMessageId);
+  if (existingId) {
+    if (isMedia) await ensureAttachment(db, tenantId, existingId, messageType, lineMessageId);
+    return { status: "duplicate", lineMessageId };
+  }
+
+  // --- (4) persist chat_message (content_enc = ciphertext จาก payload) ---
+  const rawMeta: Record<string, unknown> = { source_type: "user", oa };
+  if (event.message?.encSkipped) rawMeta.enc_skipped = true;
+
+  const { data: msgRow, error: msgErr } = await db
+    .from("chat_messages")
+    .insert({
+      tenant_id: tenantId,
+      chat_group_id: chatGroupId,
+      line_message_id: lineMessageId,
+      sender_line_user_id: userId,
+      chat_member_id: chatMemberId,
+      message_type: messageType,
+      content_enc: event.message?.contentEnc ?? null,
+      sent_at: sentAtIso(event.timestamp, now),
+      raw_meta: rawMeta,
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (msgErr) {
+    if (isUniqueViolation(msgErr)) {
+      const dupId = await selectExistingMessageId(db, lineMessageId);
+      if (dupId && isMedia) await ensureAttachment(db, tenantId, dupId, messageType, lineMessageId);
+      return { status: "duplicate", lineMessageId };
+    }
+    throw msgErr;
+  }
+
+  const chatMessageId = (msgRow as { id?: string } | null)?.id;
   if (chatMessageId && isMedia) {
     await ensureAttachment(db, tenantId, chatMessageId, messageType, lineMessageId);
   }

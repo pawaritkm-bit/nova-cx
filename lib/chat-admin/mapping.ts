@@ -74,6 +74,9 @@ export async function listChatGroups(db: DB, tenantId: string): Promise<ChatGrou
       "id, display_name_enc, customer_id, responsible_employee_id, joined_at, is_active, customers(name), responsible:employees!responsible_employee_id(first_name, nickname)"
     )
     .eq("tenant_id", tenantId)
+    // ★ กันปน (Phase A): หน้าจับคู่/ประเมินนักบัญชี โชว์เฉพาะ "กลุ่มจริง" (group/room)
+    //   ไม่โชว์บทสนทนา 1-1 (group_kind='user') ซึ่งเป็นฝั่งลูกค้าล้วน ผูกนักบัญชีไม่ได้
+    .in("group_kind", ["group", "room"])
     .is("deleted_at", null)
     .order("joined_at", { ascending: false });
   if (error) throw new Error(error.message);

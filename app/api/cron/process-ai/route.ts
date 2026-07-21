@@ -4,6 +4,7 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import { getAIProvider } from "@/lib/ai/provider";
 import { processAiAnalysisJobs } from "@/lib/ai/worker";
 import { processChatAnalysisJobs } from "@/lib/ai/chat-worker";
+import { processOfficeInboundJobs } from "@/lib/ai/office-worker";
 import { scanChatAnalysis } from "@/lib/ai/chat-scan";
 import { newRequestId, logServerError, isValidCronAuth } from "@/lib/http";
 
@@ -51,13 +52,16 @@ async function handle(request: NextRequest) {
     // 1) survey AI worker (เดิม — ไม่แตะ)
     const summary = await processAiAnalysisJobs({ db, provider });
 
-    // 2) chat (Phase 2) — additive: scan enqueue + chat worker
+    // 2) chat (Phase 2 + Phase A) — additive: scan enqueue + chat worker (กลุ่ม) + office worker (1-1)
+    //    scan แยก route: group/room → chat_analysis, 1-1 → office_inbound
     //    isolate ไว้: chat พังต้องไม่ทำให้ survey worker ล้ม (คืนผลแยกใน chat.error)
     let chatScan;
     let chatWorker;
+    let officeWorker;
     try {
       chatScan = await scanChatAnalysis({ db });
       chatWorker = await processChatAnalysisJobs({ db, provider });
+      officeWorker = await processOfficeInboundJobs({ db, provider });
     } catch (chatErr) {
       logServerError("cron/process-ai:chat", requestId, chatErr);
       return NextResponse.json(
@@ -67,7 +71,11 @@ async function handle(request: NextRequest) {
     }
 
     return NextResponse.json(
-      { status: "ok", ...summary, chat: { scan: chatScan, worker: chatWorker } },
+      {
+        status: "ok",
+        ...summary,
+        chat: { scan: chatScan, worker: chatWorker, office: officeWorker },
+      },
       { status: 200 }
     );
   } catch (e) {

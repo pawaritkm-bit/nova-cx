@@ -88,7 +88,25 @@ export async function aggregateAccountantSignals(
   }
 
   const { data: caseData } = await q;
-  const cases = (caseData ?? []) as CaseRow[];
+  const casesRaw = (caseData ?? []) as CaseRow[];
+  if (casesRaw.length === 0) return { cases: [], chatGroupIds: [] };
+
+  // ★ กันปน (Phase A / REGRESSION-CRITICAL): ประเมินนักบัญชีรายคนต้องอิงเฉพาะ "กลุ่มจริง"
+  //   (group_kind ∈ group/room) เท่านั้น — ตัดบทสนทนา 1-1 (group_kind='user') ทิ้ง
+  //   โดยโครงสร้างแล้ว 1-1 ไม่มีวันสร้าง conversation_cases อยู่แล้ว (office-worker ไม่เปิดเคส)
+  //   นี่คือ defense-in-depth: แม้จะมีเคสหลุดมา ก็ต้องไม่นับเข้าคะแนนนักบัญชี
+  const allGroupIds = [...new Set(casesRaw.map((c) => c.chat_group_id))];
+  const { data: kindData } = await db
+    .from("chat_groups")
+    .select("id, group_kind")
+    .eq("tenant_id", input.tenantId)
+    .in("id", allGroupIds);
+  const directGroupIds = new Set(
+    ((kindData ?? []) as { id: string; group_kind: string }[])
+      .filter((g) => g.group_kind === "user")
+      .map((g) => g.id)
+  );
+  const cases = casesRaw.filter((c) => !directGroupIds.has(c.chat_group_id));
   if (cases.length === 0) return { cases: [], chatGroupIds: [] };
 
   const groupIds = [...new Set(cases.map((c) => c.chat_group_id))];

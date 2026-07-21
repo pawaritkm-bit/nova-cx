@@ -1,15 +1,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Chat Analysis Scan/Enqueue (Phase 2) — รวบกลุ่มที่มีข้อความใหม่ "ยังไม่วิเคราะห์"
- *   → enqueue job `chat_analysis` 1 งาน/กลุ่ม (1 window) ให้ chat-worker ทำต่อ
- *   (Phase 1 ยังไม่ enqueue AI — scan นี้เป็นตัวเชื่อม ingest → analysis)
+ * Chat Analysis Scan/Enqueue (Phase 2 + Phase A) — รวบกลุ่ม/บทสนทนาที่มีข้อความใหม่ "ยังไม่วิเคราะห์"
+ *   → routing ตาม group_kind (กันปนเปื้อนสองสาย):
+ *       group/room (group_kind != 'user') → enqueue `chat_analysis` (per-accountant, chat-worker)
+ *       1-1        (group_kind = 'user')   → enqueue `office_inbound` (office-worker, ฝั่งลูกค้า)
+ *   ★ default = chat_analysis เมื่ออ่าน group_kind ไม่ได้ (ปลอดภัย: ไม่ปล่อยกลุ่มจริงหลุด)
  *
- * debounce: enqueue เฉพาะกลุ่มที่บทสนทนา "นิ่งแล้ว" (ข้อความล่าสุดเก่ากว่า debounce)
+ * debounce: enqueue เฉพาะบทสนทนาที่ "นิ่งแล้ว" (ข้อความล่าสุดเก่ากว่า debounce)
  *   หรือมีข้อความค้างเยอะเกิน threshold (ไม่รอ ป้องกัน backlog บวม)
- *   → กันการเรียก AI ถี่ทุกข้อความ (คุมต้นทุน) + ให้ได้บริบทบทสนทนาครบก่อนวิเคราะห์
  *
- * idempotent: ถ้ากลุ่มนั้นมี job chat_analysis ค้างอยู่ (pending/processing) แล้ว → ไม่ enqueue ซ้ำ
+ * idempotent: ถ้ามี job ค้างอยู่ (pending/processing) ใน queue ที่ตรงกันแล้ว → ไม่ enqueue ซ้ำ
  *
  * inject deps (now) เพื่อ test ได้โดยไม่พึ่งเวลาจริง
  */
@@ -25,8 +26,9 @@ export type ChatScanDeps = {
 };
 
 export type ChatScanSummary = {
-  groups: number; // กลุ่มที่มีข้อความค้าง (พิจารณา)
-  enqueued: number; // enqueue job ใหม่
+  groups: number; // กลุ่ม/บทสนทนาที่มีข้อความค้าง (พิจารณา)
+  enqueued: number; // enqueue job chat_analysis ใหม่ (group/room)
+  enqueuedOffice: number; // enqueue job office_inbound ใหม่ (1-1)
   waiting: number; // ยังไม่ถึง debounce (รอรอบหน้า)
   existed: number; // มี job ค้างอยู่แล้ว (idempotent skip)
   failed: number; // enqueue พัง (isolate ไม่ล้มทั้ง batch)
@@ -44,17 +46,38 @@ type GroupAgg = {
   latestMs: number; // เวลาข้อความล่าสุด (ms)
 };
 
-/** true เมื่อกลุ่มนี้มี job chat_analysis ค้างอยู่ (pending/processing) */
-async function hasPendingJob(db: SupabaseClient, chatGroupId: string): Promise<boolean> {
+/** true เมื่อบทสนทนานี้มี job (queue ที่ระบุ) ค้างอยู่ (pending/processing) */
+async function hasPendingJob(
+  db: SupabaseClient,
+  queue: string,
+  chatGroupId: string
+): Promise<boolean> {
   const { data } = await db
     .from("job_queue")
     .select("id")
-    .eq("queue", "chat_analysis")
+    .eq("queue", queue)
     .in("status", ["pending", "processing"])
     .eq("payload->>chat_group_id", chatGroupId)
     .limit(1)
     .maybeSingle();
   return !!(data as { id?: string } | null)?.id;
+}
+
+/** โหลด group_kind ต่อ chat_group_id (best-effort) — คืน map; อ่านไม่ได้ = ว่าง (default group) */
+async function loadGroupKinds(
+  db: SupabaseClient,
+  groupIds: string[]
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (groupIds.length === 0) return out;
+  const { data } = await db
+    .from("chat_groups")
+    .select("id, group_kind")
+    .in("id", groupIds);
+  for (const g of (data ?? []) as { id: string; group_kind: string }[]) {
+    out.set(g.id, g.group_kind);
+  }
+  return out;
 }
 
 export async function scanChatAnalysis(deps: ChatScanDeps): Promise<ChatScanSummary> {
@@ -66,6 +89,7 @@ export async function scanChatAnalysis(deps: ChatScanDeps): Promise<ChatScanSumm
   const summary: ChatScanSummary = {
     groups: 0,
     enqueued: 0,
+    enqueuedOffice: 0,
     waiting: 0,
     existed: 0,
     failed: 0,
@@ -100,6 +124,9 @@ export async function scanChatAnalysis(deps: ChatScanDeps): Promise<ChatScanSumm
 
   summary.groups = agg.size;
 
+  // routing: อ่าน group_kind ของทุกกลุ่มที่พิจารณา (1 query) → เลือก queue ต่อรายการ
+  const kinds = await loadGroupKinds(db, [...agg.keys()]);
+
   for (const [chatGroupId, info] of agg) {
     // debounce: ยังไม่นิ่ง + ยังไม่ถึง threshold → รอรอบหน้า
     const settled = nowMs - info.latestMs >= debounceMs;
@@ -108,15 +135,19 @@ export async function scanChatAnalysis(deps: ChatScanDeps): Promise<ChatScanSumm
       continue;
     }
 
+    // ★ กันปน: 1-1 (group_kind='user') → office_inbound ; อื่น/อ่านไม่ได้ → chat_analysis (per-accountant)
+    const isDirect = kinds.get(chatGroupId) === "user";
+    const queue = isDirect ? "office_inbound" : "chat_analysis";
+
     try {
-      if (await hasPendingJob(db, chatGroupId)) {
+      if (await hasPendingJob(db, queue, chatGroupId)) {
         summary.existed += 1;
         continue;
       }
 
       const { error: insErr } = await db.from("job_queue").insert({
         tenant_id: info.tenantId,
-        queue: "chat_analysis",
+        queue,
         payload: { chat_group_id: chatGroupId },
       });
       if (insErr) {
@@ -126,6 +157,8 @@ export async function scanChatAnalysis(deps: ChatScanDeps): Promise<ChatScanSumm
         } else {
           summary.failed += 1;
         }
+      } else if (isDirect) {
+        summary.enqueuedOffice += 1;
       } else {
         summary.enqueued += 1;
       }

@@ -2,14 +2,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import type { LineClient } from "@/lib/line/client";
 import type { QueuedLineEvent } from "@/lib/line/webhook";
-import { ingestGroupMessage, ingestGroupJoin } from "@/lib/line/ingest";
+import { ingestGroupMessage, ingestDirectMessage, ingestGroupJoin } from "@/lib/line/ingest";
 
 /**
  * Worker: line_event — ประมวลผล event ที่ webhook enqueue ไว้ (job_queue queue='line_event')
  *   follow (แอดเพื่อน)     → upsert line_users + linked + unblock
  *   unfollow/block         → mark is_blocked = true
- *   message (group/room)   → ingest แชตลง chat_* (เข้ารหัสแล้ว, idempotent) — Phase 1
- *   message (1:1)/อื่น     → no-op (mark done)
+ *   message (group/room)   → ingest แชตกลุ่มลง chat_* (เข้ารหัสแล้ว, idempotent) — per-accountant
+ *   message (1:1/user)     → ingest แชต 1-1 ฝั่งลูกค้า (group_kind='user') — office inbound (Phase A)
+ *   อื่น                    → no-op (mark done)
  *
  * inject deps (db + getClient) เพื่อ test ได้โดยไม่ต้องมี env/network จริง
  */
@@ -137,13 +138,24 @@ async function processOne(
         await handleUnfollow(deps, job.tenant_id, userId);
         break;
       case "message":
-        // Phase 1: เก็บแชตกลุ่ม/ห้อง (ingest จัดการ skip เองถ้าเป็น 1:1/ข้อมูลไม่ครบ)
-        await ingestGroupMessage(
-          { db, client: deps.getClient?.(oa) ?? null, now: () => now },
-          job.tenant_id,
-          oa,
-          event
-        );
+        // routing ตามชนิดต้นทาง:
+        //   1-1 (user) → ingest ฝั่งลูกค้า (office inbound) ; group/room → ingest กลุ่ม (per-accountant)
+        //   (แต่ละ ingest จัดการ skip เองถ้าข้อมูลไม่ครบ/ผิดชนิด)
+        if (event.source?.type === "user") {
+          await ingestDirectMessage(
+            { db, client: deps.getClient?.(oa) ?? null, now: () => now },
+            job.tenant_id,
+            oa,
+            event
+          );
+        } else {
+          await ingestGroupMessage(
+            { db, client: deps.getClient?.(oa) ?? null, now: () => now },
+            job.tenant_id,
+            oa,
+            event
+          );
+        }
         break;
       case "join":
         // บอทถูกเชิญเข้ากลุ่ม/ห้อง → สร้าง chat_group + ดึงชื่อทันที (โผล่ในหน้า admin ไม่ต้องรอข้อความแรก)

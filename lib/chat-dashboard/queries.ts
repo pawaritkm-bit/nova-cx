@@ -231,7 +231,14 @@ export async function getExecChatDashboard(
   const [{ data: caseData }, { data: groupData }, { data: riskData }, { data: violData }] =
     await Promise.all([
       db.from("conversation_cases").select(CASE_COLS).is("deleted_at", null).limit(CASE_LIMIT),
-      db.from("chat_groups").select("id").is("deleted_at", null).eq("is_active", true).limit(CASE_LIMIT),
+      db
+        .from("chat_groups")
+        .select("id")
+        .is("deleted_at", null)
+        .eq("is_active", true)
+        // ★ กันปน (Phase A): นับเฉพาะกลุ่มจริง (group/room) ไม่รวมบทสนทนา 1-1 (group_kind='user')
+        .in("group_kind", ["group", "room"])
+        .limit(CASE_LIMIT),
       db.from("risk_alerts").select("level, status").in("status", ACTIVE_RISK).limit(CASE_LIMIT),
       db.from("sop_violations").select("violation_type, chat_group_id").is("deleted_at", null).limit(CASE_LIMIT),
     ]);
