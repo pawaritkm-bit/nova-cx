@@ -53,6 +53,10 @@
 .nova-dash .bar-fill.bad {
   background: linear-gradient(90deg, #ef4444, #f87171);
 }
+/* สัดส่วนอารมณ์ลูกค้า (ประเมินสำนักงาน): บวก=เขียว, กลาง=amber(.low), ลบ=แดง(.bad) */
+.nova-dash .bar-fill.good {
+  background: linear-gradient(90deg, #16a34a, #4ade80);
+}
 
 /* ---- Chat timeline (viewer) ---- */
 .nova-dash .chat {
