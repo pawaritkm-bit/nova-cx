@@ -151,7 +151,7 @@ export default async function AdminPage() {
           teams={teams}
           employees={employees}
           customers={customers}
-          assignments={assignments}
+          caretakers={assignments}
           workload={workload}
           staffReg={staffReg}
         />

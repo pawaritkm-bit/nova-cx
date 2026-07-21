@@ -58,6 +58,9 @@ function makeDb(resolver: Resolver, capture: { inserts: any[]; updates: any[] })
     is() {
       return this;
     }
+    not() {
+      return this;
+    }
     in() {
       return this;
     }
@@ -411,90 +414,82 @@ describe("updateEmployee — แก้ไขพนักงานรายคน
   });
 });
 
-describe("createAssignment — กันชน unique ผู้ดูแลปัจจุบัน", () => {
-  it("ไม่มีของเดิม → insert อย่างเดียว, replacedPrevious=false, valid_from=วันนี้", async () => {
+describe("createAssignment — ตั้งผู้ดูแลกลุ่มแชตของลูกค้า (chat_groups)", () => {
+  /** resolver มาตรฐาน: customer/employee valid, มีกลุ่ม N กลุ่ม, update สำเร็จ */
+  function okDb(opts: {
+    employeeType?: string;
+    active?: boolean;
+    groups?: { id: string }[];
+    updated?: { id: string }[];
+  } = {}) {
     const cap = { inserts: [] as any[], updates: [] as any[] };
     const db = makeDb(({ table, op, terminal }) => {
       if (table === "customers" && terminal === "maybeSingle") return { data: { id: UUID_C } };
-      if (table === "employees" && terminal === "maybeSingle") return { data: { id: UUID_E } };
-      // find existing (await) → ว่าง
-      if (table === "customer_assignments" && op === "select" && terminal === "await")
-        return { data: [] };
-      if (table === "customer_assignments" && op === "insert" && terminal === "single")
-        return { data: { id: "as-1" } };
+      if (table === "employees" && terminal === "maybeSingle")
+        return {
+          data: {
+            id: UUID_E,
+            employee_type: opts.employeeType ?? "accountant",
+            is_active: opts.active ?? true,
+          },
+        };
+      // find groups ของลูกค้า
+      if (table === "chat_groups" && op === "select" && terminal === "await")
+        return { data: opts.groups ?? [{ id: "g-1" }, { id: "g-2" }] };
+      // update ตั้ง responsible
+      if (table === "chat_groups" && op === "update" && terminal === "await")
+        return { data: opts.updated ?? [{ id: "g-1" }, { id: "g-2" }] };
       return { data: null };
     }, cap);
+    return { db, cap };
+  }
 
+  it("สำเร็จ: set responsible_employee_id บนทุกกลุ่มของลูกค้า + คืน groupCount", async () => {
+    const { db, cap } = okDb();
     const out = await createAssignment(db, T, {
       customer_id: UUID_C,
       employee_id: UUID_E,
-      role: "member",
     });
-    expect(out.replacedPrevious).toBe(false);
-    expect(out.id).toBe("as-1");
-    // ไม่มี update (ไม่ต้องปิดของเดิม)
-    expect(cap.updates.length).toBe(0);
-    const ins = cap.inserts.find((i) => i.table === "customer_assignments");
-    expect(ins.payload.tenant_id).toBe(T);
-    expect(ins.payload.valid_from).toBe(todayISO());
-    expect(ins.payload.role).toBe("member");
+    expect(out.groupCount).toBe(2);
+    const upd = cap.updates.find((u) => u.table === "chat_groups");
+    expect(upd.payload.responsible_employee_id).toBe(UUID_E);
+    // ไม่เขียน customer_assignments อีกต่อไป
+    expect(cap.inserts.length).toBe(0);
+    expect(cap.updates.some((u) => u.table === "customer_assignments")).toBe(false);
   });
 
-  it("มีคู่เดิมอยู่ → ปิดของเดิม (update valid_to) ก่อน insert, replacedPrevious=true", async () => {
-    const cap = { inserts: [] as any[], updates: [] as any[] };
-    const db = makeDb(({ table, op, terminal }) => {
-      if (table === "customers" && terminal === "maybeSingle") return { data: { id: UUID_C } };
-      if (table === "employees" && terminal === "maybeSingle") return { data: { id: UUID_E } };
-      if (table === "customer_assignments" && op === "select" && terminal === "await")
-        return { data: [{ id: "old-1" }] };
-      if (table === "customer_assignments" && op === "update" && terminal === "await")
-        return { error: null };
-      if (table === "customer_assignments" && op === "insert" && terminal === "single")
-        return { data: { id: "as-2" } };
-      return { data: null };
-    }, cap);
-
-    const out = await createAssignment(db, T, {
-      customer_id: UUID_C,
-      employee_id: UUID_E,
-      role: "lead",
-    });
-    expect(out.replacedPrevious).toBe(true);
-    // มีการปิดของเดิม 1 ครั้ง (set valid_to)
-    const upd = cap.updates.find((u) => u.table === "customer_assignments");
-    expect(upd.payload.valid_to).toBe(todayISO());
-    // แล้วจึง insert ใหม่
-    expect(cap.inserts.find((i) => i.table === "customer_assignments")).toBeTruthy();
+  it("ลูกค้ายังไม่มีกลุ่มแชต → error สุภาพ + ไม่แตะ update", async () => {
+    const { db, cap } = okDb({ groups: [] });
+    await expect(
+      createAssignment(db, T, { customer_id: UUID_C, employee_id: UUID_E })
+    ).rejects.toThrow(/ยังไม่มีกลุ่มแชต/);
+    expect(cap.updates.some((u) => u.table === "chat_groups")).toBe(false);
   });
 
-  it("customer นอก tenant → throw ก่อนแตะ insert", async () => {
+  it("พนักงานไม่ใช่นักบัญชี/CS → throw", async () => {
+    const { db } = okDb({ employeeType: "sales" });
+    await expect(
+      createAssignment(db, T, { customer_id: UUID_C, employee_id: UUID_E })
+    ).rejects.toThrow(/นักบัญชีหรือทีมบริการลูกค้า/);
+  });
+
+  it("พนักงานถูกปิดใช้งาน → throw", async () => {
+    const { db } = okDb({ active: false });
+    await expect(
+      createAssignment(db, T, { customer_id: UUID_C, employee_id: UUID_E })
+    ).rejects.toThrow(/ปิดใช้งาน/);
+  });
+
+  it("customer นอก tenant → throw ก่อนแตะกลุ่ม", async () => {
     const cap = { inserts: [] as any[], updates: [] as any[] };
     const db = makeDb(({ table, terminal }) => {
       if (table === "customers" && terminal === "maybeSingle") return { data: null };
       return { data: null };
     }, cap);
-
     await expect(
-      createAssignment(db, T, { customer_id: UUID_C, employee_id: UUID_E, role: "member" })
+      createAssignment(db, T, { customer_id: UUID_C, employee_id: UUID_E })
     ).rejects.toThrow(/ลูกค้า/);
-    expect(cap.inserts.length).toBe(0);
-  });
-
-  it("★ insert ชน unique (23505) จาก race → แจ้งสุภาพ (ไม่โยน error ดิบ)", async () => {
-    const cap = { inserts: [] as any[], updates: [] as any[] };
-    const db = makeDb(({ table, op, terminal }) => {
-      if (table === "customers" && terminal === "maybeSingle") return { data: { id: UUID_C } };
-      if (table === "employees" && terminal === "maybeSingle") return { data: { id: UUID_E } };
-      if (table === "customer_assignments" && op === "select" && terminal === "await")
-        return { data: [] };
-      if (table === "customer_assignments" && op === "insert" && terminal === "single")
-        return { error: { code: "23505", message: "duplicate key" } };
-      return { data: null };
-    }, cap);
-
-    await expect(
-      createAssignment(db, T, { customer_id: UUID_C, employee_id: UUID_E, role: "member" })
-    ).rejects.toThrow(/มีการมอบหมายลูกค้ารายนี้ให้พนักงานคนนี้อยู่แล้ว/);
+    expect(cap.updates.length).toBe(0);
   });
 });
 

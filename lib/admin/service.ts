@@ -8,6 +8,7 @@
  *   - throw Error ข้อความสั้นเมื่อเขียนพัง (actions ชั้นบน map เป็นข้อความสุภาพ)
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { decryptField, hasEncKey } from "@/lib/crypto/field";
 import type {
   CreateTeamInput,
   CreateEmployeeInput,
@@ -494,152 +495,189 @@ export async function deactivateCustomer(
 }
 
 // =====================================================================
-// ASSIGNMENTS (customer → employee, effective-dated)
+// ผู้ดูแลลูกค้า (มอบหมาย) — ยึด chat_groups เป็นแหล่งเดียว
+//   "นักบัญชีดูแลลูกค้าคนไหน" = ผู้ดูแลของกลุ่มแชตที่จับคู่ลูกค้ารายนั้น
+//   (chat_groups.responsible_employee_id + customer_id) — แหล่งเดียวกับหน้าตรวจแชต
+//   ★ ไม่เขียน customer_assignments ใน flow นี้แล้ว (แต่ตารางยังคงอยู่ให้ evaluation/SLA)
 // =====================================================================
-export type AssignmentRow = {
-  id: string;
-  role: string;
-  valid_from: string;
-  customer_id: string;
-  employee_id: string;
-  team_id: string | null;
-  customer_name: string | null;
-  customer_code: string | null;
+
+/** group_kind ที่ถือเป็น "กลุ่มจริง" (ไม่ใช่บทสนทนา 1-1 ฝั่งลูกค้า) */
+const REAL_GROUP_KINDS = ["group", "room"] as const;
+
+/** ถอดรหัสชื่อกลุ่มแบบ best-effort — คืน null ถ้าไม่มีคีย์/ถอดไม่ได้ */
+function safeDecryptGroupName(enc: string | null | undefined): string | null {
+  if (!enc || !hasEncKey()) return null;
+  try {
+    return decryptField(enc);
+  } catch {
+    return null; // token เพี้ยน/คีย์ไม่ตรง — ไม่ให้ทั้งหน้าใช้ไม่ได้
+  }
+}
+
+/** ผู้ดูแลปัจจุบันของลูกค้า 1 คู่ (customer × accountant) จาก chat_groups linkage */
+export type CaretakerRow = {
+  /** key ไว้ทำ React key + อ้างอิงในตาราง (customerId::employeeId) */
+  key: string;
+  customerId: string;
+  customerCode: string | null;
+  customerName: string | null;
+  employeeId: string;
   employee_name: string | null;
   employee_nickname: string | null;
+  /** ชื่อกลุ่มที่ decrypt ได้ (best-effort) — อาจว่างถ้าไม่มีคีย์/ยังไม่มีชื่อ */
+  groupNames: string[];
+  /** จำนวนกลุ่มของคู่นี้ */
+  groupCount: number;
 };
 
-/** รายการ "ผู้ดูแลปัจจุบัน" (valid_to null) พร้อมชื่อ (enrich จาก 2 ตาราง) */
+/**
+ * รายการ "ผู้ดูแลปัจจุบัน" — อ่านจากกลุ่มแชตที่มีทั้งลูกค้า + นักบัญชีผู้ดูแล
+ *   - รวมเป็นแถวต่อคู่ (customer × accountant) + list ชื่อกลุ่มที่ decrypt ได้
+ *   - กรองลูกค้าที่ถูกปิดใช้งาน (soft-deleted) ออก
+ *   - scope tenant จาก session เสมอ
+ */
 export async function listCurrentAssignments(
   db: DB,
   tenantId: string
-): Promise<AssignmentRow[]> {
+): Promise<CaretakerRow[]> {
   const { data, error } = await db
-    .from("customer_assignments")
+    .from("chat_groups")
     .select(
-      "id, role, valid_from, customer_id, employee_id, team_id, customers(name, customer_code, deleted_at), employees(first_name, nickname)"
+      "customer_id, responsible_employee_id, display_name_enc, customers(name, customer_code, deleted_at), responsible:employees!responsible_employee_id(first_name, nickname)"
     )
     .eq("tenant_id", tenantId)
-    .is("valid_to", null)
-    .is("deleted_at", null)
-    .order("valid_from", { ascending: false });
+    .not("customer_id", "is", null)
+    .not("responsible_employee_id", "is", null)
+    .in("group_kind", REAL_GROUP_KINDS as unknown as string[])
+    .is("deleted_at", null);
   if (error) throw new Error(error.message);
 
+  type EmpEmbed = { first_name?: string; nickname?: string | null };
   type Raw = {
-    id: string;
-    role: string;
-    valid_from: string;
     customer_id: string;
-    employee_id: string;
-    team_id: string | null;
-    customers: {
-      name?: string;
-      customer_code?: string | null;
-      deleted_at?: string | null;
-    } | null;
-    employees: { first_name?: string; nickname?: string | null } | null;
+    responsible_employee_id: string;
+    display_name_enc: string | null;
+    customers:
+      | { name?: string; customer_code?: string | null; deleted_at?: string | null }
+      | { name?: string; customer_code?: string | null; deleted_at?: string | null }[]
+      | null;
+    responsible: EmpEmbed | EmpEmbed[] | null;
   };
 
-  return ((data ?? []) as unknown as Raw[])
-    // กรองลูกค้าที่ถูกปิดใช้งาน (soft-deleted) ออก — ไม่ให้โผล่ในรายการมอบหมาย
-    .filter((r) => !r.customers?.deleted_at)
-    .map((r) => ({
-    id: r.id,
-    role: r.role,
-    valid_from: r.valid_from,
-    customer_id: r.customer_id,
-    employee_id: r.employee_id,
-    team_id: r.team_id,
-    customer_name: r.customers?.name ?? null,
-    customer_code: r.customers?.customer_code ?? null,
-    employee_name: r.employees?.first_name ?? null,
-    employee_nickname: r.employees?.nickname ?? null,
-  }));
+  const byPair = new Map<string, CaretakerRow>();
+
+  for (const r of (data ?? []) as unknown as Raw[]) {
+    const cust = Array.isArray(r.customers) ? r.customers[0] : r.customers;
+    if (cust?.deleted_at) continue; // ลูกค้าปิดใช้งาน → ไม่โชว์
+    const emp = Array.isArray(r.responsible) ? r.responsible[0] : r.responsible;
+
+    const key = `${r.customer_id}::${r.responsible_employee_id}`;
+    let row = byPair.get(key);
+    if (!row) {
+      row = {
+        key,
+        customerId: r.customer_id,
+        customerCode: cust?.customer_code ?? null,
+        customerName: cust?.name ?? null,
+        employeeId: r.responsible_employee_id,
+        employee_name: emp?.first_name ?? null,
+        employee_nickname: emp?.nickname ?? null,
+        groupNames: [],
+        groupCount: 0,
+      };
+      byPair.set(key, row);
+    }
+    row.groupCount += 1;
+    const name = safeDecryptGroupName(r.display_name_enc);
+    if (name && !row.groupNames.includes(name)) row.groupNames.push(name);
+  }
+
+  // เรียงตามชื่อลูกค้า (คงที่) แล้วชื่อผู้ดูแล
+  return Array.from(byPair.values()).sort(
+    (a, b) =>
+      (a.customerName ?? "").localeCompare(b.customerName ?? "", "th") ||
+      (a.employee_name ?? "").localeCompare(b.employee_name ?? "", "th")
+  );
 }
 
 /**
- * สร้าง assignment ใหม่ (ผู้ดูแลปัจจุบัน)
- *
- * กันชน "ผู้ดูแลปัจจุบันซ้ำ": ก่อน insert จะปิด assignment ปัจจุบันของ
- *   "ลูกค้าคน + พนักงานคนเดียวกัน" (set valid_to = วันนี้) — เก็บ history ไว้ ไม่ overwrite
- *   ทำให้ไม่มีแถว current ซ้ำของคู่เดิม (ปลอดภัยแม้ในอนาคตจะเพิ่ม unique index)
- *   ★ ลูกค้าคนเดียวกันมีผู้ดูแลได้หลายคน (lead + member) — ปิดเฉพาะคู่ที่ซ้ำเท่านั้น
+ * มอบหมายลูกค้า → นักบัญชี (ผ่านกลุ่มแชต)
+ *   ตั้ง responsible_employee_id = นักบัญชีที่เลือก บน "ทุกกลุ่มแชตที่จับคู่ลูกค้ารายนี้"
+ *   - guard cross-tenant: ลูกค้า + พนักงานต้องอยู่ tenant เดียวกัน
+ *   - พนักงานต้องเป็นนักบัญชี/CS + ยัง active (สอดคล้องกับผู้ดูแลกลุ่มในหน้าตรวจแชต)
+ *   - ลูกค้าไม่มีกลุ่มแชตผูก → error สุภาพ (ให้ไปจับคู่กลุ่ม→ลูกค้าก่อน)
+ *   - คืนจำนวนกลุ่มที่อัปเดต (ให้ action แจ้งผลได้)
  */
 export async function createAssignment(
   db: DB,
   tenantId: string,
   input: CreateAssignmentInput
-): Promise<{ id: string; replacedPrevious: boolean }> {
-  // 1) ยืนยันว่า customer/employee/team อยู่ tenant เดียวกัน (กัน cross-tenant)
+): Promise<{ groupCount: number }> {
+  // 1) ลูกค้าอยู่ tenant นี้จริง
   await assertBelongsToTenant(db, "customers", input.customer_id, tenantId, "ลูกค้า");
-  await assertBelongsToTenant(db, "employees", input.employee_id, tenantId, "พนักงาน");
-  if (input.team_id) {
-    await assertBelongsToTenant(db, "teams", input.team_id, tenantId, "ทีม");
+
+  // 2) พนักงานอยู่ tenant + เป็นนักบัญชี/CS + ยัง active
+  const { data: emp, error: empErr } = await db
+    .from("employees")
+    .select("id, employee_type, is_active")
+    .eq("id", input.employee_id)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (empErr) throw new Error(empErr.message);
+  const e = emp as { employee_type?: string; is_active?: boolean } | null;
+  if (!e) throw new Error("ไม่พบพนักงานที่เลือก (หรืออยู่นอกสำนักงานของคุณ)");
+  if (e.employee_type !== "accountant" && e.employee_type !== "cs") {
+    throw new Error("ผู้ดูแลต้องเป็นนักบัญชีหรือทีมบริการลูกค้า (CS)");
   }
+  if (!e.is_active) throw new Error("พนักงานที่เลือกถูกปิดใช้งานอยู่");
 
-  const today = todayISO();
-
-  // 2) ปิด assignment ปัจจุบันของคู่ (customer, employee) เดิม ถ้ามี
-  const { data: existing, error: findErr } = await db
-    .from("customer_assignments")
+  // 3) ลูกค้ารายนี้มีกลุ่มแชตผูกไหม
+  const { data: groups, error: gErr } = await db
+    .from("chat_groups")
     .select("id")
     .eq("tenant_id", tenantId)
     .eq("customer_id", input.customer_id)
-    .eq("employee_id", input.employee_id)
-    .is("valid_to", null)
+    .in("group_kind", REAL_GROUP_KINDS as unknown as string[])
     .is("deleted_at", null);
-  if (findErr) throw new Error(findErr.message);
-
-  const replacedPrevious = (existing ?? []).length > 0;
-  if (replacedPrevious) {
-    const { error: closeErr } = await db
-      .from("customer_assignments")
-      .update({ valid_to: today })
-      .eq("tenant_id", tenantId)
-      .eq("customer_id", input.customer_id)
-      .eq("employee_id", input.employee_id)
-      .is("valid_to", null)
-      .is("deleted_at", null);
-    if (closeErr) throw new Error(closeErr.message);
+  if (gErr) throw new Error(gErr.message);
+  if (!groups || groups.length === 0) {
+    throw new Error(
+      "ลูกค้ารายนี้ยังไม่มีกลุ่มแชต — จับคู่กลุ่ม→ลูกค้าก่อนที่หน้าตั้งค่าตรวจแชต"
+    );
   }
 
-  // 3) insert แถวใหม่ (ผู้ดูแลปัจจุบัน)
-  const { data, error } = await db
-    .from("customer_assignments")
-    .insert({
-      tenant_id: tenantId, // ★ จาก session
-      customer_id: input.customer_id,
-      employee_id: input.employee_id,
-      team_id: input.team_id ?? null,
-      role: input.role,
-      valid_from: today,
-    })
-    .select("id")
-    .single();
-  if (error) {
-    // unique violation จาก partial index 0028 (tenant, customer, employee) where valid_to null
-    //   เกิดได้เมื่อ race กับอีก request ที่เพิ่งสร้างคู่เดียวกัน → แจ้งสุภาพ (idempotent-ish)
-    if ((error as { code?: string }).code === "23505") {
-      throw new Error("มีการมอบหมายลูกค้ารายนี้ให้พนักงานคนนี้อยู่แล้ว");
-    }
-    throw new Error(error.message);
-  }
+  // 4) ตั้งผู้ดูแลบนทุกกลุ่มของลูกค้ารายนี้
+  const { data: upd, error: uErr } = await db
+    .from("chat_groups")
+    .update({ responsible_employee_id: input.employee_id })
+    .eq("tenant_id", tenantId)
+    .eq("customer_id", input.customer_id)
+    .in("group_kind", REAL_GROUP_KINDS as unknown as string[])
+    .is("deleted_at", null)
+    .select("id");
+  assertAffected(upd as unknown[] | null, uErr);
 
-  return { id: (data as { id: string }).id, replacedPrevious };
+  return { groupCount: (upd ?? []).length };
 }
 
-/** สิ้นสุดการเป็นผู้ดูแลปัจจุบัน (set valid_to = วันนี้) — เก็บ history */
+/**
+ * สิ้นสุดการเป็นผู้ดูแล — เอานักบัญชีออกจากทุกกลุ่มแชตของลูกค้ารายนี้
+ *   (set responsible_employee_id = null บนกลุ่มที่ยังมีผู้ดูแลอยู่)
+ */
 export async function endAssignment(
   db: DB,
   tenantId: string,
-  assignmentId: string
+  customerId: string
 ): Promise<void> {
   const { data, error } = await db
-    .from("customer_assignments")
-    .update({ valid_to: todayISO() })
-    .eq("id", assignmentId)
+    .from("chat_groups")
+    .update({ responsible_employee_id: null })
     .eq("tenant_id", tenantId)
-    .is("valid_to", null)
+    .eq("customer_id", customerId)
+    .in("group_kind", REAL_GROUP_KINDS as unknown as string[])
+    .is("deleted_at", null)
+    .not("responsible_employee_id", "is", null)
     .select("id");
   assertAffected(data as unknown[] | null, error);
 }

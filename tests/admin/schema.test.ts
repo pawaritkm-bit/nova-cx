@@ -214,13 +214,20 @@ describe("updateCustomerSchema", () => {
   });
 });
 
-describe("createAssignmentSchema", () => {
-  it("ผ่าน: customer+employee uuid + role", () => {
+describe("createAssignmentSchema (มอบหมายผ่านกลุ่มแชต — customer + employee เท่านั้น)", () => {
+  it("ผ่าน: customer+employee uuid (ไม่มี role/team แล้ว)", () => {
     const r = createAssignmentSchema.safeParse({
       customer_id: UUID,
       employee_id: UUID,
-      role: "member",
-      team_id: "",
+    });
+    expect(r.success).toBe(true);
+  });
+  it("ผ่าน: มี key ส่วนเกิน (role/team) ถูกละเว้น ไม่ทำให้ fail", () => {
+    const r = createAssignmentSchema.safeParse({
+      customer_id: UUID,
+      employee_id: UUID,
+      role: "boss",
+      team_id: "x",
     });
     expect(r.success).toBe(true);
   });
@@ -228,15 +235,13 @@ describe("createAssignmentSchema", () => {
     const r = createAssignmentSchema.safeParse({
       customer_id: "nope",
       employee_id: UUID,
-      role: "member",
     });
     expect(r.success).toBe(false);
   });
-  it("ล้มเหลว: role นอก enum", () => {
+  it("ล้มเหลว: employee_id ไม่ใช่ uuid", () => {
     const r = createAssignmentSchema.safeParse({
       customer_id: UUID,
-      employee_id: UUID,
-      role: "boss",
+      employee_id: "nope",
     });
     expect(r.success).toBe(false);
   });

@@ -175,14 +175,13 @@ export const updateCustomerSchema = z.object({
 });
 export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>;
 
-// ---- ฟอร์ม 4: มอบหมาย (ลูกค้า → นักบัญชี) ---------------------------
+// ---- ฟอร์ม 4: มอบหมาย (ลูกค้า → นักบัญชี ผ่านกลุ่มแชต) ----------------
+//   ★ ใหม่: มอบหมาย = ตั้งนักบัญชีผู้ดูแล (responsible_employee_id) บนทุกกลุ่มแชต
+//     ที่จับคู่ลูกค้ารายนี้ (chat_groups) — ไม่มี role/team ต่อการมอบหมายแล้ว
+//     (กลุ่มไม่มี role; ทีมของนักบัญชีมาจาก team_members ต่างหาก)
 export const createAssignmentSchema = z.object({
   customer_id: z.string().uuid("กรุณาเลือกลูกค้า"),
   employee_id: z.string().uuid("กรุณาเลือกพนักงาน"),
-  role: z.enum(ASSIGNMENT_ROLES, {
-    errorMap: () => ({ message: "เลือกบทบาทผู้ดูแล" }),
-  }),
-  team_id: optionalUuid,
 });
 export type CreateAssignmentInput = z.infer<typeof createAssignmentSchema>;
 

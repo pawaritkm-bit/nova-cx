@@ -10,7 +10,7 @@ import type {
   TeamRow,
   EmployeeRow,
   CustomerRow,
-  AssignmentRow,
+  CaretakerRow,
 } from "@/lib/admin/service";
 import type { WorkloadRow } from "@/lib/admin/workload";
 import type { StaffRegInfo } from "./page";
@@ -54,11 +54,6 @@ const EMPLOYEE_TYPE_LABEL: Record<string, string> = {
   sales: "เซล",
   cs: "CS",
   other: "อื่น ๆ",
-};
-const ROLE_LABEL: Record<string, string> = {
-  lead: "หัวหน้า (lead)",
-  member: "นักบัญชี/สมาชิก (member)",
-  coordinator: "ผู้ประสานงาน (coordinator)",
 };
 /** ป้ายประเภทลูกค้า (0037) — ใช้ทั้งลูกค้าและทีม */
 const CUSTOMER_TYPE_LABEL: Record<string, string> = {
@@ -1013,15 +1008,13 @@ function ManualSendCell({
 // แท็บ 4: มอบหมาย
 // =====================================================================
 function AssignmentsTab({
-  assignments,
+  caretakers,
   customers,
   employees,
-  teams,
 }: {
-  assignments: AssignmentRow[];
+  caretakers: CaretakerRow[];
   customers: CustomerRow[];
   employees: EmployeeRow[];
-  teams: TeamRow[];
 }) {
   const [state, action, pending] = useActionState(createAssignmentAction, null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -1029,12 +1022,15 @@ function AssignmentsTab({
     if (state?.ok) formRef.current?.reset();
   }, [state]);
 
-  const activeEmployees = employees.filter((e) => e.is_active);
+  // ผู้ดูแลกลุ่มต้องเป็นนักบัญชี/CS + ยัง active (สอดคล้องกับ guard ฝั่ง service)
+  const assignableEmployees = employees.filter(
+    (e) => e.is_active && (e.employee_type === "accountant" || e.employee_type === "cs")
+  );
 
   return (
     <div className="admin-grid">
       <form ref={formRef} action={action} className="card admin-form">
-        <h3>มอบหมายลูกค้า → พนักงาน</h3>
+        <h3>มอบหมายลูกค้า → นักบัญชีผู้ดูแล</h3>
         <label>
           ลูกค้า *
           <select name="customer_id" required defaultValue="">
@@ -1050,33 +1046,14 @@ function AssignmentsTab({
           </select>
         </label>
         <label>
-          พนักงาน (ผู้ดูแล) *
+          นักบัญชี (ผู้ดูแล) *
           <select name="employee_id" required defaultValue="">
             <option value="" disabled>
-              — เลือกพนักงาน —
+              — เลือกนักบัญชี —
             </option>
-            {activeEmployees.map((e) => (
+            {assignableEmployees.map((e) => (
               <option key={e.id} value={e.id}>
                 {e.nickname ? `${e.first_name} (${e.nickname})` : e.first_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          บทบาท *
-          <select name="role" defaultValue="member">
-            <option value="member">นักบัญชี/สมาชิก (member)</option>
-            <option value="lead">หัวหน้า (lead)</option>
-            <option value="coordinator">ผู้ประสานงาน (coordinator)</option>
-          </select>
-        </label>
-        <label>
-          ทีม (ไม่บังคับ)
-          <select name="team_id" defaultValue="">
-            <option value="">— ไม่ระบุ —</option>
-            {teams.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
               </option>
             ))}
           </select>
@@ -1086,45 +1063,50 @@ function AssignmentsTab({
         </button>
         <ResultNote state={state} />
         <p className="admin-hint">
-          หากมอบหมายลูกค้าคนนี้ให้พนักงานคนเดิมอยู่แล้ว ระบบจะปิดรายการเดิม
-          แล้วสร้างใหม่ให้อัตโนมัติ (เก็บประวัติไว้)
+          การมอบหมายจะตั้งนักบัญชีคนนี้เป็น “ผู้ดูแล” บนทุกกลุ่มแชตที่จับคู่ลูกค้ารายนี้
+          (แหล่งข้อมูลเดียวกับหน้าตรวจแชต) — ถ้าลูกค้ายังไม่มีกลุ่มแชต
+          ให้ไปจับคู่กลุ่ม→ลูกค้าที่หน้า “ตั้งค่าตรวจแชต” ก่อน
         </p>
       </form>
 
       <div className="card">
-        <h3>ผู้ดูแลปัจจุบัน ({assignments.length})</h3>
-        {assignments.length === 0 ? (
-          <p className="admin-empty">ยังไม่มีการมอบหมาย</p>
+        <h3>ผู้ดูแลปัจจุบัน ({caretakers.length})</h3>
+        {caretakers.length === 0 ? (
+          <p className="admin-empty">
+            ยังไม่มีลูกค้าที่มีนักบัญชีผู้ดูแล (ผูกผ่านกลุ่มแชต)
+          </p>
         ) : (
           <table className="admin-table">
             <thead>
               <tr>
                 <th>ลูกค้า</th>
                 <th>ผู้ดูแล</th>
-                <th>บทบาท</th>
-                <th>ตั้งแต่</th>
+                <th>กลุ่มแชต</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {assignments.map((a) => (
-                <tr key={a.id}>
+              {caretakers.map((c) => (
+                <tr key={c.key}>
                   <td>
-                    {a.customer_code ? `[${a.customer_code}] ` : ""}
-                    {a.customer_name ?? "—"}
+                    {c.customerCode ? `[${c.customerCode}] ` : ""}
+                    {c.customerName ?? "—"}
                   </td>
                   <td>
-                    {a.employee_name ?? "—"}
-                    {a.employee_nickname ? ` (${a.employee_nickname})` : ""}
+                    {c.employee_name ?? "—"}
+                    {c.employee_nickname ? ` (${c.employee_nickname})` : ""}
                   </td>
-                  <td>{ROLE_LABEL[a.role] ?? a.role}</td>
-                  <td>{a.valid_from}</td>
+                  <td>
+                    {c.groupNames.length > 0
+                      ? c.groupNames.join(", ")
+                      : `${c.groupCount} กลุ่ม`}
+                  </td>
                   <td>
                     <RowAction
                       action={endAssignmentAction}
-                      fields={{ id: a.id }}
+                      fields={{ customer_id: c.customerId }}
                       label="สิ้นสุด"
-                      confirm="สิ้นสุดการมอบหมายนี้?"
+                      confirm="ยกเลิกผู้ดูแลของลูกค้ารายนี้ (ทุกกลุ่มแชต)?"
                     />
                   </td>
                 </tr>
@@ -1352,14 +1334,14 @@ export default function AdminTabs({
   teams,
   employees,
   customers,
-  assignments,
+  caretakers,
   workload,
   staffReg,
 }: {
   teams: TeamRow[];
   employees: EmployeeRow[];
   customers: CustomerRow[];
-  assignments: AssignmentRow[];
+  caretakers: CaretakerRow[];
   workload: WorkloadRow[];
   staffReg: StaffRegInfo;
 }) {
@@ -1387,10 +1369,9 @@ export default function AdminTabs({
       {tab === "customers" && <CustomersTab customers={customers} />}
       {tab === "assignments" && (
         <AssignmentsTab
-          assignments={assignments}
+          caretakers={caretakers}
           customers={customers}
           employees={employees}
-          teams={teams}
         />
       )}
       {tab === "workload" && <WorkloadTab workload={workload} />}

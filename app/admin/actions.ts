@@ -275,7 +275,7 @@ export async function sendManualSurveyAction(
   }
 }
 
-// ---- มอบหมาย ---------------------------------------------------------
+// ---- มอบหมาย (ตั้งผู้ดูแลกลุ่มแชตของลูกค้า) --------------------------
 export async function createAssignmentAction(
   _prev: ActionResult | null,
   formData: FormData
@@ -283,31 +283,30 @@ export async function createAssignmentAction(
   const parsed = createAssignmentSchema.safeParse({
     customer_id: formData.get("customer_id"),
     employee_id: formData.get("employee_id"),
-    role: formData.get("role"),
-    team_id: formData.get("team_id"),
   });
   if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
 
-  let replaced = false;
+  let groupCount = 0;
   const res = await withAdminWrite(async (db, tenantId) => {
     const out = await createAssignment(db, tenantId, parsed.data);
-    replaced = out.replacedPrevious;
+    groupCount = out.groupCount;
   });
   if (!res.ok) return res;
   return {
     ok: true,
-    message: replaced
-      ? "มอบหมายสำเร็จ (แทนที่การมอบหมายเดิมของคู่นี้)"
-      : "มอบหมายสำเร็จ",
+    message: `มอบหมายสำเร็จ — ตั้งผู้ดูแลบน ${groupCount} กลุ่มแชตของลูกค้ารายนี้`,
   };
 }
 
+/** สิ้นสุดการมอบหมาย — เอานักบัญชีออกจากทุกกลุ่มแชตของลูกค้า (รับ customer_id) */
 export async function endAssignmentAction(
   _prev: ActionResult | null,
   formData: FormData
 ): Promise<ActionResult> {
-  const id = String(formData.get("id") ?? "");
-  if (!id) return { ok: false, message: "ไม่พบรายการมอบหมาย" };
-  const res = await withAdminWrite((db, tenantId) => endAssignment(db, tenantId, id));
-  return res.ok ? { ok: true, message: "สิ้นสุดการมอบหมายแล้ว" } : res;
+  const customerId = String(formData.get("customer_id") ?? "");
+  if (!customerId) return { ok: false, message: "ไม่พบลูกค้าที่ต้องการยกเลิกผู้ดูแล" };
+  const res = await withAdminWrite((db, tenantId) =>
+    endAssignment(db, tenantId, customerId)
+  );
+  return res.ok ? { ok: true, message: "ยกเลิกผู้ดูแลของลูกค้ารายนี้แล้ว" } : res;
 }
