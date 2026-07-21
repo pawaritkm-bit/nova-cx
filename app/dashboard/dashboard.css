@@ -168,6 +168,11 @@
 .nova-dash .app-nav-group.is-primary .app-nav-link:hover {
   background: #e8f1ff;
 }
+/* ★ active ในกลุ่มหัวใจ: ต้อง override สี navy ของกลุ่ม (specificity สูงกว่า) ไม่งั้น navy บน navy = มองไม่เห็น */
+.nova-dash .app-nav-group.is-primary .app-nav-link.active {
+  background: var(--navy-800);
+  color: #fff;
+}
 
 /* กลุ่มตั้งค่า/ข้อมูล — ใช้นาน ๆ ครั้ง จึงจางลง (active ยังเด่นตามปกติ) */
 .nova-dash .app-nav-group.is-muted .app-nav-link:not(.active) {
