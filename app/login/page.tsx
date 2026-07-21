@@ -1,14 +1,17 @@
 import { redirect } from "next/navigation";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
+import { resolveViewer } from "@/lib/dashboard/session";
+import { resolveHomePath } from "@/lib/auth/home";
 import { LoginForm } from "./_form";
 
 export const dynamic = "force-dynamic";
 
 /**
  * หน้าเข้าสู่ระบบพนักงาน (Supabase Auth)
- * - ถ้ามี session อยู่แล้ว → เด้งเข้า /dashboard เลย
- * - รับ ?redirect= เพื่อพากลับปลายทางเดิมหลัง login สำเร็จ
+ * - ถ้ามี session อยู่แล้ว → เด้งไป "หน้าออดิทตามบทบาท" (resolveHomePath) เลย
+ *   (เว้นมี ?redirect= ระบุปลายทางชัดเจน → ไปตามนั้น)
+ * - รับ ?redirect= เพื่อพากลับปลายทางเดิมหลัง login สำเร็จ (กัน open-redirect)
  */
 export default async function LoginPage({
   searchParams,
@@ -16,24 +19,33 @@ export default async function LoginPage({
   searchParams: Promise<{ redirect?: string }>;
 }) {
   const { redirect: redirectParam } = await searchParams;
-  // ยอมรับเฉพาะ path ภายใน (กัน open-redirect)
-  const redirectTo =
+  // ยอมรับเฉพาะ path ภายใน (กัน open-redirect) — null = ไม่มีปลายทางชัดเจน
+  const explicitRedirect =
     redirectParam && redirectParam.startsWith("/") && !redirectParam.startsWith("//")
       ? redirectParam
-      : "/dashboard";
+      : null;
 
-  // ถ้าตั้ง env แล้วและมี session อยู่ → ข้ามหน้า login
+  // ถ้าตั้ง env แล้ว → เช็ก session; ★ resolve นอก try/catch เพื่อไม่ให้ catch กลืน
+  //   NEXT_REDIRECT ที่ redirect() โยนออกมา
+  let viewer: Awaited<ReturnType<typeof resolveViewer>> | null = null;
   if (getSupabaseEnv()) {
     try {
       const db = await createClient();
-      const {
-        data: { user },
-      } = await db.auth.getUser();
-      if (user) redirect(redirectTo);
+      viewer = await resolveViewer(db);
     } catch {
       // อ่าน session ไม่ได้ → แสดงฟอร์ม login ตามปกติ
+      viewer = null;
     }
   }
+
+  // มี session อยู่แล้ว → ข้ามหน้า login ไปปลายทาง (explicit) หรือหน้าออดิทตามบทบาท
+  if (viewer?.hasSession) {
+    redirect(explicitRedirect ?? resolveHomePath(viewer.role));
+  }
+
+  // ยังไม่ login: ถ้ามีปลายทางชัดเจนให้กลับไปหลัง login; ไม่งั้นส่งไป "/login" ให้ server
+  //   resolve บทบาทแล้วเด้งต่อ (form เป็น client — resolve role ที่นี่ไม่สะดวก)
+  const redirectTo = explicitRedirect ?? "/login";
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6 py-16">

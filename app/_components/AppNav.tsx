@@ -19,7 +19,8 @@ import NovaMascot from "../liff/survey/[token]/NovaMascot";
  * โดยไม่ต้องพิมพ์ URL เอง
  *   - โลโก้/ชื่อ NOVA-CX + มาสคอตน้อง NOVA (reuse NovaMascot variant="profile")
  *   - ลิงก์แต่ละอันโผล่เฉพาะบทบาทที่เข้าได้ (allow-list) — กันงงว่ากดแล้วโดน redirect
- *       · Dashboard          — ทุกบทบาทที่ login
+ *       · ตรวจแชต/ออดิท       — หัวใจระบบ (กลุ่มบนสุด) แสดงตามบทบาทที่มีสิทธิ์
+ *       · ประเมินลูกค้า (CSAT) — ทุกบทบาทที่ login (เมนูรอง กลุ่ม "ประเมิน & เสียงลูกค้า")
  *       · เคสร้องเรียน /cases — privileged (executive/admin/cs)
  *       · รายงาน /reports     — export ได้ (executive/admin/acc_lead/sales_lead/cs)
  *       · แบบประเมิน /surveys — admin/executive
@@ -85,17 +86,9 @@ type NavGroup = {
 // key/href/label/canSee ของแต่ละลิงก์คงเดิมทุกอย่าง — จัดเข้ากลุ่มตามความสำคัญเท่านั้น
 const NAV_GROUPS: NavGroup[] = [
   {
-    id: "overview",
-    label: "ภาพรวม",
-    items: [
-      // Dashboard เห็นเสมอเมื่อ login (ทุกบทบาทมีหน้า dashboard ของตัวเอง)
-      { key: "dashboard", href: "/dashboard", label: "Dashboard", canSee: () => true },
-    ],
-  },
-  {
     id: "service",
     label: "ดูแลงานบริการลูกค้า",
-    emphasis: true, // หัวใจระบบ — เด่นสุด
+    emphasis: true, // หัวใจระบบ — เด่นสุด (ออดิท/ตรวจแชต) อยู่บนสุด
     items: [
       // ตรวจแชต (โมดูล AI วิเคราะห์แชท) — แสดงตามบทบาทที่มีสิทธิ์ในแต่ละหน้า
       { key: "chat-exec", href: "/chat-audit", label: "ตรวจแชต (ภาพรวม)", canSee: canSeeExecDashboard },
@@ -110,6 +103,9 @@ const NAV_GROUPS: NavGroup[] = [
     id: "assess",
     label: "ประเมิน & เสียงลูกค้า",
     items: [
+      // ★ แบบประเมินลูกค้า (CSAT) — ลดระดับเป็นเมนูรอง (โปรแกรมเน้นออดิทเป็นหลัก)
+      //   เห็นเสมอเมื่อ login (ทุกบทบาทมีหน้า dashboard CSAT ของตัวเอง)
+      { key: "dashboard", href: "/dashboard", label: "ประเมินลูกค้า (CSAT)", canSee: () => true },
       // รายงานประเมินนักบัญชี (รายเดือน) — exec/admin/auditor/lead/hr/accountant (scope จริงในหน้า)
       { key: "chat-report", href: "/chat-audit/reports", label: "รายงานประเมิน", canSee: canSeeAccountantReport },
       // ★ ประเมินสำนักงาน (แชต 1-1 ฝั่งลูกค้า) — คนละส่วนกับประเมินนักบัญชี/ทีม — admin/executive

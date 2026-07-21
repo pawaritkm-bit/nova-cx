@@ -8,6 +8,13 @@ import { validateLoginInput, loginErrorMessage } from "@/lib/auth/login";
 /**
  * ฟอร์มเข้าสู่ระบบ (client) — signInWithPassword ผ่าน browser client
  * สำเร็จ → refresh (ให้ middleware/Server Component เห็น cookie ใหม่) แล้วไป redirectTo
+ *
+ * หมายเหตุ redirectTo:
+ *   - มี ?redirect= ชัดเจน → redirectTo = path นั้น (พากลับปลายทางเดิม)
+ *   - ไม่มีปลายทาง → redirectTo = "/login" : กลับเข้าหน้า login อีกครั้ง แต่คราวนี้มี
+ *     session แล้ว server component (login/page.tsx) จะ resolve บทบาทแล้ว redirect()
+ *     ต่อไป "หน้าออดิทตามบทบาท" เอง — client ไม่ต้อง resolve role เอง (ไม่มี flash ฟอร์ม
+ *     เพราะ redirect เกิดตอน server render)
  */
 export function LoginForm({ redirectTo }: { redirectTo: string }) {
   const router = useRouter();
