@@ -148,13 +148,18 @@ begin
   -- 2) idempotency guard: นับเฉพาะข้อความที่ยัง analyzed_at IS NULL (ล็อก FOR UPDATE)
   --    ถ้า 0 = window นี้ถูกวิเคราะห์ไปแล้ว → no-op (ไม่ insert ซ้ำ/ไม่จ่าย AI ซ้ำ)
   if v_count > 0 then
-    select count(*) into v_unanalyzed
-    from public.chat_messages
-    where tenant_id = p_tenant_id
-      and chat_group_id = p_chat_group_id
-      and analyzed_at is null
-      and id in (select (jsonb_array_elements_text(p_message_ids))::uuid)
-    for update;
+    -- ★ ล็อกด้วย CTE ก่อน แล้วค่อย count — กัน 0A000 "FOR UPDATE with aggregate"
+    --   (บทเรียนเดิม hotfix 0036: count(*) + FOR UPDATE โดยตรงจะพังตอนรันจริง)
+    with locked as (
+      select id
+      from public.chat_messages
+      where tenant_id = p_tenant_id
+        and chat_group_id = p_chat_group_id
+        and analyzed_at is null
+        and id in (select (jsonb_array_elements_text(p_message_ids))::uuid)
+      for update
+    )
+    select count(*) into v_unanalyzed from locked;
 
     if v_unanalyzed = 0 then
       return jsonb_build_object(
