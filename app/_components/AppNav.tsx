@@ -9,6 +9,7 @@ import {
   canSeeMeDashboard,
   canSeeRiskDashboard,
 } from "@/lib/chat-dashboard/access";
+import { canSeeTeamStructure } from "@/lib/teams/queries";
 import type { RoleCode } from "@/lib/dashboard/types";
 import NovaMascot from "../liff/survey/[token]/NovaMascot";
 
@@ -53,6 +54,7 @@ export type AppNavActive =
   | "chat-me"
   | "chat-risk"
   | "chat-office"
+  | "chat-teams"
   | "chat-knowledge"
   | "chat-viewer"
   | "chat-eval"
@@ -96,6 +98,8 @@ const NAV_GROUPS: NavGroup[] = [
       { key: "chat-team", href: "/chat-audit/team", label: "ตรวจแชต (ทีม)", canSee: canSeeTeamDashboard },
       { key: "chat-me", href: "/chat-audit/me", label: "งานแชตของฉัน", canSee: canSeeMeDashboard },
       { key: "chat-risk", href: "/chat-audit/risk", label: "ลูกค้าเสี่ยง", canSee: canSeeRiskDashboard },
+      // โครงสร้างทีม — ผังทีมบัญชี (privileged เห็นทุกทีม / accountant เห็นทีมตัวเอง)
+      { key: "chat-teams", href: "/chat-audit/teams", label: "โครงสร้างทีม", canSee: canSeeTeamStructure },
       // เคสร้องเรียนทั้งหมด — เฉพาะ privileged (executive/admin/cs)
       { key: "cases", href: "/cases", label: "เคสร้องเรียน", canSee: isPrivilegedRole },
     ],
