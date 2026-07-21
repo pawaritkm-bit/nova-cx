@@ -18,6 +18,7 @@ import {
 } from "@/lib/chat-admin/actions";
 import type { ChatGroupRow } from "@/lib/chat-admin/mapping";
 import type { SlaRuleRow } from "@/lib/chat-admin/sla";
+import { filterChatGroups } from "@/lib/chat-admin/group-filter";
 
 type CustomerOpt = { id: string; name: string; code: string | null };
 type EmployeeOpt = { id: string; name: string };
@@ -182,6 +183,10 @@ function MappingPanel({
   const mapped = groups.filter((g) => g.customerId).length;
   const noName = groups.filter((g) => !g.groupName).length;
   const [backfillState, backfillAction] = useActionState(backfillGroupNamesAction, null);
+  // ค้นหากลุ่มแบบ client-side (กรองตามชื่อกลุ่ม + ชื่อลูกค้า + ชื่อนักบัญชี) — ไม่แตะ server
+  const [query, setQuery] = useState("");
+  const filtered = filterChatGroups(groups, query);
+  const trimmedQuery = query.trim();
   return (
     <div className="card">
       <div className="section-title">
@@ -204,32 +209,65 @@ function MappingPanel({
       {groups.length === 0 ? (
         <p className="empty">ยังไม่มีกลุ่ม LINE (รอบอทเข้ากลุ่มและเก็บข้อความ)</p>
       ) : (
-        <div className="table-wrap">
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>กลุ่ม LINE</th>
-                <th>ลูกค้าที่จับคู่</th>
-                <th>นักบัญชีผู้ดูแล</th>
-                <th className="center">สมาชิก</th>
-                <th className="center">สถานะ</th>
-                <th className="center"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map((g) => (
-                <GroupRow
-                  key={g.id}
-                  group={g}
-                  customers={customers}
-                  accountants={accountants}
-                  suggestions={suggestionsByGroup[g.id] ?? []}
-                  accountantSuggestion={accountantSuggestionByGroup[g.id] ?? null}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {/* ช่องค้นหากลุ่ม (client-side) — พิมพ์แล้วกรองทันทีตามชื่อกลุ่ม/ลูกค้า/นักบัญชี */}
+          <div className="group-search">
+            <input
+              type="search"
+              className="group-search-input"
+              placeholder="ค้นหาชื่อกลุ่ม…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="ค้นหากลุ่ม LINE"
+            />
+            {trimmedQuery ? (
+              <button
+                type="button"
+                className="group-search-clear"
+                onClick={() => setQuery("")}
+                title="ล้างคำค้นหา"
+                aria-label="ล้างคำค้นหา"
+              >
+                ×
+              </button>
+            ) : null}
+            {trimmedQuery ? (
+              <span className="muted group-search-count">
+                พบ {filtered.length} จาก {groups.length} กลุ่ม
+              </span>
+            ) : null}
+          </div>
+          {filtered.length === 0 ? (
+            <p className="empty">ไม่พบกลุ่มที่ตรงกับ &quot;{trimmedQuery}&quot;</p>
+          ) : (
+            <div className="table-wrap">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>กลุ่ม LINE</th>
+                    <th>ลูกค้าที่จับคู่</th>
+                    <th>นักบัญชีผู้ดูแล</th>
+                    <th className="center">สมาชิก</th>
+                    <th className="center">สถานะ</th>
+                    <th className="center"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((g) => (
+                    <GroupRow
+                      key={g.id}
+                      group={g}
+                      customers={customers}
+                      accountants={accountants}
+                      suggestions={suggestionsByGroup[g.id] ?? []}
+                      accountantSuggestion={accountantSuggestionByGroup[g.id] ?? null}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

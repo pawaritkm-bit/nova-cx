@@ -95,6 +95,44 @@
 }
 .suggest-chips .chip:hover { background: #dbeafe; }
 
+/* ช่องค้นหากลุ่ม LINE (client-side filter เหนือรายการ) */
+.group-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.group-search-input {
+  flex: 1 1 240px;
+  max-width: 360px;
+  padding: 8px 12px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
+}
+.group-search-input:focus {
+  outline: none;
+  border-color: var(--navy-800, #1e293b);
+}
+.group-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line, #e2e8f0);
+  background: #fff;
+  border-radius: 8px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted, #64748b);
+  cursor: pointer;
+}
+.group-search-clear:hover { background: #f1f5f9; }
+.group-search-count { font-size: 13px; }
+
 /* ตัวช่วย 1: กล่อง propagate ตัวตนสมาชิก (review-first) */
 .propagate-box {
   background: #f8fafc;
