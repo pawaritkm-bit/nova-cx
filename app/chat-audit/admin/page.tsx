@@ -103,8 +103,18 @@ export default async function ChatAdminPage() {
           groups={groups}
           customers={customers
             .map((c) => ({ id: c.id, name: c.name, code: c.customer_code }))
-            // เรียงลูกค้าใน dropdown ตามชื่อแบบไทย (presentation) — option "— ยังไม่จับคู่ —" เป็น static ใน JSX อยู่บนสุดเสมอ
-            .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", "th"))}
+            // เรียงลูกค้าใน dropdown ตามรหัสลูกค้า (customer_code) แบบ natural (prefix ตัวอักษร + เลข)
+            // เช่น N003 < N011 < N026 < N160 < N199 < P139 < P404 < P510
+            // ลูกค้าที่ไม่มีรหัส (null) จัดไว้ท้ายสุด เรียงตามชื่อไทยกันหาย
+            // option "— ยังไม่จับคู่ —" เป็น static ใน JSX อยู่บนสุดเสมอ
+            .sort((a, b) => {
+              const ca = a.code ?? "";
+              const cb = b.code ?? "";
+              if (!ca && !cb) return (a.name ?? "").localeCompare(b.name ?? "", "th");
+              if (!ca) return 1; // a ไม่มีรหัส → ลงท้าย
+              if (!cb) return -1; // b ไม่มีรหัส → ลงท้าย
+              return ca.localeCompare(cb, undefined, { numeric: true, sensitivity: "base" });
+            })}
           accountants={accountants
             .map((e) => ({ id: e.id, name: e.nickname || e.first_name }))
             // เรียงนักบัญชีผู้ดูแลตามชื่อ (nickname/first_name) แบบไทย
