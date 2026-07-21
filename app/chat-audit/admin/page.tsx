@@ -101,8 +101,14 @@ export default async function ChatAdminPage() {
       >
         <AdminConfig
           groups={groups}
-          customers={customers.map((c) => ({ id: c.id, name: c.name, code: c.customer_code }))}
-          accountants={accountants.map((e) => ({ id: e.id, name: e.nickname || e.first_name }))}
+          customers={customers
+            .map((c) => ({ id: c.id, name: c.name, code: c.customer_code }))
+            // เรียงลูกค้าใน dropdown ตามชื่อแบบไทย (presentation) — option "— ยังไม่จับคู่ —" เป็น static ใน JSX อยู่บนสุดเสมอ
+            .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", "th"))}
+          accountants={accountants
+            .map((e) => ({ id: e.id, name: e.nickname || e.first_name }))
+            // เรียงนักบัญชีผู้ดูแลตามชื่อ (nickname/first_name) แบบไทย
+            .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", "th"))}
           teams={teams.map((t) => ({ id: t.id, name: t.name }))}
           weights={weights}
           slaRules={slaRules}
