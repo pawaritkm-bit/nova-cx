@@ -102,17 +102,39 @@
   background: #f5f9ff;
 }
 
-/* ---- App nav (แถบเมนูนำทางร่วม dashboard ↔ admin) ---- */
+/* ---- App nav (แถบเมนูนำทางร่วม dashboard ↔ admin) — จัดกลุ่มตามความสำคัญ ---- */
 .nova-dash .app-nav {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: flex-start;
+  gap: 10px 16px;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 5px;
+  padding: 10px 12px;
   margin-bottom: 18px;
   box-shadow: var(--shadow-sm);
+}
+/* กลุ่มเมนูหนึ่งกลุ่ม: หัวข้อกลุ่มอยู่บน ลิงก์เรียงด้านล่าง */
+.nova-dash .app-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 6px 4px;
+  border-radius: 10px;
+}
+.nova-dash .app-nav-group-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  padding: 0 4px;
+}
+.nova-dash .app-nav-group-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .nova-dash .app-nav-link {
   padding: 9px 18px;
@@ -131,6 +153,26 @@
 .nova-dash .app-nav-link.active {
   background: var(--navy-800);
   color: #fff;
+}
+
+/* กลุ่มหัวใจระบบ (ดูแลงานบริการลูกค้า) — เด่นกว่าเพื่อน: พื้นฟ้าอ่อน + หัวข้อ accent */
+.nova-dash .app-nav-group.is-primary {
+  background: #f5f9ff;
+}
+.nova-dash .app-nav-group.is-primary .app-nav-group-label {
+  color: var(--blue-600);
+}
+.nova-dash .app-nav-group.is-primary .app-nav-link {
+  color: var(--navy-800);
+}
+.nova-dash .app-nav-group.is-primary .app-nav-link:hover {
+  background: #e8f1ff;
+}
+
+/* กลุ่มตั้งค่า/ข้อมูล — ใช้นาน ๆ ครั้ง จึงจางลง (active ยังเด่นตามปกติ) */
+.nova-dash .app-nav-group.is-muted .app-nav-link:not(.active) {
+  color: var(--muted-2);
+  font-weight: 600;
 }
 
 /* ---- Dev role switch (พรีวิว dev เท่านั้น) ---- */

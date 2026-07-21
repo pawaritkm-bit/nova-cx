@@ -70,30 +70,69 @@ type NavItem = {
   canSee: (role: RoleCode) => boolean;
 };
 
-const NAV_ITEMS: NavItem[] = [
-  // Dashboard เห็นเสมอเมื่อ login (ทุกบทบาทมีหน้า dashboard ของตัวเอง)
-  { key: "dashboard", href: "/dashboard", label: "Dashboard", canSee: () => true },
-  // เคสร้องเรียนทั้งหมด — เฉพาะ privileged (executive/admin/cs)
-  { key: "cases", href: "/cases", label: "เคสร้องเรียน", canSee: isPrivilegedRole },
-  // ตรวจแชต (โมดูล AI วิเคราะห์แชท) — แสดงตามบทบาทที่มีสิทธิ์ในแต่ละหน้า
-  { key: "chat-exec", href: "/chat-audit", label: "ตรวจแชต (ภาพรวม)", canSee: canSeeExecDashboard },
-  { key: "chat-team", href: "/chat-audit/team", label: "ตรวจแชต (ทีม)", canSee: canSeeTeamDashboard },
-  { key: "chat-me", href: "/chat-audit/me", label: "งานแชตของฉัน", canSee: canSeeMeDashboard },
-  { key: "chat-risk", href: "/chat-audit/risk", label: "ลูกค้าเสี่ยง", canSee: canSeeRiskDashboard },
-  // ★ ประเมินสำนักงาน (แชต 1-1 ฝั่งลูกค้า) — คนละส่วนกับประเมินนักบัญชี/ทีม — admin/executive
-  { key: "chat-office", href: "/chat-audit/office", label: "ประเมินสำนักงาน", canSee: isAdminRole },
-  // รายงานประเมินนักบัญชี (รายเดือน) — exec/admin/auditor/lead/hr/accountant (scope จริงในหน้า)
-  { key: "chat-report", href: "/chat-audit/reports", label: "รายงานประเมิน", canSee: canSeeAccountantReport },
-  // ตั้งค่าตรวจแชต (จับคู่กลุ่ม/น้ำหนัก/SLA) — admin/executive
-  { key: "chat-admin", href: "/chat-audit/admin", label: "ตั้งค่าตรวจแชต", canSee: isAdminRole },
-  // รายงาน/Export — บทบาทที่ export ข้อมูลผูกลูกค้าได้
-  { key: "reports", href: "/reports", label: "รายงาน", canSee: canExportReports },
-  // แบบประเมิน — admin/executive
-  { key: "surveys", href: "/surveys", label: "แบบประเมิน", canSee: isAdminRole },
-  // จัดการข้อมูล — admin/executive
-  { key: "admin", href: "/admin", label: "จัดการข้อมูล", canSee: isAdminRole },
-  // ตั้งค่า — admin/executive
-  { key: "settings", href: "/settings", label: "ตั้งค่า", canSee: isAdminRole },
+/** กลุ่มเมนู — จัดตามวัตถุประสงค์/ความสำคัญ (เรียงบน→ล่าง) เพื่อให้ nav อ่านง่าย */
+type NavGroup = {
+  id: string;
+  /** หัวข้อกลุ่ม (label เล็ก ๆ สีจาง) */
+  label: string;
+  /** เน้นกลุ่มนี้ให้เด่น (หัวใจระบบ) */
+  emphasis?: boolean;
+  /** ทำกลุ่มนี้ให้จางลง (ใช้นาน ๆ ครั้ง) */
+  muted?: boolean;
+  items: NavItem[];
+};
+
+// key/href/label/canSee ของแต่ละลิงก์คงเดิมทุกอย่าง — จัดเข้ากลุ่มตามความสำคัญเท่านั้น
+const NAV_GROUPS: NavGroup[] = [
+  {
+    id: "overview",
+    label: "ภาพรวม",
+    items: [
+      // Dashboard เห็นเสมอเมื่อ login (ทุกบทบาทมีหน้า dashboard ของตัวเอง)
+      { key: "dashboard", href: "/dashboard", label: "Dashboard", canSee: () => true },
+    ],
+  },
+  {
+    id: "service",
+    label: "ดูแลงานบริการลูกค้า",
+    emphasis: true, // หัวใจระบบ — เด่นสุด
+    items: [
+      // ตรวจแชต (โมดูล AI วิเคราะห์แชท) — แสดงตามบทบาทที่มีสิทธิ์ในแต่ละหน้า
+      { key: "chat-exec", href: "/chat-audit", label: "ตรวจแชต (ภาพรวม)", canSee: canSeeExecDashboard },
+      { key: "chat-team", href: "/chat-audit/team", label: "ตรวจแชต (ทีม)", canSee: canSeeTeamDashboard },
+      { key: "chat-me", href: "/chat-audit/me", label: "งานแชตของฉัน", canSee: canSeeMeDashboard },
+      { key: "chat-risk", href: "/chat-audit/risk", label: "ลูกค้าเสี่ยง", canSee: canSeeRiskDashboard },
+      // เคสร้องเรียนทั้งหมด — เฉพาะ privileged (executive/admin/cs)
+      { key: "cases", href: "/cases", label: "เคสร้องเรียน", canSee: isPrivilegedRole },
+    ],
+  },
+  {
+    id: "assess",
+    label: "ประเมิน & เสียงลูกค้า",
+    items: [
+      // รายงานประเมินนักบัญชี (รายเดือน) — exec/admin/auditor/lead/hr/accountant (scope จริงในหน้า)
+      { key: "chat-report", href: "/chat-audit/reports", label: "รายงานประเมิน", canSee: canSeeAccountantReport },
+      // ★ ประเมินสำนักงาน (แชต 1-1 ฝั่งลูกค้า) — คนละส่วนกับประเมินนักบัญชี/ทีม — admin/executive
+      { key: "chat-office", href: "/chat-audit/office", label: "ประเมินสำนักงาน", canSee: isAdminRole },
+      // แบบประเมิน — admin/executive
+      { key: "surveys", href: "/surveys", label: "แบบประเมิน", canSee: isAdminRole },
+    ],
+  },
+  {
+    id: "config",
+    label: "ตั้งค่า & ข้อมูล",
+    muted: true, // ใช้นาน ๆ ครั้ง — จางลง ล่างสุด
+    items: [
+      // ตั้งค่าตรวจแชต (จับคู่กลุ่ม/น้ำหนัก/SLA) — admin/executive
+      { key: "chat-admin", href: "/chat-audit/admin", label: "ตั้งค่าตรวจแชต", canSee: isAdminRole },
+      // จัดการข้อมูล — admin/executive
+      { key: "admin", href: "/admin", label: "จัดการข้อมูล", canSee: isAdminRole },
+      // รายงาน/Export — บทบาทที่ export ข้อมูลผูกลูกค้าได้
+      { key: "reports", href: "/reports", label: "รายงาน", canSee: canExportReports },
+      // ตั้งค่า — admin/executive
+      { key: "settings", href: "/settings", label: "ตั้งค่า", canSee: isAdminRole },
+    ],
+  },
 ];
 
 export default function AppNav({
@@ -114,9 +153,13 @@ export default function AppNav({
 }) {
   // แสดงเมนู/ควบคุมเฉพาะเมื่อ login จริงและมีบทบาท (หน้าถูก guard redirect อยู่แล้วถ้าไม่มี session)
   const showControls = authed && !!role;
-  // เมนูที่บทบาทนี้เห็นได้ (กรองด้วย allow-list ของแต่ละลิงก์)
-  const visibleItems = role
-    ? NAV_ITEMS.filter((item) => item.canSee(role))
+  // กรองลิงก์ในแต่ละกลุ่มด้วย allow-list เดิม แล้วตัดกลุ่มที่ไม่มีลิงก์ให้บทบาทนี้เห็นทิ้ง
+  // (ไม่โชว์หัวข้อกลุ่มลอย ๆ)
+  const visibleGroups = role
+    ? NAV_GROUPS.map((group) => ({
+        ...group,
+        items: group.items.filter((item) => item.canSee(role)),
+      })).filter((group) => group.items.length > 0)
     : [];
 
   return (
@@ -145,18 +188,30 @@ export default function AppNav({
         ) : null}
       </div>
 
-      {/* แถบเมนูร่วม — สลับหน้าได้จากที่เดียว (wrap ได้บนจอแคบ) */}
+      {/* แถบเมนูร่วม — จัดกลุ่มตามความสำคัญ มีหัวข้อกลุ่ม (wrap ได้บนจอแคบ) */}
       {showControls ? (
         <nav className="app-nav" aria-label="เมนูหลัก">
-          {visibleItems.map((item) => (
-            <Link
-              key={item.key}
-              href={item.href}
-              aria-current={active === item.key ? "page" : undefined}
-              className={`app-nav-link${active === item.key ? " active" : ""}`}
+          {visibleGroups.map((group) => (
+            <div
+              key={group.id}
+              className={`app-nav-group${group.emphasis ? " is-primary" : ""}${group.muted ? " is-muted" : ""}`}
+              role="group"
+              aria-label={group.label}
             >
-              {item.label}
-            </Link>
+              <span className="app-nav-group-label">{group.label}</span>
+              <div className="app-nav-group-links">
+                {group.items.map((item) => (
+                  <Link
+                    key={item.key}
+                    href={item.href}
+                    aria-current={active === item.key ? "page" : undefined}
+                    className={`app-nav-link${active === item.key ? " active" : ""}`}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
       ) : null}
