@@ -1,7 +1,7 @@
+import { Fragment } from "react";
 import Link from "next/link";
 import { isAdminRole } from "@/lib/admin/guard";
 import { isPrivilegedRole } from "@/lib/dashboard/access";
-import { canExportReports } from "@/lib/reports";
 import { canSeeAccountantReport } from "@/lib/reports/report-access";
 import {
   canSeeExecDashboard,
@@ -19,13 +19,15 @@ import NovaMascot from "../liff/survey/[token]/NovaMascot";
  * โดยไม่ต้องพิมพ์ URL เอง
  *   - โลโก้/ชื่อ NOVA-CX + มาสคอตน้อง NOVA (reuse NovaMascot variant="profile")
  *   - ลิงก์แต่ละอันโผล่เฉพาะบทบาทที่เข้าได้ (allow-list) — กันงงว่ากดแล้วโดน redirect
- *       · ตรวจแชต/ออดิท       — หัวใจระบบ (กลุ่มบนสุด) แสดงตามบทบาทที่มีสิทธิ์
- *       · ประเมินลูกค้า (CSAT) — ทุกบทบาทที่ login (เมนูรอง กลุ่ม "ประเมิน & เสียงลูกค้า")
- *       · เคสร้องเรียน /cases — privileged (executive/admin/cs)
- *       · รายงาน /reports     — export ได้ (executive/admin/acc_lead/sales_lead/cs)
- *       · แบบประเมิน /surveys — admin/executive
- *       · จัดการข้อมูล /admin  — admin/executive
- *       · ตั้งค่า /settings    — admin/executive
+ *   - แบ่งเมนูเป็น 2 ส่วนชัดเจน:
+ *       ส่วน A · AI ประเมิน (เมนูหลัก) — 3 กลุ่ม
+ *           · ดูแลงานบริการลูกค้า   — ตรวจแชต/ออดิท + เคสร้องเรียน (หัวใจระบบ กลุ่มบนสุด)
+ *           · ประเมิน & คลังความรู้ — รายงานประเมิน/ประเมินสำนักงาน/คลังคำตอบ AI
+ *           · ตั้งค่า & ข้อมูล      — ตั้งค่าตรวจแชต + จัดการข้อมูล
+ *       ส่วน B · แบบประเมินลูกค้า (CSAT) — แยกท้ายสุด (คนละระบบ, ยังไม่เริ่มส่ง)
+ *           · ประเมินลูกค้า (CSAT) /dashboard + แบบประเมิน /surveys
+ *   - ★ /reports (รายงาน/Export) และ /settings (ตั้งค่า) เอาออกจากเมนูแล้ว
+ *     (route ยังอยู่ ไม่ได้ลบ — แค่ไม่โชว์ในเมนู)
  *   - ฝั่งขวา: ป้ายบทบาทผู้ใช้ + ปุ่มออกจากระบบ (POST /auth/logout)
  *
  * เป็น server component (ไม่มี state/hook) — รับ active/role/authed เป็น prop จากหน้าที่ resolve session แล้ว
@@ -81,11 +83,16 @@ type NavGroup = {
   emphasis?: boolean;
   /** ทำกลุ่มนี้ให้จางลง (ใช้นาน ๆ ครั้ง) */
   muted?: boolean;
+  /** แยกเป็นคนละระบบ (เช่น CSAT) — ขึ้นเส้นคั่นเต็มแถวก่อนกลุ่มนี้ */
+  standalone?: boolean;
+  /** ป้ายเล็กข้างหัวข้อกลุ่ม (เช่น "ยังไม่เริ่มส่ง") */
+  badge?: string;
   items: NavItem[];
 };
 
-// key/href/label/canSee ของแต่ละลิงก์คงเดิมทุกอย่าง — จัดเข้ากลุ่มตามความสำคัญเท่านั้น
+// key/href/label/canSee ของแต่ละลิงก์คงเดิมทุกอย่าง — จัดเข้ากลุ่ม/แยกส่วนตามความสำคัญเท่านั้น
 const NAV_GROUPS: NavGroup[] = [
+  // ===== ส่วน A · AI ประเมิน (เมนูหลัก) =====
   {
     id: "service",
     label: "ดูแลงานบริการลูกค้า",
@@ -102,34 +109,39 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     id: "assess",
-    label: "ประเมิน & เสียงลูกค้า",
+    label: "ประเมิน & คลังความรู้",
     items: [
-      // ★ แบบประเมินลูกค้า (CSAT) — ลดระดับเป็นเมนูรอง (โปรแกรมเน้นออดิทเป็นหลัก)
-      //   เห็นเสมอเมื่อ login (ทุกบทบาทมีหน้า dashboard CSAT ของตัวเอง)
-      { key: "dashboard", href: "/dashboard", label: "ประเมินลูกค้า (CSAT)", canSee: () => true },
       // รายงานประเมินนักบัญชี (รายเดือน) — exec/admin/auditor/lead/hr/accountant (scope จริงในหน้า)
       { key: "chat-report", href: "/chat-audit/reports", label: "รายงานประเมิน", canSee: canSeeAccountantReport },
       // ★ ประเมินสำนักงาน (แชต 1-1 ฝั่งลูกค้า) — คนละส่วนกับประเมินนักบัญชี/ทีม — admin/executive
       { key: "chat-office", href: "/chat-audit/office", label: "ประเมินสำนักงาน", canSee: isAdminRole },
       // ★ คลังคำตอบ AI (คู่ถาม-ตอบจากแชตกลุ่ม) — เก็บ+เรียนรู้เท่านั้น — admin/executive
       { key: "chat-knowledge", href: "/chat-audit/knowledge", label: "คลังคำตอบ AI", canSee: isAdminRole },
-      // แบบประเมิน — admin/executive
-      { key: "surveys", href: "/surveys", label: "แบบประเมิน", canSee: isAdminRole },
     ],
   },
   {
     id: "config",
     label: "ตั้งค่า & ข้อมูล",
-    muted: true, // ใช้นาน ๆ ครั้ง — จางลง ล่างสุด
+    muted: true, // ใช้นาน ๆ ครั้ง — จางลง
     items: [
       // ตั้งค่าตรวจแชต (จับคู่กลุ่ม/น้ำหนัก/SLA) — admin/executive
       { key: "chat-admin", href: "/chat-audit/admin", label: "ตั้งค่าตรวจแชต", canSee: isAdminRole },
       // จัดการข้อมูล — admin/executive
       { key: "admin", href: "/admin", label: "จัดการข้อมูล", canSee: isAdminRole },
-      // รายงาน/Export — บทบาทที่ export ข้อมูลผูกลูกค้าได้
-      { key: "reports", href: "/reports", label: "รายงาน", canSee: canExportReports },
-      // ตั้งค่า — admin/executive
-      { key: "settings", href: "/settings", label: "ตั้งค่า", canSee: isAdminRole },
+    ],
+  },
+  // ===== ส่วน B · แบบประเมินลูกค้า (CSAT) — คนละระบบ แยกท้ายสุด =====
+  {
+    id: "csat",
+    label: "แบบประเมินลูกค้า (CSAT)",
+    standalone: true, // ขึ้นเส้นคั่นเต็มแถว แยกออกจากเมนู AI ประเมินให้ชัด
+    muted: true, // ระบบเสริม — ยังไม่เริ่มส่ง จึงจางลง
+    badge: "ยังไม่เริ่มส่ง",
+    items: [
+      // แบบประเมินลูกค้า (CSAT) — เห็นเสมอเมื่อ login (ทุกบทบาทมีหน้า dashboard CSAT ของตัวเอง)
+      { key: "dashboard", href: "/dashboard", label: "ประเมินลูกค้า (CSAT)", canSee: () => true },
+      // แบบประเมิน — admin/executive
+      { key: "surveys", href: "/surveys", label: "แบบประเมิน", canSee: isAdminRole },
     ],
   },
 ];
@@ -191,26 +203,32 @@ export default function AppNav({
       {showControls ? (
         <nav className="app-nav" aria-label="เมนูหลัก">
           {visibleGroups.map((group) => (
-            <div
-              key={group.id}
-              className={`app-nav-group${group.emphasis ? " is-primary" : ""}${group.muted ? " is-muted" : ""}`}
-              role="group"
-              aria-label={group.label}
-            >
-              <span className="app-nav-group-label">{group.label}</span>
-              <div className="app-nav-group-links">
-                {group.items.map((item) => (
-                  <Link
-                    key={item.key}
-                    href={item.href}
-                    aria-current={active === item.key ? "page" : undefined}
-                    className={`app-nav-link${active === item.key ? " active" : ""}`}
-                  >
-                    {item.label}
-                  </Link>
-                ))}
+            <Fragment key={group.id}>
+              {/* เส้นคั่นเต็มแถว: แยก "แบบประเมินลูกค้า (CSAT)" ออกเป็นคนละระบบ */}
+              {group.standalone ? <div className="app-nav-sep" aria-hidden="true" /> : null}
+              <div
+                className={`app-nav-group${group.emphasis ? " is-primary" : ""}${group.muted ? " is-muted" : ""}${group.standalone ? " is-standalone" : ""}`}
+                role="group"
+                aria-label={group.label}
+              >
+                <span className="app-nav-group-label">
+                  {group.label}
+                  {group.badge ? <span className="app-nav-group-badge">{group.badge}</span> : null}
+                </span>
+                <div className="app-nav-group-links">
+                  {group.items.map((item) => (
+                    <Link
+                      key={item.key}
+                      href={item.href}
+                      aria-current={active === item.key ? "page" : undefined}
+                      className={`app-nav-link${active === item.key ? " active" : ""}`}
+                    >
+                      {item.label}
+                    </Link>
+                  ))}
+                </div>
               </div>
-            </div>
+            </Fragment>
           ))}
         </nav>
       ) : null}

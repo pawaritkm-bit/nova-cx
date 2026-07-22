@@ -180,6 +180,33 @@
   font-weight: 600;
 }
 
+/* ---- แยกส่วน "แบบประเมินลูกค้า (CSAT)" ให้เป็นคนละระบบ ---- */
+/* เส้นคั่นเต็มแถว (flex-basis 100% ดันกลุ่ม CSAT ขึ้นบรรทัดใหม่) — โทน --line เดิม */
+.nova-dash .app-nav-sep {
+  flex-basis: 100%;
+  height: 0;
+  margin: 4px 2px 2px;
+  border-top: 1px dashed var(--line);
+}
+/* หัวข้อกลุ่ม CSAT — โทน muted ตามธีม (ระบบเสริม) */
+.nova-dash .app-nav-group.is-standalone .app-nav-group-label {
+  color: var(--muted);
+}
+/* ป้าย "ยังไม่เริ่มส่ง" — ใช้โทน amber จาก token ธีมเดิม (--amber/--amber-bg) */
+.nova-dash .app-nav-group-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  background: var(--amber-bg);
+  color: var(--amber);
+  vertical-align: middle;
+}
+
 /* ---- Dev role switch (พรีวิว dev เท่านั้น) ---- */
 .nova-dash .role-switch {
   display: inline-flex;

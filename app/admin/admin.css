@@ -473,7 +473,7 @@
   border-bottom: 1px solid var(--line);
 }
 .nova-dash .team-name {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--navy-800);
 }
@@ -501,13 +501,13 @@
 }
 .nova-dash .team-total-num {
   display: block;
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 800;
   color: var(--navy-800);
   line-height: 1.1;
 }
 .nova-dash .team-total-label {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
 }
 
@@ -522,9 +522,11 @@
   border-radius: 8px;
   background: #fff;
 }
+/* หัวหน้าทีม — เน้นแบบบางเบา (ทินต์ navy อ่อน #f5f9ff เดิมของแอป) ไม่ใช้พื้นฟ้าทึบ
+   ตัวชี้ว่าเป็นหัวหน้าอาศัย 👑 + ป้าย "หัวหน้าทีม" (navy) เป็นหลัก */
 .nova-dash .member-row.is-lead {
-  background: var(--blue-bg);
-  border-color: var(--blue-500);
+  background: #f5f9ff;
+  border-color: var(--line);
 }
 .nova-dash .member-row > summary {
   display: flex;
@@ -552,11 +554,12 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
 }
 .nova-dash .member-row .crown {
-  font-size: 14px;
+  font-size: 13px;
 }
 .nova-dash .member-row .lead-tag {
   font-size: 10px;
