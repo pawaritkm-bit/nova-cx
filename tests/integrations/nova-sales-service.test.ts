@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { upsertDealAndMaybeInvite } from "@/lib/integrations/nova-sales-service";
+import {
+  upsertCustomer,
+  upsertDealAndMaybeInvite,
+} from "@/lib/integrations/nova-sales-service";
 import type { DealStatusPayload } from "@/lib/integrations/nova-sales";
 
 /**
@@ -242,5 +245,68 @@ describe("upsertDealAndMaybeInvite — idempotent", () => {
     expect(invites(store)).toHaveLength(1);
     // ยังคงไม่มี OA push job (D)
     expect(jobs(store)).toHaveLength(0);
+  });
+});
+
+describe("upsertCustomer — auto-recode เมื่อ customer_code ชน (ไม่ 500)", () => {
+  function recodeDb(attempts: (string | null)[], passWhen: (c: string | null) => boolean) {
+    return {
+      from() {
+        const qb: Record<string, unknown> = {};
+        Object.assign(qb, {
+          select: () => qb,
+          eq: () => qb,
+          is: () => qb,
+          order: () => qb,
+          limit: () => qb,
+          update: () => qb,
+          maybeSingle: async () => ({ data: null, error: null }), // external_ref ไม่เจอ = ตัวใหม่
+          insert: (row: Record<string, unknown>) => {
+            const code = (row.customer_code as string | null) ?? null;
+            attempts.push(code);
+            return {
+              select: () => ({
+                single: async () =>
+                  passWhen(code)
+                    ? { data: { id: "cust-new" }, error: null }
+                    : { data: null, error: { code: "23505", message: "dup code" } },
+              }),
+            };
+          },
+        });
+        return qb;
+      },
+    } as unknown as SupabaseClient;
+  }
+
+  it("code ชนรอบแรก → เติม suffix -2 แล้ว insert สำเร็จ (created)", async () => {
+    const attempts: (string | null)[] = [];
+    // ผ่านเฉพาะรหัสที่มี suffix "-N" (จำลองว่า P648 ชนกับแถว soft-deleted)
+    const db = recodeDb(attempts, (c) => !!c && /-\d+$/.test(c));
+
+    const r = await upsertCustomer(db, {
+      tenant_id: TENANT,
+      external_customer_id: "L-xyz",
+      customer_code: "P648",
+      name: "ทดสอบ",
+      status: "active",
+    } as never);
+
+    expect(r.created).toBe(true);
+    expect(r.id).toBe("cust-new");
+    expect(attempts).toEqual(["P648", "P648-2"]); // ลองเดิมก่อน (ชน) แล้ว -2 (ผ่าน)
+  });
+
+  it("ไม่ชน → insert รหัสเดิมได้เลย (ไม่เติม suffix)", async () => {
+    const attempts: (string | null)[] = [];
+    const db = recodeDb(attempts, () => true);
+    const r = await upsertCustomer(db, {
+      tenant_id: TENANT,
+      external_customer_id: "L-abc",
+      customer_code: "N100",
+      name: "ทดสอบ2",
+    } as never);
+    expect(r.created).toBe(true);
+    expect(attempts).toEqual(["N100"]);
   });
 });

@@ -199,32 +199,66 @@ export async function upsertCustomer(
     }
   }
 
-  // insert ใหม่ (จับ 23505 = race → re-select แล้ว update)
-  const { data, error } = await db
-    .from("customers")
-    .insert({
-      tenant_id: payload.tenant_id,
-      external_ref: externalRef,
-      customer_code: payload.customer_code ?? null,
-      name: payload.name,
-      business_name: payload.business_name ?? null,
-      service_start_date: payload.service_start_date ?? null,
-      status: payload.status ?? "active",
-    })
-    .select("id")
-    .single();
+  // insert ใหม่ — auto-recode ถ้า customer_code ชน (รวมแถว soft-deleted ที่ยังจองรหัส):
+  //   ชน 23505 แล้วไล่เคส (1) external_ref ชน (row active) = race → re-select แล้ว update
+  //   (2) customer_code ชน → ออกรหัสใหม่ (เติม suffix "-N" ไม่ไปชนรหัสจริง P###/N###) แล้วลองใหม่
+  //   → รับลูกค้าเข้า CX ได้เสมอ ไม่ 500 (มติผู้ใช้ 2026-07-22: ชนรหัสให้เปลี่ยนฝั่ง CX ให้สะอาด)
+  let code: string | null = payload.customer_code ?? null;
+  const base = {
+    tenant_id: payload.tenant_id,
+    external_ref: externalRef,
+    name: payload.name,
+    business_name: payload.business_name ?? null,
+    service_start_date: payload.service_start_date ?? null,
+    status: payload.status ?? "active",
+  };
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const { data, error } = await db
+      .from("customers")
+      .insert({ ...base, customer_code: code })
+      .select("id")
+      .single();
 
-  if (error) {
-    if (isUniqueViolation(error) && externalRef) {
+    if (!error) {
+      return { id: (data as { id: string }).id, created: true };
+    }
+    if (!isUniqueViolation(error)) {
+      throw new Error(error.message);
+    }
+    // (1) external_ref ชนกับ row ที่ยัง active = race → ตัวนั้นคือลูกค้าเดียวกัน → update
+    if (externalRef) {
       const existingId = await findCustomerByExternalRef(db, payload.tenant_id, externalRef);
       if (existingId) {
         await db.from("customers").update(updateFields).eq("id", existingId);
         return { id: existingId, created: false };
       }
     }
+    // (2) customer_code ชน (ไม่ใช่ external_ref) → ออกรหัสใหม่แล้วลองใหม่
+    //     ไม่มี code แต่ยังชน = ชนอย่างอื่นที่หาสาเหตุไม่ได้ → throw กันวนไม่จบ
+    if (!code) {
+      throw new Error(error.message);
+    }
+    code = bumpCustomerCode(code);
+  }
+  // เผื่อสุดๆ (ชน 25 ครั้ง): ยอมทิ้ง code (null) เพื่อให้ลูกค้าเข้าได้ ไม่ 500
+  const { data, error } = await db
+    .from("customers")
+    .insert({ ...base, customer_code: null })
+    .select("id")
+    .single();
+  if (error) {
     throw new Error(error.message);
   }
   return { id: (data as { id: string }).id, created: true };
+}
+
+/**
+ * ออกรหัสลูกค้าใหม่เมื่อ customer_code ชน — เติม/เพิ่ม suffix "-N"
+ *   "P648" → "P648-2" → "P648-3" ... · suffix "-N" ไม่ชนรหัสจริง (P###/N###) จากNOVA Sales
+ */
+function bumpCustomerCode(code: string): string {
+  const m = code.match(/^(.*)-(\d+)$/);
+  return m ? `${m[1]}-${Number(m[2]) + 1}` : `${code}-2`;
 }
 
 async function findCustomerByExternalRef(
