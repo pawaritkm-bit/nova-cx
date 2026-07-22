@@ -132,15 +132,23 @@ export function summarizeExecCases(
   return { casesByStatus, openCases, newTodayCases, overdueCases, urgentCases };
 }
 
-/** งานค้างต่อ owner (open + overdue) เรียงงานค้างมาก→น้อย */
+/**
+ * งานค้างต่อ owner (open + overdue) เรียงงานค้างมาก→น้อย
+ *   ★ นับเฉพาะ "เคสเปิดที่ AI เจอปัญหาจริง" (hasRealProblem) — เกณฑ์เดียวกับทั้งหน้า
+ *     ไม่นับ noise (insufficient_data / other / ข้อมูลไม่พอ) เพื่อให้ตัวเลขสอดคล้องกัน
+ *   analysisByGroup: วิเคราะห์ล่าสุดต่อกลุ่ม (ผู้เรียกเตรียมมาให้)
+ */
 export function computeOwnerBacklog(
   cases: ConversationCaseRow[],
   nowMs: number,
-  names: Map<string, string>
+  names: Map<string, string>,
+  analysisByGroup: Map<string, GroupAnalysis>
 ): ExecChatDashboard["ownerBacklog"] {
   const map = new Map<string, { open: number; overdue: number }>();
   for (const c of cases) {
     if (CLOSED.has(c.status) || !c.owner_employee_id) continue;
+    // ★ นับเฉพาะเคสเปิดที่มีปัญหาจริง
+    if (!hasRealProblem(analysisByGroup.get(c.chat_group_id))) continue;
     const e = map.get(c.owner_employee_id) ?? { open: 0, overdue: 0 };
     e.open += 1;
     if (computeSlaStatus(c.resolution_due_at, nowMs).state === "overdue") e.overdue += 1;
@@ -249,33 +257,38 @@ export function computeCareHealth7d(
 
 /**
  * สร้างรายการ "เหตุการณ์เร่งด่วน" จากเคสที่เปิดอยู่
+ *   ★ กรอง: แสดงเฉพาะเคสที่กลุ่มมี analysis "เจอปัญหาจริง" (hasRealProblem)
+ *     — ตัดแถว insufficient_data / other / ข้อมูลไม่พอทิ้ง (ไม่ให้ noise ขึ้นการ์ด)
  *   - เรียงตามความด่วน (compareUrgency: เกิน SLA → critical/high → ครบกำหนดใกล้สุด)
- *   - เหตุการณ์เจาะจง = problem.detail ตัวแรก → summary → summary เคส → title
+ *   - เหตุการณ์เจาะจง = problem จริงตัวแรก (detail) → summary → summary เคส → title
  *   - ลูกค้า/ผู้รับผิดชอบ: จากเคสก่อน ถ้าไม่มีใช้ fallback จากกลุ่ม (customer/responsible)
  *   ★ pure: ผู้เรียกเตรียม map (analysis/กลุ่ม/รหัสลูกค้า/ชื่อ) มาให้
  */
 export function buildIncidents(
   openCases: ConversationCaseRow[],
-  analysisByGroup: Map<string, { problems: ChatProblem[]; summary: string | null }>,
+  analysisByGroup: Map<string, GroupAnalysis>,
   groupFallback: Map<string, { customerId: string | null; responsibleId: string | null }>,
   custCode: Map<string, string>,
   names: Map<string, string>,
   nowMs: number,
   limit = INCIDENT_LIMIT
 ): IncidentRow[] {
-  const sorted = [...openCases].sort((a, b) =>
-    compareUrgency(
-      { level: a.level, sla_due_at: a.resolution_due_at },
-      { level: b.level, sla_due_at: b.resolution_due_at },
-      nowMs
-    )
-  );
+  const sorted = [...openCases]
+    // ★ เฉพาะเคสที่ AI ตรวจเจอปัญหาจริง (ตัด insufficient/other/ข้อมูลไม่พอ)
+    .filter((c) => hasRealProblem(analysisByGroup.get(c.chat_group_id)))
+    .sort((a, b) =>
+      compareUrgency(
+        { level: a.level, sla_due_at: a.resolution_due_at },
+        { level: b.level, sla_due_at: b.resolution_due_at },
+        nowMs
+      )
+    );
   return sorted.slice(0, limit).map((c) => {
     const fb = groupFallback.get(c.chat_group_id);
     const custId = c.customer_id ?? fb?.customerId ?? null;
     const ownerId = c.owner_employee_id ?? fb?.responsibleId ?? null;
     const an = analysisByGroup.get(c.chat_group_id);
-    const top = an?.problems[0];
+    const top = firstRealProblem(an);
     const detail =
       (top?.detail && top.detail.trim()) ||
       (an?.summary && an.summary.trim()) ||
@@ -364,19 +377,81 @@ type AnalysisRaw = {
   problems: unknown;
   confidence: number | null;
   needs_human_review: boolean;
+  insufficient_data?: boolean | null;
 };
+
+/** วิเคราะห์ล่าสุดต่อกลุ่ม (subset ที่ layer แสดงผลใช้ + ธง insufficient_data สำหรับกรอง) */
+export type GroupAnalysis = {
+  problems: ChatProblem[];
+  summary: string | null;
+  insufficientData: boolean;
+};
+
+/**
+ * หมวดปัญหา "จริงเจาะจง" 5 หมวด ที่ถือว่า AI ตรวจเจอปัญหาชัด
+ *   ★ ตัด "other" ออก — "อื่นๆ" ถือว่ายังไม่เจอปัญหาชัด ไม่ต้องโชว์
+ *   ★ ตรงกับ PROBLEM_CATEGORIES (lib/ai/chat-schema.ts) เว้น other
+ */
+export const REAL_PROBLEM_TYPES = new Set<string>([
+  "sla_risk",
+  "complaint",
+  "dropped_work",
+  "slow_reply",
+  "no_response",
+]);
+
+/** problem ที่ถือว่า "จริง" = หมวดอยู่ใน 5 หมวดจริง + มี detail ไม่ว่าง */
+function isRealProblem(p: ChatProblem): boolean {
+  return REAL_PROBLEM_TYPES.has(p.type) && p.detail.trim().length > 0;
+}
+
+/**
+ * ★ นิยามกลาง: analysis ล่าสุดของกลุ่ม "AI ตรวจเจอปัญหาจริง" ไหม
+ *   ใช้กรองการแสดงผลทุกที่ (การ์ดเหตุการณ์เร่งด่วน + หน้าลูกค้าเสี่ยง + KPI ลูกค้าเสี่ยง)
+ *   เข้าเกณฑ์เมื่อ:
+ *     1) insufficient_data = false (ไม่ใช่บทสนทนาสั้น/ข้อมูลไม่พอสรุป)
+ *     2) มี problem อย่างน้อย 1 ที่ type อยู่ใน 5 หมวดจริง (ตัด other)
+ *     3) problem นั้น detail ต้องไม่ว่าง
+ *   ★ pure function — ทดสอบ/นำกลับมาใช้ซ้ำได้
+ */
+export function hasRealProblem(
+  analysis: { problems: ChatProblem[]; insufficientData?: boolean } | null | undefined
+): boolean {
+  if (!analysis || analysis.insufficientData) return false;
+  return analysis.problems.some(isRealProblem);
+}
+
+/** problem จริงตัวแรก (ไว้แสดงหมวด+detail เด่น) — null ถ้าไม่มี */
+export function firstRealProblem(
+  analysis: { problems: ChatProblem[] } | null | undefined
+): ChatProblem | null {
+  if (!analysis) return null;
+  return analysis.problems.find(isRealProblem) ?? null;
+}
+
+/** เก็บเฉพาะ problem จริง (ตัด other/detail ว่าง) — ใช้แสดงในหน้าลูกค้าเสี่ยง */
+export function realProblemsOf(
+  analysis: { problems: ChatProblem[] } | null | undefined
+): ChatProblem[] {
+  if (!analysis) return [];
+  return analysis.problems.filter(isRealProblem);
+}
 
 /**
  * map "การวิเคราะห์ล่าสุดต่อกลุ่ม" (rows เรียง window_end desc มาก่อน → ตัวแรกของกลุ่ม = ล่าสุด)
  *   ★ pure: ผู้เรียก query + order มาให้
  */
 export function latestAnalysisByGroup(
-  rows: { chat_group_id: string; summary: string | null; problems: unknown }[]
-): Map<string, { problems: ChatProblem[]; summary: string | null }> {
-  const out = new Map<string, { problems: ChatProblem[]; summary: string | null }>();
+  rows: { chat_group_id: string; summary: string | null; problems: unknown; insufficient_data?: boolean | null }[]
+): Map<string, GroupAnalysis> {
+  const out = new Map<string, GroupAnalysis>();
   for (const r of rows) {
     if (out.has(r.chat_group_id)) continue; // ตัวแรก = ล่าสุด (desc)
-    out.set(r.chat_group_id, { problems: parseProblems(r.problems), summary: r.summary });
+    out.set(r.chat_group_id, {
+      problems: parseProblems(r.problems),
+      summary: r.summary,
+      insufficientData: r.insufficient_data === true,
+    });
   }
   return out;
 }
@@ -422,12 +497,12 @@ export async function getExecChatDashboard(
       // ★ กันปน (Phase A): นับเฉพาะกลุ่มจริง (group/room) ไม่รวมบทสนทนา 1-1 (group_kind='user')
       .in("group_kind", ["group", "room"])
       .limit(CASE_LIMIT),
-    db.from("risk_alerts").select("level, status").in("status", ACTIVE_RISK).limit(CASE_LIMIT),
+    db.from("risk_alerts").select("case_id, level, status").in("status", ACTIVE_RISK).limit(CASE_LIMIT),
     db.from("sop_violations").select("violation_type, chat_group_id").is("deleted_at", null).limit(CASE_LIMIT),
-    // ★ วิเคราะห์ล่าสุดต่อกลุ่ม (เรียง window_end desc) — ใช้ทั้ง incident detail + นับ AI รอตรวจ
+    // ★ วิเคราะห์ล่าสุดต่อกลุ่ม (เรียง window_end desc) — ใช้ทั้ง incident detail + นับ AI รอตรวจ + กรองปัญหาจริง
     db
       .from("ai_chat_analysis")
-      .select("chat_group_id, summary, problems, confidence, needs_human_review, window_end")
+      .select("chat_group_id, summary, problems, confidence, needs_human_review, insufficient_data, window_end")
       .is("deleted_at", null)
       .order("window_end", { ascending: false })
       .limit(CASE_LIMIT),
@@ -435,11 +510,21 @@ export async function getExecChatDashboard(
 
   const cases = (caseData ?? []) as ConversationCaseRow[];
   logTruncate("exec cases", cases.length, CASE_LIMIT);
-  const risks = (riskData ?? []) as { level: string; status: string }[];
+  const risks = (riskData ?? []) as { case_id: string | null; level: string; status: string }[];
   const violations = (violData ?? []) as { violation_type: string; chat_group_id: string }[];
   const analysisRows = (analysisData ?? []) as AnalysisRaw[];
 
   const summary = summarizeExecCases(cases, nowMs);
+  const analysisByGroup = latestAnalysisByGroup(analysisRows);
+
+  // ★ "ลูกค้าเสี่ยง" = นับเฉพาะ risk ที่กลุ่ม (ผ่านเคส) มี analysis เจอปัญหาจริง
+  //   risk ที่ไม่มีเคส / กลุ่มไม่มีปัญหาจริง (แค่ sentiment/ข้อมูลไม่พอ) → ไม่นับ
+  const caseGroupById = new Map<string, string>();
+  for (const c of cases) caseGroupById.set(c.id, c.chat_group_id);
+  const activeRisk = risks.filter((r) => {
+    const gid = r.case_id ? caseGroupById.get(r.case_id) : undefined;
+    return gid ? hasRealProblem(analysisByGroup.get(gid)) : false;
+  }).length;
 
   const complaints = risks.filter((r) => r.level === "orange" || r.level === "red").length;
   const cancelRisk = risks.filter((r) => r.level === "red").length;
@@ -451,8 +536,6 @@ export async function getExecChatDashboard(
 
   // ★ เรื่องรอตอบ = เคสเปิดที่ยังไม่ตอบครั้งแรก
   const waitingCases = openCases.filter((c) => !c.first_responded_at).length;
-
-  const analysisByGroup = latestAnalysisByGroup(analysisRows);
 
   // fallback ลูกค้า/ผู้รับผิดชอบ จากกลุ่ม (เมื่อเคสไม่มี) — ดึงเฉพาะกลุ่มของเคสที่เปิด
   const openGroupIds = [...new Set(openCases.map((c) => c.chat_group_id))];
@@ -501,13 +584,13 @@ export async function getExecChatDashboard(
     totalGroups: (groupData ?? []).length,
     ...summary,
     waitingCases,
-    activeRisk: risks.length,
+    activeRisk,
     aiPendingReview: countAiPendingReview(analysisRows),
     complaints,
     cancelRisk,
     repeatRate,
     topProblems: topProblemsFromViolations(violations),
-    ownerBacklog: computeOwnerBacklog(cases, nowMs, names),
+    ownerBacklog: computeOwnerBacklog(cases, nowMs, names, analysisByGroup),
     incidents: buildIncidents(openCases, analysisByGroup, groupFallback, custCode, names, nowMs),
     careHealth: computeCareHealth7d(cases, nowMs),
   };
@@ -813,17 +896,20 @@ export async function getRiskDashboard(db: DB, viewer: Viewer): Promise<RiskRow[
             .limit(CASE_LIMIT),
           db
             .from("ai_chat_analysis")
-            .select("chat_group_id, summary, problems, window_end")
+            .select("chat_group_id, summary, problems, insufficient_data, window_end")
             .in("chat_group_id", groupIds)
             .is("deleted_at", null)
             .order("window_end", { ascending: false })
             .limit(CASE_LIMIT),
         ])
-      : [{ data: [] as GroupFbRow[] }, { data: [] as { chat_group_id: string; summary: string | null; problems: unknown }[] }];
+      : [
+          { data: [] as GroupFbRow[] },
+          { data: [] as { chat_group_id: string; summary: string | null; problems: unknown; insufficient_data?: boolean | null }[] },
+        ];
   const groupMap = new Map<string, GroupFbRow>();
   for (const g of (groupFbRes.data ?? []) as GroupFbRow[]) groupMap.set(g.id, g);
   const analysisByGroup = latestAnalysisByGroup(
-    (analysisRes.data ?? []) as { chat_group_id: string; summary: string | null; problems: unknown }[]
+    (analysisRes.data ?? []) as { chat_group_id: string; summary: string | null; problems: unknown; insufficient_data?: boolean | null }[]
   );
 
   // ── ขั้นที่ 3: รหัสลูกค้า (ปลอมนาม) + ชื่อผู้รับผิดชอบ (รวม fallback เคส/กลุ่ม) ──
@@ -865,19 +951,26 @@ export async function getRiskDashboard(db: DB, viewer: Viewer): Promise<RiskRow[
       const ownerId = r.owner_employee_id ?? kase?.owner_employee_id ?? group?.responsible_employee_id ?? null;
       const analysis = kase ? analysisByGroup.get(kase.chat_group_id) : undefined;
       return {
-        alertId: r.id,
-        caseId: r.case_id,
-        // ★ pseudonymity: แสดง "รหัสลูกค้า" ไม่ใช่ชื่อจริง
-        customerLabel: custId ? custCode.get(custId) ?? "—" : "—",
-        level: r.level,
-        reason: r.reason,
-        problems: analysis?.problems ?? [],
-        summary: analysis?.summary ?? null,
-        ownerName: nameOf(names, ownerId),
-        status: r.status,
-        escalated: !!r.escalated_at,
+        row: {
+          alertId: r.id,
+          caseId: r.case_id,
+          // ★ pseudonymity: แสดง "รหัสลูกค้า" ไม่ใช่ชื่อจริง
+          customerLabel: custId ? custCode.get(custId) ?? "—" : "—",
+          level: r.level,
+          reason: r.reason,
+          // ★ โชว์เฉพาะ problem จริง (ตัด other/detail ว่าง) — เน้นสิ่งที่ AI ตรวจได้จริง
+          problems: realProblemsOf(analysis),
+          summary: analysis?.summary ?? null,
+          ownerName: nameOf(names, ownerId),
+          status: r.status,
+          escalated: !!r.escalated_at,
+        } satisfies RiskRow,
+        // ★ กรอง: แสดงเฉพาะ risk ที่ analysis เจอปัญหาจริง — ตัด noise (แค่ sentiment/ข้อมูลไม่พอ)
+        real: hasRealProblem(analysis),
       };
     })
+    .filter((x) => x.real)
+    .map((x) => x.row)
     .sort((a, b) => (rank[a.level] ?? 9) - (rank[b.level] ?? 9));
 }
 

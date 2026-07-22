@@ -98,7 +98,7 @@ export default async function ChatExecPage() {
         <section className="card">
           <div className="section-title"><span>เหตุการณ์เร่งด่วน</span><span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>เรียงตามความด่วน (เกิน SLA / ระดับเคส)</span></div>
           {d.incidents.length === 0 ? (
-            <p className="empty">ยังไม่มีเหตุการณ์เร่งด่วน</p>
+            <p className="empty">ยังไม่พบเหตุการณ์ที่ต้องจัดการ</p>
           ) : (
             <div className="table-wrap">
               <table className="dlv-table">

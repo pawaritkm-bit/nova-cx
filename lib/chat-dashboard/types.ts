@@ -123,7 +123,7 @@ export type ExecChatDashboard = {
   overdueCases: number;
   urgentCases: number; // critical/high ที่ยังเปิด
   waitingCases: number; // ★ เรื่องรอตอบ (เปิดอยู่ + ยังไม่ตอบครั้งแรก)
-  activeRisk: number; // ★ ลูกค้าเสี่ยง (risk_alerts active ทั้งหมด)
+  activeRisk: number; // ★ ลูกค้าเสี่ยง (นับเฉพาะ risk ที่กลุ่มมี analysis เจอปัญหาจริง — ตัด noise)
   aiPendingReview: number; // ★ AI รอหัวหน้าตรวจ (needs_human_review / confidence ต่ำ)
   complaints: number; // risk level orange/red ที่ยัง active
   cancelRisk: number; // risk level red ที่ยัง active
