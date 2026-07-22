@@ -176,6 +176,51 @@ export async function resolveSalesEmployeeId(
 // --------------------------------------------------------------------------
 
 /** upsert ลูกค้าตาม external_ref (idempotent + จับ 23505) → คืน customer id */
+/**
+ * ออก customer_code ใหม่ที่ยังไม่ถูกใช้ใน tenant เมื่อรหัสที่ NOVA Sales ส่งมาไปชนลูกค้าอื่น
+ *   (รหัสชน ≠ ลูกค้าซ้ำ — ลูกค้ารายนี้ external_ref ใหม่ จึงต้องได้ record ของตัวเอง)
+ *   - desired ลงท้ายด้วยเลข ("P166") → +1 คงรูปแบบ prefix + ความกว้าง ("P167"...) จนเจอที่ว่าง
+ *   - ไม่มีเลขท้าย → ต่อ "-2","-3" จนเจอที่ว่าง
+ */
+async function nextAvailableCustomerCode(
+  db: DB,
+  tenantId: string,
+  desired: string
+): Promise<string> {
+  const { data } = await db
+    .from("customers")
+    .select("customer_code")
+    .eq("tenant_id", tenantId)
+    .not("customer_code", "is", null)
+    .limit(10000); // กัน default PostgREST cap 1000 แถว → taken set ไม่ครบ → ออกรหัสชนซ้ำ
+  const taken = new Set(
+    (data ?? [])
+      .map((r) =>
+        String((r as { customer_code: string }).customer_code).trim().toLowerCase()
+      )
+      .filter((c) => c.length > 0)
+  );
+  const isFree = (c: string) => !taken.has(c.toLowerCase());
+  const base = desired.trim();
+  const match = base.match(/^(.*?)(\d+)$/);
+  if (match) {
+    const prefix = match[1];
+    const width = match[2].length;
+    let n = Number.parseInt(match[2], 10);
+    for (let guard = 0; guard < 1_000_000; guard += 1) {
+      n += 1;
+      const candidate = `${prefix}${String(n).padStart(width, "0")}`;
+      if (isFree(candidate)) return candidate;
+    }
+  } else {
+    for (let i = 2; i < 1_000_000; i += 1) {
+      const candidate = `${base}-${i}`;
+      if (isFree(candidate)) return candidate;
+    }
+  }
+  return `${base}-${Date.now()}`; // safety (แทบไม่ถึง)
+}
+
 export async function upsertCustomer(
   db: DB,
   payload: CustomerUpsertPayload
@@ -221,6 +266,49 @@ export async function upsertCustomer(
         await db.from("customers").update(updateFields).eq("id", existingId);
         return { id: existingId, created: false };
       }
+    }
+    // unique violation ที่ external_ref แก้ไม่ได้ = customer_code ชนกับลูกค้า "รายอื่น"
+    //   → ลูกค้ารายนี้เป็นรายใหม่ (external_ref ใหม่) → ออกรหัสใหม่ที่ว่าง แล้ว insert ใหม่
+    //   (แก้เคส P166: เดิม fall through → throw → 500 ตอน push จาก NOVA Sales)
+    if (isUniqueViolation(error) && payload.customer_code) {
+      // ไล่ออกรหัสใหม่ที่ว่าง แล้ว insert; ถ้ายังชน customer_code (taken set ไม่ครบ/แข่งกันเขียน)
+      //   → bump ต่อจากรหัสล่าสุด (monotonic เพิ่มขึ้นเรื่อย ๆ) จนกว่าจะสำเร็จ
+      let candidate = payload.customer_code;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        candidate = await nextAvailableCustomerCode(db, payload.tenant_id, candidate);
+        const retry = await db
+          .from("customers")
+          .insert({
+            tenant_id: payload.tenant_id,
+            external_ref: externalRef,
+            customer_code: candidate,
+            name: payload.name,
+            business_name: payload.business_name ?? null,
+            service_start_date: payload.service_start_date ?? null,
+            status: payload.status ?? "active",
+          })
+          .select("id")
+          .single();
+        if (!retry.error) {
+          return { id: (retry.data as { id: string }).id, created: true };
+        }
+        // race ที่ external_ref (ลูกค้าเดิมถูกสร้างพร้อมกัน) → re-select แล้ว update ด้วยรหัสใหม่
+        if (isUniqueViolation(retry.error) && externalRef) {
+          const existingId = await findCustomerByExternalRef(db, payload.tenant_id, externalRef);
+          if (existingId) {
+            await db
+              .from("customers")
+              .update({ ...updateFields, customer_code: candidate })
+              .eq("id", existingId);
+            return { id: existingId, created: false };
+          }
+        }
+        // ชน customer_code อีก (รหัสถูกใช้ระหว่างทาง) → วนออกรหัสถัดไป; error อื่น → โยน
+        if (!isUniqueViolation(retry.error)) {
+          throw new Error(retry.error.message);
+        }
+      }
+      throw new Error("ออกรหัสลูกค้าใหม่ไม่สำเร็จ (customer_code ชนต่อเนื่อง)");
     }
     throw new Error(error.message);
   }
