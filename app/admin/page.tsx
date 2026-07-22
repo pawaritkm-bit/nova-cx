@@ -15,7 +15,7 @@ import {
   listCustomers,
   listCurrentAssignments,
 } from "@/lib/admin/service";
-import { getAccountantWorkload } from "@/lib/admin/workload";
+import { getTeamWorkload } from "@/lib/admin/workload";
 import type { RoleCode } from "@/lib/dashboard/types";
 import AppNav from "../_components/AppNav";
 import AdminTabs from "./AdminTabs";
@@ -141,7 +141,7 @@ export default async function AdminPage() {
         listEmployees(service, tenantId),
         listCustomers(service, tenantId),
         listCurrentAssignments(service, tenantId),
-        getAccountantWorkload(service, tenantId),
+        getTeamWorkload(service, tenantId),
         buildStaffRegInfo(),
       ]);
 

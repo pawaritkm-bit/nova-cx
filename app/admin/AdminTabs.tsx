@@ -12,7 +12,12 @@ import type {
   CustomerRow,
   CaretakerRow,
 } from "@/lib/admin/service";
-import type { WorkloadRow } from "@/lib/admin/workload";
+import type {
+  TeamWorkload,
+  WorkloadTeam,
+  WorkloadMember,
+  CustomerType,
+} from "@/lib/admin/workload";
 import type { StaffRegInfo } from "./page";
 import {
   filterLeadCandidates,
@@ -1120,76 +1125,137 @@ function AssignmentsTab({
 }
 
 // =====================================================================
-// แท็บ 5: ภาระงาน (นักบัญชีแต่ละคนดูแลลูกค้ากี่ราย)
+// แท็บ 5: ภาระงาน (ผังทีม: หัวหน้า → นักบัญชี → ลูกค้าที่ดูแล)
 // =====================================================================
-function WorkloadTab({ workload }: { workload: WorkloadRow[] }) {
-  // ยอดรวมท้ายตาราง (นับทั้งทีม) — ช่วยเห็นภาพรวม
-  const totals = workload.reduce(
-    (acc, r) => {
-      acc.total += r.total;
-      acc.company += r.company;
-      acc.individual += r.individual;
-      acc.unspecified += r.unspecified;
-      return acc;
-    },
-    { total: 0, company: 0, individual: 0, unspecified: 0 }
+
+/** ป้ายประเภทลูกค้าที่ทีมรับดูแล */
+const WORKLOAD_TYPE_LABEL: Record<CustomerType, string> = {
+  company: "บริษัท / นิติบุคคล",
+  individual: "บุคคลธรรมดา",
+};
+
+/** class โทนสีการ์ดตามประเภททีม (บริษัท=navy, บุคคล=amber) */
+function teamToneClass(type: CustomerType | null): string {
+  if (type === "company") return "is-company";
+  if (type === "individual") return "is-individual";
+  return "is-unspecified";
+}
+
+/** แถวนักบัญชี 1 คน (กางดูรายชื่อลูกค้าได้) — ใช้ทั้งในทีมและกลุ่มไม่สังกัดทีม */
+function MemberRowDetails({ m }: { m: WorkloadMember }) {
+  return (
+    <details className={`member-row${m.is_lead ? " is-lead" : ""}`}>
+      <summary>
+        <span className="member-name">
+          {m.is_lead ? (
+            <span className="crown" aria-hidden="true">
+              👑
+            </span>
+          ) : null}
+          {m.name}
+          {m.is_lead ? <span className="lead-tag">หัวหน้าทีม</span> : null}
+        </span>
+        <span className="member-count">{m.total} ลูกค้า</span>
+      </summary>
+      {m.customers.length === 0 ? (
+        <p className="member-empty">ยังไม่มีลูกค้าที่ดูแล</p>
+      ) : (
+        <ul className="customer-list">
+          {m.customers.map((c) => (
+            <li key={c.customer_id}>
+              {c.code ? <span className="customer-code">{c.code}</span> : null}
+              <span className="customer-name">{c.name}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   );
+}
+
+/** การ์ด 1 ทีม: หัว (ชื่อ+ประเภท+ลูกค้ารวม) → รายชื่อสมาชิก (หัวหน้าอยู่บนสุด) */
+function TeamCard({ team }: { team: WorkloadTeam }) {
+  return (
+    <section className={`card team-card ${teamToneClass(team.handles_customer_type)}`}>
+      <div className="team-head">
+        <div>
+          <div className="team-name">{team.name}</div>
+          <span className="team-type-badge">
+            {team.handles_customer_type
+              ? WORKLOAD_TYPE_LABEL[team.handles_customer_type]
+              : "ไม่ระบุประเภท"}
+          </span>
+        </div>
+        <div className="team-total">
+          <span className="team-total-num">{team.total}</span>
+          <span className="team-total-label">ลูกค้ารวม</span>
+        </div>
+      </div>
+
+      {team.members.length === 0 ? (
+        <p className="admin-empty" style={{ marginTop: 8 }}>
+          ยังไม่มีสมาชิกในทีม
+        </p>
+      ) : (
+        <div className="team-members">
+          {team.members.map((m) => (
+            <MemberRowDetails key={m.employee_id} m={m} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WorkloadTab({ workload }: { workload: TeamWorkload }) {
+  const { teams, unassigned } = workload;
+  const isEmpty = teams.length === 0 && unassigned.length === 0;
 
   return (
-    <div className="admin-grid">
-      <div className="card admin-card-wide">
-        <h3>ภาระงานนักบัญชี ({workload.length} คน)</h3>
-        <p className="admin-hint">
-          นับจาก “ผู้ดูแลปัจจุบัน” ของลูกค้าที่ยังใช้งานอยู่ — แยกตามประเภทลูกค้า
-          (นิติบุคคล / บุคคลธรรมดา / ยังไม่ระบุ) เรียงจากมากไปน้อย
-        </p>
-        {workload.length === 0 ? (
-          <p className="admin-empty">ยังไม่มีการมอบหมายลูกค้าให้นักบัญชี</p>
-        ) : (
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>นักบัญชี</th>
-                <th>ทีม</th>
-                <th className="num">รวม</th>
-                <th className="num">นิติบุคคล</th>
-                <th className="num">บุคคลธรรมดา</th>
-                <th className="num">ยังไม่ระบุ</th>
-              </tr>
-            </thead>
-            <tbody>
-              {workload.map((r) => (
-                <tr key={r.employee_id}>
-                  <td>
-                    {r.employee_name ?? "—"}
-                    {r.employee_nickname ? ` (${r.employee_nickname})` : ""}
-                  </td>
-                  <td>{r.team_name ?? "—"}</td>
-                  <td className="num">
-                    <strong>{r.total}</strong>
-                  </td>
-                  <td className="num">{r.company}</td>
-                  <td className="num">{r.individual}</td>
-                  <td className="num">{r.unspecified}</td>
-                </tr>
+    <div className="dash-views">
+      <p className="admin-hint">
+        ผังทีมบัญชี — หัวหน้าทีม (👑) → นักบัญชีในทีม → ลูกค้าที่ดูแล
+        (กดชื่อนักบัญชีเพื่อดูรายชื่อลูกค้า) · ตัวเลข “ลูกค้า”
+        นับจากกลุ่มแชตที่นักบัญชีดูแล (จับคู่ลูกค้าแล้ว) แบบไม่ซ้ำ
+      </p>
+
+      {isEmpty ? (
+        <div className="card">
+          <p className="admin-empty">ยังไม่มีทีม/การมอบหมายลูกค้าให้นักบัญชี</p>
+        </div>
+      ) : (
+        <>
+          {teams.length > 0 && (
+            <div className="team-grid">
+              {teams.map((team) => (
+                <TeamCard key={team.team_id} team={team} />
               ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colSpan={2}>
-                  <strong>รวมทั้งหมด</strong>
-                </td>
-                <td className="num">
-                  <strong>{totals.total}</strong>
-                </td>
-                <td className="num">{totals.company}</td>
-                <td className="num">{totals.individual}</td>
-                <td className="num">{totals.unspecified}</td>
-              </tr>
-            </tfoot>
-          </table>
-        )}
-      </div>
+            </div>
+          )}
+
+          {unassigned.length > 0 && (
+            <section className="card team-card is-unspecified" style={{ marginTop: 16 }}>
+              <div className="team-head">
+                <div>
+                  <div className="team-name">ไม่สังกัดทีม</div>
+                  <span className="team-type-badge">
+                    นักบัญชีที่มีลูกค้าดูแลแต่ยังไม่ได้จัดเข้าทีม
+                  </span>
+                </div>
+                <div className="team-total">
+                  <span className="team-total-num">{unassigned.length}</span>
+                  <span className="team-total-label">นักบัญชี</span>
+                </div>
+              </div>
+              <div className="team-members">
+                {unassigned.map((m) => (
+                  <MemberRowDetails key={m.employee_id} m={m} />
+                ))}
+              </div>
+            </section>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1342,7 +1408,7 @@ export default function AdminTabs({
   employees: EmployeeRow[];
   customers: CustomerRow[];
   caretakers: CaretakerRow[];
-  workload: WorkloadRow[];
+  workload: TeamWorkload;
   staffReg: StaffRegInfo;
 }) {
   const [tab, setTab] = useState<TabKey>("teams");
