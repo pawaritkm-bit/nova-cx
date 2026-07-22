@@ -473,8 +473,8 @@
   border-bottom: 1px solid var(--line);
 }
 .nova-dash .team-name {
-  font-size: 16px;
-  font-weight: 800;
+  font-size: 15px;
+  font-weight: 700;
   color: var(--navy-800);
 }
 .nova-dash .team-type-badge {
@@ -501,8 +501,8 @@
 }
 .nova-dash .team-total-num {
   display: block;
-  font-size: 22px;
-  font-weight: 800;
+  font-size: 18px;
+  font-weight: 700;
   color: var(--navy-800);
   line-height: 1.1;
 }
@@ -523,8 +523,8 @@
   background: #fff;
 }
 .nova-dash .member-row.is-lead {
-  background: var(--amber-bg);
-  border-color: var(--amber);
+  background: var(--blue-bg);
+  border-color: var(--blue-500);
 }
 .nova-dash .member-row > summary {
   display: flex;
@@ -563,7 +563,7 @@
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 999px;
-  background: var(--amber);
+  background: var(--navy-800);
   color: #fff;
 }
 /* ตัวเลขจำนวนลูกค้าต่อคน — พิลล์สีน้ำเงินอ่อน */
