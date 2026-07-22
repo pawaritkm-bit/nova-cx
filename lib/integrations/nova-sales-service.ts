@@ -242,6 +242,46 @@ async function findCustomerByExternalRef(
   return data ? (data as { id: string }).id : null;
 }
 
+/**
+ * soft-delete ลูกค้าตาม external_ref (delete-sync จาก NOVA Sales) — idempotent
+ *   - หาลูกค้าด้วย external_ref + tenant (เฉพาะที่ยังไม่ถูกลบ)
+ *     → ไม่เจอ (ไม่มีจริง / ลบไปแล้ว / คนละ tenant) = no-op (deleted:false) ไม่ error
+ *   - เจอ → set deleted_at=now(), status='cancelled' (ค่าที่ customers.status enum รับ)
+ *   - เคลียร์ chat_groups.customer_id (กลุ่ม/ห้องของลูกค้านั้นใน tenant) → null
+ *     คง responsible_employee_id ไว้ (ผู้ดูแลที่แอดมินกำหนดไม่เกี่ยวกับการลบลูกค้า)
+ *   - ไม่แตะ customer_assignments (การมอบหมายเก็บไว้เป็นประวัติ)
+ *   - filter tenant_id ทุก query → กัน cross-tenant (ลบข้าม tenant ไม่ได้)
+ */
+export async function softDeleteCustomerByExternalRef(
+  db: DB,
+  tenantId: string,
+  externalRef: string
+): Promise<{ deleted: boolean; customerId: string | null }> {
+  const customerId = await findCustomerByExternalRef(db, tenantId, externalRef);
+  if (!customerId) {
+    // ไม่เจอลูกค้าที่ยัง active ใน tenant นี้ → idempotent no-op
+    return { deleted: false, customerId: null };
+  }
+
+  const now = new Date().toISOString();
+
+  // soft-delete ตัวลูกค้า (คง external_ref ไว้เพื่อ idempotency ของการยิงลบซ้ำ)
+  await db
+    .from("customers")
+    .update({ deleted_at: now, status: "cancelled" })
+    .eq("id", customerId)
+    .eq("tenant_id", tenantId);
+
+  // เคลียร์การจับคู่กลุ่ม/ห้องแชท → customer_id = null (คง responsible_employee_id)
+  await db
+    .from("chat_groups")
+    .update({ customer_id: null })
+    .eq("tenant_id", tenantId)
+    .eq("customer_id", customerId);
+
+  return { deleted: true, customerId };
+}
+
 /** upsert lead ตาม external_ref (idempotent + จับ 23505) → คืน lead id หรือ null */
 export async function upsertLead(
   db: DB,

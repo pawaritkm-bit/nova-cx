@@ -75,26 +75,50 @@ const contactSchema = z
   })
   .optional();
 
-/** POST /api/integrations/nova-sales/customer — สร้าง/อัปเดตลูกค้า (+lead) */
-export const customerUpsertSchema = z.object({
-  tenant_id: uuid,
-  /** id ลูกค้าฝั่ง NOVA Sales (ใช้ทำ idempotency ถ้าไม่มี customer_code) */
-  external_customer_id: z.string().optional(),
-  customer_code: z.string().optional(),
-  name: z.string().min(1, "ต้องมีชื่อลูกค้า"),
-  business_name: z.string().optional(),
-  service_start_date: z.string().optional(),
-  status: z.enum(["active", "cancelled", "prospect"]).optional(),
-  contact: contactSchema,
-  lead: z
-    .object({
-      external_lead_id: z.string().optional(),
-      name: z.string().optional(),
-      source: z.string().optional(),
-      owner_employee_id: uuid.optional(),
-    })
-    .optional(),
-});
+/** POST /api/integrations/nova-sales/customer — สร้าง/อัปเดต หรือ ลบลูกค้า (+lead)
+ *  - upsert ปกติ: ต้องมี name
+ *  - delete-sync: deleted===true + external_customer_id → soft-delete (ไม่ต้องมี name) */
+export const customerUpsertSchema = z
+  .object({
+    tenant_id: uuid,
+    /** id ลูกค้าฝั่ง NOVA Sales (ใช้ทำ idempotency ถ้าไม่มี customer_code + เป็นตัวชี้เป้าตอนลบ) */
+    external_customer_id: z.string().optional(),
+    customer_code: z.string().optional(),
+    name: z.string().min(1, "ต้องมีชื่อลูกค้า").optional(),
+    business_name: z.string().optional(),
+    service_start_date: z.string().optional(),
+    status: z.enum(["active", "cancelled", "prospect"]).optional(),
+    /** signal ลบลูกค้า (delete-sync): true → soft-delete แทน upsert; ไม่ส่ง/false → upsert ปกติ */
+    deleted: z.boolean().optional(),
+    contact: contactSchema,
+    lead: z
+      .object({
+        external_lead_id: z.string().optional(),
+        name: z.string().optional(),
+        source: z.string().optional(),
+        owner_employee_id: uuid.optional(),
+      })
+      .optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.deleted === true) {
+      // ลบต้องมี external_customer_id เป็นตัวชี้เป้า (ไม่งั้นไม่รู้ว่าลบใคร)
+      if (!val.external_customer_id) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["external_customer_id"],
+          message: "ต้องระบุ external_customer_id เพื่อลบลูกค้า",
+        });
+      }
+    } else if (!val.name) {
+      // upsert ปกติต้องมีชื่อลูกค้า
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["name"],
+        message: "ต้องมีชื่อลูกค้า",
+      });
+    }
+  });
 
 export type CustomerUpsertPayload = z.infer<typeof customerUpsertSchema>;
 

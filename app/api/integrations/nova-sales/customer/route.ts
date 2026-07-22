@@ -13,6 +13,7 @@ import {
 import {
   upsertCustomer,
   upsertLead,
+  softDeleteCustomerByExternalRef,
   IntegrationValidationError,
 } from "@/lib/integrations/nova-sales-service";
 import { newRequestId, logServerError, serverErrorResponse } from "@/lib/http";
@@ -69,6 +70,26 @@ export async function POST(request: NextRequest) {
 
   try {
     const db = createServiceRoleClient();
+
+    // delete-sync: NOVA Sales ส่ง deleted=true → soft-delete แทน upsert (idempotent)
+    // (schema.superRefine การันตีว่ามี external_customer_id เมื่อ deleted=true แล้ว)
+    if (parsed.data.deleted === true) {
+      const result = await softDeleteCustomerByExternalRef(
+        db,
+        parsed.data.tenant_id,
+        parsed.data.external_customer_id as string
+      );
+      return NextResponse.json(
+        {
+          ok: true,
+          deleted: true,
+          external_ref: parsed.data.external_customer_id,
+          customer_id: result.customerId,
+        },
+        { status: 200 }
+      );
+    }
+
     const customer = await upsertCustomer(db, parsed.data);
 
     let leadId: string | null = null;
