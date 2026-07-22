@@ -32,6 +32,37 @@ export const FLOW_STEPS = [
 
 export const FLOW_STATUSES = ["done", "partial", "late", "missing", "unknown"] as const;
 
+/**
+ * PROBLEM_CATEGORIES — ชุดหมวดปัญหา "คงที่" สำหรับ problems[].type
+ *   บังคับให้ AI เลือกจากชุดนี้เท่านั้น เพื่อให้ UI map เป็นป้ายหมวดชัด ๆ ได้
+ *   (คนละชุดกับ PROBLEM_TYPES ด้านล่างซึ่งใช้กับ sop_violations.violation_type)
+ */
+export const PROBLEM_CATEGORIES = [
+  "sla_risk", // เกิน/ใกล้เกิน SLA (ถามแล้วเงียบนาน ยังไม่มีผู้ตอบ)
+  "complaint", // ลูกค้าไม่พอใจ/ร้องเรียน (บ่น ตำหนิ ผิดหวัง)
+  "dropped_work", // งานตกหล่น (ส่งเอกสาร/statement แล้ว แต่ทีมยังไม่เริ่ม/ไม่คืบหน้า)
+  "slow_reply", // ตอบช้า/ตอบไม่ชัด (ตอบแล้วแต่ช้าหรือคลุมเครือ)
+  "no_response", // ลูกค้าถามแล้วยังไม่มีใครตอบเลย
+  "other", // อื่น ๆ ที่ไม่เข้าหมวด
+] as const;
+
+export type ProblemCategory = (typeof PROBLEM_CATEGORIES)[number];
+
+/**
+ * PROBLEM_LABELS — map หมวดปัญหา → label ไทย + ระดับสีสำหรับ UI
+ *   level: red = เร่งด่วน/เสี่ยงร้องเรียน, amber = เฝ้าระวัง
+ *   ให้หน้าจอ reuse ได้ทันที ไม่ต้อง hardcode ป้าย/สีซ้ำหลายที่
+ */
+export const PROBLEM_LABELS: Record<ProblemCategory, { label: string; level: "red" | "amber" }> = {
+  sla_risk: { label: "เกิน/ใกล้เกิน SLA", level: "red" },
+  complaint: { label: "ลูกค้าร้องเรียน/ไม่พอใจ", level: "red" },
+  dropped_work: { label: "งานตกหล่น", level: "amber" },
+  slow_reply: { label: "ตอบช้า/ตอบไม่ชัด", level: "amber" },
+  no_response: { label: "ยังไม่มีใครตอบ", level: "red" },
+  other: { label: "อื่น ๆ", level: "amber" },
+};
+
+/** PROBLEM_TYPES — ชุดประเภทการผิด SOP (ใช้กับ sop_violations.violation_type เท่านั้น) */
 export const PROBLEM_TYPES = [
   "slow_reply", // ตอบช้า
   "missed_request", // ตกหล่น
@@ -65,7 +96,7 @@ const flowStepSchema = z.object({
 });
 
 const problemSchema = z.object({
-  type: z.enum(PROBLEM_TYPES),
+  type: z.enum(PROBLEM_CATEGORIES),
   detail: z.string(),
   msg_idx: z.number().int().nullable(),
 });
@@ -154,7 +185,7 @@ export const CHAT_AI_JSON_SCHEMA = {
           type: "object",
           additionalProperties: false,
           properties: {
-            type: { type: "string", enum: [...PROBLEM_TYPES] },
+            type: { type: "string", enum: [...PROBLEM_CATEGORIES] },
             detail: { type: "string" },
             msg_idx: { type: ["integer", "null"] },
           },
