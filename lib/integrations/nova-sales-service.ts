@@ -175,22 +175,28 @@ export async function resolveSalesEmployeeId(
 // customer / lead
 // --------------------------------------------------------------------------
 
-/** upsert ลูกค้าตาม external_ref (idempotent + จับ 23505) → คืน customer id */
+/**
+ * upsert ลูกค้าตาม external_ref (idempotent + จับ 23505) → คืน customer id
+ *
+ * หลักการรหัสลูกค้า (requirement ผู้ใช้ 2026-07-22): NOVA Sales เป็นเจ้าของรหัส —
+ * ลูกค้าที่ NOVA Sales ดันเข้ามาต้องได้ customer_code จริงตาม payload เสมอ (ไม่ bump ตัวที่เข้ามา)
+ */
 export async function upsertCustomer(
   db: DB,
   payload: CustomerUpsertPayload
 ): Promise<{ id: string; created: boolean }> {
   const externalRef = payload.external_customer_id ?? null;
+  const customerCode = payload.customer_code ?? null;
 
   const updateFields = {
     name: payload.name,
     business_name: payload.business_name ?? null,
     service_start_date: payload.service_start_date ?? null,
     ...(payload.status ? { status: payload.status } : {}),
-    ...(payload.customer_code ? { customer_code: payload.customer_code } : {}),
+    ...(customerCode ? { customer_code: customerCode } : {}),
   };
 
-  // fast path: หาโดย external_ref
+  // fast path: หาโดย external_ref → ลูกค้าเดิม → update ตาม payload (รวม customer_code จริง)
   if (externalRef) {
     const existingId = await findCustomerByExternalRef(db, payload.tenant_id, externalRef);
     if (existingId) {
@@ -199,11 +205,12 @@ export async function upsertCustomer(
     }
   }
 
-  // insert ใหม่ — auto-recode ถ้า customer_code ชน (รวมแถว soft-deleted ที่ยังจองรหัส):
-  //   ชน 23505 แล้วไล่เคส (1) external_ref ชน (row active) = race → re-select แล้ว update
-  //   (2) customer_code ชน → ออกรหัสใหม่ (เติม suffix "-N" ไม่ไปชนรหัสจริง P###/N###) แล้วลองใหม่
-  //   → รับลูกค้าเข้า CX ได้เสมอ ไม่ 500 (มติผู้ใช้ 2026-07-22: ชนรหัสให้เปลี่ยนฝั่ง CX ให้สะอาด)
-  let code: string | null = payload.customer_code ?? null;
+  // insert ใหม่ — NOVA Sales เป็นเจ้าของรหัส: ต้องได้ customer_code จริงตาม payload เสมอ (ไม่ bump)
+  //   ถ้า insert ชน 23505:
+  //     (1) external_ref ชนกับ row ที่ยัง active = race → ลูกค้าเดียวกัน → re-select แล้ว update (idempotent)
+  //     (2) customer_code ชนกับลูกค้า active คนอื่น → ให้ "ตัวที่ถือรหัสอยู่เดิม" สละรหัส (code→null)
+  //         แล้ว retry insert ด้วย customer_code จริง → NOVA Sales ชนะเสมอ + push ไม่ล้ม
+  //   (หลัง 0042 เป็น partial unique: soft-deleted/รหัส null ไม่ชนแล้ว เหลือแค่เคส active-active ที่หายาก)
   const base = {
     tenant_id: payload.tenant_id,
     external_ref: externalRef,
@@ -211,11 +218,12 @@ export async function upsertCustomer(
     business_name: payload.business_name ?? null,
     service_start_date: payload.service_start_date ?? null,
     status: payload.status ?? "active",
+    customer_code: customerCode,
   };
-  for (let attempt = 0; attempt < 25; attempt += 1) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
     const { data, error } = await db
       .from("customers")
-      .insert({ ...base, customer_code: code })
+      .insert(base)
       .select("id")
       .single();
 
@@ -225,7 +233,7 @@ export async function upsertCustomer(
     if (!isUniqueViolation(error)) {
       throw new Error(error.message);
     }
-    // (1) external_ref ชนกับ row ที่ยัง active = race → ตัวนั้นคือลูกค้าเดียวกัน → update
+    // (1) external_ref ชน = ลูกค้าเดียวกัน (race) → update ตาม payload
     if (externalRef) {
       const existingId = await findCustomerByExternalRef(db, payload.tenant_id, externalRef);
       if (existingId) {
@@ -233,32 +241,60 @@ export async function upsertCustomer(
         return { id: existingId, created: false };
       }
     }
-    // (2) customer_code ชน (ไม่ใช่ external_ref) → ออกรหัสใหม่แล้วลองใหม่
+    // (2) customer_code ชน → ปลดรหัสจากลูกค้าเดิมให้ NOVA Sales แล้ว retry
     //     ไม่มี code แต่ยังชน = ชนอย่างอื่นที่หาสาเหตุไม่ได้ → throw กันวนไม่จบ
-    if (!code) {
+    if (!customerCode) {
       throw new Error(error.message);
     }
-    code = bumpCustomerCode(code);
+    const holderId = await findActiveCustomerCodeHolder(
+      db,
+      payload.tenant_id,
+      customerCode,
+      externalRef
+    );
+    if (!holderId) {
+      // ชน code แต่หาเจ้าของ active ไม่เจอ (race แปลก ๆ) → throw กันวนไม่จบ
+      throw new Error(error.message);
+    }
+    // ให้ตัวที่ถือรหัสเดิม "สละรหัส" (customer_code = null) — filter tenant_id กัน cross-tenant
+    await db
+      .from("customers")
+      .update({ customer_code: null })
+      .eq("id", holderId)
+      .eq("tenant_id", payload.tenant_id);
+    // วนไป retry insert ด้วย customer_code จริง
   }
-  // เผื่อสุดๆ (ชน 25 ครั้ง): ยอมทิ้ง code (null) เพื่อให้ลูกค้าเข้าได้ ไม่ 500
-  const { data, error } = await db
-    .from("customers")
-    .insert({ ...base, customer_code: null })
-    .select("id")
-    .single();
-  if (error) {
-    throw new Error(error.message);
-  }
-  return { id: (data as { id: string }).id, created: true };
+  throw new Error(
+    "ไม่สามารถกำหนด customer_code ให้ลูกค้าที่ NOVA Sales ส่งเข้ามาได้ (ชนรหัสเกินจำนวนครั้งที่ retry)"
+  );
 }
 
 /**
- * ออกรหัสลูกค้าใหม่เมื่อ customer_code ชน — เติม/เพิ่ม suffix "-N"
- *   "P648" → "P648-2" → "P648-3" ... · suffix "-N" ไม่ชนรหัสจริง (P###/N###) จากNOVA Sales
+ * หา "ตัวที่ถือ customer_code นี้อยู่" ใน tenant เดียวกัน (active, ต่าง external_ref)
+ * เพื่อให้มันสละรหัสให้ลูกค้าที่ NOVA Sales ดันเข้ามา
+ *   - filter tenant_id + deleted_at is null → เจอเฉพาะเจ้าของรหัสที่ยังใช้งาน
+ *   - ถ้า row นั้นเป็น external_ref เดียวกับที่เข้ามา (ลูกค้าเดียวกัน) → ไม่ปลด (คืน null)
+ *     ปล่อยให้ path external_ref จัดการเป็น update แทน
  */
-function bumpCustomerCode(code: string): string {
-  const m = code.match(/^(.*)-(\d+)$/);
-  return m ? `${m[1]}-${Number(m[2]) + 1}` : `${code}-2`;
+async function findActiveCustomerCodeHolder(
+  db: DB,
+  tenantId: string,
+  customerCode: string,
+  incomingExternalRef: string | null
+): Promise<string | null> {
+  const { data } = await db
+    .from("customers")
+    .select("id, external_ref")
+    .eq("tenant_id", tenantId)
+    .eq("customer_code", customerCode)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!data) return null;
+  const row = data as { id: string; external_ref: string | null };
+  if (incomingExternalRef !== null && row.external_ref === incomingExternalRef) {
+    return null;
+  }
+  return row.id;
 }
 
 async function findCustomerByExternalRef(

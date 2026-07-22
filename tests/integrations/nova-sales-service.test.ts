@@ -248,65 +248,175 @@ describe("upsertDealAndMaybeInvite — idempotent", () => {
   });
 });
 
-describe("upsertCustomer — auto-recode เมื่อ customer_code ชน (ไม่ 500)", () => {
-  function recodeDb(attempts: (string | null)[], passWhen: (c: string | null) => boolean) {
-    return {
-      from() {
-        const qb: Record<string, unknown> = {};
-        Object.assign(qb, {
-          select: () => qb,
-          eq: () => qb,
-          is: () => qb,
-          order: () => qb,
-          limit: () => qb,
-          update: () => qb,
-          maybeSingle: async () => ({ data: null, error: null }), // external_ref ไม่เจอ = ตัวใหม่
-          insert: (row: Record<string, unknown>) => {
-            const code = (row.customer_code as string | null) ?? null;
-            attempts.push(code);
-            return {
-              select: () => ({
-                single: async () =>
-                  passWhen(code)
-                    ? { data: { id: "cust-new" }, error: null }
-                    : { data: null, error: { code: "23505", message: "dup code" } },
-              }),
-            };
-          },
+describe("upsertCustomer — NOVA Sales เป็นเจ้าของรหัส (ตัวที่เข้ามาได้รหัสจริงเสมอ)", () => {
+  // mock customers แบบ stateful ที่จำลอง partial unique index (0042):
+  //   unique (tenant_id, customer_code) where customer_code is not null and deleted_at is null
+  type CRow = {
+    id: string;
+    tenant_id: string;
+    external_ref: string | null;
+    customer_code: string | null;
+    deleted_at: string | null;
+    name?: string;
+    status?: string;
+  };
+  type CStore = { rows: CRow[]; seq: number };
+
+  class CustomersMock {
+    private eqFilters: { col: string; val: unknown }[] = [];
+    private isFilters: { col: string; val: unknown }[] = [];
+    private mode: "select" | "insert" | "update" = "select";
+    private payload?: Record<string, unknown>;
+    constructor(private store: CStore) {}
+
+    select() { return this; }
+    eq(col: string, val: unknown) { this.eqFilters.push({ col, val }); return this; }
+    is(col: string, val: unknown) { this.isFilters.push({ col, val }); return this; }
+    order() { return this; }
+    limit() { return this; }
+    insert(row: Record<string, unknown>) { this.mode = "insert"; this.payload = row; return this; }
+    update(fields: Record<string, unknown>) { this.mode = "update"; this.payload = fields; return this; }
+
+    private match(r: CRow): boolean {
+      const rec = r as unknown as Record<string, unknown>;
+      return (
+        this.eqFilters.every((f) => rec[f.col] === f.val) &&
+        this.isFilters.every((f) => rec[f.col] === f.val)
+      );
+    }
+
+    single() { return Promise.resolve(this.exec("single")); }
+    maybeSingle() { return Promise.resolve(this.exec("maybe")); }
+    then<T>(onF: (v: { data: unknown; error: unknown }) => T) {
+      return Promise.resolve(this.exec("list")).then(onF);
+    }
+
+    private exec(want: "single" | "maybe" | "list"): { data: unknown; error: unknown } {
+      if (this.mode === "insert") {
+        const row = this.payload ?? {};
+        const code = (row.customer_code as string | null) ?? null;
+        // จำลอง partial unique: ชนเฉพาะเมื่อ code ไม่ null และมี active row ถือรหัสนี้อยู่
+        if (code !== null) {
+          const clash = this.store.rows.find(
+            (r) =>
+              r.tenant_id === row.tenant_id &&
+              r.customer_code === code &&
+              r.deleted_at === null
+          );
+          if (clash) {
+            return { data: null, error: { code: "23505", message: "dup customer_code" } };
+          }
+        }
+        const id = (row.id as string) ?? `cust-${++this.store.seq}`;
+        this.store.rows.push({
+          id,
+          tenant_id: row.tenant_id as string,
+          external_ref: (row.external_ref as string | null) ?? null,
+          customer_code: code,
+          deleted_at: (row.deleted_at as string | null) ?? null,
+          name: row.name as string | undefined,
+          status: row.status as string | undefined,
         });
-        return qb;
+        return { data: { id }, error: null };
+      }
+      if (this.mode === "update") {
+        for (const r of this.store.rows) {
+          if (this.match(r)) Object.assign(r, this.payload);
+        }
+        return { data: null, error: null };
+      }
+      const rows = this.store.rows.filter((r) => this.match(r));
+      if (want === "single" || want === "maybe") return { data: rows[0] ?? null, error: null };
+      return { data: rows, error: null };
+    }
+  }
+
+  function custDb(store: CStore): SupabaseClient {
+    return {
+      from(table: string) {
+        if (table !== "customers") throw new Error(`unexpected table ${table}`);
+        return new CustomersMock(store);
       },
     } as unknown as SupabaseClient;
   }
 
-  it("code ชนรอบแรก → เติม suffix -2 แล้ว insert สำเร็จ (created)", async () => {
-    const attempts: (string | null)[] = [];
-    // ผ่านเฉพาะรหัสที่มี suffix "-N" (จำลองว่า P648 ชนกับแถว soft-deleted)
-    const db = recodeDb(attempts, (c) => !!c && /-\d+$/.test(c));
+  const find = (s: CStore, ext: string) => s.rows.find((r) => r.external_ref === ext);
 
-    const r = await upsertCustomer(db, {
+  it("(ก) รหัสชนกับ active คนอื่น → ตัวเก่าสละรหัส (code→null), ตัวใหม่ได้ payload.customer_code", async () => {
+    const store: CStore = {
+      rows: [
+        { id: "cust-old", tenant_id: TENANT, external_ref: "EXT-OLD", customer_code: "P648", deleted_at: null },
+      ],
+      seq: 0,
+    };
+    const r = await upsertCustomer(custDb(store), {
       tenant_id: TENANT,
-      external_customer_id: "L-xyz",
+      external_customer_id: "EXT-NEW",
       customer_code: "P648",
-      name: "ทดสอบ",
+      name: "ลูกค้าใหม่จาก NOVA Sales",
       status: "active",
     } as never);
 
     expect(r.created).toBe(true);
-    expect(r.id).toBe("cust-new");
-    expect(attempts).toEqual(["P648", "P648-2"]); // ลองเดิมก่อน (ชน) แล้ว -2 (ผ่าน)
+    // ตัวเก่าถูกปลดรหัส (สละให้ NOVA Sales)
+    expect(find(store, "EXT-OLD")?.customer_code).toBeNull();
+    // ตัวใหม่ได้รหัสจริง P648 (ไม่ bump เป็น P648-2)
+    const created = find(store, "EXT-NEW");
+    expect(created?.id).toBe(r.id);
+    expect(created?.customer_code).toBe("P648");
   });
 
-  it("ไม่ชน → insert รหัสเดิมได้เลย (ไม่เติม suffix)", async () => {
-    const attempts: (string | null)[] = [];
-    const db = recodeDb(attempts, () => true);
-    const r = await upsertCustomer(db, {
+  it("(ข) external_ref race (row เดิม active) → update ตัวเดิม ไม่สร้างใหม่", async () => {
+    const store: CStore = {
+      rows: [
+        { id: "cust-1", tenant_id: TENANT, external_ref: "EXT-1", customer_code: "N100", deleted_at: null, name: "เก่า" },
+      ],
+      seq: 0,
+    };
+    const r = await upsertCustomer(custDb(store), {
       tenant_id: TENANT,
-      external_customer_id: "L-abc",
+      external_customer_id: "EXT-1",
       customer_code: "N100",
-      name: "ทดสอบ2",
+      name: "ชื่อใหม่",
+      status: "active",
     } as never);
+
+    expect(r.created).toBe(false);
+    expect(r.id).toBe("cust-1");
+    expect(store.rows).toHaveLength(1); // ไม่มีการ insert เพิ่ม
+    expect(find(store, "EXT-1")?.name).toBe("ชื่อใหม่");
+  });
+
+  it("(ค) ไม่ชนอะไร → insert ปกติด้วย customer_code จริง", async () => {
+    const store: CStore = { rows: [], seq: 0 };
+    const r = await upsertCustomer(custDb(store), {
+      tenant_id: TENANT,
+      external_customer_id: "EXT-Z",
+      customer_code: "P999",
+      name: "ลูกค้าใหม่",
+    } as never);
+
     expect(r.created).toBe(true);
-    expect(attempts).toEqual(["N100"]);
+    expect(store.rows).toHaveLength(1);
+    expect(find(store, "EXT-Z")?.customer_code).toBe("P999");
+  });
+
+  it("(ง) update ตัวเดิม (external_ref เดิม) → เปลี่ยน customer_code ตาม payload", async () => {
+    const store: CStore = {
+      rows: [
+        { id: "cust-2", tenant_id: TENANT, external_ref: "EXT-2", customer_code: "OLDCODE", deleted_at: null },
+      ],
+      seq: 0,
+    };
+    const r = await upsertCustomer(custDb(store), {
+      tenant_id: TENANT,
+      external_customer_id: "EXT-2",
+      customer_code: "NEWCODE",
+      name: "ลูกค้า",
+    } as never);
+
+    expect(r.created).toBe(false);
+    expect(r.id).toBe("cust-2");
+    expect(find(store, "EXT-2")?.customer_code).toBe("NEWCODE");
   });
 });
