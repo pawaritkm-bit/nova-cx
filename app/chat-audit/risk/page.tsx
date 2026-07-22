@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { resolveEvalViewer } from "@/lib/evaluation/context";
 import { canSeeRiskDashboard, canAccessChatViewer } from "@/lib/chat-dashboard/access";
 import { getRiskDashboard } from "@/lib/chat-dashboard/queries";
+import { problemMeta, problemBadgeClass } from "@/lib/chat-dashboard/problem-labels";
+import type { RiskRow } from "@/lib/chat-dashboard/types";
 import ChatAuditFrame from "../_Frame";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +18,32 @@ const LEVEL_BADGE: Record<string, { cls: string; label: string }> = {
   yellow: { cls: "b-yellow", label: "🟡 ติดตาม" },
   green: { cls: "b-green", label: "🟢 ปกติ" },
 };
+
+/**
+ * เซลล์ "สัญญาณ/สาเหตุ" — โชว์เหตุการณ์เจาะจง (ป้ายหมวด + detail จริงจาก AI)
+ *   ลำดับ fallback: problems[] (มี type+detail) → summary → reason (กว้าง) → "—"
+ */
+function ReasonCell({ row }: { row: RiskRow }) {
+  if (row.problems.length > 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {row.problems.slice(0, 3).map((p, i) => {
+          const meta = problemMeta(p.type);
+          return (
+            <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <span className={`badge ${problemBadgeClass(meta.tone)}`} style={{ flexShrink: 0 }}>
+                {meta.label}
+              </span>
+              {p.detail ? <span style={{ fontSize: 13 }}>{p.detail}</span> : null}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  const fallback = row.summary ?? row.reason;
+  return <span style={{ fontSize: 13 }}>{fallback ?? "—"}</span>;
+}
 
 export default async function ChatRiskPage() {
   if (!getSupabaseEnv()) {
@@ -88,7 +116,7 @@ export default async function ChatRiskPage() {
                         {/* ★ pseudonymity: แสดงรหัสลูกค้า ไม่ใช่ชื่อจริง */}
                         <td><b style={{ color: "var(--navy-800)" }}>{r.customerLabel}</b></td>
                         <td className="center"><span className={`badge ${b.cls}`}>{b.label}</span>{r.escalated ? <div style={{ fontSize: 10 }} className="muted">↑ escalate แล้ว</div> : null}</td>
-                        <td>{r.reason ?? "—"}</td>
+                        <td><ReasonCell row={r} /></td>
                         <td>{r.ownerName}</td>
                         <td className="center">{r.caseId && canOpenCase ? <Link href={`/chat-audit/cases/${r.caseId}`} className="underline">เปิด</Link> : "—"}</td>
                       </tr>

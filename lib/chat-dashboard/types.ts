@@ -87,6 +87,33 @@ export type AccountantEvaluationRow = {
   needs_review: boolean;
 };
 
+/** ปัญหาที่ AI สกัดจากบทสนทนา (subset ของ ai_chat_analysis.problems) */
+export type ChatProblem = {
+  type: string; // หมวด (ดู problem-labels.ts)
+  detail: string; // ข้อความอธิบายเหตุการณ์จริง
+};
+
+/** เหตุการณ์เร่งด่วน 1 รายการ (ต่อเคส) — ใช้บนการ์ด exec + ตารางลูกค้าเสี่ยง */
+export type IncidentRow = {
+  caseId: string;
+  customerLabel: string; // รหัสลูกค้า (ปลอมนาม) หรือ "—"
+  ownerName: string; // ผู้รับผิดชอบ (owner เคส → ผู้ดูแลกลุ่ม)
+  level: string; // ระดับเคส (critical/high/...)
+  urgency: string | null;
+  problemType: string | null; // หมวดปัญหาเด่น (null = ไม่มี problem → ใช้ summary)
+  detail: string; // เหตุการณ์เจาะจง (problem.detail → summary → title)
+  overdue: boolean; // เกิน SLA แล้วหรือยัง (ไว้เน้น/เรียง)
+};
+
+/** จุดข้อมูลกราฟ "สุขภาพการดูแล 7 วัน" (อัตราตอบภายใน SLA รายวัน) */
+export type CareHealthDay = {
+  date: string; // YYYY-MM-DD (โซนเวลา server)
+  label: string; // ป้ายสั้น (ว/ด)
+  total: number; // เคสที่ครบกำหนดตอบในวันนั้น
+  withinSla: number; // ตอบทันภายใน SLA
+  rate: number | null; // withinSla/total (null = ไม่มีเคสวันนั้น)
+};
+
 // ---- ผลลัพธ์ dashboard ----------------------------------------------
 export type ExecChatDashboard = {
   totalGroups: number;
@@ -95,11 +122,16 @@ export type ExecChatDashboard = {
   newTodayCases: number;
   overdueCases: number;
   urgentCases: number; // critical/high ที่ยังเปิด
+  waitingCases: number; // ★ เรื่องรอตอบ (เปิดอยู่ + ยังไม่ตอบครั้งแรก)
+  activeRisk: number; // ★ ลูกค้าเสี่ยง (risk_alerts active ทั้งหมด)
+  aiPendingReview: number; // ★ AI รอหัวหน้าตรวจ (needs_human_review / confidence ต่ำ)
   complaints: number; // risk level orange/red ที่ยัง active
   cancelRisk: number; // risk level red ที่ยัง active
   repeatRate: number | null; // อัตราทวงซ้ำ (0..1) — ประมาณจาก repeat_doc_request/off-topic
   topProblems: { label: string; count: number }[];
   ownerBacklog: { employeeId: string; name: string; open: number; overdue: number }[];
+  incidents: IncidentRow[]; // ★ เหตุการณ์เร่งด่วน (top เรียงตามความด่วน)
+  careHealth: CareHealthDay[]; // ★ สุขภาพการดูแล 7 วัน
 };
 
 export type TeamMemberStat = {
@@ -136,13 +168,15 @@ export type MeChatDashboard = {
   } | null;
 };
 
-/** แถวในตารางลูกค้าเสี่ยง (join customer + owner) */
+/** แถวในตารางลูกค้าเสี่ยง (join customer + owner + เหตุการณ์เจาะจงจาก AI) */
 export type RiskRow = {
   alertId: string;
   caseId: string | null;
   customerLabel: string; // รหัสลูกค้า (ปลอมนาม) — ★ ไม่ใช่ชื่อจริง
   level: string;
-  reason: string | null;
+  reason: string | null; // เหตุผลกว้างจาก risk_alert (fallback สุดท้าย)
+  problems: ChatProblem[]; // ★ เหตุการณ์เจาะจง (หมวด + detail จริง) จาก ai_chat_analysis
+  summary: string | null; // ★ สรุปบทสนทนา (fallback เมื่อไม่มี problem)
   ownerName: string;
   status: string;
   escalated: boolean;

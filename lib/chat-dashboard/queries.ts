@@ -9,7 +9,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptField } from "@/lib/crypto/field";
-import { computeSlaStatus } from "@/lib/dashboard/sla";
+import { computeSlaStatus, compareUrgency } from "@/lib/dashboard/sla";
 import type { Viewer } from "@/lib/evaluation/access";
 import { caseScopeForViewer, canDecryptChat, type CaseScope } from "./access";
 import { buildTimeline, type RawTimelineInput } from "./decrypt";
@@ -24,6 +24,9 @@ import type {
   AiChatAnalysisRow,
   SopViolationRow,
   AccountantEvaluationRow,
+  ChatProblem,
+  IncidentRow,
+  CareHealthDay,
 } from "./types";
 
 type DB = SupabaseClient;
@@ -32,6 +35,10 @@ const CASE_LIMIT = 1000;
 const MSG_LIMIT = 500;
 const ACTIVE_STATUSES = ["open", "in_progress", "waiting_customer", "reopened"];
 const ACTIVE_RISK = ["open", "acknowledged"];
+/** confidence ต่ำกว่านี้ = AI ยังไม่มั่นใจ → ควรให้หัวหน้าตรวจ */
+const LOW_CONFIDENCE = 0.5;
+/** จำนวนเหตุการณ์เร่งด่วนสูงสุดที่โชว์บนการ์ด exec */
+const INCIDENT_LIMIT = 8;
 
 /** ป้ายภาษาไทยของชนิด SOP violation (ปัญหาที่ AI จับได้) */
 const VIOLATION_LABEL: Record<string, string> = {
@@ -160,6 +167,135 @@ export function topProblemsFromViolations(
 }
 
 /**
+ * แปลง ai_chat_analysis.problems (jsonb unknown) → ChatProblem[] อย่างปลอดภัย
+ *   - ไม่ใช่ array → []
+ *   - แต่ละ item อ่าน type/detail แบบ defensive (ข้อมูลจาก AI อาจไม่ครบ)
+ *   - เก็บ item ที่มี type หรือ detail อย่างน้อยอย่างใดอย่างหนึ่ง
+ */
+export function parseProblems(raw: unknown): ChatProblem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ChatProblem[] = [];
+  for (const item of raw) {
+    if (item && typeof item === "object") {
+      const o = item as Record<string, unknown>;
+      const type = typeof o.type === "string" ? o.type : null;
+      const detail = typeof o.detail === "string" ? o.detail.trim() : "";
+      if (type || detail) out.push({ type: type ?? "other", detail });
+    }
+  }
+  return out;
+}
+
+/** key วันแบบ YYYY-MM-DD ตามโซนเวลา server (ใช้จับ bucket รายวัน) */
+function dayKey(ms: number): string {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * สุขภาพการดูแล 7 วันล่าสุด — อัตรา "ตอบทันภายใน SLA" รายวัน
+ *   - จัด bucket ตามวันที่ "เปิดเคส" (opened_at) 7 วันย้อนหลังรวมวันนี้
+ *   - total = เคสที่เปิดวันนั้นและมีกำหนดตอบ (first_response_due_at)
+ *   - withinSla = ตอบครั้งแรกแล้ว (first_responded_at) และไม่เกินกำหนด
+ *   - ไม่มีเคสวันนั้น → rate = null (หน้าแสดง empty/จาง)
+ *   ★ pure: รับ cases + nowMs (ไม่แตะ DB / ไม่เรียก Date.now เอง)
+ */
+export function computeCareHealth7d(
+  cases: ConversationCaseRow[],
+  nowMs: number
+): CareHealthDay[] {
+  const start = new Date(nowMs);
+  start.setHours(0, 0, 0, 0);
+  const days: CareHealthDay[] = [];
+  const byKey = new Map<string, CareHealthDay>();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(start);
+    d.setDate(start.getDate() - i);
+    const key = dayKey(d.getTime());
+    const day: CareHealthDay = {
+      date: key,
+      label: `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`,
+      total: 0,
+      withinSla: 0,
+      rate: null,
+    };
+    days.push(day);
+    byKey.set(key, day);
+  }
+  for (const c of cases) {
+    if (!c.opened_at || !c.first_response_due_at) continue;
+    const openedMs = Date.parse(c.opened_at);
+    if (!Number.isFinite(openedMs)) continue;
+    const day = byKey.get(dayKey(openedMs));
+    if (!day) continue;
+    day.total += 1;
+    const dueMs = Date.parse(c.first_response_due_at);
+    if (
+      c.first_responded_at &&
+      Number.isFinite(dueMs) &&
+      Date.parse(c.first_responded_at) <= dueMs
+    ) {
+      day.withinSla += 1;
+    }
+  }
+  for (const day of days) {
+    day.rate = day.total > 0 ? Math.round((day.withinSla / day.total) * 100) / 100 : null;
+  }
+  return days;
+}
+
+/**
+ * สร้างรายการ "เหตุการณ์เร่งด่วน" จากเคสที่เปิดอยู่
+ *   - เรียงตามความด่วน (compareUrgency: เกิน SLA → critical/high → ครบกำหนดใกล้สุด)
+ *   - เหตุการณ์เจาะจง = problem.detail ตัวแรก → summary → summary เคส → title
+ *   - ลูกค้า/ผู้รับผิดชอบ: จากเคสก่อน ถ้าไม่มีใช้ fallback จากกลุ่ม (customer/responsible)
+ *   ★ pure: ผู้เรียกเตรียม map (analysis/กลุ่ม/รหัสลูกค้า/ชื่อ) มาให้
+ */
+export function buildIncidents(
+  openCases: ConversationCaseRow[],
+  analysisByGroup: Map<string, { problems: ChatProblem[]; summary: string | null }>,
+  groupFallback: Map<string, { customerId: string | null; responsibleId: string | null }>,
+  custCode: Map<string, string>,
+  names: Map<string, string>,
+  nowMs: number,
+  limit = INCIDENT_LIMIT
+): IncidentRow[] {
+  const sorted = [...openCases].sort((a, b) =>
+    compareUrgency(
+      { level: a.level, sla_due_at: a.resolution_due_at },
+      { level: b.level, sla_due_at: b.resolution_due_at },
+      nowMs
+    )
+  );
+  return sorted.slice(0, limit).map((c) => {
+    const fb = groupFallback.get(c.chat_group_id);
+    const custId = c.customer_id ?? fb?.customerId ?? null;
+    const ownerId = c.owner_employee_id ?? fb?.responsibleId ?? null;
+    const an = analysisByGroup.get(c.chat_group_id);
+    const top = an?.problems[0];
+    const detail =
+      (top?.detail && top.detail.trim()) ||
+      (an?.summary && an.summary.trim()) ||
+      (c.summary && c.summary.trim()) ||
+      (c.title && c.title.trim()) ||
+      "ยังไม่มีรายละเอียดจาก AI";
+    return {
+      caseId: c.id,
+      customerLabel: custId ? custCode.get(custId) ?? "—" : "—",
+      ownerName: nameOf(names, ownerId),
+      level: c.level,
+      urgency: c.urgency,
+      problemType: top?.type ?? null,
+      detail,
+      overdue: computeSlaStatus(c.resolution_due_at, nowMs).state === "overdue",
+    };
+  });
+}
+
+/**
  * ★ M2: อัตราทวงซ้ำ — คิดจาก "เคสเปิด" ชุดเดียวทั้งเศษ/ส่วน (ไม่ปนหน่วย)
  *   = (เคสเปิดที่กลุ่มมี violation repeat_doc_request) ÷ (เคสเปิดทั้งหมด)
  *   openCases = รายการเคสที่เปิดอยู่แล้ว (ผู้เรียกกรอง CLOSED ออกก่อน)
@@ -221,6 +357,48 @@ function logTruncate(context: string, n: number, cap: number): void {
   }
 }
 
+/** แถวดิบ ai_chat_analysis เท่าที่ dashboard ใช้ (เรียง window_end desc มาแล้ว) */
+type AnalysisRaw = {
+  chat_group_id: string;
+  summary: string | null;
+  problems: unknown;
+  confidence: number | null;
+  needs_human_review: boolean;
+};
+
+/**
+ * map "การวิเคราะห์ล่าสุดต่อกลุ่ม" (rows เรียง window_end desc มาก่อน → ตัวแรกของกลุ่ม = ล่าสุด)
+ *   ★ pure: ผู้เรียก query + order มาให้
+ */
+export function latestAnalysisByGroup(
+  rows: { chat_group_id: string; summary: string | null; problems: unknown }[]
+): Map<string, { problems: ChatProblem[]; summary: string | null }> {
+  const out = new Map<string, { problems: ChatProblem[]; summary: string | null }>();
+  for (const r of rows) {
+    if (out.has(r.chat_group_id)) continue; // ตัวแรก = ล่าสุด (desc)
+    out.set(r.chat_group_id, { problems: parseProblems(r.problems), summary: r.summary });
+  }
+  return out;
+}
+
+/**
+ * นับ "AI รอหัวหน้าตรวจ" จากวิเคราะห์ล่าสุดต่อกลุ่ม:
+ *   needs_human_review = true หรือ confidence ต่ำกว่าเกณฑ์ (LOW_CONFIDENCE)
+ *   ★ นับต่อกลุ่ม (ล่าสุด) ไม่นับซ้ำหลาย window ของกลุ่มเดียว
+ */
+export function countAiPendingReview(rows: AnalysisRaw[]): number {
+  const seen = new Set<string>();
+  let n = 0;
+  for (const r of rows) {
+    if (seen.has(r.chat_group_id)) continue; // ตัวแรก = ล่าสุด
+    seen.add(r.chat_group_id);
+    if (r.needs_human_review || (typeof r.confidence === "number" && r.confidence < LOW_CONFIDENCE)) {
+      n += 1;
+    }
+  }
+  return n;
+}
+
 // ---------------------------------------------------------------------
 // 1) Executive Dashboard — ภาพรวมทั้ง tenant
 // ---------------------------------------------------------------------
@@ -228,28 +406,40 @@ export async function getExecChatDashboard(
   db: DB,
   nowMs: number = Date.now()
 ): Promise<ExecChatDashboard> {
-  const [{ data: caseData }, { data: groupData }, { data: riskData }, { data: violData }] =
-    await Promise.all([
-      db.from("conversation_cases").select(CASE_COLS).is("deleted_at", null).limit(CASE_LIMIT),
-      db
-        .from("chat_groups")
-        .select("id")
-        .is("deleted_at", null)
-        .eq("is_active", true)
-        // ★ กันปน (Phase A): นับเฉพาะกลุ่มจริง (group/room) ไม่รวมบทสนทนา 1-1 (group_kind='user')
-        .in("group_kind", ["group", "room"])
-        .limit(CASE_LIMIT),
-      db.from("risk_alerts").select("level, status").in("status", ACTIVE_RISK).limit(CASE_LIMIT),
-      db.from("sop_violations").select("violation_type, chat_group_id").is("deleted_at", null).limit(CASE_LIMIT),
-    ]);
+  const [
+    { data: caseData },
+    { data: groupData },
+    { data: riskData },
+    { data: violData },
+    { data: analysisData },
+  ] = await Promise.all([
+    db.from("conversation_cases").select(CASE_COLS).is("deleted_at", null).limit(CASE_LIMIT),
+    db
+      .from("chat_groups")
+      .select("id")
+      .is("deleted_at", null)
+      .eq("is_active", true)
+      // ★ กันปน (Phase A): นับเฉพาะกลุ่มจริง (group/room) ไม่รวมบทสนทนา 1-1 (group_kind='user')
+      .in("group_kind", ["group", "room"])
+      .limit(CASE_LIMIT),
+    db.from("risk_alerts").select("level, status").in("status", ACTIVE_RISK).limit(CASE_LIMIT),
+    db.from("sop_violations").select("violation_type, chat_group_id").is("deleted_at", null).limit(CASE_LIMIT),
+    // ★ วิเคราะห์ล่าสุดต่อกลุ่ม (เรียง window_end desc) — ใช้ทั้ง incident detail + นับ AI รอตรวจ
+    db
+      .from("ai_chat_analysis")
+      .select("chat_group_id, summary, problems, confidence, needs_human_review, window_end")
+      .is("deleted_at", null)
+      .order("window_end", { ascending: false })
+      .limit(CASE_LIMIT),
+  ]);
 
   const cases = (caseData ?? []) as ConversationCaseRow[];
   logTruncate("exec cases", cases.length, CASE_LIMIT);
   const risks = (riskData ?? []) as { level: string; status: string }[];
   const violations = (violData ?? []) as { violation_type: string; chat_group_id: string }[];
+  const analysisRows = (analysisData ?? []) as AnalysisRaw[];
 
   const summary = summarizeExecCases(cases, nowMs);
-  const names = await fetchEmployeeNames(db, cases.map((c) => c.owner_employee_id ?? "").filter(Boolean));
 
   const complaints = risks.filter((r) => r.level === "orange" || r.level === "red").length;
   const cancelRisk = risks.filter((r) => r.level === "red").length;
@@ -259,14 +449,67 @@ export async function getExecChatDashboard(
   const openCases = cases.filter((c) => !CLOSED.has(c.status));
   const repeatRate = computeRepeatRate(openCases, violations);
 
+  // ★ เรื่องรอตอบ = เคสเปิดที่ยังไม่ตอบครั้งแรก
+  const waitingCases = openCases.filter((c) => !c.first_responded_at).length;
+
+  const analysisByGroup = latestAnalysisByGroup(analysisRows);
+
+  // fallback ลูกค้า/ผู้รับผิดชอบ จากกลุ่ม (เมื่อเคสไม่มี) — ดึงเฉพาะกลุ่มของเคสที่เปิด
+  const openGroupIds = [...new Set(openCases.map((c) => c.chat_group_id))];
+  type GroupFbRow = { id: string; customer_id: string | null; responsible_employee_id: string | null };
+  const { data: groupFbData } =
+    openGroupIds.length > 0
+      ? await db
+          .from("chat_groups")
+          .select("id, customer_id, responsible_employee_id")
+          .in("id", openGroupIds)
+          .limit(CASE_LIMIT)
+      : { data: [] as GroupFbRow[] };
+  const groupFallback = new Map<string, { customerId: string | null; responsibleId: string | null }>();
+  for (const g of (groupFbData ?? []) as GroupFbRow[]) {
+    groupFallback.set(g.id, { customerId: g.customer_id, responsibleId: g.responsible_employee_id });
+  }
+
+  // รหัสลูกค้า (ปลอมนาม) + ชื่อผู้รับผิดชอบ — รวมทั้งของเคสและ fallback จากกลุ่ม
+  const custIds = [
+    ...new Set(
+      [
+        ...openCases.map((c) => c.customer_id),
+        ...[...groupFallback.values()].map((g) => g.customerId),
+      ].filter((x): x is string => !!x)
+    ),
+  ];
+  const ownerIds = [
+    ...openCases.map((c) => c.owner_employee_id),
+    ...cases.map((c) => c.owner_employee_id), // เผื่อ ownerBacklog
+    ...[...groupFallback.values()].map((g) => g.responsibleId),
+  ].filter((x): x is string => !!x);
+
+  type CustRow = { id: string; customer_code: string | null };
+  const [names, custRes] = await Promise.all([
+    fetchEmployeeNames(db, ownerIds),
+    custIds.length > 0
+      ? db.from("customers").select("id, customer_code").in("id", custIds)
+      : Promise.resolve({ data: [] as CustRow[] }),
+  ]);
+  const custCode = new Map<string, string>();
+  for (const c of (custRes.data ?? []) as CustRow[]) {
+    custCode.set(c.id, c.customer_code ?? c.id.slice(0, 8));
+  }
+
   return {
     totalGroups: (groupData ?? []).length,
     ...summary,
+    waitingCases,
+    activeRisk: risks.length,
+    aiPendingReview: countAiPendingReview(analysisRows),
     complaints,
     cancelRisk,
     repeatRate,
     topProblems: topProblemsFromViolations(violations),
     ownerBacklog: computeOwnerBacklog(cases, nowMs, names),
+    incidents: buildIncidents(openCases, analysisByGroup, groupFallback, custCode, names, nowMs),
+    careHealth: computeCareHealth7d(cases, nowMs),
   };
 }
 
@@ -537,13 +780,71 @@ export async function getRiskDashboard(db: DB, viewer: Viewer): Promise<RiskRow[
     escalated_at: string | null;
   }[];
 
-  // ★ pseudonymity: แสดง "รหัสลูกค้า" ไม่ใช่ชื่อจริง
-  const custIds = [...new Set(rows.map((r) => r.customer_id).filter((x): x is string => !!x))];
+  // ── ขั้นที่ 1: เคสที่ผูกกับ alert → chat_group_id + fallback ลูกค้า/เจ้าของ ──
+  const caseIds = [...new Set(rows.map((r) => r.case_id).filter((x): x is string => !!x))];
+  type CaseFbRow = {
+    id: string;
+    chat_group_id: string;
+    customer_id: string | null;
+    owner_employee_id: string | null;
+  };
+  const { data: caseFbData } =
+    caseIds.length > 0
+      ? await db
+          .from("conversation_cases")
+          .select("id, chat_group_id, customer_id, owner_employee_id")
+          .in("id", caseIds)
+          .is("deleted_at", null)
+          .limit(CASE_LIMIT)
+      : { data: [] as CaseFbRow[] };
+  const caseMap = new Map<string, CaseFbRow>();
+  for (const c of (caseFbData ?? []) as CaseFbRow[]) caseMap.set(c.id, c);
 
-  // ★ perf: ชื่อ owner กับ รหัสลูกค้า ต่างขึ้นกับ rows แต่ไม่ขึ้นต่อกัน → ยิงขนาน
+  // ── ขั้นที่ 2: กลุ่มของเคส → วิเคราะห์ล่าสุด (problems/summary) + fallback กลุ่ม ──
+  const groupIds = [...new Set([...caseMap.values()].map((c) => c.chat_group_id))];
+  type GroupFbRow = { id: string; customer_id: string | null; responsible_employee_id: string | null };
+  const [groupFbRes, analysisRes] =
+    groupIds.length > 0
+      ? await Promise.all([
+          db
+            .from("chat_groups")
+            .select("id, customer_id, responsible_employee_id")
+            .in("id", groupIds)
+            .limit(CASE_LIMIT),
+          db
+            .from("ai_chat_analysis")
+            .select("chat_group_id, summary, problems, window_end")
+            .in("chat_group_id", groupIds)
+            .is("deleted_at", null)
+            .order("window_end", { ascending: false })
+            .limit(CASE_LIMIT),
+        ])
+      : [{ data: [] as GroupFbRow[] }, { data: [] as { chat_group_id: string; summary: string | null; problems: unknown }[] }];
+  const groupMap = new Map<string, GroupFbRow>();
+  for (const g of (groupFbRes.data ?? []) as GroupFbRow[]) groupMap.set(g.id, g);
+  const analysisByGroup = latestAnalysisByGroup(
+    (analysisRes.data ?? []) as { chat_group_id: string; summary: string | null; problems: unknown }[]
+  );
+
+  // ── ขั้นที่ 3: รหัสลูกค้า (ปลอมนาม) + ชื่อผู้รับผิดชอบ (รวม fallback เคส/กลุ่ม) ──
+  const custIds = [
+    ...new Set(
+      [
+        ...rows.map((r) => r.customer_id),
+        ...[...caseMap.values()].map((c) => c.customer_id),
+        ...[...groupMap.values()].map((g) => g.customer_id),
+      ].filter((x): x is string => !!x)
+    ),
+  ];
+  const ownerIds = [
+    ...rows.map((r) => r.owner_employee_id),
+    ...[...caseMap.values()].map((c) => c.owner_employee_id),
+    ...[...groupMap.values()].map((g) => g.responsible_employee_id),
+  ].filter((x): x is string => !!x);
+
   type CustRow = { id: string; customer_code: string | null };
   const [names, custRes] = await Promise.all([
-    fetchEmployeeNames(db, rows.map((r) => r.owner_employee_id ?? "").filter(Boolean)),
+    fetchEmployeeNames(db, ownerIds),
     custIds.length > 0
       ? db.from("customers").select("id, customer_code").in("id", custIds)
       : Promise.resolve({ data: [] as CustRow[] }),
@@ -556,16 +857,27 @@ export async function getRiskDashboard(db: DB, viewer: Viewer): Promise<RiskRow[
 
   const rank: Record<string, number> = { red: 0, orange: 1, yellow: 2, green: 3 };
   return rows
-    .map((r) => ({
-      alertId: r.id,
-      caseId: r.case_id,
-      customerLabel: r.customer_id ? custCode.get(r.customer_id) ?? "—" : "—",
-      level: r.level,
-      reason: r.reason,
-      ownerName: nameOf(names, r.owner_employee_id),
-      status: r.status,
-      escalated: !!r.escalated_at,
-    }))
+    .map((r) => {
+      const kase = r.case_id ? caseMap.get(r.case_id) : undefined;
+      const group = kase ? groupMap.get(kase.chat_group_id) : undefined;
+      // ★ ลูกค้า/ผู้รับผิดชอบ: alert → เคส → กลุ่ม (เอาค่าแรกที่มี)
+      const custId = r.customer_id ?? kase?.customer_id ?? group?.customer_id ?? null;
+      const ownerId = r.owner_employee_id ?? kase?.owner_employee_id ?? group?.responsible_employee_id ?? null;
+      const analysis = kase ? analysisByGroup.get(kase.chat_group_id) : undefined;
+      return {
+        alertId: r.id,
+        caseId: r.case_id,
+        // ★ pseudonymity: แสดง "รหัสลูกค้า" ไม่ใช่ชื่อจริง
+        customerLabel: custId ? custCode.get(custId) ?? "—" : "—",
+        level: r.level,
+        reason: r.reason,
+        problems: analysis?.problems ?? [],
+        summary: analysis?.summary ?? null,
+        ownerName: nameOf(names, ownerId),
+        status: r.status,
+        escalated: !!r.escalated_at,
+      };
+    })
     .sort((a, b) => (rank[a.level] ?? 9) - (rank[b.level] ?? 9));
 }
 

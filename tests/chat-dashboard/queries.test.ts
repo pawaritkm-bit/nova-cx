@@ -4,13 +4,20 @@ import {
   getMeChatDashboard,
   getCaseChatView,
   getRiskDashboard,
+  getExecChatDashboard,
   summarizeExecCases,
   computeOwnerBacklog,
   topProblemsFromViolations,
   computeRepeatRate,
   attributeExpertViolations,
   buildGroupSingleOwner,
+  parseProblems,
+  computeCareHealth7d,
+  buildIncidents,
+  countAiPendingReview,
+  latestAnalysisByGroup,
 } from "@/lib/chat-dashboard/queries";
+import type { ChatProblem } from "@/lib/chat-dashboard/types";
 import type { ConversationCaseRow } from "@/lib/chat-dashboard/types";
 import type { Viewer } from "@/lib/evaluation/access";
 
@@ -285,5 +292,179 @@ describe("attributeExpertViolations — ★ M1 attribute ต่อเคส→ow
       groupSingleOwner
     );
     expect(res.get("z")).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------
+// ★ เหตุการณ์เจาะจง — parse problems / incident / care health / AI รอตรวจ
+// ---------------------------------------------------------------------
+describe("parseProblems — อ่าน problems[] จาก jsonb แบบ defensive", () => {
+  it("array ปกติ → เก็บ type+detail", () => {
+    const out = parseProblems([
+      { type: "sla_risk", detail: "ถาม VAT ยังไม่มีผู้ตอบ 3 ชม.", msg_idx: 2 },
+      { type: "complaint", detail: "ลูกค้าบ่นช้า", msg_idx: null },
+    ]);
+    expect(out).toEqual([
+      { type: "sla_risk", detail: "ถาม VAT ยังไม่มีผู้ตอบ 3 ชม." },
+      { type: "complaint", detail: "ลูกค้าบ่นช้า" },
+    ]);
+  });
+  it("ไม่ใช่ array (null/สตริง) → []", () => {
+    expect(parseProblems(null)).toEqual([]);
+    expect(parseProblems("x")).toEqual([]);
+  });
+  it("item ที่มีแต่ detail (type หาย) → type=other; item ว่างเปล่า → ข้าม", () => {
+    const out = parseProblems([{ detail: "เหตุการณ์" }, {}, { type: 123 }]);
+    expect(out).toEqual([{ type: "other", detail: "เหตุการณ์" }]);
+  });
+});
+
+describe("latestAnalysisByGroup — เอาวิเคราะห์ล่าสุดต่อกลุ่ม (ตัวแรก = desc)", () => {
+  it("กลุ่มเดียวหลาย window → ใช้ตัวแรก (ล่าสุด)", () => {
+    const m = latestAnalysisByGroup([
+      { chat_group_id: "g1", summary: "ใหม่", problems: [{ type: "sla_risk", detail: "a" }] },
+      { chat_group_id: "g1", summary: "เก่า", problems: [] },
+      { chat_group_id: "g2", summary: "อีกกลุ่ม", problems: [] },
+    ]);
+    expect(m.get("g1")?.summary).toBe("ใหม่");
+    expect(m.get("g1")?.problems[0].type).toBe("sla_risk");
+    expect(m.size).toBe(2);
+  });
+});
+
+describe("countAiPendingReview — needs_review หรือ confidence ต่ำ (นับต่อกลุ่ม ไม่ซ้ำ)", () => {
+  it("นับกลุ่มที่ needs_human_review หรือ confidence < 0.5 (ตัวล่าสุดของกลุ่ม)", () => {
+    const n = countAiPendingReview([
+      { chat_group_id: "g1", summary: null, problems: null, confidence: 0.9, needs_human_review: true }, // นับ (flag)
+      { chat_group_id: "g2", summary: null, problems: null, confidence: 0.3, needs_human_review: false }, // นับ (conf ต่ำ)
+      { chat_group_id: "g3", summary: null, problems: null, confidence: 0.8, needs_human_review: false }, // ไม่นับ
+      { chat_group_id: "g2", summary: null, problems: null, confidence: 0.95, needs_human_review: false }, // window เก่าของ g2 → ข้าม
+    ]);
+    expect(n).toBe(2);
+  });
+});
+
+describe("computeCareHealth7d — อัตราตอบภายใน SLA รายวัน (7 วัน)", () => {
+  it("bucket ตามวันเปิดเคส + คิด rate = ตอบทัน/ครบกำหนด", () => {
+    const today = new Date(NOW);
+    today.setHours(9, 0, 0, 0);
+    const dueLater = new Date(today.getTime() + 4 * H).toISOString();
+    const cases = [
+      // เปิดวันนี้ 2 เคส: 1 ตอบทัน, 1 ตอบเกิน (respond หลัง due)
+      mkCase({ id: "1", opened_at: today.toISOString(), first_response_due_at: dueLater, first_responded_at: new Date(today.getTime() + 1 * H).toISOString() }),
+      mkCase({ id: "2", opened_at: today.toISOString(), first_response_due_at: dueLater, first_responded_at: new Date(today.getTime() + 10 * H).toISOString() }),
+      // เคสไม่มี due → ไม่นับ
+      mkCase({ id: "3", opened_at: today.toISOString(), first_response_due_at: null, first_responded_at: null }),
+    ];
+    const h = computeCareHealth7d(cases, NOW);
+    expect(h.length).toBe(7);
+    const last = h[6]; // วันนี้ (ตัวสุดท้าย)
+    expect(last.total).toBe(2);
+    expect(last.withinSla).toBe(1);
+    expect(last.rate).toBe(0.5);
+    // วันก่อนหน้าที่ไม่มีเคส → rate null
+    expect(h[0].total).toBe(0);
+    expect(h[0].rate).toBeNull();
+  });
+});
+
+describe("buildIncidents — เรียงความด่วน + fallback ลูกค้า/เจ้าของ + detail", () => {
+  const custCode = new Map([["cust1", "CUST-001"]]);
+  const names = new Map([["e1", "พิม"], ["e2", "ผู้ดูแลกลุ่ม"]]);
+  const analysis = new Map<string, { problems: ChatProblem[]; summary: string | null }>([
+    ["g1", { problems: [{ type: "sla_risk", detail: "ถาม VAT ยังไม่มีผู้ตอบ 3 ชม." }], summary: "สรุป" }],
+    ["g2", { problems: [], summary: "สรุปกลุ่มสอง" }],
+  ]);
+  const groupFb = new Map([
+    ["g2", { customerId: "cust1", responsibleId: "e2" }],
+  ]);
+
+  it("เคส overdue มาก่อน + ใช้ problem.detail เป็นเหตุการณ์ + tag type", () => {
+    const cases = [
+      mkCase({ id: "c-ok", chat_group_id: "g2", owner_employee_id: null, customer_id: null, level: "high", resolution_due_at: new Date(NOW + 5 * H).toISOString() }),
+      mkCase({ id: "c-late", chat_group_id: "g1", owner_employee_id: "e1", customer_id: "cust1", level: "critical", resolution_due_at: new Date(NOW - 2 * H).toISOString() }),
+    ];
+    const inc = buildIncidents(cases, analysis, groupFb, custCode, names, NOW);
+    // overdue (c-late) ต้องมาก่อน
+    expect(inc[0].caseId).toBe("c-late");
+    expect(inc[0].problemType).toBe("sla_risk");
+    expect(inc[0].detail).toContain("VAT");
+    expect(inc[0].customerLabel).toBe("CUST-001");
+    expect(inc[0].ownerName).toBe("พิม");
+    expect(inc[0].overdue).toBe(true);
+    // c-ok: ไม่มี problem → detail = summary กลุ่ม; ลูกค้า/เจ้าของ fallback จากกลุ่ม
+    const ok = inc.find((x) => x.caseId === "c-ok")!;
+    expect(ok.problemType).toBeNull();
+    expect(ok.detail).toBe("สรุปกลุ่มสอง");
+    expect(ok.customerLabel).toBe("CUST-001");
+    expect(ok.ownerName).toBe("ผู้ดูแลกลุ่ม");
+  });
+});
+
+describe("getRiskDashboard — ★ เหตุการณ์เจาะจง + fallback เจ้าของจากเคส/กลุ่ม", () => {
+  it("alert ไม่มี owner → ดึงจากเคส; problems/summary มาจาก ai_chat_analysis ของกลุ่ม", async () => {
+    const calls: CallRec[] = [];
+    const db = makeDb(
+      {
+        risk_alerts: [
+          { id: "r1", case_id: "c1", customer_id: null, level: "red", reason: "sentiment ลบ", owner_employee_id: null, status: "open", escalated_at: null },
+        ],
+        conversation_cases: [
+          { id: "c1", chat_group_id: "g1", customer_id: "cust1", owner_employee_id: "e1" },
+        ],
+        chat_groups: [
+          { id: "g1", customer_id: null, responsible_employee_id: "e2" },
+        ],
+        ai_chat_analysis: [
+          { chat_group_id: "g1", summary: "ลูกค้าถาม VAT", problems: [{ type: "sla_risk", detail: "ถาม VAT ยังไม่มีผู้ตอบ 3 ชม." }], window_end: "2026-07-18T00:00:00Z" },
+        ],
+        customers: [{ id: "cust1", customer_code: "CUST-001" }],
+        employees: [{ id: "e1", first_name: "พิม", nickname: "พิม" }],
+      },
+      calls
+    );
+    const rows = await getRiskDashboard(db, accountant("e1"));
+    // ★ scope: ยังบังคับ eq owner_employee_id ตัวเองบน risk_alerts
+    expect(hasFilter(calls, "risk_alerts", "eq", "owner_employee_id", "e1")).toBe(true);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].problems[0]).toEqual({ type: "sla_risk", detail: "ถาม VAT ยังไม่มีผู้ตอบ 3 ชม." });
+    expect(rows[0].summary).toBe("ลูกค้าถาม VAT");
+    expect(rows[0].customerLabel).toBe("CUST-001"); // fallback จากเคส
+    expect(rows[0].ownerName).toBe("พิม"); // fallback owner จากเคส
+  });
+});
+
+describe("getExecChatDashboard — ★ KPI ใหม่ + เหตุการณ์เร่งด่วน", () => {
+  it("นับ waiting/activeRisk/aiPendingReview + สร้าง incidents จาก analysis", async () => {
+    const calls: CallRec[] = [];
+    const opened = new Date(NOW).toISOString();
+    const db = makeDb(
+      {
+        conversation_cases: [
+          { id: "c1", customer_id: "cust1", chat_group_id: "g1", owner_employee_id: "e1", title: "t", summary: "s", status: "open", urgency: "high", level: "critical", first_response_due_at: opened, resolution_due_at: new Date(NOW - 2 * H).toISOString(), first_responded_at: null, opened_at: opened, closed_at: null },
+          { id: "c2", customer_id: null, chat_group_id: "g1", owner_employee_id: "e1", title: "t2", summary: "s2", status: "in_progress", urgency: "low", level: "medium", first_response_due_at: opened, resolution_due_at: new Date(NOW + 5 * H).toISOString(), first_responded_at: opened, opened_at: opened, closed_at: null },
+        ],
+        chat_groups: [{ id: "g1", customer_id: "cust1", responsible_employee_id: "e2", is_active: true, group_kind: "group" }],
+        risk_alerts: [{ level: "red", status: "open" }, { level: "orange", status: "open" }],
+        sop_violations: [],
+        ai_chat_analysis: [
+          { chat_group_id: "g1", summary: "ลูกค้าถาม VAT", problems: [{ type: "sla_risk", detail: "ยังไม่มีผู้ตอบ 3 ชม." }], confidence: 0.3, needs_human_review: false, window_end: "2026-07-18T00:00:00Z" },
+        ],
+        customers: [{ id: "cust1", customer_code: "CUST-001" }],
+        employees: [{ id: "e1", first_name: "พิม", nickname: "พิม" }],
+      },
+      calls
+    );
+    const d = await getExecChatDashboard(db, NOW);
+    expect(d.waitingCases).toBe(1); // c1 ยังไม่ตอบครั้งแรก (c2 ตอบแล้ว)
+    expect(d.activeRisk).toBe(2);
+    expect(d.aiPendingReview).toBe(1); // confidence 0.3 < 0.5
+    expect(d.incidents.length).toBeGreaterThan(0);
+    // เคส overdue critical (c1) ต้องมาเป็นเหตุการณ์แรก + detail จาก problem
+    expect(d.incidents[0].caseId).toBe("c1");
+    expect(d.incidents[0].detail).toContain("ยังไม่มีผู้ตอบ");
+    expect(d.incidents[0].problemType).toBe("sla_risk");
+    // ยิง query ai_chat_analysis จริง
+    expect(calls.some((c) => c.table === "ai_chat_analysis")).toBe(true);
   });
 });
