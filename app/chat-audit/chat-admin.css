@@ -133,6 +133,32 @@
 .group-search-clear:hover { background: #f1f5f9; }
 .group-search-count { font-size: 13px; }
 
+/* ปุ่มกรองสถานะการผูก (segmented) — โทน navy เดียวกับ .ca-tab */
+.bind-filter {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.bind-filter-btn {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line, #e2e8f0);
+  background: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted, #64748b);
+  cursor: pointer;
+}
+.bind-filter-btn:hover { background: #f1f5f9; }
+.bind-filter-btn.is-active {
+  background: var(--navy-800, #1e293b);
+  color: #fff;
+  border-color: var(--navy-800, #1e293b);
+}
+.bind-filter-btn.is-active:hover { background: var(--navy-800, #1e293b); }
+
 /* ตัวช่วย 1: กล่อง propagate ตัวตนสมาชิก (review-first) */
 .propagate-box {
   background: #f8fafc;

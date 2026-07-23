@@ -185,8 +185,21 @@ function MappingPanel({
   const [backfillState, backfillAction] = useActionState(backfillGroupNamesAction, null);
   // ค้นหากลุ่มแบบ client-side (กรองตามชื่อกลุ่ม + ชื่อลูกค้า + ชื่อนักบัญชี) — ไม่แตะ server
   const [query, setQuery] = useState("");
-  const filtered = filterChatGroups(groups, query);
+  // ตัวกรองสถานะการผูก (client-side) — ยังไม่ผูกลูกค้า / ยังไม่ผูกนักบัญชี / ทั้งหมด
+  const [bindFilter, setBindFilter] = useState<"all" | "no-customer" | "no-accountant">("all");
+  // นับจาก groups ทั้งหมด (ไม่ใช่ที่กรองแล้ว) เพื่อโชว์ badge บนปุ่ม
+  const noCustomer = groups.filter((g) => !g.customerId).length;
+  const noAccountant = groups.filter((g) => !g.responsibleEmployeeId).length;
+  const filtered = filterChatGroups(groups, query).filter((g) =>
+    bindFilter === "no-customer"
+      ? !g.customerId
+      : bindFilter === "no-accountant"
+        ? !g.responsibleEmployeeId
+        : true
+  );
   const trimmedQuery = query.trim();
+  // โชว์ตัวนับผลลัพธ์เมื่อมีการค้นหา หรือมีตัวกรองสถานะการผูก
+  const hasActiveFilter = Boolean(trimmedQuery) || bindFilter !== "all";
   return (
     <div className="card">
       <div className="section-title">
@@ -210,6 +223,33 @@ function MappingPanel({
         <p className="empty">ยังไม่มีกลุ่ม LINE (รอบอทเข้ากลุ่มและเก็บข้อความ)</p>
       ) : (
         <>
+          {/* แถวปุ่มกรองสถานะการผูก (client-side) — กรองเฉพาะกลุ่มที่ยังต้องจัดการ */}
+          <div className="bind-filter" role="group" aria-label="กรองสถานะการผูก">
+            <button
+              type="button"
+              className={`bind-filter-btn${bindFilter === "all" ? " is-active" : ""}`}
+              aria-pressed={bindFilter === "all"}
+              onClick={() => setBindFilter("all")}
+            >
+              ทั้งหมด
+            </button>
+            <button
+              type="button"
+              className={`bind-filter-btn${bindFilter === "no-customer" ? " is-active" : ""}`}
+              aria-pressed={bindFilter === "no-customer"}
+              onClick={() => setBindFilter("no-customer")}
+            >
+              ยังไม่ผูกลูกค้า ({noCustomer})
+            </button>
+            <button
+              type="button"
+              className={`bind-filter-btn${bindFilter === "no-accountant" ? " is-active" : ""}`}
+              aria-pressed={bindFilter === "no-accountant"}
+              onClick={() => setBindFilter("no-accountant")}
+            >
+              ยังไม่ผูกนักบัญชี ({noAccountant})
+            </button>
+          </div>
           {/* ช่องค้นหากลุ่ม (client-side) — พิมพ์แล้วกรองทันทีตามชื่อกลุ่ม/ลูกค้า/นักบัญชี */}
           <div className="group-search">
             <input
@@ -231,14 +271,22 @@ function MappingPanel({
                 ×
               </button>
             ) : null}
-            {trimmedQuery ? (
+            {hasActiveFilter ? (
               <span className="muted group-search-count">
                 พบ {filtered.length} จาก {groups.length} กลุ่ม
               </span>
             ) : null}
           </div>
           {filtered.length === 0 ? (
-            <p className="empty">ไม่พบกลุ่มที่ตรงกับ &quot;{trimmedQuery}&quot;</p>
+            trimmedQuery ? (
+              <p className="empty">ไม่พบกลุ่มที่ตรงกับ &quot;{trimmedQuery}&quot;</p>
+            ) : bindFilter === "no-customer" ? (
+              <p className="empty">ไม่มีกลุ่มที่ยังไม่ผูกลูกค้า — จับคู่ครบทุกกลุ่มแล้ว</p>
+            ) : bindFilter === "no-accountant" ? (
+              <p className="empty">ไม่มีกลุ่มที่ยังไม่ผูกนักบัญชี — ผูกครบทุกกลุ่มแล้ว</p>
+            ) : (
+              <p className="empty">ไม่พบกลุ่ม</p>
+            )
           ) : (
             <div className="table-wrap">
               <table className="admin-table">
