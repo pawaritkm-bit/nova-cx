@@ -45,7 +45,27 @@ async function handle(request: NextRequest) {
   try {
     const db = createServiceRoleClient();
     const summary = await processPendingAttachments(db, { limit: 20 });
-    return NextResponse.json({ status: "ok", ...summary }, { status: 200 });
+    // diagnostic ชั่วคราว (ปลอดภัย: บอกแค่ true/false + ความยาว ไม่โชว์ค่า/คีย์)
+    let diag: Record<string, unknown> | undefined;
+    if ((summary as { disabled?: boolean }).disabled) {
+      const raw = process.env.GOOGLE_DRIVE_SA_JSON;
+      const folder = process.env.GDRIVE_ROOT_FOLDER_ID;
+      let parseOk = false, hasEmail = false, hasKey = false, hasEscapedNL = false, firstChar = "";
+      if (raw) {
+        firstChar = raw.trim().slice(0, 1);
+        hasEscapedNL = raw.includes("\\n");
+        try {
+          const p = JSON.parse(raw) as { client_email?: string; private_key?: string };
+          parseOk = true; hasEmail = !!p.client_email; hasKey = !!p.private_key;
+        } catch { parseOk = false; }
+      }
+      diag = {
+        saPresent: !!raw, saLen: raw ? raw.length : 0, saFirstChar: firstChar,
+        folderPresent: !!folder, folderLen: folder ? folder.length : 0,
+        parseOk, hasClientEmail: hasEmail, hasPrivateKey: hasKey, hasEscapedNewline: hasEscapedNL,
+      };
+    }
+    return NextResponse.json({ status: "ok", ...summary, ...(diag ? { _diag: diag } : {}) }, { status: 200 });
   } catch (e) {
     logServerError("cron/process-attachments", requestId, e);
     // คืน 200 กัน Vercel Cron retry เป็น error loop + ให้ monitor เห็นสถานะ
