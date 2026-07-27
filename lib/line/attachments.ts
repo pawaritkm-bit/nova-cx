@@ -2,15 +2,16 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import { getLineClient } from "@/lib/line/client";
-import { isDriveEnabled, ensureFolderPath, uploadFile } from "@/lib/storage/drive";
+import { isBillStorageEnabled, storeBillFile } from "@/lib/storage/bill-storage";
 import { decryptField, hasEncKey } from "@/lib/crypto/field";
 
 /**
  * Bill Attachment pipeline (เฟส 1 ฝั่ง CX)
- *   ดึง binary รูปบิลจาก LINE → อัปขึ้น Google Drive → บันทึกลิงก์/สถานะ
+ *   ดึง binary รูปบิลจาก LINE → เก็บขึ้น storage (Supabase Storage / Drive) → บันทึก ref/สถานะ
  *   เรียกจาก cron แยก (process-attachments) เพื่อไม่หน่วง webhook ingest เดิม
  *
- * ★ inert-by-default: ถ้า !isDriveEnabled() → return { disabled:true } (no-op)
+ * ★ backend เลือกผ่าน lib/storage/bill-storage (BILL_STORAGE_BACKEND, default = supabase)
+ * ★ inert-by-default: ถ้า !isBillStorageEnabled() → return { disabled:true } (no-op)
  * ★ เฟสนี้ทำเฉพาะ attachment_type='image' เท่านั้น (ข้าม video/audio/file)
  * ★ ยังไม่ส่งต่อ NOVA Sales / ยังไม่อ่าน-จำแนกบิล (เฟสถัดไป)
  *
@@ -19,8 +20,11 @@ import { decryptField, hasEncKey } from "@/lib/crypto/field";
  *    (fetch_attempts < 3). ถ้าจำเป็นต้องชัวร์กว่านี้ ควรลด interval cron หรือดึงทันที
  *    ตอน ingest (นอกสโคปเฟสนี้เพราะจะหน่วง webhook)
  *
+ * ★ หมายเหตุคอลัมน์ DB: reuse `drive_file_id`/`drive_url` เป็น "storage ref" ทั่วไป
+ *    (drive_file_id = objectPath, drive_url = signed URL/ลิงก์) ไม่ทำ migration
+ *
  * ★ PDPA: ห้าม log plaintext ชื่อ/ชื่อไฟล์/คีย์ — decrypt ชื่อทำในหน่วยความจำเพื่อตั้ง
- *    ชื่อโฟลเดอร์บน Drive เท่านั้น ไม่พิมพ์ออก log
+ *    ชื่อโฟลเดอร์บน storage เท่านั้น ไม่พิมพ์ออก log
  */
 
 export type ProcessAttachmentsResult = {
@@ -202,8 +206,8 @@ export async function processPendingAttachments(
   db: SupabaseClient,
   opts: { limit?: number } = {}
 ): Promise<ProcessAttachmentsResult> {
-  // inert: ไม่มี env Drive → no-op
-  if (!isDriveEnabled()) {
+  // inert: storage backend ยังไม่พร้อม → no-op
+  if (!isBillStorageEnabled()) {
     return { disabled: true, processed: 0, stored: 0, failed: 0, skipped: 0 };
   }
 
@@ -332,42 +336,39 @@ export async function processPendingAttachments(
       continue;
     }
 
-    // 5) โฟลเดอร์: [ชื่อลูกค้า, เดือน YYYY-MM] ใต้ root
+    // 5) เก็บไฟล์ผ่าน storage abstraction: โฟลเดอร์ [ชื่อลูกค้า, เดือน YYYY-MM]
+    //    ชื่อไฟล์ = <sent_at>_<contentId>.<ext>
     const customerFolder = group ? resolveCustomerFolder(group) : "ยังไม่ระบุลูกค้า";
     const month = monthFolder(row.created_at);
-    const folderId = await ensureFolderPath([customerFolder, month]);
-    if (!folderId) {
-      await markFailed(db, row.id, row.fetch_attempts, "drive_folder_failed");
-      failed++;
-      continue;
-    }
-
-    // 6) upload — ชื่อไฟล์ = <sent_at>_<contentId>.<ext>
     const ext = extFromMime(content.mime);
     const fileName = `${safeStamp(row.chat_messages?.sent_at ?? null)}_${contentId}.${ext}`;
-    const uploaded = await uploadFile({
-      name: fileName,
+
+    const saved = await storeBillFile({
+      db,
+      tenantId: row.tenant_id,
+      folderParts: [customerFolder, month],
+      fileName,
       mime: content.mime,
       data: content.data,
-      folderId,
     });
-    if (!uploaded) {
-      await markFailed(db, row.id, row.fetch_attempts, "drive_upload_failed");
+    if (!saved) {
+      await markFailed(db, row.id, row.fetch_attempts, "storage_upload_failed");
       failed++;
       continue;
     }
 
     // จำไว้ใน batch — แถวอื่นที่ sha256 เดียวกันในรอบนี้ reuse ได้เลย
-    batchDedup.set(sha256, { fileId: uploaded.fileId, url: uploaded.url });
+    batchDedup.set(sha256, { fileId: saved.objectPath, url: saved.url });
 
-    // 7) สำเร็จ → บันทึกแบบ 2 สเต็ป กัน orphan:
-    //    7a) เขียน drive_file_id/drive_url/sha256 ก่อน (แถวยังเป็น 'processing')
-    //        ถ้าพลาดตรงนี้: retry จะเจอไฟล์ผ่าน dedup (มี drive_url) แล้ว reuse ไม่อัปซ้ำ
+    // 6) สำเร็จ → บันทึกแบบ 2 สเต็ป กัน orphan:
+    //    6a) เขียน storage ref (drive_file_id=objectPath, drive_url=url) + sha256 ก่อน
+    //        (แถวยังเป็น 'processing') ถ้าพลาดตรงนี้: retry จะเจอไฟล์ผ่าน dedup (มี drive_url)
+    //        แล้ว reuse ไม่อัปซ้ำ
     const { error: linkErr } = await db
       .from("message_attachments")
       .update({
-        drive_file_id: uploaded.fileId,
-        drive_url: uploaded.url,
+        drive_file_id: saved.objectPath,
+        drive_url: saved.url,
         bytes: content.data.length,
         sha256,
         fetched_at: new Date().toISOString(),
@@ -375,13 +376,13 @@ export async function processPendingAttachments(
       })
       .eq("id", row.id);
     if (linkErr) {
-      // อัปขึ้น Drive แล้วแต่บันทึกลิงก์ไม่ได้ → mark failed. retry จะ reuse ผ่าน dedup (กัน orphan)
+      // อัปขึ้น storage แล้วแต่บันทึก ref ไม่ได้ → mark failed. retry จะ reuse ผ่าน dedup (กัน orphan)
       await markFailed(db, row.id, row.fetch_attempts, "db_link_write_failed");
       failed++;
       continue;
     }
 
-    //    7b) ปิดงาน: set fetch_status='stored' (แยกสเต็ป — ถ้า 7a สำเร็จแต่ 7b พลาด แถวค้าง
+    //    6b) ปิดงาน: set fetch_status='stored' (แยกสเต็ป — ถ้า 6a สำเร็จแต่ 6b พลาด แถวค้าง
     //        'processing' ที่มี drive_url แล้ว → รอบหน้า reuse ตัวเองปิดเป็น 'stored')
     const { error: statusErr } = await db
       .from("message_attachments")

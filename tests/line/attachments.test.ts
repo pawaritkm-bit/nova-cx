@@ -2,25 +2,24 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * processPendingAttachments (เฟส 1 — ดึงรูปบิล LINE → Google Drive)
+ * processPendingAttachments (เฟส 1 — ดึงรูปบิล LINE → storage abstraction)
  *   ครอบเส้นทางหลักตามผลรีวิว (rev รอบ 2):
- *     - inert: env Drive ว่าง → disabled ไม่แตะ DB
+ *     - inert: storage backend ยังไม่พร้อม → disabled ไม่แตะ DB
  *     - claim atomic: คว้าไม่ได้ (worker อื่นชิง) → ข้าม ไม่อัป/ไม่นับ
  *     - เขียนแบบ 2 สเต็ป (link → stored) กัน orphan
  *     - dedup ข้ามรอบ (sha256 ซ้ำ มี drive_url) → reuse ไม่อัปซ้ำ
  *     - in-batch dedup (sha256 ซ้ำในรอบเดียว) → อัปครั้งเดียว
  *     - upload สำเร็จแต่ write DB พลาด → mark failed (retry จะ reuse ผ่าน dedup)
+ *     - store คืน null (upload ล้ม) → mark failed 'storage_upload_failed'
  */
 
-// --- mock ชั้น storage/drive + line/client (คุมพฤติกรรมภายนอกทั้งหมด) ---
-const isDriveEnabledMock = vi.fn<() => boolean>();
-const ensureFolderPathMock = vi.fn<(parts: string[]) => Promise<string | null>>();
-const uploadFileMock = vi.fn();
+// --- mock ชั้น storage/bill-storage + line/client (คุมพฤติกรรมภายนอกทั้งหมด) ---
+const isBillStorageEnabledMock = vi.fn<() => boolean>();
+const storeBillFileMock = vi.fn();
 
-vi.mock("@/lib/storage/drive", () => ({
-  isDriveEnabled: () => isDriveEnabledMock(),
-  ensureFolderPath: (parts: string[]) => ensureFolderPathMock(parts),
-  uploadFile: (params: unknown) => uploadFileMock(params),
+vi.mock("@/lib/storage/bill-storage", () => ({
+  isBillStorageEnabled: () => isBillStorageEnabledMock(),
+  storeBillFile: (params: unknown) => storeBillFileMock(params),
 }));
 
 const getMessageContentMock = vi.fn();
@@ -161,15 +160,14 @@ function lineClientReturning(data: Buffer | null, mime = "image/jpeg") {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  isDriveEnabledMock.mockReturnValue(true);
-  ensureFolderPathMock.mockResolvedValue("folder-1");
-  uploadFileMock.mockResolvedValue({ fileId: "drive-file-1", url: "https://drive/x" });
+  isBillStorageEnabledMock.mockReturnValue(true);
+  storeBillFileMock.mockResolvedValue({ objectPath: "t1/cust/2026-07/x.jpg", url: "https://signed/x" });
   getLineClientMock.mockImplementation(() => lineClientReturning(Buffer.from("IMG")));
 });
 
 describe("processPendingAttachments — inert-by-default", () => {
-  it("env Drive ว่าง → disabled และไม่แตะ DB เลย", async () => {
-    isDriveEnabledMock.mockReturnValue(false);
+  it("storage backend ยังไม่พร้อม → disabled และไม่แตะ DB เลย", async () => {
+    isBillStorageEnabledMock.mockReturnValue(false);
     // db ที่ throw ถ้าถูกเรียก — พิสูจน์ว่าไม่แตะ DB
     const throwingDb = {
       from() {
@@ -180,7 +178,7 @@ describe("processPendingAttachments — inert-by-default", () => {
     const res = await processPendingAttachments(throwingDb);
     expect(res.disabled).toBe(true);
     expect(res.processed).toBe(0);
-    expect(uploadFileMock).not.toHaveBeenCalled();
+    expect(storeBillFileMock).not.toHaveBeenCalled();
   });
 });
 
@@ -192,12 +190,13 @@ describe("processPendingAttachments — happy path (2-step write)", () => {
 
     expect(res.stored).toBe(1);
     expect(res.processed).toBe(1);
-    expect(uploadFileMock).toHaveBeenCalledTimes(1);
+    expect(storeBillFileMock).toHaveBeenCalledTimes(1);
     expect(claims).toEqual(["att-1"]); // claim ก่อนทำงาน
 
-    // สเต็ป A: เขียน drive_url แต่ยังไม่ set stored
+    // สเต็ป A: เขียน storage ref (drive_url) แต่ยังไม่ set stored
     const linkStep = updates.find((u) => "drive_url" in u.payload);
-    expect(linkStep?.payload.drive_url).toBe("https://drive/x");
+    expect(linkStep?.payload.drive_url).toBe("https://signed/x");
+    expect(linkStep?.payload.drive_file_id).toBe("t1/cust/2026-07/x.jpg");
     expect(linkStep?.payload.fetch_status).toBeUndefined();
     // สเต็ป B: set stored แยกต่างหาก
     const storedStep = updates.find((u) => u.payload.fetch_status === "stored");
@@ -216,7 +215,7 @@ describe("processPendingAttachments — claim atomic (race)", () => {
 
     expect(res.processed).toBe(0);
     expect(res.stored).toBe(0);
-    expect(uploadFileMock).not.toHaveBeenCalled();
+    expect(storeBillFileMock).not.toHaveBeenCalled();
     expect(getMessageContentMock).not.toHaveBeenCalled();
     // ไม่มี update อื่นนอกจาก claim
     expect(updates).toHaveLength(0);
@@ -234,7 +233,7 @@ describe("processPendingAttachments — dedup ข้ามรอบ", () => {
 
     expect(res.skipped).toBe(1);
     expect(res.stored).toBe(0);
-    expect(uploadFileMock).not.toHaveBeenCalled(); // ไม่อัปซ้ำ
+    expect(storeBillFileMock).not.toHaveBeenCalled(); // ไม่อัปซ้ำ
     const reuse = updates.find((u) => u.payload.drive_url === "https://drive/old");
     expect(reuse?.payload.fetch_status).toBe("stored"); // reuse ปิดงานเป็น stored ในสเต็ปเดียว
   });
@@ -253,7 +252,7 @@ describe("processPendingAttachments — in-batch dedup", () => {
     expect(res.processed).toBe(2);
     expect(res.stored).toBe(1); // แถวแรกอัปจริง
     expect(res.skipped).toBe(1); // แถวสอง reuse ใน batch
-    expect(uploadFileMock).toHaveBeenCalledTimes(1); // อัปครั้งเดียว
+    expect(storeBillFileMock).toHaveBeenCalledTimes(1); // อัปครั้งเดียว
   });
 });
 
@@ -271,5 +270,22 @@ describe("processPendingAttachments — upload สำเร็จแต่ write
     const failedStep = updates.find((u) => u.payload.fetch_status === "failed");
     expect(failedStep?.payload.fetch_error).toBe("db_link_write_failed");
     expect(failedStep?.payload.fetch_attempts).toBe(1); // attempts +1
+  });
+});
+
+describe("processPendingAttachments — storeBillFile ล้ม (คืน null)", () => {
+  it("อัป storage ไม่สำเร็จ → mark failed 'storage_upload_failed' + attempts +1", async () => {
+    storeBillFileMock.mockResolvedValue(null); // จำลอง upload ล้ม (จับ error ภายในแล้วคืน null)
+    const { db, updates } = makeFakeDb({ candidates: [candRow()], dedup: () => null });
+
+    const res = await processPendingAttachments(db);
+
+    expect(res.stored).toBe(0);
+    expect(res.failed).toBe(1);
+    const failedStep = updates.find((u) => u.payload.fetch_status === "failed");
+    expect(failedStep?.payload.fetch_error).toBe("storage_upload_failed");
+    expect(failedStep?.payload.fetch_attempts).toBe(1);
+    // ไม่มีการเขียน storage ref เพราะ store ล้มก่อน
+    expect(updates.some((u) => "drive_url" in u.payload)).toBe(false);
   });
 });

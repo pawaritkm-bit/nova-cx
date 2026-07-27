@@ -10,12 +10,13 @@ export const maxDuration = 60;
 
 /**
  * POST/GET /api/cron/process-attachments
- *   Bill Attachment Worker — Vercel Cron ดึงรูปบิลจาก LINE → เก็บขึ้น Google Drive
- *   (เฟส 1: เฉพาะ attachment_type='image' ยังไม่ส่งต่อ NOVA Sales/ยังไม่อ่านบิล)
+ *   Bill Attachment Worker — Vercel Cron ดึงรูปบิลจาก LINE → เก็บขึ้น storage
+ *   (Supabase Storage default / Drive) — เฟส 1: เฉพาะ attachment_type='image'
+ *   ยังไม่ส่งต่อ NOVA Sales/ยังไม่อ่านบิล
  *
  * ความปลอดภัย (fail-closed): ไม่ตั้ง CRON_SECRET → ปิด endpoint (503, ไม่รัน worker)
  *   มี secret แต่ auth ผิด → 401
- * degrade: ไม่มี service-role env → skip · ไม่มี env Google Drive → worker คืน {disabled:true}
+ * degrade: ไม่มี service-role env → skip · storage backend ยังไม่พร้อม → worker คืน {disabled:true}
  *   (inert — ไม่มีผลข้างเคียง)
  */
 async function handle(request: NextRequest) {
