@@ -239,7 +239,9 @@ export async function processPendingAttachments(
     .or(
       `fetch_status.in.(pending,failed),and(fetch_status.eq.processing,fetched_at.lt.${staleCutoffIso})`
     )
-    .order("created_at", { ascending: true })
+    // ★ ใหม่สุดก่อน (desc): LINE เก็บ binary ให้ดาวน์โหลดได้ชั่วคราว → รูปใหม่ยังดึงได้
+    //   ต้องรีบเก็บก่อนหมดอายุ · รูปเก่า (เกิน ~ไม่กี่วัน) มักหมดอายุแล้ว ดึงไม่ได้อยู่ดี
+    .order("created_at", { ascending: false })
     .limit(limit);
 
   if (error) {
