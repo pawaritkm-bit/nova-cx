@@ -60,6 +60,7 @@ function GroupRow({
   const [accState, accAction] = useActionState(setGroupAccountantAction, null);
   const formRef = useRef<HTMLFormElement>(null);
   const delFormRef = useRef<HTMLFormElement>(null);
+  const accFormRef = useRef<HTMLFormElement>(null);
   const [customerId, setCustomerId] = useState(group.customerId ?? "");
   // ค่าเริ่มต้น dropdown นักบัญชี: ผูกแล้ว→คนนั้น, ยังไม่ผูก→คนที่ระบบเดา (ยังไม่บันทึกจนกดปุ่ม)
   const [employeeId, setEmployeeId] = useState(
@@ -71,6 +72,13 @@ function GroupRow({
     setCustomerId(id);
     // ให้ state อัปเดต value ก่อนแล้วค่อย submit
     requestAnimationFrame(() => formRef.current?.requestSubmit());
+  }
+
+  // quick-action: ตั้งกลุ่มนี้เป็น "ยังไม่มีผู้ดูแล" (เคลียร์ employee_id) แล้ว submit ฟอร์มนักบัญชี
+  // ตั้ง employeeId="" ก่อนให้ state อัปเดต value แล้วค่อย submit (pattern เดียวกับ pickSuggestion)
+  function markNoAccountant() {
+    setEmployeeId("");
+    requestAnimationFrame(() => accFormRef.current?.requestSubmit());
   }
 
   // กดลบ → confirm ก่อนเสมอ (soft-delete กลุ่ม + ข้อมูลแชตในกลุ่ม) สำหรับกลุ่มทดสอบ
@@ -123,7 +131,7 @@ function GroupRow({
             <span className="muted" style={{ fontSize: 11 }}>เดา: {accountantSuggestion.employeeName}</span>
           </div>
         ) : null}
-        <form action={accAction} className="inline-form">
+        <form action={accAction} className="inline-form" ref={accFormRef}>
           <input type="hidden" name="chat_group_id" value={group.id} />
           <select name="employee_id" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
             <option value="">— ยังไม่ผูก —</option>
@@ -132,6 +140,16 @@ function GroupRow({
             ))}
           </select>
           <button type="submit" className="btn">บันทึกนักบัญชี</button>
+          {/* quick-action รอง (ghost): ตั้งเป็น "ยังไม่มีผู้ดูแล" — disabled เมื่อเป็นสถานะปัจจุบันอยู่แล้ว */}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={markNoAccountant}
+            disabled={!group.responsibleEmployeeId && employeeId === ""}
+            title="ตั้งกลุ่มนี้เป็นยังไม่มีนักบัญชีผู้ดูแล"
+          >
+            ยังไม่มีผู้ดูแล
+          </button>
         </form>
         <div style={{ marginTop: 4 }}>
           {group.responsibleEmployeeId ? (

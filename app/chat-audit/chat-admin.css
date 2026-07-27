@@ -159,6 +159,16 @@
 }
 .bind-filter-btn.is-active:hover { background: var(--navy-800, #1e293b); }
 
+/* ปุ่ม quick-action รอง (ghost) — โทน navy เดิม: พื้นโปร่ง/ขอบ + text muted, hover เทาอ่อน
+   ใช้คู่กับ .btn (specificity สูงกว่า .nova-dash .btn จึง override สี/พื้นได้) */
+.nova-dash .btn.btn-ghost {
+  background: transparent;
+  color: var(--muted, #64748b);
+  border-color: var(--line, #e2e8f0);
+  font-weight: 600;
+}
+.nova-dash .btn.btn-ghost:hover:not(:disabled) { background: #f1f5f9; }
+
 /* ตัวช่วย 1: กล่อง propagate ตัวตนสมาชิก (review-first) */
 .propagate-box {
   background: #f8fafc;
