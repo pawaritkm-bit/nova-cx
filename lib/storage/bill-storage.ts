@@ -44,20 +44,24 @@ export function isBillStorageEnabled(): boolean {
 }
 
 /**
- * sanitize ชื่อส่วนของ path (โฟลเดอร์/ไฟล์)
- *   - ตัด `/` `\` กัน path traversal / แตกโฟลเดอร์เกินตั้งใจ
- *   - ตัดอักขระควบคุม (\x00-\x1f) ที่ storage key ไม่รับ
- *   - trim; ถ้าว่างใช้ "-" กัน segment ว่าง
- *   (คงอักษรไทย/unicode ไว้ได้ — Supabase Storage key รองรับ)
+ * sanitize ชื่อส่วนของ path ให้เป็น **ASCII-safe ล้วน**
+ *   ★ Supabase Storage key ไม่รับอักขระไทย/นอก ASCII (→ 400 InvalidKey)
+ *   เก็บเฉพาะ [A-Za-z0-9._-] อักขระอื่นทั้งหมด (ช่องว่าง/ไทย/`/`/`\`/control) → `_`
+ *   กัน path traversal (`/`,`\` กลายเป็น `_`) และ key เพี้ยนจาก unicode
  */
 function sanitizePart(raw: string): string {
-  // eslint-disable-next-line no-control-regex
-  return raw.replace(/[/\\]/g, "_").replace(/[\x00-\x1f]/g, "").trim() || "-";
+  return raw.replace(/[^A-Za-z0-9._-]/g, "_");
 }
 
-/** ประกอบ object path: `${tenantId}/${folderParts...}/${fileName}` (ทุกส่วน sanitize) */
+/**
+ * ประกอบ object path: `${tenantId}/${folderParts...}/${fileName}`
+ *   ทุกส่วน sanitize เป็น ASCII แล้วตัด segment ว่างทิ้ง (กัน `//` / key เพี้ยน)
+ */
 function buildObjectPath(tenantId: string, folderParts: string[], fileName: string): string {
-  return [sanitizePart(tenantId), ...folderParts.map(sanitizePart), sanitizePart(fileName)].join("/");
+  return [tenantId, ...folderParts, fileName]
+    .map(sanitizePart)
+    .filter((p) => p.length > 0)
+    .join("/");
 }
 
 /** เก็บไฟล์ผ่าน Supabase Storage (service role, private bucket) */

@@ -67,7 +67,7 @@ function makeFakeStorageDb(cfg: {
 
 const STORE_PARAMS_BASE = {
   tenantId: "tenant-1",
-  folderParts: ["ลูกค้า A", "2026-07"],
+  folderParts: ["N023", "2026-07"],
   fileName: "2026-07-18T09-00-00Z_msg-1.jpg",
   mime: "image/jpeg",
   data: Buffer.from("IMG"),
@@ -131,10 +131,10 @@ describe("storeBillFile — supabase backend", () => {
 
     expect(buckets).toEqual(["bills"]); // เรียก .from('bills') ครั้งเดียว reuse handle
     expect(uploads).toHaveLength(1);
-    expect(uploads[0].path).toBe("tenant-1/ลูกค้า A/2026-07/2026-07-18T09-00-00Z_msg-1.jpg");
+    expect(uploads[0].path).toBe("tenant-1/N023/2026-07/2026-07-18T09-00-00Z_msg-1.jpg");
     expect(uploads[0].opts).toMatchObject({ contentType: "image/jpeg", upsert: false });
     expect(res).toEqual({
-      objectPath: "tenant-1/ลูกค้า A/2026-07/2026-07-18T09-00-00Z_msg-1.jpg",
+      objectPath: "tenant-1/N023/2026-07/2026-07-18T09-00-00Z_msg-1.jpg",
       url: "https://x.supabase.co/signed/abc",
     });
     expect(getSignedPath()).toBe(res?.objectPath);
@@ -162,6 +162,32 @@ describe("storeBillFile — supabase backend", () => {
     expect(uploads[0].path).toBe("tenant-1/a_b/.._etc/2026-07-18T09-00-00Z_msg-1.jpg");
   });
 
+  it("sanitize: อักขระไทย/ช่องว่าง → ASCII ล้วน (กัน 400 InvalidKey)", async () => {
+    const { db, uploads } = makeFakeStorageDb({ signedUrl: "u" });
+    await storeBillFile({
+      db,
+      ...STORE_PARAMS_BASE,
+      folderParts: ["ลูกค้า A", "2026-07"],
+    });
+    const path = uploads[0].path;
+    // ทั้ง key ต้องเป็น ASCII-safe เท่านั้น: [A-Za-z0-9._/-]
+    expect(path).toMatch(/^[A-Za-z0-9._/-]+$/);
+    // ไม่เหลืออักขระไทยเลย
+    expect(/[^\x00-\x7f]/.test(path)).toBe(false);
+    // ไทย 6 ตัว + ช่องว่าง + A → "_______A"
+    expect(path).toBe("tenant-1/_______A/2026-07/2026-07-18T09-00-00Z_msg-1.jpg");
+  });
+
+  it("sanitize: segment ที่ว่างถูกตัดทิ้ง (กัน // ใน key)", async () => {
+    const { db, uploads } = makeFakeStorageDb({ signedUrl: "u" });
+    await storeBillFile({
+      db,
+      ...STORE_PARAMS_BASE,
+      folderParts: ["", "2026-07"],
+    });
+    expect(uploads[0].path).toBe("tenant-1/2026-07/2026-07-18T09-00-00Z_msg-1.jpg");
+  });
+
   it("storage client throw → จับภายใน คืน null", async () => {
     const db = {
       storage: {
@@ -184,7 +210,7 @@ describe("storeBillFile — drive backend", () => {
     const { db } = makeFakeStorageDb({ signedUrl: "unused" });
     const res = await storeBillFile({ db, ...STORE_PARAMS_BASE });
 
-    expect(ensureFolderPathMock).toHaveBeenCalledWith(["ลูกค้า A", "2026-07"]);
+    expect(ensureFolderPathMock).toHaveBeenCalledWith(["N023", "2026-07"]);
     expect(uploadFileMock).toHaveBeenCalledTimes(1);
     expect(res).toEqual({ objectPath: "drive-file-1", url: "https://drive/view" });
   });

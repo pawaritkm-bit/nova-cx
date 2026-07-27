@@ -140,9 +140,9 @@ function candRow(over: Partial<Record<string, unknown>> = {}): Record<string, un
     chat_messages: {
       sent_at: "2026-07-18T09:00:00Z",
       chat_groups: {
+        id: "abcd1234-5678-90ab-cdef-000000000000",
         customer_id: "c1",
-        display_name_enc: null,
-        customers: { name: "ลูกค้า A", customer_code: "C001" },
+        customers: { customer_code: "C001" },
         chat_channels: { oa_type: "care" },
       },
     },
@@ -191,6 +191,10 @@ describe("processPendingAttachments — happy path (2-step write)", () => {
     expect(res.stored).toBe(1);
     expect(res.processed).toBe(1);
     expect(storeBillFileMock).toHaveBeenCalledTimes(1);
+    // โฟลเดอร์ = [customer_code (ASCII), เดือน YYYY-MM] — ไม่ใช้ชื่อลูกค้า/ชื่อกลุ่มภาษาไทย
+    expect(storeBillFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({ folderParts: ["C001", "2026-07"] })
+    );
     expect(claims).toEqual(["att-1"]); // claim ก่อนทำงาน
 
     // สเต็ป A: เขียน storage ref (drive_url) แต่ยังไม่ set stored
@@ -270,6 +274,27 @@ describe("processPendingAttachments — upload สำเร็จแต่ write
     const failedStep = updates.find((u) => u.payload.fetch_status === "failed");
     expect(failedStep?.payload.fetch_error).toBe("db_link_write_failed");
     expect(failedStep?.payload.fetch_attempts).toBe(1); // attempts +1
+  });
+});
+
+describe("processPendingAttachments — ชื่อโฟลเดอร์ ASCII-only", () => {
+  it("ไม่มี customer_code → ใช้ unassigned-<8 ตัวแรกของ group id> (ASCII, ไม่ใช้ชื่อไทย)", async () => {
+    const row = candRow();
+    // ลูกค้ายังไม่ผูก + ไม่มี code → ต้อง fallback เป็น unassigned-<groupId8>
+    (row.chat_messages as { chat_groups: Record<string, unknown> }).chat_groups = {
+      id: "abcd1234-5678-90ab-cdef-000000000000",
+      customer_id: null,
+      customers: null,
+      chat_channels: { oa_type: "care" },
+    };
+    const { db } = makeFakeDb({ candidates: [row], dedup: () => null });
+
+    await processPendingAttachments(db);
+
+    const call = storeBillFileMock.mock.calls[0][0] as { folderParts: string[] };
+    expect(call.folderParts[0]).toBe("unassigned-abcd1234");
+    // ยืนยัน ASCII ล้วน
+    expect(/^[\x00-\x7f]+$/.test(call.folderParts[0])).toBe(true);
   });
 });
 

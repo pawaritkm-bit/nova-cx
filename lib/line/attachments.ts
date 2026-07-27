@@ -3,7 +3,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import { getLineClient } from "@/lib/line/client";
 import { isBillStorageEnabled, storeBillFile } from "@/lib/storage/bill-storage";
-import { decryptField, hasEncKey } from "@/lib/crypto/field";
 
 /**
  * Bill Attachment pipeline (เฟส 1 ฝั่ง CX)
@@ -54,11 +53,11 @@ type AttachmentRow = {
   } | null;
 };
 
-/** context ของกลุ่ม (ลูกค้า/ชื่อกลุ่ม/OA) จาก nested select */
+/** context ของกลุ่ม (id/ลูกค้า/OA) จาก nested select */
 type GroupContext = {
+  id: string | null;
   customer_id: string | null;
-  display_name_enc: string | null;
-  customers: { name: string | null; customer_code: string | null } | null;
+  customers: { customer_code: string | null } | null;
   chat_channels: { oa_type: string | null } | null;
 };
 
@@ -89,25 +88,22 @@ function safeStamp(ts: string | null): string {
   return base.replace(/[:.]/g, "-").replace(/[^\w\-T]/g, "");
 }
 
-/** resolve ชื่อโฟลเดอร์ลูกค้า (best-effort) — ไม่ log ค่านี้ (PDPA) */
+/**
+ * resolve ชื่อโฟลเดอร์ลูกค้า — ต้องเป็น **ASCII เท่านั้น**
+ *   (Supabase Storage key ไม่รับอักขระไทย/นอก ASCII → 400 InvalidKey)
+ *   ★ ห้ามใช้ชื่อลูกค้า/ชื่อกลุ่ม (เป็นภาษาไทย + PDPA) — ใช้ customer_code หรือ group id เท่านั้น
+ *   ลำดับ:
+ *     1) customer_code (เช่น N023/P648 = ASCII)
+ *     2) unassigned-<8 ตัวแรกของ chat_group id> (UUID = ASCII)
+ *     3) unassigned (เผื่อไม่มี group id — ไม่ควรเกิดเพราะ inner join)
+ *   ไม่ log ค่านี้ (PDPA)
+ */
 function resolveCustomerFolder(group: GroupContext): string {
-  // 1) ลูกค้าที่ผูกแล้ว: ใช้ชื่อ (plaintext) หรือ customer_code
-  const cust = group.customers;
-  if (cust) {
-    if (cust.name && cust.name.trim()) return cust.name.trim();
-    if (cust.customer_code && cust.customer_code.trim()) return cust.customer_code.trim();
-  }
-  // 2) ยังไม่ผูกลูกค้า แต่มีชื่อกลุ่ม (ciphertext) → decrypt best-effort
-  if (group.display_name_enc && hasEncKey()) {
-    try {
-      const name = decryptField(group.display_name_enc);
-      if (name && name.trim()) return name.trim();
-    } catch {
-      // ถอดไม่ได้ → ตกไป fallback
-    }
-  }
-  // 3) ไม่รู้ลูกค้า
-  return "ยังไม่ระบุลูกค้า";
+  const code = group.customers?.customer_code?.trim();
+  if (code) return code;
+  const gid = group.id?.trim();
+  if (gid) return `unassigned-${gid.slice(0, 8)}`;
+  return "unassigned";
 }
 
 /** resolve OA จาก channel (fallback 'care') */
@@ -232,8 +228,8 @@ export async function processPendingAttachments(
        chat_messages!inner (
          sent_at,
          chat_groups!inner (
-           customer_id, display_name_enc,
-           customers ( name, customer_code ),
+           id, customer_id,
+           customers ( customer_code ),
            chat_channels ( oa_type )
          )
        )`
@@ -338,7 +334,7 @@ export async function processPendingAttachments(
 
     // 5) เก็บไฟล์ผ่าน storage abstraction: โฟลเดอร์ [ชื่อลูกค้า, เดือน YYYY-MM]
     //    ชื่อไฟล์ = <sent_at>_<contentId>.<ext>
-    const customerFolder = group ? resolveCustomerFolder(group) : "ยังไม่ระบุลูกค้า";
+    const customerFolder = group ? resolveCustomerFolder(group) : "unassigned";
     const month = monthFolder(row.created_at);
     const ext = extFromMime(content.mime);
     const fileName = `${safeStamp(row.chat_messages?.sent_at ?? null)}_${contentId}.${ext}`;
