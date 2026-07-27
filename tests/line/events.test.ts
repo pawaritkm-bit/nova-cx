@@ -19,6 +19,9 @@ function clientWithProfile(displayName: string | null) {
     async getGroupMemberProfile(_type, _sourceId, userId) {
       return displayName ? { userId, displayName } : { userId };
     },
+    async getMessageContent() {
+      return null;
+    },
     async getGroupSummary() {
       return displayName ? { groupName: displayName } : null;
     },

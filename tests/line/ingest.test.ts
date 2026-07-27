@@ -42,6 +42,9 @@ function clientWithName(displayName: string | null): LineClient {
     async getGroupMemberProfile(_type, _sourceId, userId) {
       return displayName ? { userId, displayName } : { userId };
     },
+    async getMessageContent() {
+      return null;
+    },
     async getGroupSummary() {
       return null;
     },
@@ -63,6 +66,9 @@ function clientWithSummary(groupName: string | null): LineClient & { summaryCall
       return null;
     },
     async getGroupMemberProfile() {
+      return null;
+    },
+    async getMessageContent() {
       return null;
     },
     async getGroupSummary() {
@@ -513,6 +519,9 @@ function clientWithProfile(displayName: string | null): LineClient {
       return displayName ? { userId, displayName } : { userId };
     },
     async getGroupMemberProfile() {
+      return null;
+    },
+    async getMessageContent() {
       return null;
     },
     async getGroupSummary() {

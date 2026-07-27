@@ -32,6 +32,9 @@ function makeClients(result: LineSendResult = { ok: true, messageId: "mid-1" }) 
     async getGroupMemberProfile() {
       return null;
     },
+    async getMessageContent() {
+      return null;
+    },
     async getGroupSummary() {
       return null;
     },

@@ -31,6 +31,9 @@ function makeGetClient(namesByRef: Record<string, string>, counter?: { n: number
     async getGroupMemberProfile() {
       return null;
     },
+    async getMessageContent() {
+      return null;
+    },
     async getGroupSummary(groupId) {
       if (counter) counter.n += 1;
       const name = namesByRef[groupId];
@@ -126,6 +129,9 @@ describe("backfillGroupNames", () => {
         return null;
       },
       async getGroupMemberProfile() {
+        return null;
+      },
+      async getMessageContent() {
         return null;
       },
       async getGroupSummary() {

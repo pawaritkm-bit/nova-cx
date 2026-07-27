@@ -11,6 +11,8 @@ import type { LineMessage } from "@/lib/line/messages";
  */
 
 const LINE_API_BASE = "https://api.line.me/v2/bot";
+// ★ ดึง binary ของ content (รูป/ไฟล์) ใช้ "api-data" คนละ host กับ api ปกติ
+const LINE_DATA_API_BASE = "https://api-data.line.me/v2/bot";
 
 export type LineSendResult =
   | { ok: true; messageId?: string }
@@ -44,6 +46,12 @@ export type LineClient = {
    *   ★ room ไม่มี summary API → caller ต้องเรียกเฉพาะ group
    */
   getGroupSummary(groupId: string): Promise<LineGroupSummary | null>;
+  /**
+   * ดึง binary ของ content ตาม messageId (รูป/ไฟล์) — best-effort คืน null ถ้าล้ม
+   *   endpoint: GET https://api-data.line.me/v2/bot/message/{messageId}/content
+   *   ★ content ฝั่ง LINE มีอายุจำกัด (หมดอายุแล้วจะได้ 404/410) → คืน null ไม่ throw
+   */
+  getMessageContent(messageId: string): Promise<{ data: Buffer; mime: string } | null>;
 };
 
 /** จำแนกว่า HTTP status ควร retry ไหม (5xx/429 = retry, 4xx อื่น = ไม่) */
@@ -150,6 +158,22 @@ export function getLineClient(oa: LineOa): LineClient | null {
         // ไม่มีชื่อกลุ่ม = ถือว่าดึงไม่ได้ (ไม่คืน object เปล่า)
         if (!data.groupName) return null;
         return { groupName: data.groupName, pictureUrl: data.pictureUrl };
+      } catch {
+        return null;
+      }
+    },
+    async getMessageContent(messageId) {
+      try {
+        const res = await fetch(
+          `${LINE_DATA_API_BASE}/message/${encodeURIComponent(messageId)}/content`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        // 404/410 = content หมดอายุ/ไม่มี, อื่น ๆ = ล้ม → คืน null (ไม่ throw)
+        if (!res.ok) return null;
+        const mime = res.headers.get("content-type") || "application/octet-stream";
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length === 0) return null;
+        return { data: buf, mime };
       } catch {
         return null;
       }

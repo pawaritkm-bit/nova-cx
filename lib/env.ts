@@ -155,6 +155,59 @@ export function getLineTenantId(): string | undefined {
   return process.env.LINE_TENANT_ID || undefined;
 }
 
+export type GoogleDriveConfig = {
+  /** service account JSON ทั้งก้อน (parse แล้ว) — มี client_email, private_key, token_uri */
+  serviceAccount: {
+    client_email: string;
+    private_key: string;
+    token_uri: string;
+  };
+  /** โฟลเดอร์ราก (parent) ที่จะสร้างโฟลเดอร์ลูกค้า/เดือนซ้อนใต้ */
+  rootFolderId: string;
+};
+
+/**
+ * config Google Drive สำหรับเก็บรูปบิล (เฟส 1) — คืน null ถ้าตั้งไม่ครบ (= ปิดฟีเจอร์)
+ *   อ่าน 2 ตัว:
+ *     - GOOGLE_DRIVE_SA_JSON  : service account JSON ทั้งก้อนเป็น string
+ *     - GDRIVE_ROOT_FOLDER_ID : id โฟลเดอร์รากบน Drive
+ *   ★ inert-by-default: อันใดอันหนึ่งขาด/JSON เพี้ยน/ไม่มี client_email/private_key → null
+ *     ทำให้ pipeline ดึงรูปเป็น no-op โดยไม่กระทบระบบเดิม
+ *   ★ ไม่ throw — parse ล้มเหลว = คืน null (log สั้น ๆ ไม่ log เนื้อ JSON/คีย์)
+ */
+export function getGoogleDriveConfig(): GoogleDriveConfig | null {
+  const rawSa = process.env.GOOGLE_DRIVE_SA_JSON;
+  const rootFolderId = process.env.GDRIVE_ROOT_FOLDER_ID;
+  if (!rawSa || !rootFolderId) return null;
+
+  try {
+    const parsed = JSON.parse(rawSa) as {
+      client_email?: string;
+      private_key?: string;
+      token_uri?: string;
+    };
+    if (!parsed.client_email || !parsed.private_key) return null;
+    return {
+      serviceAccount: {
+        client_email: parsed.client_email,
+        // บาง env เก็บ \n เป็น literal สองตัวอักษร → แปลงกลับเป็น newline จริง
+        private_key: parsed.private_key.replace(/\\n/g, "\n"),
+        token_uri: parsed.token_uri || "https://oauth2.googleapis.com/token",
+      },
+      rootFolderId,
+    };
+  } catch {
+    // JSON เพี้ยน → ถือว่าไม่ได้ตั้ง (ปิดฟีเจอร์) ห้าม log เนื้อหา
+    console.warn("[env] GOOGLE_DRIVE_SA_JSON parse failed — Drive feature disabled");
+    return null;
+  }
+}
+
+/** true เมื่อตั้ง env Google Drive ครบ (พร้อมอัปไฟล์ได้จริง) */
+export function hasGoogleDriveConfig(): boolean {
+  return getGoogleDriveConfig() !== null;
+}
+
 /**
  * base URL ของแอป (ใช้ประกอบ survey_url ลิงก์เว็บที่เปิดในเบราว์เซอร์ไหนก็ได้)
  *   ลำดับ: NEXT_PUBLIC_APP_URL → https://${VERCEL_URL} → fallback prod
