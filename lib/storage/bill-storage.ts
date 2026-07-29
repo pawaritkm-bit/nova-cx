@@ -1,12 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { isDriveEnabled, ensureFolderPath, uploadFile } from "@/lib/storage/drive";
+import { isOneDriveEnabled, uploadOneDriveFile } from "@/lib/storage/onedrive";
 
 /**
  * ชั้น abstraction เลือก backend เก็บรูปบิล (เฟส 1 ฝั่ง CX)
- *   รองรับ 2 backend ผ่าน env BILL_STORAGE_BACKEND:
+ *   รองรับ 3 backend ผ่าน env BILL_STORAGE_BACKEND:
  *     - 'supabase' (default) : อัปเข้า Supabase Storage bucket `bills` (private) + signed URL
  *     - 'drive'              : Google Drive service account เดิม (ไว้ต่อ OAuth ทีหลัง)
+ *     - 'onedrive'           : Microsoft 365 OneDrive ของบริษัท (Graph, app-only)
  *
  * ★ ที่มา: service account ของ Google อัปไฟล์เข้า Gmail ธรรมดาไม่ได้
  *   ("Service Accounts do not have storage quota") → สลับมาใช้ Supabase Storage ก่อน
@@ -18,7 +20,7 @@ import { isDriveEnabled, ensureFolderPath, uploadFile } from "@/lib/storage/driv
  *   ห้าม log ชื่อไฟล์/path/เนื้อไฟล์ (PDPA) — log แค่ error สั้น ๆ
  */
 
-export type BillStorageBackend = "supabase" | "drive";
+export type BillStorageBackend = "supabase" | "drive" | "onedrive";
 
 /** bucket สำหรับรูปบิล (private) — สร้างไว้แล้วใน Supabase project */
 const BILLS_BUCKET = "bills";
@@ -26,19 +28,24 @@ const BILLS_BUCKET = "bills";
 /** อายุ signed URL: 1 ปี (bucket private → ต้องมีลิงก์เซ็นถึงจะเปิดดูได้) */
 const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 365;
 
-/** backend ที่เลือกใช้ (default = supabase) — ค่าอื่นที่ไม่ใช่ 'drive' ถือเป็น supabase */
+/** backend ที่เลือกใช้ (default = supabase) — ค่าที่ไม่รู้จักถือเป็น supabase */
 export function getBillStorageBackend(): BillStorageBackend {
   const raw = (process.env.BILL_STORAGE_BACKEND || "supabase").trim().toLowerCase();
-  return raw === "drive" ? "drive" : "supabase";
+  if (raw === "drive") return "drive";
+  if (raw === "onedrive") return "onedrive";
+  return "supabase";
 }
 
 /**
  * true เมื่อ backend ที่เลือกพร้อมใช้งาน
  *   - supabase: พร้อมเมื่อมี service role env (Supabase มีพื้นที่เก็บอยู่แล้ว)
  *   - drive   : เดิม — พร้อมเมื่อตั้ง env Drive ครบ (isDriveEnabled)
+ *   - onedrive: พร้อมเมื่อตั้ง env MS ครบ (isOneDriveEnabled)
  */
 export function isBillStorageEnabled(): boolean {
-  if (getBillStorageBackend() === "drive") return isDriveEnabled();
+  const backend = getBillStorageBackend();
+  if (backend === "drive") return isDriveEnabled();
+  if (backend === "onedrive") return isOneDriveEnabled();
   const env = getSupabaseEnv();
   return !!(env && env.serviceRoleKey);
 }
@@ -116,11 +123,28 @@ async function storeViaDrive(params: {
   return { objectPath: uploaded.fileId, url: uploaded.url };
 }
 
+/** เก็บไฟล์ผ่าน Microsoft OneDrive (Graph, app-only) */
+async function storeViaOneDrive(params: {
+  folderParts: string[];
+  fileName: string;
+  mime: string;
+  data: Buffer;
+}): Promise<{ objectPath: string; url: string } | null> {
+  // uploadOneDriveFile คืน { objectPath, url } ตรง interface กลางอยู่แล้ว
+  return uploadOneDriveFile({
+    folderParts: params.folderParts,
+    fileName: params.fileName,
+    mime: params.mime,
+    data: params.data,
+  });
+}
+
 /**
  * เก็บไฟล์รูปบิลตาม backend ที่เลือก
  *   @returns { objectPath, url } เมื่อสำเร็จ · null เมื่อล้ม/ปิดฟีเจอร์ (ไม่ throw)
- *     - objectPath : storage ref (Supabase = object path ใน bucket `bills`, Drive = fileId)
- *     - url        : Supabase = signed URL (อายุ 1 ปี), Drive = webViewLink
+ *     - objectPath : storage ref (Supabase = object path ใน bucket `bills`, Drive = fileId,
+ *                    OneDrive = path เต็มใต้ ONEDRIVE_ROOT)
+ *     - url        : Supabase = signed URL (อายุ 1 ปี), Drive = webViewLink, OneDrive = webUrl
  */
 export async function storeBillFile(params: {
   db: SupabaseClient;
@@ -130,8 +154,8 @@ export async function storeBillFile(params: {
   mime: string;
   data: Buffer;
 }): Promise<{ objectPath: string; url: string } | null> {
-  if (getBillStorageBackend() === "drive") {
-    return storeViaDrive(params);
-  }
+  const backend = getBillStorageBackend();
+  if (backend === "drive") return storeViaDrive(params);
+  if (backend === "onedrive") return storeViaOneDrive(params);
   return storeViaSupabase(params);
 }

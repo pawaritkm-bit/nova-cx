@@ -20,6 +20,14 @@ vi.mock("@/lib/storage/drive", () => ({
   uploadFile: (params: unknown) => uploadFileMock(params),
 }));
 
+// --- mock ชั้น onedrive (สำหรับเส้นทาง backend=onedrive) ---
+const isOneDriveEnabledMock = vi.fn<() => boolean>();
+const uploadOneDriveFileMock = vi.fn();
+vi.mock("@/lib/storage/onedrive", () => ({
+  isOneDriveEnabled: () => isOneDriveEnabledMock(),
+  uploadOneDriveFile: (params: unknown) => uploadOneDriveFileMock(params),
+}));
+
 import {
   getBillStorageBackend,
   isBillStorageEnabled,
@@ -98,6 +106,10 @@ describe("getBillStorageBackend", () => {
     process.env.BILL_STORAGE_BACKEND = "  Drive ";
     expect(getBillStorageBackend()).toBe("drive");
   });
+  it("ตั้ง onedrive → onedrive (case-insensitive/trim)", () => {
+    process.env.BILL_STORAGE_BACKEND = "  OneDrive ";
+    expect(getBillStorageBackend()).toBe("onedrive");
+  });
   it("ค่าแปลก ๆ → ถือเป็น supabase", () => {
     process.env.BILL_STORAGE_BACKEND = "s3";
     expect(getBillStorageBackend()).toBe("supabase");
@@ -117,6 +129,13 @@ describe("isBillStorageEnabled", () => {
     isDriveEnabledMock.mockReturnValue(true);
     expect(isBillStorageEnabled()).toBe(true);
     isDriveEnabledMock.mockReturnValue(false);
+    expect(isBillStorageEnabled()).toBe(false);
+  });
+  it("onedrive: ตาม isOneDriveEnabled", () => {
+    process.env.BILL_STORAGE_BACKEND = "onedrive";
+    isOneDriveEnabledMock.mockReturnValue(true);
+    expect(isBillStorageEnabled()).toBe(true);
+    isOneDriveEnabledMock.mockReturnValue(false);
     expect(isBillStorageEnabled()).toBe(false);
   });
 });
@@ -222,5 +241,37 @@ describe("storeBillFile — drive backend", () => {
     const res = await storeBillFile({ db, ...STORE_PARAMS_BASE });
     expect(res).toBeNull();
     expect(uploadFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("storeBillFile — onedrive backend", () => {
+  it("delegate ไป uploadOneDriveFile (ส่ง folderParts/fileName/mime/data ตรง)", async () => {
+    process.env.BILL_STORAGE_BACKEND = "onedrive";
+    uploadOneDriveFileMock.mockResolvedValue({
+      objectPath: "NOVA-Bills/N023/2026-07/2026-07-18T09-00-00Z_msg-1.jpg",
+      url: "https://onedrive/webUrl",
+    });
+
+    const { db } = makeFakeStorageDb({ signedUrl: "unused" });
+    const res = await storeBillFile({ db, ...STORE_PARAMS_BASE });
+
+    expect(uploadOneDriveFileMock).toHaveBeenCalledWith({
+      folderParts: ["N023", "2026-07"],
+      fileName: "2026-07-18T09-00-00Z_msg-1.jpg",
+      mime: "image/jpeg",
+      data: STORE_PARAMS_BASE.data,
+    });
+    expect(res).toEqual({
+      objectPath: "NOVA-Bills/N023/2026-07/2026-07-18T09-00-00Z_msg-1.jpg",
+      url: "https://onedrive/webUrl",
+    });
+  });
+
+  it("upload ล้ม → คืน null", async () => {
+    process.env.BILL_STORAGE_BACKEND = "onedrive";
+    uploadOneDriveFileMock.mockResolvedValue(null);
+    const { db } = makeFakeStorageDb({ signedUrl: "u" });
+    const res = await storeBillFile({ db, ...STORE_PARAMS_BASE });
+    expect(res).toBeNull();
   });
 });
