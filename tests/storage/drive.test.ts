@@ -124,3 +124,76 @@ describe("drive — token cache", () => {
     expect(fetchMock.tokenCalls).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------
+// Shared Drive: ทุก endpoint ต้องแนบ query param รองรับ Shared Drive
+//   (ไม่งั้น Google ตอบ 404/มองไม่เห็นไฟล์ใน Shared Drive)
+// ---------------------------------------------------------------------
+
+/** mock fetch ที่เก็บ URL ทุกครั้งไว้ตรวจ param + จำลอง flow list(ไม่เจอ)→create→upload */
+function installUrlCapture(): { calls: string[] } {
+  const calls: string[] = [];
+  const fn = vi.fn(async (url: string | URL | Request) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("oauth2.googleapis.com/token")) {
+      return jsonResponse({ access_token: "tok-x" }, 200);
+    }
+    // files.list (folder query): คืน files ว่าง → บังคับให้ไปเส้น create
+    if (u.includes("/drive/v3/files?") && u.includes("q=")) {
+      return jsonResponse({ files: [] }, 200);
+    }
+    // files.create (สร้างโฟลเดอร์): คืน id โฟลเดอร์ใหม่
+    if (u.includes("/drive/v3/files?")) {
+      return jsonResponse({ id: "new-folder" }, 200);
+    }
+    // upload
+    if (u.includes("/upload/drive/v3/files")) {
+      return jsonResponse({ id: "file-1", webViewLink: "https://drive/file-1" }, 200);
+    }
+    return jsonResponse({}, 200);
+  });
+  global.fetch = fn as unknown as typeof fetch;
+  return { calls };
+}
+
+describe("drive — Shared Drive query params", () => {
+  it("files.list แนบ supportsAllDrives + includeItemsFromAllDrives + corpora=allDrives", async () => {
+    const { calls } = installUrlCapture();
+    const { ensureFolderPath } = await import("@/lib/storage/drive");
+
+    await ensureFolderPath(["2026", "07"]);
+
+    const listCall = calls.find((u) => u.includes("/drive/v3/files?") && u.includes("q="));
+    expect(listCall).toBeDefined();
+    const p = new URL(listCall!).searchParams;
+    expect(p.get("supportsAllDrives")).toBe("true");
+    expect(p.get("includeItemsFromAllDrives")).toBe("true");
+    expect(p.get("corpora")).toBe("allDrives");
+  });
+
+  it("files.create (สร้างโฟลเดอร์) แนบ supportsAllDrives", async () => {
+    const { calls } = installUrlCapture();
+    const { ensureFolderPath } = await import("@/lib/storage/drive");
+
+    await ensureFolderPath(["2026"]);
+
+    // create = เรียก /drive/v3/files? ที่ไม่มี q= (POST metadata โฟลเดอร์)
+    const createCall = calls.find((u) => u.includes("/drive/v3/files?") && !u.includes("q="));
+    expect(createCall).toBeDefined();
+    expect(new URL(createCall!).searchParams.get("supportsAllDrives")).toBe("true");
+  });
+
+  it("upload (multipart) แนบ supportsAllDrives", async () => {
+    const { calls } = installUrlCapture();
+    const { uploadFile } = await import("@/lib/storage/drive");
+
+    await uploadFile(UPLOAD_PARAMS);
+
+    const uploadCall = calls.find((u) => u.includes("/upload/drive/v3/files"));
+    expect(uploadCall).toBeDefined();
+    const p = new URL(uploadCall!).searchParams;
+    expect(p.get("supportsAllDrives")).toBe("true");
+    expect(p.get("uploadType")).toBe("multipart");
+  });
+});

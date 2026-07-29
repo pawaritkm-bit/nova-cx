@@ -145,8 +145,11 @@ async function ensureSingleFolder(
       fields: "files(id,name)",
       pageSize: "1",
       // รองรับ Shared Drive เผื่อ root อยู่บน Shared Drive
+      //   corpora=allDrives ให้ค้นครอบทั้ง My Drive + Shared Drive ที่ SA เป็นสมาชิก
+      //   (ต้องมาคู่กับ supportsAllDrives + includeItemsFromAllDrives; ปลอดภัยกับ My Drive ธรรมดาด้วย)
       supportsAllDrives: "true",
       includeItemsFromAllDrives: "true",
+      corpora: "allDrives",
     }).toString();
 
   const listRes = await driveFetch(token, listUrl);
