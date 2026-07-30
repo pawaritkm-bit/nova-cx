@@ -46,7 +46,19 @@ async function handle(request: NextRequest) {
   try {
     const db = createServiceRoleClient();
     const summary = await processPendingAttachments(db, { limit: 20 });
-    return NextResponse.json({ status: "ok", ...summary }, { status: 200 });
+    // diagnostic ชั่วคราว (ปลอดภัย: บอกแค่ว่าง/ไม่ว่าง + ความยาว ไม่โชว์ค่า)
+    let diag: Record<string, unknown> | undefined;
+    if ((summary as { disabled?: boolean }).disabled) {
+      const L = (v?: string) => (v ? v.length : 0);
+      diag = {
+        backend: (process.env.BILL_STORAGE_BACKEND || "").trim().toLowerCase(),
+        MS_TENANT_ID: L(process.env.MS_TENANT_ID),
+        MS_CLIENT_ID: L(process.env.MS_CLIENT_ID),
+        MS_CLIENT_SECRET: L(process.env.MS_CLIENT_SECRET),
+        ONEDRIVE_USER: L(process.env.ONEDRIVE_USER),
+      };
+    }
+    return NextResponse.json({ status: "ok", ...summary, ...(diag ? { _diag: diag } : {}) }, { status: 200 });
   } catch (e) {
     logServerError("cron/process-attachments", requestId, e);
     // คืน 200 กัน Vercel Cron retry เป็น error loop + ให้ monitor เห็นสถานะ
