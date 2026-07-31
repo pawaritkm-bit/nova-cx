@@ -25,6 +25,7 @@ import { createEntryAction } from "./actions";
 import ChatAuditFrame from "../_Frame";
 import EntryEditor from "./EntryEditor";
 import RowActions from "./RowActions";
+import CustomerTaxIdField from "./CustomerTaxIdField";
 import "../chat-admin.css";
 import "../bills/bills.css";
 import "./accounting.css";
@@ -118,6 +119,25 @@ async function fetchCustomerCodes(
     .in("id", ids);
   for (const c of (data ?? []) as { id: string; customer_code: string | null }[]) {
     map.set(c.id, c.customer_code);
+  }
+  return map;
+}
+
+/** ดึงเลขภาษี (tax_id) ของ customerIds — สำหรับช่องกรอก/แก้เลขภาษีต่อลูกค้า (loop เก็บเลขภาษี) */
+async function fetchCustomerTaxIds(
+  service: SupabaseClient,
+  tenantId: string,
+  ids: string[]
+): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>();
+  if (ids.length === 0) return map;
+  const { data } = await service
+    .from("customers")
+    .select("id, tax_id")
+    .eq("tenant_id", tenantId)
+    .in("id", ids);
+  for (const c of (data ?? []) as { id: string; tax_id: string | null }[]) {
+    map.set(c.id, c.tax_id);
   }
   return map;
 }
@@ -391,7 +411,10 @@ export default async function AccountingPage({
   // รหัสลูกค้า (สำหรับ avatar/ชื่อ/ค้นหา/ไฟล์ Excel)
   const service = createServiceRoleClient();
   const custIds = [...new Set(allEntries.map((e) => e.customerId).filter((x): x is string => !!x))];
-  const codeById = await fetchCustomerCodes(service, tenantId, custIds);
+  const [codeById, taxIdById] = await Promise.all([
+    fetchCustomerCodes(service, tenantId, custIds),
+    fetchCustomerTaxIds(service, tenantId, custIds),
+  ]);
 
   // ---- ตัวกรอง (validate ก่อนใช้) ----
   const q = (sp.q ?? "").trim();
@@ -525,6 +548,14 @@ export default async function AccountingPage({
                     {/* เนื้อหากางออก */}
                     {isOpen ? (
                       <div className="cust-body">
+                        {/* เลขภาษีของลูกค้า (loop เก็บเลขภาษี) — กรอก/แก้ได้ เฉพาะลูกค้าที่จับคู่แล้ว */}
+                        {g.customerId ? (
+                          <CustomerTaxIdField
+                            customerId={g.customerId}
+                            initialTaxId={taxIdById.get(g.customerId) ?? null}
+                          />
+                        ) : null}
+
                         {/* สรุปของลูกค้ารายนี้ */}
                         <KpiRow s={g.summary.all} />
 

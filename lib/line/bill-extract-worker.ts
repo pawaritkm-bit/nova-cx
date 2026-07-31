@@ -490,23 +490,27 @@ type UnspecifiedRow = {
  *
  *   ★ เฉพาะ entry ที่มี customer_id (ต้องมีลูกค้าถึงจะจับฝั่งได้) + มีชื่อฝั่งอย่างน้อย 1
  *   ★ ไม่แตะ entry ที่ confirmed แล้ว (WHERE status='draft')
+ *   ★ opts.customerId (ทางเลือก): จำกัดเฉพาะ entry ของลูกค้ารายนั้น — ใช้ตอนนักบัญชี
+ *     เพิ่งกรอกเลขภาษีของลูกค้ารายเดียว (re-decide ทันทีเฉพาะรายนั้น ไม่ต้องสแกนทั้ง tenant)
  */
 export async function redecideExistingEntries(
   db: SupabaseClient,
   tenantId: string,
-  opts: { limit?: number } = {}
+  opts: { limit?: number; customerId?: string } = {}
 ): Promise<RedecideResult> {
   const limit = opts.limit ?? 50;
 
-  const { data, error } = await db
+  let query = db
     .from("bill_entries")
     .select("id, customer_id, seller_name, seller_tax_id, buyer_name, buyer_tax_id")
     .eq("tenant_id", tenantId)
     .eq("entry_type", "unspecified")
     .eq("status", "draft")
     .is("deleted_at", null)
-    .not("customer_id", "is", null)
-    .limit(limit);
+    .not("customer_id", "is", null);
+  // scope ลูกค้าเดียว (ถ้าระบุ) — index (tenant_id, customer_id) รองรับ
+  if (opts.customerId) query = query.eq("customer_id", opts.customerId);
+  const { data, error } = await query.limit(limit);
 
   if (error) {
     console.warn(`[bill-extract-worker] redecide select error code=${(error as { code?: string }).code ?? "?"}`);

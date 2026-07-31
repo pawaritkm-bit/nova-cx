@@ -38,6 +38,15 @@ export function getNovaSalesApiKey(): string | undefined {
 }
 
 /**
+ * endpoint ของ NOVA Sale สำหรับ "ส่งเลขภาษีลูกค้ากลับ" (outbound) เมื่อนักบัญชีกรอกเลขภาษีที่ขาด
+ *   คืน undefined ถ้ายังไม่ตั้ง → outbound เป็น no-op (skip) ไม่ error
+ *   (NOVA Sale ยังไม่เปิด endpoint = ไม่พัง — degrade อย่างนุ่มนวล)
+ */
+export function getNovaSalesOutboundUrl(): string | undefined {
+  return process.env.NOVA_SALES_OUTBOUND_URL || undefined;
+}
+
+/**
  * tenant ที่ผูกกับ NOVA_SALES_API_KEY (allowlist) — ถ้าตั้งไว้ integration จะรับ
  * เฉพาะ payload.tenant_id นี้เท่านั้น (กัน key เดียวเขียนข้าม tenant — Reviewer 🔴#2)
  * ยังไม่ตั้ง = undefined (dev) แต่ควรตั้งใน prod

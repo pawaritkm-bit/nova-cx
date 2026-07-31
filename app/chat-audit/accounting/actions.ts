@@ -28,6 +28,9 @@ import {
   type ActionResult,
 } from "@/lib/accounting/actions-lib";
 import type { EntryType, VatType, WhtForm } from "@/lib/accounting/queries";
+import { normalizeTaxId } from "@/lib/accounting/tax-id";
+import { redecideExistingEntries } from "@/lib/line/bill-extract-worker";
+import { pushCustomerTaxId } from "@/lib/integrations/nova-sales-outbound";
 
 const PATH = "/chat-audit/accounting";
 /** bucket รูปบิล (private) — ตรงกับหน้า bills / lib/storage/bill-storage.ts */
@@ -387,4 +390,80 @@ export async function createEntryAction(formData: FormData): Promise<void> {
   sp.set("type", entryType);
   if (res.ok) sp.set("edit", res.data.id);
   redirect(`${PATH}?${sp.toString()}`);
+}
+
+/**
+ * บันทึกเลขภาษีของลูกค้า (loop เก็บเลขภาษี) — admin เท่านั้น
+ *
+ * บิลหลายใบไม่มีเลขภาษีให้ AI อ่าน → จับซื้อ/ขายไม่ได้ (กลายเป็น "รอระบุ").
+ * ให้นักบัญชีกรอกเลขภาษีของลูกค้าที่ขาด แล้วระบบทำ 3 อย่าง:
+ *   1) จำไว้ที่ customers.tax_id (tenant-scoped; trigger set_updated_at อัปเดต updated_at ให้เอง)
+ *   2) re-decide บิลของลูกค้ารายนั้นที่ยัง 'unspecified' ทันที (ใช้ tax_id ใหม่ + seller/buyer ที่เก็บไว้)
+ *   3) ส่งเลขภาษีกลับ NOVA Sale (best-effort — ไม่มี env/ล้ม ก็ไม่ทำให้ action พัง)
+ *
+ * ★ validate 13 หลัก (strip ขีด/ช่องว่าง) ก่อนเขียน
+ * ★ PDPA: ไม่ log เลขภาษี/ชื่อลูกค้า (ไม่มี console.* ที่นี่)
+ */
+export async function saveCustomerTaxIdAction(input: {
+  customerId: string;
+  taxId: string;
+}): Promise<SaveResult> {
+  try {
+    const authed = await createClient();
+    const ctx = await requireAdminContext(authed);
+    const service = createServiceRoleClient();
+
+    if (!isUuid(input.customerId)) {
+      return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    }
+    const taxId = normalizeTaxId(input.taxId);
+    if (!taxId) {
+      return { ok: false, message: "เลขภาษีต้องเป็นตัวเลข 13 หลัก" };
+    }
+
+    // 1) อัปเดต customers.tax_id (scope tenant — กันเขียนข้าม tenant) + คืน external_ref/customer_code
+    //    เพื่อส่งกลับ NOVA Sale (updated_at อัปเดตอัตโนมัติจาก trigger set_updated_at)
+    const { data: updated, error: updErr } = await service
+      .from("customers")
+      .update({ tax_id: taxId })
+      .eq("id", input.customerId)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null)
+      .select("id, external_ref, customer_code")
+      .maybeSingle();
+
+    if (updErr || !updated) {
+      return { ok: false, message: "บันทึกเลขภาษีไม่สำเร็จ (ไม่พบลูกค้า หรือฐานข้อมูลผิดพลาด)" };
+    }
+    const cust = updated as {
+      id: string;
+      external_ref: string | null;
+      customer_code: string | null;
+    };
+
+    // 2) re-decide บิล 'unspecified' ของลูกค้ารายนี้ทันที (ใช้ tax_id ใหม่)
+    let redecided = 0;
+    try {
+      const r = await redecideExistingEntries(service, ctx.tenantId, {
+        customerId: input.customerId,
+      });
+      redecided = r.updated;
+    } catch {
+      // re-decide ล้ม ไม่ให้ทั้ง action พัง — เลขภาษีเก็บแล้ว, cron redecide รอบถัดไปจะตามเก็บ
+    }
+
+    // 3) ส่งกลับ NOVA Sale (best-effort — degrade ถ้าไม่ตั้ง env / ยิงไม่ผ่าน)
+    await pushCustomerTaxId({
+      externalRef: cust.external_ref,
+      customerCode: cust.customer_code,
+      taxId,
+    });
+
+    revalidatePath(PATH);
+    const suffix = redecided > 0 ? ` · จับคู่ซื้อ/ขายให้ ${redecided} รายการแล้ว` : "";
+    return { ok: true, message: `บันทึกเลขภาษีแล้ว${suffix}` };
+  } catch (e) {
+    if (e instanceof AdminAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "บันทึกเลขภาษีไม่สำเร็จ กรุณาลองใหม่" };
+  }
 }

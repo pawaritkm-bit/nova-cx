@@ -373,3 +373,50 @@
   .nova-dash .acc-line-desc { grid-column: 1 / -1; }
   .nova-dash .acc-net { grid-column: 1 / -1; text-align: left; }
 }
+
+/* ============================================================
+   เลขภาษีลูกค้า (loop เก็บเลขภาษี) — ช่องกรอก/แก้ต่อลูกค้าในการ์ดที่กางออก
+   ============================================================ */
+.nova-dash .acc-taxid-field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.nova-dash .acc-taxid-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy-800, #1e293b);
+}
+.nova-dash .acc-taxid-input {
+  padding: 7px 10px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 8px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+  min-width: 200px;
+}
+.nova-dash .acc-taxid-input:focus {
+  outline: none;
+  border-color: var(--navy-800, #1e293b);
+}
+.nova-dash .acc-taxid-input:disabled { opacity: 0.6; }
+.nova-dash .acc-taxid-hint {
+  font-size: 12px;
+  color: #b45309;
+  font-weight: 600;
+}
+.nova-dash .acc-taxid-count {
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  font-variant-numeric: tabular-nums;
+}
+.nova-dash .acc-taxid-msg { font-size: 12px; font-weight: 600; }
+.nova-dash .acc-taxid-msg.ok { color: #047857; }
+.nova-dash .acc-taxid-msg.err { color: #b91c1c; }

@@ -411,8 +411,13 @@ describe("normalizeName / nameSimilarity / digitsOnly (pure)", () => {
 function makeRedecideDb(opts: {
   entries: Record<string, unknown>[];
   customers: Record<string, unknown>[];
-}): { db: SupabaseClient; updates: { payload: Record<string, unknown>; filters: Record<string, unknown> }[] } {
+}): {
+  db: SupabaseClient;
+  updates: { payload: Record<string, unknown>; filters: Record<string, unknown> }[];
+  selects: { table: string; filters: Record<string, unknown> }[];
+} {
   const updates: { payload: Record<string, unknown>; filters: Record<string, unknown> }[] = [];
+  const selects: { table: string; filters: Record<string, unknown> }[] = [];
   function qb(table: string) {
     const filters: Record<string, unknown> = {};
     let mode: "select" | "update" = "select";
@@ -437,12 +442,17 @@ function makeRedecideDb(opts: {
         updates.push({ payload, filters: { ...filters } });
         return Promise.resolve({ data: null, error: null }).then(onF);
       }
-      const data = table === "bill_entries" ? opts.entries : table === "customers" ? opts.customers : [];
-      return Promise.resolve({ data, error: null }).then(onF);
+      selects.push({ table, filters: { ...filters } });
+      // จำลอง scope customer_id: ถ้ามี filter → คืนเฉพาะ entry ของลูกค้านั้น
+      let rows = table === "bill_entries" ? opts.entries : table === "customers" ? opts.customers : [];
+      if (table === "bill_entries" && filters.customer_id) {
+        rows = rows.filter((r) => (r as { customer_id?: unknown }).customer_id === filters.customer_id);
+      }
+      return Promise.resolve({ data: rows, error: null }).then(onF);
     };
     return api;
   }
-  return { db: { from: (t: string) => qb(t) } as unknown as SupabaseClient, updates };
+  return { db: { from: (t: string) => qb(t) } as unknown as SupabaseClient, updates, selects };
 }
 
 describe("redecideExistingEntries — ตัดสินฝั่งใหม่ให้ entry เดิม (ไม่เรียก AI)", () => {
@@ -498,5 +508,40 @@ describe("redecideExistingEntries — ตัดสินฝั่งใหม่
     const res = await redecideExistingEntries(db, "t1", { limit: 50 });
     expect(res.scanned).toBe(0);
     expect(res.updated).toBe(0);
+  });
+
+  it("★ scope customerId → ส่ง filter customer_id + แตะเฉพาะ entry ของลูกค้ารายนั้น", async () => {
+    const { db, updates, selects } = makeRedecideDb({
+      entries: [
+        // ลูกค้า c1 (รายที่นักบัญชีเพิ่งกรอกเลขภาษี) — ต้องถูก re-decide
+        {
+          id: "e1",
+          customer_id: "c1",
+          seller_name: "ร้านวัสดุ เอบีซี",
+          seller_tax_id: "0105500000009",
+          buyer_name: "อ่านเพี้ยน",
+          buyer_tax_id: "0994000000001",
+        },
+        // ลูกค้า c2 (คนอื่น) — ต้องไม่ถูกแตะ เพราะ scope customerId=c1
+        {
+          id: "e2",
+          customer_id: "c2",
+          seller_name: "ร้านอื่น",
+          seller_tax_id: "0105500000009",
+          buyer_name: "ลูกค้าสอง",
+          buyer_tax_id: "0994000000001",
+        },
+      ],
+      customers: [{ id: "c1", name: "ยูนิเวิร์ส", business_name: null, tax_id: "0994000000001" }],
+    });
+    const res = await redecideExistingEntries(db, "t1", { customerId: "c1" });
+    // select bill_entries ต้องมี filter customer_id=c1 (scope ลูกค้าเดียว)
+    const entrySelect = selects.find((s) => s.table === "bill_entries")!;
+    expect(entrySelect.filters.customer_id).toBe("c1");
+    // อัปเดตเฉพาะ e1 ของ c1 (e2 ไม่ถูกดึงมาเพราะ scope)
+    expect(res.updated).toBe(1);
+    expect(updates.length).toBe(1);
+    expect(updates[0].filters.id).toBe("e1");
+    expect(updates[0].payload.entry_type).toBe("purchase");
   });
 });
