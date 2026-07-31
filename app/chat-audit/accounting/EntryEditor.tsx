@@ -11,6 +11,7 @@ import {
   formatMoney,
 } from "@/lib/accounting/calc";
 import type { BillEntry, EntryType, VatType, WhtForm } from "@/lib/accounting/queries";
+import { resolveEntryNav } from "@/lib/accounting/entry-nav";
 
 /**
  * EntryEditor — หน้าต่างตรวจ/แก้บิล (verify panel)
@@ -73,6 +74,7 @@ export default function EntryEditor({
   fileName = null,
   customerLabel,
   closeHref,
+  orderIds = [],
 }: {
   entry: BillEntry;
   viewUrl: string | null;
@@ -82,10 +84,23 @@ export default function EntryEditor({
   fileName?: string | null;
   customerLabel: string;
   closeHref: string;
+  /**
+   * ลำดับ entry id ของบริบทที่กำลังดู (ลูกค้าเดียวกัน + แท็บ/type เดียวกัน) เรียงเหมือนตาราง
+   *   — page.tsx (server) เป็นผู้ส่งมา เพื่อทำปุ่ม "ก่อนหน้า/ถัดไป" (กรอกต่อเนื่อง)
+   */
+  orderIds?: string[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const readOnly = entry.status === "confirmed";
+
+  // ---- นำทาง ก่อนหน้า/ถัดไป ในบริบทนี้ ----
+  const nav = resolveEntryNav(orderIds, entry.id);
+  // href ของบิลอีกใบ = closeHref (คงบริบท open/type/accountant/customer) + edit=<id>
+  const editHrefFor = useCallback(
+    (id: string) => `${closeHref}${closeHref.includes("?") ? "&" : "?"}edit=${id}`,
+    [closeHref]
+  );
 
   // ---- header state ----
   const [entryType, setEntryType] = useState<EntryType>(entry.entryType);
@@ -202,6 +217,28 @@ export default function EntryEditor({
     });
   }
 
+  // บันทึกร่างใบปัจจุบันอัตโนมัติก่อน แล้วเด้งไปบิลที่ href (ใช้กับ ก่อนหน้า/ถัดไป)
+  //   - ยืนยันแล้ว (readOnly): แก้ไม่ได้ → ไปเลยไม่ต้องบันทึก
+  //   - บันทึกไม่ผ่าน (validate ฯลฯ): ค้างที่ใบเดิม โชว์ error ให้แก้ก่อน
+  function saveThenGo(href: string) {
+    if (readOnly) {
+      router.push(href);
+      router.refresh();
+      return;
+    }
+    setMsg(null);
+    startTransition(async () => {
+      const res = await saveEntryAction(buildInput(false));
+      if (res.ok) {
+        router.push(href);
+        router.refresh();
+      } else {
+        setMsg({ ok: false, text: res.message });
+        router.refresh();
+      }
+    });
+  }
+
   function remove() {
     if (!window.confirm("ลบบิลนี้ถาวร? (ไม่ใช่บิล — จะลบรูปออกด้วย)")) return;
     setMsg(null);
@@ -223,6 +260,36 @@ export default function EntryEditor({
             <div className="acc-modal-title">ตรวจ / แก้บิล</div>
             <div className="acc-modal-sub">{customerLabel}</div>
           </div>
+
+          {/* นำทางบิลในบริบทนี้ (กรอกต่อเนื่อง) — บันทึกร่างอัตโนมัติก่อนเปลี่ยนใบ */}
+          {nav.total > 1 ? (
+            <div className="acc-nav" aria-label="สลับบิลก่อนหน้า/ถัดไป">
+              <button
+                type="button"
+                className="btn btn-ghost acc-nav-btn"
+                onClick={() => nav.prevId && saveThenGo(editHrefFor(nav.prevId))}
+                disabled={pending || !nav.prevId}
+                aria-label="บิลก่อนหน้า"
+                title="บันทึกร่างแล้วไปบิลก่อนหน้า"
+              >
+                ◀ ก่อนหน้า
+              </button>
+              <span className="acc-nav-pos" aria-live="polite">
+                บิล {nav.position} / {nav.total}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost acc-nav-btn"
+                onClick={() => nav.nextId && saveThenGo(editHrefFor(nav.nextId))}
+                disabled={pending || !nav.nextId}
+                aria-label="บิลถัดไป"
+                title="บันทึกร่างแล้วไปบิลถัดไป"
+              >
+                ถัดไป ▶
+              </button>
+            </div>
+          ) : null}
+
           <button type="button" className="acc-modal-close" onClick={close} aria-label="ปิด">✕</button>
         </div>
 

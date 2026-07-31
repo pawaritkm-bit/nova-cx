@@ -584,6 +584,8 @@ export default async function AccountingPage({
 
   // ---- sign ไฟล์เฉพาะที่โชว์: entry ของแท็บที่เปิด + entry ที่กำลังแก้ (บิลไลน์ + ไฟล์อัปเอง) ----
   const shownEntries = openGroup ? entriesOfType(openGroup, selectedType) : [];
+  // ลำดับบิลของบริบทที่เปิด (ลูกค้า+แท็บเดียวกัน เรียงเหมือนตาราง) — ให้ EntryEditor ทำปุ่มก่อนหน้า/ถัดไป
+  const navOrderIds = shownEntries.map((e) => e.id);
   const pathsToSign: string[] = [];
   for (const e of shownEntries) {
     const p = entryObjectPath(e);
@@ -599,7 +601,8 @@ export default async function AccountingPage({
   // export: ส่ง accountant เฉพาะกรณีเลือกนักบัญชีคนหนึ่ง (ไม่ใช่ "ทั้งสำนักงาน")
   //   นักบัญชี (staff) ไม่ต้องส่ง — export route สโคปจาก session ให้เอง
   const exportAccountant = accParam && accParam !== "all" ? accParam : undefined;
-  const exportAllHref = `/chat-audit/accounting/export${buildQuery({ accountant: exportAccountant, month: selectedMonth || undefined })}`;
+  // ไปหน้า "ตรวจทานก่อนออก Excel" (คงสโคป/ตัวกรอง) — ปุ่มดาวน์โหลดจริงอยู่ในหน้านั้น
+  const reviewAllHref = `/chat-audit/accounting/review${buildQuery({ accountant: exportAccountant, month: selectedMonth || undefined })}`;
 
   // ป้ายบอกสโคป + ปุ่มกลับไปเลือกนักบัญชี (เฉพาะ admin/lead)
   const scopeLabel =
@@ -665,8 +668,8 @@ export default async function AccountingPage({
             </form>
             {/* อัปโหลดไฟล์เอง (เลือกลูกค้าได้) */}
             <UploadFileButton customers={customerSelectOptions} />
-            {/* Excel รวมทั้งหมด */}
-            <a href={exportAllHref} className="btn btn-ghost">บันทึกเป็น Excel (รวม)</a>
+            {/* ตรวจทานทุกบรรทัดก่อนออก Excel รวม */}
+            <a href={reviewAllHref} className="btn btn-ghost">ตรวจทาน / ออก Excel (รวม)</a>
           </form>
         </div>
 
@@ -767,13 +770,13 @@ export default async function AccountingPage({
                             defaultEntryType={selectedType}
                             label="อัปไฟล์"
                           />
-                          {/* Excel ของลูกค้ารายนี้ */}
+                          {/* ตรวจทาน + Excel ของลูกค้ารายนี้ */}
                           {g.customerId ? (
                             <a
-                              href={`/chat-audit/accounting/export${buildQuery({ month: selectedMonth || undefined })}${selectedMonth ? "&" : "?"}customerId=${g.customerId}`}
+                              href={`/chat-audit/accounting/review${buildQuery({ month: selectedMonth || undefined })}${selectedMonth ? "&" : "?"}customerId=${g.customerId}`}
                               className="btn btn-ghost"
                             >
-                              Excel ลูกค้านี้
+                              ตรวจทาน / ออก Excel
                             </a>
                           ) : null}
                         </div>
@@ -805,10 +808,12 @@ export default async function AccountingPage({
       {/* ---- หน้าต่างตรวจ/แก้ (verify panel) ---- */}
       {editEntry ? (
         <EntryEditor
+          key={editEntry.id}
           entry={editEntry}
           viewUrl={editViewUrl}
           viewIsImage={editIsImage}
           fileName={editEntry.uploadName}
+          orderIds={navOrderIds}
           customerLabel={customerLabel(
             editEntry.customerId ? codeById.get(editEntry.customerId) ?? null : null,
             editEntry.customerName

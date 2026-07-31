@@ -560,3 +560,86 @@
   font-weight: 700;
   font-size: 15px;
 }
+
+/* ============================================================
+   ปุ่มก่อนหน้า/ถัดไป ในหน้าแก้บิล (กรอกต่อเนื่อง) — อยู่บนหัว modal (navy)
+   ============================================================ */
+.nova-dash .acc-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+.nova-dash .acc-nav-pos {
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #fff;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+}
+/* ปุ่มบนพื้นหลัง navy → เส้นขอบ/ตัวอักษรขาว โปร่ง */
+.nova-dash .acc-nav-btn {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+.nova-dash .acc-nav-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.26); }
+.nova-dash .acc-nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+@media (max-width: 640px) {
+  .nova-dash .acc-nav-btn { padding: 6px 9px; }
+  .nova-dash .acc-modal-sub { display: none; }
+}
+
+/* ============================================================
+   หน้าตรวจทานก่อนออก Excel (/chat-audit/accounting/review)
+   ============================================================ */
+.nova-dash .acc-review-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.nova-dash .acc-review-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nova-dash .acc-review-month {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 600;
+}
+/* ปุ่มดาวน์โหลดที่ถูกปิด (ไม่มีอะไรจะออก) */
+.nova-dash .btn.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* กล่องเตือน รอระบุ/ร่าง (amber) */
+.nova-dash .acc-review-warn {
+  display: flex;
+  gap: 12px;
+  border: 1px solid var(--amber);
+  background: var(--amber-bg);
+}
+.nova-dash .acc-review-warn-icon { font-size: 20px; line-height: 1.4; }
+.nova-dash .acc-review-warn-body { flex: 1 1 auto; }
+.nova-dash .acc-review-warn-title {
+  font-weight: 800;
+  color: #b45309;
+  margin-bottom: 6px;
+}
+.nova-dash .acc-review-warn-list {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--navy-800);
+  line-height: 1.7;
+}
+.nova-dash .acc-review-warn-list strong { color: #b45309; }
