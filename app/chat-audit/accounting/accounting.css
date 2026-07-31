@@ -304,7 +304,7 @@
 .nova-dash .acc-lines-head,
 .nova-dash .acc-line {
   display: grid;
-  grid-template-columns: minmax(160px, 2fr) 92px 84px 70px 92px 96px 28px;
+  grid-template-columns: minmax(200px, 2.4fr) 92px 84px 70px 92px 96px 28px;
   gap: 6px;
   align-items: center;
 }
@@ -374,13 +374,16 @@
 /* โหมดอ่านอย่างเดียว (ยืนยันแล้ว) */
 .nova-dash .acc-acct-ro { gap: 8px; }
 .nova-dash .acc-acct-name-ro { font-size: 12.5px; color: var(--navy-800); }
-/* dropdown รายการบัญชี */
+/* dropdown รายการบัญชี — กว้างกว่าช่องบัญชีที่แคบ ให้หัวข้อกลุ่ม+ชื่อบัญชีอยู่บรรทัดเดียวอ่านง่าย */
 .nova-dash .acc-acct-list {
   position: absolute;
   z-index: 30;
   top: calc(100% + 2px);
   left: 0;
-  right: 0;
+  right: auto;
+  min-width: 320px;
+  width: max-content;
+  max-width: 420px;
   max-height: 240px;
   overflow-y: auto;
   background: #fff;
@@ -403,6 +406,7 @@
   font-size: 12.5px;
   color: var(--navy-800);
   cursor: pointer;
+  white-space: nowrap; /* รหัส+ชื่อ อยู่บรรทัดเดียว ไม่ตกบรรทัด */
 }
 .nova-dash .acc-acct-opt:hover { background: var(--navy-50, #eef4ff); }
 .nova-dash .acc-acct-opt-code {
@@ -411,7 +415,13 @@
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-.nova-dash .acc-acct-opt-name { flex: 1 1 auto; }
+.nova-dash .acc-acct-opt-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis; /* ชื่อยาวเกิน → ตัด … แทน wrap */
+}
 .nova-dash .acc-acct-empty { padding: 8px; font-size: 12px; color: var(--muted); }
 /* คั่นหมวดในดรอปดาวน์ผังบัญชี (จัดกลุ่มตามหมวด 1–6) */
 .nova-dash .acc-acct-cat + .acc-acct-cat { margin-top: 4px; border-top: 1px dashed var(--line); }
@@ -671,6 +681,54 @@
 .acc-team-sub {
   font-size: 12px;
   color: rgba(0, 0, 0, 0.55);
+}
+
+/* ===== การ์ดนักบัญชีในทีม (หน้าแรกหัวหน้าทีม) ===== */
+.acc-team-card.needs {
+  border-color: rgba(180, 83, 9, 0.4);
+}
+.acc-team-self {
+  font-weight: 500;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+.acc-team-flag {
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: #b45309;
+  background: var(--amber-bg, #fef3c7);
+}
+.acc-team-flag.clear {
+  color: #0f9d63;
+  background: #e4f6ee;
+}
+.acc-team-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: center;
+}
+.acc-team-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.05);
+  color: rgba(0, 0, 0, 0.6);
+}
+.acc-team-pill.ok {
+  color: #0f9d63;
+  background: #e4f6ee;
+}
+.acc-team-pill.draft {
+  color: #5c6a8c;
+  background: #eef1f7;
+}
+.acc-team-pill.un {
+  color: #b45309;
+  background: var(--amber-bg, #fef3c7);
 }
 
 /* ===== แถบสโคป (นักบัญชีที่กำลังดู) ===== */
@@ -977,7 +1035,7 @@
 }
 .nova-dash .acc-modal-gear:hover { background: rgba(255, 255, 255, 0.24); }
 
-/* หัวข้อกลุ่มในดรอปดาวน์เลือกบัญชี */
+/* หัวข้อกลุ่มในดรอปดาวน์เลือกบัญชี (แถบเล็กตัวหนาสีจาง — แยกจาก options) */
 .nova-dash .acc-acct-group {
   padding: 6px 8px 3px;
   font-size: 11px;
@@ -985,6 +1043,7 @@
   color: var(--muted);
   text-transform: none;
   letter-spacing: 0.01em;
+  white-space: nowrap; /* หัวข้อกลุ่มยาว (เช่น "🏦 เงินฝากธนาคาร — ของลูกค้านี้") ห้ามตกบรรทัด */
 }
 .nova-dash .acc-acct-group + .acc-acct-group { margin-top: 4px; border-top: 1px dashed var(--line); }
 /* generic bank (ยังไม่ตั้งเลขบัญชีจริง) — จางลงเล็กน้อย */

@@ -11,6 +11,10 @@ import {
   type AccountantCard,
 } from "@/lib/accounting/accountant-scope";
 import {
+  listTeamAccountantCards,
+  type TeamAccountantCard,
+} from "@/lib/accounting/lead-scope";
+import {
   listEntries,
   lineNet,
   summarizeEntry,
@@ -34,11 +38,9 @@ import {
 } from "@/lib/accounting/bank-accounts";
 import {
   monthKeyOf,
-  buildMonthlyIndex,
   summarizeMonth,
   customerColumnRows,
   thaiMonthLabel,
-  type MonthBucket,
   type MonthKpi,
 } from "@/lib/accounting/monthly";
 import { createEntryAction } from "./actions";
@@ -178,6 +180,93 @@ function AccountantHome({ accountants }: { accountants: AccountantCard[] }) {
             ))
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * หน้าแรกของหัวหน้าทีม (mode=lead) — การ์ดนักบัญชีในทีม (ลูกทีม + ตัวเอง)
+ *   แต่ละการ์ด: ชื่อ · จำนวนลูกค้า/บิล · สถานะรอตรวจ (ร่าง+รอระบุ) · กด "ตรวจงาน" → เข้าดูลูกค้าของคนนั้น
+ *   ★ ไม่มีการ์ด "ทั้งสำนักงาน" — หัวหน้าเห็นเฉพาะทีมตัวเอง
+ */
+function TeamHome({ leadName, cards }: { leadName: string | null; cards: TeamAccountantCard[] }) {
+  const totalCustomers = cards.reduce((s, c) => s + c.customerCount, 0);
+  const totalBills = cards.reduce((s, c) => s + c.billCount, 0);
+  const totalPending = cards.reduce((s, c) => s + c.pendingCount, 0);
+  return (
+    <div className="dash-views">
+      {/* KPI ภาพรวมทีม */}
+      <div className="card">
+        <div className="section-title">
+          <span>ภาพรวมทีม{leadName ? ` · ${leadName}` : ""}</span>
+          <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>
+            👑 หัวหน้าทีม
+          </span>
+        </div>
+        <div className="kpi-grid">
+          <div className="kpi">
+            <div className="label">นักบัญชีในทีม</div>
+            <div className="value">{cards.length.toLocaleString("th-TH")}<span className="unit">คน</span></div>
+          </div>
+          <div className="kpi">
+            <div className="label">ลูกค้าที่ทีมดูแล</div>
+            <div className="value">{totalCustomers.toLocaleString("th-TH")}<span className="unit">ราย</span></div>
+          </div>
+          <div className="kpi">
+            <div className="label">บิลทั้งหมด</div>
+            <div className="value">{totalBills.toLocaleString("th-TH")}<span className="unit">ใบ</span></div>
+          </div>
+          <div className="kpi">
+            <div className="label">รอตรวจ (ร่าง+รอระบุ)</div>
+            <div className="value v-green">{totalPending.toLocaleString("th-TH")}<span className="unit">ใบ</span></div>
+          </div>
+        </div>
+      </div>
+
+      {/* การ์ดนักบัญชีในทีม */}
+      <div className="card">
+        <div className="section-title">
+          <span>นักบัญชีในทีม</span>
+          <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>
+            เรียงคนที่ค้างตรวจมากสุดขึ้นก่อน · กด “ตรวจงาน”
+          </span>
+        </div>
+        {cards.length === 0 ? (
+          <p className="empty">ยังไม่มีนักบัญชีในทีม (ยังไม่ได้กำหนดสมาชิกทีม)</p>
+        ) : (
+          <div className="acc-team-grid">
+            {cards.map((c) => (
+              <Link
+                key={c.employeeId}
+                href={`/chat-audit/accounting?accountant=${c.employeeId}`}
+                className={`acc-team-card${c.pendingCount > 0 ? " needs" : ""}`}
+              >
+                <span className="acc-team-avatar">{c.name.slice(0, 2)}</span>
+                <span className="acc-team-name">
+                  {c.name}
+                  {c.isSelf ? <span className="acc-team-self"> (ของฉันเอง)</span> : null}
+                </span>
+                <span className="acc-team-sub">
+                  {c.customerCount.toLocaleString("th-TH")} ลูกค้า ·{" "}
+                  {c.billCount.toLocaleString("th-TH")} บิล
+                </span>
+                {c.pendingCount > 0 ? (
+                  <span className="acc-team-flag">
+                    ค้าง {c.pendingCount.toLocaleString("th-TH")} ใบ
+                  </span>
+                ) : (
+                  <span className="acc-team-flag clear">เรียบร้อย</span>
+                )}
+                <span className="acc-team-pills">
+                  <span className="acc-team-pill ok">ยืนยัน {c.confirmedCount}</span>
+                  <span className="acc-team-pill draft">ร่าง {c.draftCount}</span>
+                  <span className="acc-team-pill un">รอระบุ {c.unspecifiedCount}</span>
+                </span>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -460,79 +549,6 @@ function EntryTable({
   );
 }
 
-/**
- * แถบเลือกเดือน (month rail) — เห็นยอด ซื้อ/ขาย + รอตรวจ ของแต่ละเดือนในพริบตา
- *   คลิกเดือน → set month · การ์ดพิเศษ "ยังไม่ลงวันที่" → month=none · "ทุกเดือน" = accordion เดิม
- */
-function MonthRail({
-  months,
-  undatedCount,
-  selectedMonth,
-  undatedMode,
-  accParam,
-  q,
-}: {
-  months: MonthBucket[];
-  undatedCount: number;
-  selectedMonth: string;
-  undatedMode: boolean;
-  accParam?: string;
-  q?: string;
-}) {
-  const allActive = !selectedMonth && !undatedMode;
-  return (
-    <div className="card acc-rail-card">
-      <div className="acc-rail">
-        {/* ทุกเดือน (พฤติกรรมเดิม — accordion รายลูกค้า) */}
-        <Link
-          href={`/chat-audit/accounting${buildQuery({ accountant: accParam, q })}`}
-          className={`acc-mtab acc-mtab-all${allActive ? " active" : ""}`}
-          scroll={false}
-        >
-          <span className="acc-mo">ทุกเดือน</span>
-          <span className="acc-mc">ดูรวมทุกเดือน (รายลูกค้า)</span>
-        </Link>
-
-        {months.map((m) => {
-          const active = selectedMonth === m.month;
-          return (
-            <Link
-              key={m.month}
-              href={`/chat-audit/accounting${buildQuery({ accountant: accParam, q, month: m.month })}`}
-              className={`acc-mtab${active ? " active" : ""}`}
-              scroll={false}
-            >
-              <span className="acc-mo">{thaiMonthLabel(m.month)}</span>
-              <span className="acc-mc">
-                <span className="b">ซื้อ {m.purchaseCount}</span>
-                <span className="s">ขาย {m.saleCount}</span>
-              </span>
-              {m.pendingCount > 0 ? (
-                <span className="acc-pend">⏳ รอตรวจ {m.pendingCount} ใบ</span>
-              ) : (
-                <span className="acc-done">✅ ครบแล้ว</span>
-              )}
-            </Link>
-          );
-        })}
-
-        {/* กล่องพิเศษ: ยังไม่ลงวันที่ */}
-        {undatedCount > 0 ? (
-          <Link
-            href={`/chat-audit/accounting${buildQuery({ accountant: accParam, q, month: "none" })}`}
-            className={`acc-mtab acc-mtab-warn${undatedMode ? " active" : ""}`}
-            scroll={false}
-          >
-            <span className="acc-mo">⚠️ ยังไม่ลงวันที่</span>
-            <span className="acc-mc">อ่านวันที่ไม่ได้ {undatedCount} ใบ</span>
-            <span className="acc-pend">ต้องลงวันที่ก่อนเข้าเดือน</span>
-          </Link>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 /** KPI สรุปเดือน (ฐาน/VAT ซื้อ·ขาย + หัก ณ ที่จ่าย + ยืนยันแล้ว X/Y) */
 function MonthKpiRow({ k }: { k: MonthKpi }) {
   const remain = k.totalCount - k.confirmedCount;
@@ -706,13 +722,34 @@ export default async function AccountingPage({
     scopeCustomerIds = [...(access.allowedCustomerIds ?? new Set<string>())];
   } else {
     // admin / lead — หน้าแรกเลือกนักบัญชี, เลือกแล้วเห็นลูกค้าของคนนั้น
+    // ★ lead: จำกัดทุกอย่างในทีมตัวเอง (allowedCustomerIds = สโคปทีม)
+    const teamScope = access.mode === "lead" ? access.allowedCustomerIds : null;
+
     if (accountantParam === "all") {
-      scopeCustomerIds = undefined; // ทั้งสำนักงาน
+      // lead ไม่มีสิทธิ์ดู "ทั้งสำนักงาน" → จำกัดเป็นสโคปทีมตัวเอง
+      scopeCustomerIds = teamScope ? [...teamScope] : undefined;
     } else if (UUID_RE.test(accountantParam)) {
-      scopeCustomerIds = await customerIdsForAccountant(service, tenantId, accountantParam);
+      const ids = await customerIdsForAccountant(service, tenantId, accountantParam);
+      // lead: ตัดลูกค้าที่อยู่นอกทีมออก (กัน override ผ่าน query param คนนอกทีม)
+      scopeCustomerIds = teamScope ? ids.filter((id) => teamScope.has(id)) : ids;
       selectedAccountantName = await getEmployeeName(service, tenantId, accountantParam);
+    } else if (access.mode === "lead") {
+      // หัวหน้าทีม ยังไม่เลือก → หน้าแรก = การ์ดนักบัญชีในทีม
+      const cards = await listTeamAccountantCards(service, tenantId, access.employeeId!);
+      return (
+        <ChatAuditFrame
+          active="chat-accounting"
+          role={navRole}
+          authed
+          staffOnly={staffOnly}
+          title="ตรวจงานทีม"
+          subtitle="เลือกนักบัญชีในทีมเพื่อตรวจงานลูกค้าที่ดูแล"
+        >
+          <TeamHome leadName={access.name} cards={cards} />
+        </ChatAuditFrame>
+      );
     } else {
-      // ยังไม่เลือก → หน้าแรก = การ์ดนักบัญชี
+      // admin ยังไม่เลือก → หน้าแรก = การ์ดนักบัญชีทั้งสำนักงาน
       const accountants = await listAccountantsWithCounts(service, tenantId);
       return (
         <ChatAuditFrame
@@ -766,9 +803,6 @@ export default async function AccountingPage({
   const monthParam = undatedMode ? "none" : selectedMonth || undefined;
   const selectedType: EntryType =
     sp.type === "sale" ? "sale" : sp.type === "unspecified" ? "unspecified" : "purchase";
-
-  // ดัชนีเดือน (แถบเลือกเดือน) — จากทั้งสโคป (ไม่ผูกกับคำค้น/เดือนที่เลือก)
-  const monthlyIndex = buildMonthlyIndex(allEntries);
 
   // กรอง (เดือน/undated + ค้นหาลูกค้า) ก่อนจัดกลุ่ม
   const qLower = q.toLowerCase();
@@ -831,7 +865,9 @@ export default async function AccountingPage({
     access.mode === "accountant"
       ? "ลูกค้าที่คุณดูแล"
       : accountantParam === "all"
-      ? "ทั้งสำนักงาน (ทุกนักบัญชี)"
+      ? access.mode === "lead"
+        ? "ทีมของฉัน (ทุกคน)"
+        : "ทั้งสำนักงาน (ทุกนักบัญชี)"
       : `นักบัญชี: ${selectedAccountantName ?? "—"}`;
   const showAccountantPicker = access.mode !== "accountant";
 
@@ -938,16 +974,6 @@ export default async function AccountingPage({
             </Link>
           ) : null}
         </div>
-
-        {/* ---- แถบเลือกเดือน (ตัดงานรายเดือน) ---- */}
-        <MonthRail
-          months={monthlyIndex.months}
-          undatedCount={monthlyIndex.undatedCount}
-          selectedMonth={selectedMonth}
-          undatedMode={undatedMode}
-          accParam={accParam}
-          q={q}
-        />
 
         {/* ---- toolbar ---- */}
         <div className="card">

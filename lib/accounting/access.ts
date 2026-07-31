@@ -3,7 +3,7 @@
  *   1) admin/executive (Supabase Auth) — เห็นทุกลูกค้า เลือกดูของนักบัญชีคนไหนก็ได้
  *   2) staff นักบัญชี (LINE session) —
  *        - accountant: เห็น "เฉพาะลูกค้าที่ตัวเองดูแล" (บังคับสโคป server-side)
- *        - lead (หัวหน้านักบัญชี): เห็นทั้งหมดเหมือน admin ไปก่อน
+ *        - lead (หัวหน้าทีม): เห็น "เฉพาะลูกค้าของทีมตัวเอง" (ลูกทีม + ตัวเอง)
  *
  * ★ ความปลอดภัย (default-deny): ไม่เข้าเงื่อนไขไหนเลย = null (ปฏิเสธ)
  *   staff มาก่อน admin (ถ้ามี staff session ที่ถูกต้อง ใช้สิทธิ์ staff)
@@ -14,6 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveStaffContext } from "@/lib/staff/guard";
 import { resolveAdminContext } from "@/lib/admin/guard";
 import { customerIdsForAccountant } from "@/lib/accounting/accountant-scope";
+import { customerIdsForLead } from "@/lib/accounting/lead-scope";
 
 export type AccountingMode = "admin" | "lead" | "accountant";
 
@@ -62,13 +63,15 @@ export async function resolveAccountingAccess(
         navRole: "accountant",
       };
     }
-    // lead — เห็นทั้งหมด
+    // lead (หัวหน้าทีม) — เห็นเฉพาะลูกค้าของทีมตัวเอง (ลูกทีม + ตัวเอง)
+    //   ★ ผลพลอยได้: guard แก้/ยืนยัน/export จำกัดหัวหน้าให้ทำได้เฉพาะทีมตัวเองอัตโนมัติ
+    const leadIds = await customerIdsForLead(service, staff.tenantId, staff.employeeId);
     return {
       tenantId: staff.tenantId,
       mode: "lead",
       employeeId: staff.employeeId,
       name: staff.name,
-      allowedCustomerIds: null,
+      allowedCustomerIds: new Set(leadIds),
       navRole: "acc_lead",
     };
   }
@@ -101,8 +104,8 @@ export async function requireAccountingAccess(
 
 /**
  * ลูกค้ารายนี้อยู่ในสโคปของผู้เรียกไหม
- *   - admin/lead (allowedCustomerIds=null): จริงเสมอ (รวม unassigned/customerId=null)
- *   - accountant: จริงเฉพาะ customerId ที่ไม่ null และอยู่ในชุดที่ดูแล (ห้ามแตะ unassigned/คนอื่น)
+ *   - admin (allowedCustomerIds=null): จริงเสมอ (รวม unassigned/customerId=null)
+ *   - accountant/lead: จริงเฉพาะ customerId ที่ไม่ null และอยู่ในชุดที่ดูแล (ห้ามแตะ unassigned/นอกทีม)
  */
 export function customerInScope(
   access: AccountingAccess,
