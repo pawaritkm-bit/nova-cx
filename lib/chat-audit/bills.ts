@@ -9,6 +9,22 @@
  * ★ PDPA: ไม่มีการ log ที่นี่ (เป็น logic ล้วน) — ผู้เรียกห้าม log ชื่อ/ไฟล์/URL
  */
 
+/** ชนิดเอกสารบิล (message_attachments.doc_kind) — null = ยังไม่คัด/ไม่รู้จัก */
+export type DocKind = "slip" | "handwritten" | "cash" | "purchase" | "sale" | "other";
+
+/** ลำดับชนิดเอกสารที่ใช้แสดงป้าย (สลิปโอน → ขาย → เขียนมือ → ซื้อ → เงินสด → อื่นๆ) */
+export const DOC_KINDS: DocKind[] = ["slip", "sale", "handwritten", "purchase", "cash", "other"];
+
+/** เป็นค่า doc_kind ที่รู้จักไหม (กัน query param / ค่า DB แปลกปลอม) */
+export function isDocKind(v: unknown): v is DocKind {
+  return typeof v === "string" && (DOC_KINDS as string[]).includes(v);
+}
+
+/** normalize ค่า doc_kind ดิบ → DocKind หรือ null (ค่าที่ไม่รู้จัก/ว่าง = null = ยังไม่คัด) */
+export function normalizeDocKind(v: string | null | undefined): DocKind | null {
+  return isDocKind(v) ? v : null;
+}
+
 /** รายการบิล 1 ใบ (normalize จากแถว message_attachments + join แล้ว) */
 export type BillItem = {
   /** message_attachments.id */
@@ -23,6 +39,8 @@ export type BillItem = {
   customerCode: string | null;
   /** ชื่อลูกค้า — null ถ้ายังไม่จับคู่ */
   customerName: string | null;
+  /** ชนิดเอกสาร (slip/sale/...) — null = ยังไม่คัด/ไม่รู้จัก */
+  docKind: DocKind | null;
 };
 
 /** ตัวเลือกใน dropdown ลูกค้า (เฉพาะลูกค้าที่มีบิล) */
@@ -40,6 +58,8 @@ export type BillStats = {
   total: number;
   /** จำนวนลูกค้าที่มีบิล (นับ customer_id ไม่ซ้ำ; กลุ่มยังไม่จับคู่ไม่นับ) */
   customerCount: number;
+  /** จำนวนบิลที่ยังไม่จับคู่ลูกค้า (customer_id null) — เป็น "ใบ" ไม่ใช่ "ราย" */
+  unassignedCount: number;
   /** บิลของเดือนปัจจุบัน (ตาม billDate) */
   thisMonth: number;
   /** ตัวเลือกลูกค้าใน dropdown (เรียงตามรหัสลูกค้าแบบ natural) */
@@ -54,6 +74,10 @@ export type BillFilter = {
   customerId?: string | null;
   /** เดือน YYYY-MM ที่เลือก (null/undefined = ไม่กรอง) */
   month?: string | null;
+  /** ชนิดเอกสาร (null/undefined = ทุกประเภท) */
+  docKind?: DocKind | null;
+  /** ค้นหาลูกค้า/รหัส (substring ไม่สนตัวพิมพ์; ว่าง = ไม่กรอง) */
+  search?: string | null;
 };
 
 /** ค่า customer filter พิเศษ = เฉพาะบิลที่กลุ่มยังไม่จับคู่ลูกค้า */
@@ -103,6 +127,7 @@ export function computeBillStats(items: BillItem[], now: Date = new Date()): Bil
   const byCustomer = new Map<string, CustomerOption>();
   const months = new Set<string>();
   let thisMonth = 0;
+  let unassignedCount = 0;
 
   for (const it of items) {
     const mk = monthKeyOf(it.billDate);
@@ -110,6 +135,7 @@ export function computeBillStats(items: BillItem[], now: Date = new Date()): Bil
       months.add(mk);
       if (mk === thisKey) thisMonth++;
     }
+    if (!it.customerId) unassignedCount++;
     if (it.customerId) {
       const existing = byCustomer.get(it.customerId);
       if (existing) {
@@ -128,6 +154,7 @@ export function computeBillStats(items: BillItem[], now: Date = new Date()): Bil
   return {
     total: items.length,
     customerCount: byCustomer.size,
+    unassignedCount,
     thisMonth,
     customerOptions: [...byCustomer.values()].sort(compareCustomerOption),
     monthOptions: [...months].sort((a, b) => b.localeCompare(a)),
@@ -141,7 +168,8 @@ export function computeBillStats(items: BillItem[], now: Date = new Date()): Bil
  *   - month (YYYY-MM)                  → เฉพาะเดือนนั้น
  */
 export function filterBills(items: BillItem[], filter: BillFilter): BillItem[] {
-  const { customerId, month } = filter;
+  const { customerId, month, docKind, search } = filter;
+  const q = (search ?? "").trim().toLowerCase();
   const filtered = items.filter((it) => {
     if (customerId) {
       if (customerId === UNASSIGNED_CUSTOMER) {
@@ -151,10 +179,100 @@ export function filterBills(items: BillItem[], filter: BillFilter): BillItem[] {
       }
     }
     if (month && monthKeyOf(it.billDate) !== month) return false;
+    if (docKind && it.docKind !== docKind) return false;
+    if (q) {
+      const hay = `${it.customerCode ?? ""} ${it.customerName ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     return true;
   });
   // เรียงใหม่→เก่า ตามวันที่บิล (ค่าว่าง/ผิดรูปไปท้าย)
   return filtered.sort((a, b) => (b.billDate || "").localeCompare(a.billDate || ""));
+}
+
+/** จำนวนบิลแยกตามชนิดเอกสารในกลุ่มลูกค้าหนึ่ง (บิล doc_kind=null ไม่เข้าช่องไหน แต่ยังนับใน total) */
+export type BillKindCounts = {
+  slip: number;
+  sale: number;
+  handwritten: number;
+  purchase: number;
+  cash: number;
+  other: number;
+};
+
+/** กลุ่มบิลของลูกค้า 1 ราย (customerId null = กลุ่ม "ยังไม่จับคู่ลูกค้า") */
+export type CustomerBillGroup = {
+  /** customer_id (null = ยังไม่จับคู่ — จัดไว้ท้ายสุดเสมอ) */
+  customerId: string | null;
+  code: string | null;
+  name: string | null;
+  /** จำนวนบิลรวมในกลุ่ม */
+  total: number;
+  /** จำนวนแยกตามชนิดเอกสาร */
+  kinds: BillKindCounts;
+  /** วันที่บิลล่าสุดในกลุ่ม (ISO; "" ถ้าไม่มี/ผิดรูป) */
+  latestAt: string;
+};
+
+function emptyKindCounts(): BillKindCounts {
+  return { slip: 0, sale: 0, handwritten: 0, purchase: 0, cash: 0, other: 0 };
+}
+
+/**
+ * จัดกลุ่มบิลตามลูกค้า แล้วเรียง "จำนวนบิลมาก→น้อย"
+ *   - ลูกค้าที่จับคู่แล้ว: เรียง total desc → บิลล่าสุดก่อน → รหัสลูกค้า (natural)
+ *   - กลุ่ม "ยังไม่จับคู่" (customerId null): รวมเป็นการ์ดเดียว จัดไว้ท้ายสุดเสมอ (ไม่ว่ามีกี่ใบ)
+ *   - kinds: นับแยกตาม doc_kind (บิลที่ doc_kind=null นับใน total แต่ไม่เข้า kinds ใด)
+ *   ★ pure — ผู้เรียกต้อง filter (ประเภท/เดือน/ค้นหา) ก่อนแล้วค่อยส่งเข้ามา
+ */
+export function groupBillsByCustomer(items: BillItem[]): CustomerBillGroup[] {
+  const assigned = new Map<string, CustomerBillGroup>();
+  let unassigned: CustomerBillGroup | null = null;
+
+  for (const it of items) {
+    let g: CustomerBillGroup;
+    if (it.customerId) {
+      const existing = assigned.get(it.customerId);
+      if (existing) {
+        g = existing;
+      } else {
+        g = {
+          customerId: it.customerId,
+          code: it.customerCode,
+          name: it.customerName,
+          total: 0,
+          kinds: emptyKindCounts(),
+          latestAt: "",
+        };
+        assigned.set(it.customerId, g);
+      }
+    } else {
+      if (!unassigned) {
+        unassigned = {
+          customerId: null,
+          code: null,
+          name: null,
+          total: 0,
+          kinds: emptyKindCounts(),
+          latestAt: "",
+        };
+      }
+      g = unassigned;
+    }
+    g.total++;
+    if (it.docKind) g.kinds[it.docKind]++;
+    const d = it.billDate || "";
+    if (d > g.latestAt) g.latestAt = d;
+  }
+
+  const sorted = [...assigned.values()].sort((a, b) => {
+    if (b.total !== a.total) return b.total - a.total; // จำนวนมาก→น้อย
+    const t = (b.latestAt || "").localeCompare(a.latestAt || ""); // ล่าสุดก่อน
+    if (t !== 0) return t;
+    return (a.code ?? "").localeCompare(b.code ?? "", undefined, { numeric: true, sensitivity: "base" });
+  });
+  if (unassigned) sorted.push(unassigned); // ยังไม่จับคู่ = ท้ายสุดเสมอ
+  return sorted;
 }
 
 /** ผลลัพธ์แบ่งหน้า */

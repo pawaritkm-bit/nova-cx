@@ -7,10 +7,15 @@ import { resolveAdminContext } from "@/lib/admin/guard";
 import {
   computeBillStats,
   filterBills,
+  groupBillsByCustomer,
   paginate,
   isValidMonth,
+  isDocKind,
+  normalizeDocKind,
   UNASSIGNED_CUSTOMER,
   type BillItem,
+  type DocKind,
+  type CustomerBillGroup,
 } from "@/lib/chat-audit/bills";
 import ChatAuditFrame from "../_Frame";
 import DeleteBillButton from "./DeleteBillButton";
@@ -23,17 +28,32 @@ export const dynamic = "force-dynamic";
 const BILLS_BUCKET = "bills";
 /** อายุ signed URL ตอน render = 1 ชม. (PDPA — ลิงก์อายุสั้น) */
 const SIGNED_URL_TTL_SEC = 3600;
-/** จำนวนบิลต่อหน้า (สร้าง signed URL เฉพาะหน้านี้ กันโหลดหนัก) */
+/** จำนวนบิลต่อหน้าในการ์ดที่กางออก (สร้าง signed URL เฉพาะหน้านี้ กันโหลดหนัก) */
 const PAGE_SIZE = 48;
 /** เพดานสแกน metadata กันหน้าค้างถ้าบิลเยอะผิดปกติ (ดึงเป็น chunk ละ 1000) */
 const SCAN_CHUNK = 1000;
 const SCAN_MAX = 12000;
+
+/** ป้ายชนิดเอกสาร: label ไทย + คลาสสี (นิยามใน bills.css) — ลำดับตาม DOC_KINDS */
+const KIND_META: Record<DocKind, { label: string; cls: string }> = {
+  slip: { label: "สลิปโอน", cls: "k-slip" },
+  sale: { label: "ขาย", cls: "k-sale" },
+  handwritten: { label: "เขียนมือ", cls: "k-hand" },
+  purchase: { label: "ซื้อ", cls: "k-purchase" },
+  cash: { label: "เงินสด", cls: "k-cash" },
+  other: { label: "อื่นๆ", cls: "k-other" },
+};
+/** ลำดับป้ายบนหัวการ์ด */
+const KIND_ORDER: DocKind[] = ["slip", "sale", "handwritten", "purchase", "cash", "other"];
+/** ตัวเลือกในตัวกรองประเภท (ตามดีไซน์: ขาย/สลิปโอน/เขียนมือ/ซื้อ) */
+const TYPE_FILTER_OPTIONS: DocKind[] = ["sale", "slip", "handwritten", "purchase"];
 
 /** แถวดิบจาก message_attachments + join (โครงตาม nested select) */
 type RawBillRow = {
   id: string;
   drive_file_id: string | null;
   created_at: string;
+  doc_kind: string | null;
   chat_messages: {
     sent_at: string | null;
     chat_groups: {
@@ -55,6 +75,7 @@ function toBillItem(row: RawBillRow): BillItem {
     customerId: group?.customer_id ?? null,
     customerCode: customer?.customer_code ?? null,
     customerName: customer?.name ?? null,
+    docKind: normalizeDocKind(row.doc_kind),
   };
 }
 
@@ -78,7 +99,7 @@ async function fetchAllBillItems(
     const { data, error } = await service
       .from("message_attachments")
       .select(
-        `id, drive_file_id, created_at,
+        `id, drive_file_id, created_at, doc_kind,
          chat_messages!inner (
            sent_at,
            chat_groups!inner (
@@ -108,7 +129,7 @@ type SignedBill = BillItem & {
 };
 
 /**
- * สร้าง signed URL ใหม่ตอน render (batch) ให้เฉพาะบิลในหน้านี้
+ * สร้าง signed URL ใหม่ตอน render (batch) ให้เฉพาะบิลของลูกค้าที่ "กางออก" เท่านั้น
  *   - bucket private → ต้อง signed เสมอ (ไม่ทำ public)
  *   - createSignedUrls: batch หลาย path ครั้งเดียว, อายุ 1 ชม.
  *   - path ที่เซ็นไม่ได้ (ไฟล์หาย/backend อื่น) → viewUrl=null (การ์ดแสดง placeholder)
@@ -150,6 +171,13 @@ function formatBillDate(iso: string): string {
   });
 }
 
+/** วันที่แบบสั้น (ไม่มีเวลา) — ใช้บน csub หัวการ์ด */
+function formatDateShort(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "-";
+  return d.toLocaleDateString("th-TH", { year: "numeric", month: "short", day: "numeric" });
+}
+
 /** ชื่อลูกค้าแสดงผล (มีรหัส → "N023 · ชื่อ") */
 function customerLabel(code: string | null, name: string | null): string {
   if (code && name) return `${code} · ${name}`;
@@ -158,29 +186,56 @@ function customerLabel(code: string | null, name: string | null): string {
   return "ยังไม่จับคู่ลูกค้า";
 }
 
-/** ประกอบ query string ของตัวกรอง (คงค่า customer/month, เซ็ต page) */
-function buildQuery(params: { customer?: string; month?: string; page?: number }): string {
+/** avatar สั้น ๆ จากรหัสลูกค้า (ไม่มีรหัส → "?") */
+function avatarText(code: string | null): string {
+  if (code) return code.slice(0, 4);
+  return "?";
+}
+
+/**
+ * ประกอบ query string — คงค่าตัวกรอง (q/type/month) เสมอ, เซ็ต open/p ตามต้องการ
+ */
+function buildQuery(params: {
+  q?: string;
+  type?: string;
+  month?: string;
+  open?: string;
+  p?: number;
+}): string {
   const sp = new URLSearchParams();
-  if (params.customer) sp.set("customer", params.customer);
+  if (params.q) sp.set("q", params.q);
+  if (params.type) sp.set("type", params.type);
   if (params.month) sp.set("month", params.month);
-  if (params.page && params.page > 1) sp.set("page", String(params.page));
+  if (params.open) sp.set("open", params.open);
+  if (params.p && params.p > 1) sp.set("p", String(params.p));
   const s = sp.toString();
   return s ? `?${s}` : "";
 }
 
+/** คีย์ที่ใช้ใน ?open= ของกลุ่มหนึ่ง (unassigned = ค่าพิเศษ) */
+function groupOpenKey(g: CustomerBillGroup): string {
+  return g.customerId ?? UNASSIGNED_CUSTOMER;
+}
+
 /**
- * /chat-audit/bills — หน้ารวมรูปบิลลูกค้า (admin/executive เท่านั้น)
+ * /chat-audit/bills — "บิลแยกตามลูกค้า" (admin/executive เท่านั้น)
+ *   การ์ดลูกค้าแบบ accordion เรียงตามจำนวนบิลมาก→น้อย · กลุ่มยังไม่จับคู่ท้ายสุด
  *   ดู/ดาวน์โหลดบิลที่เก็บใน Supabase Storage bucket `bills` (private)
- *   แทนการเปิดไดรฟ์ · ตัวกรองลูกค้า/เดือน + แบ่งหน้า 48/หน้า
  *
  * ★ guard admin + tenant จาก session (reuse resolveAdminContext) — ไม่เชื่อ client
- * ★ PDPA: signed URL อายุ 1 ชม. สร้างตอน render เฉพาะหน้าปัจจุบัน · ไม่ทำ bucket public
- *   ห้าม log ชื่อไฟล์/ลูกค้า/URL
+ * ★ PDPA/performance: sign รูปเฉพาะลูกค้าที่ "กางออก" (?open=) เท่านั้น (≤48 ใบ/หน้า, อายุ 1 ชม.)
+ *   การ์ดที่ปิด = แสดงแค่ metadata (หัว/จำนวน/ป้าย) ไม่ sign · ห้าม log ชื่อไฟล์/ลูกค้า/URL
  */
 export default async function BillsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ customer?: string; month?: string; page?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    type?: string;
+    month?: string;
+    open?: string;
+    p?: string;
+  }>;
 }) {
   const sp = await searchParams;
 
@@ -222,22 +277,35 @@ export default async function BillsPage({
 
   const stats = computeBillStats(all);
 
-  // ตัวกรองจาก query param (validate ก่อนใช้)
-  const selectedCustomer =
-    sp.customer && (sp.customer === UNASSIGNED_CUSTOMER || stats.customerOptions.some((c) => c.id === sp.customer))
-      ? sp.customer
-      : "";
+  // ---- ตัวกรองจาก query param (validate ก่อนใช้) ----
+  const q = (sp.q ?? "").trim();
+  const selectedType: DocKind | null = isDocKind(sp.type) ? sp.type : null;
   const selectedMonth = isValidMonth(sp.month) && stats.monthOptions.includes(sp.month) ? sp.month : "";
-  const requestedPage = Number.parseInt(sp.page ?? "1", 10);
 
-  const filtered = filterBills(all, { customerId: selectedCustomer || null, month: selectedMonth || null });
-  const paged = paginate(filtered, Number.isNaN(requestedPage) ? 1 : requestedPage, PAGE_SIZE);
+  // กรองก่อนจัดกลุ่ม (ประเภท/เดือน/ค้นหา)
+  const filtered = filterBills(all, {
+    docKind: selectedType,
+    month: selectedMonth || null,
+    search: q || null,
+  });
+  const groups = groupBillsByCustomer(filtered);
 
-  // สร้าง signed URL เฉพาะบิลในหน้านี้ (≤48 ใบ) — ไม่ sign ทั้งหมด
-  const service = createServiceRoleClient();
-  const bills = await signBills(service, paged.items);
+  // ลูกค้าที่ "กางออก" — ต้องเป็นคีย์ที่มีอยู่จริงในกลุ่มหลังกรอง
+  const openKey =
+    sp.open && groups.some((g) => groupOpenKey(g) === sp.open) ? sp.open : "";
 
-  const hasUnassigned = all.some((it) => !it.customerId);
+  // sign รูปเฉพาะลูกค้าที่กางออก (≤48 ใบ/หน้า) — การ์ดอื่นไม่ sign
+  let openBills: SignedBill[] = [];
+  let openPaged: ReturnType<typeof paginate<BillItem>> | null = null;
+  const requestedPage = Number.parseInt(sp.p ?? "1", 10);
+  if (openKey) {
+    const billsOfOpen = filterBills(filtered, { customerId: openKey }); // เรียงใหม่→เก่าแล้ว
+    openPaged = paginate(billsOfOpen, Number.isNaN(requestedPage) ? 1 : requestedPage, PAGE_SIZE);
+    const service = createServiceRoleClient();
+    openBills = await signBills(service, openPaged.items);
+  }
+
+  const hasAnyFilter = !!(q || selectedType || selectedMonth);
 
   return (
     <ChatAuditFrame
@@ -245,13 +313,13 @@ export default async function BillsPage({
       role={ctx.role}
       authed
       title="บิลลูกค้า"
-      subtitle="ดู/ดาวน์โหลดรูปบิลที่เก็บจากกลุ่ม LINE (แทนการเปิดไดรฟ์)"
+      subtitle="บิลแยกตามลูกค้า เรียงตามจำนวนมากสุด (เก็บจากกลุ่ม LINE แทนการเปิดไดรฟ์)"
     >
       <div className="dash-views">
         {/* ---- KPI ---- */}
-        <div className="kpi-grid cols-3">
+        <div className="kpi-grid">
           <div className="kpi">
-            <div className="label">บิลที่เก็บแล้วทั้งหมด</div>
+            <div className="label">บิลทั้งหมด</div>
             <div className="value">{stats.total.toLocaleString("th-TH")}<span className="unit">ใบ</span></div>
           </div>
           <div className="kpi">
@@ -259,20 +327,34 @@ export default async function BillsPage({
             <div className="value">{stats.customerCount.toLocaleString("th-TH")}<span className="unit">ราย</span></div>
           </div>
           <div className="kpi">
-            <div className="label">บิลเดือนนี้</div>
+            <div className="label">ยังไม่จับคู่</div>
+            <div className={`value${stats.unassignedCount > 0 ? " v-amber" : ""}`}>
+              {stats.unassignedCount.toLocaleString("th-TH")}<span className="unit">ใบ</span>
+            </div>
+          </div>
+          <div className="kpi">
+            <div className="label">เดือนนี้</div>
             <div className="value">{stats.thisMonth.toLocaleString("th-TH")}<span className="unit">ใบ</span></div>
           </div>
         </div>
 
-        {/* ---- ตัวกรอง (GET form — submit แล้ว page รีเซ็ตเป็น 1 อัตโนมัติ) ---- */}
+        {/* ---- ตัวกรอง (GET form — submit แล้ว open/p รีเซ็ตอัตโนมัติ เพราะไม่อยู่ในฟอร์ม) ---- */}
         <div className="card">
           <form method="get" className="inline-form bills-filter">
-            <label htmlFor="f-customer" style={{ fontWeight: 600, fontSize: 14 }}>ลูกค้า:</label>
-            <select id="f-customer" name="customer" defaultValue={selectedCustomer}>
-              <option value="">— ทุกลูกค้า —</option>
-              {hasUnassigned ? <option value={UNASSIGNED_CUSTOMER}>— ยังไม่จับคู่ลูกค้า —</option> : null}
-              {stats.customerOptions.map((c) => (
-                <option key={c.id} value={c.id}>{customerLabel(c.code, c.name)} ({c.count})</option>
+            <input
+              type="search"
+              name="q"
+              defaultValue={q}
+              placeholder="ค้นหาลูกค้า / รหัส…"
+              className="bills-search"
+              aria-label="ค้นหาลูกค้าหรือรหัส"
+            />
+
+            <label htmlFor="f-type" style={{ fontWeight: 600, fontSize: 14 }}>ประเภท:</label>
+            <select id="f-type" name="type" defaultValue={selectedType ?? ""}>
+              <option value="">— ทุกประเภท —</option>
+              {TYPE_FILTER_OPTIONS.map((k) => (
+                <option key={k} value={k}>{KIND_META[k].label}</option>
               ))}
             </select>
 
@@ -285,87 +367,141 @@ export default async function BillsPage({
             </select>
 
             <button type="submit" className="btn">กรอง</button>
-            {selectedCustomer || selectedMonth ? (
+            {hasAnyFilter ? (
               <Link href="/chat-audit/bills" className="btn btn-ghost">ล้างตัวกรอง</Link>
             ) : null}
           </form>
         </div>
 
-        {/* ---- Grid การ์ดบิล ---- */}
+        {/* ---- รายการการ์ดลูกค้า (accordion) ---- */}
         <div className="card">
           <div className="section-title">
-            <span>รายการบิล</span>
+            <span>ลูกค้า</span>
             <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>
-              {paged.totalItems.toLocaleString("th-TH")} ใบ
-              {paged.totalPages > 1 ? ` · หน้า ${paged.page}/${paged.totalPages}` : ""}
+              {groups.length.toLocaleString("th-TH")} ราย · {filtered.length.toLocaleString("th-TH")} ใบ
             </span>
           </div>
 
-          {bills.length === 0 ? (
+          {groups.length === 0 ? (
             <p className="empty">ยังไม่มีบิลตามเงื่อนไขที่เลือก</p>
           ) : (
-            <div className="bills-grid">
-              {bills.map((b) => (
-                <div key={b.id} className="bill-card">
-                  {/* ปุ่มลบมุมการ์ด (admin) — ยืนยันก่อนลบเสมอ, ลบไฟล์จริง + mark DB */}
-                  <DeleteBillButton attachmentId={b.id} />
-                  {b.viewUrl ? (
-                    <a href={b.viewUrl} target="_blank" rel="noopener noreferrer" className="bill-thumb" aria-label="เปิดรูปบิล">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={b.viewUrl} alt="รูปบิล" loading="lazy" />
-                    </a>
-                  ) : (
-                    <div className="bill-thumb bill-thumb-empty" aria-hidden="true">เปิดไม่ได้</div>
-                  )}
-                  <div className="bill-meta">
-                    <div className="bill-customer" title={customerLabel(b.customerCode, b.customerName)}>
-                      {customerLabel(b.customerCode, b.customerName)}
-                    </div>
-                    <div className="bill-date">{formatBillDate(b.billDate)}</div>
-                    {b.viewUrl ? (
-                      <a
-                        href={`${b.viewUrl}&download`}
-                        className="btn bill-open"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        เปิด / ดาวน์โหลด
-                      </a>
-                    ) : (
-                      <span className="btn bill-open bill-open-disabled" aria-disabled="true">ไฟล์ไม่พร้อม</span>
-                    )}
+            <div className="cust-list">
+              {groups.map((g) => {
+                const key = groupOpenKey(g);
+                const isOpen = openKey === key;
+                const isUnassigned = g.customerId === null;
+                const toggleHref = `/chat-audit/bills${buildQuery({
+                  q,
+                  type: selectedType ?? undefined,
+                  month: selectedMonth || undefined,
+                  open: isOpen ? undefined : key,
+                })}`;
+
+                return (
+                  <div key={key} className={`cust-card${isUnassigned ? " cust-unassigned" : ""}${isOpen ? " open" : ""}`}>
+                    {/* ---- หัวการ์ด (ลิงก์ toggle) ---- */}
+                    <Link href={toggleHref} className="cust-head" aria-expanded={isOpen} scroll={false}>
+                      <span className={`cust-avatar${isUnassigned ? " un" : ""}`}>{avatarText(g.code)}</span>
+                      <span className="cust-id">
+                        <span className="cust-name">{customerLabel(g.code, g.name)}</span>
+                        <span className="csub">
+                          บิลล่าสุด {g.latestAt ? formatDateShort(g.latestAt) : "-"}
+                        </span>
+                      </span>
+
+                      {/* ป้ายแยกประเภท (ซ่อนบนจอแคบผ่าน CSS) */}
+                      <span className="cust-kinds">
+                        {KIND_ORDER.filter((k) => g.kinds[k] > 0).map((k) => (
+                          <span key={k} className={`kind-badge ${KIND_META[k].cls}`}>
+                            {KIND_META[k].label} {g.kinds[k]}
+                          </span>
+                        ))}
+                      </span>
+
+                      <span className="cust-total">{g.total.toLocaleString("th-TH")} ใบ</span>
+                      <span className={`cust-chev${isOpen ? " up" : ""}`} aria-hidden="true">▾</span>
+                    </Link>
+
+                    {/* ---- เนื้อหากางออก: grid รูป (signed) ---- */}
+                    {isOpen && openPaged ? (
+                      <div className="cust-body">
+                        {openBills.length === 0 ? (
+                          <p className="empty">ไม่มีบิลในหน้านี้</p>
+                        ) : (
+                          <div className="bills-grid">
+                            {openBills.map((b) => (
+                              <div key={b.id} className="bill-card">
+                                {b.docKind ? (
+                                  <span className={`bill-kind ${KIND_META[b.docKind].cls}`}>
+                                    {KIND_META[b.docKind].label}
+                                  </span>
+                                ) : null}
+                                {/* ปุ่มลบมุมการ์ด (admin) — ยืนยันก่อนลบเสมอ, ลบไฟล์จริง + mark DB */}
+                                <DeleteBillButton attachmentId={b.id} />
+                                {b.viewUrl ? (
+                                  <a href={b.viewUrl} target="_blank" rel="noopener noreferrer" className="bill-thumb" aria-label="เปิดรูปบิล">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img src={b.viewUrl} alt="รูปบิล" loading="lazy" />
+                                  </a>
+                                ) : (
+                                  <div className="bill-thumb bill-thumb-empty" aria-hidden="true">เปิดไม่ได้</div>
+                                )}
+                                <div className="bill-meta">
+                                  <div className="bill-date">{formatBillDate(b.billDate)}</div>
+                                  {b.viewUrl ? (
+                                    <a
+                                      href={`${b.viewUrl}&download`}
+                                      className="btn bill-open"
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                    >
+                                      เปิด / ดาวน์โหลด
+                                    </a>
+                                  ) : (
+                                    <span className="btn bill-open bill-open-disabled" aria-disabled="true">ไฟล์ไม่พร้อม</span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* แถบสรุป + แบ่งหน้าในลูกค้า (ถ้า > 48 ใบ) */}
+                        <div className="cust-foot">
+                          <span className="muted" style={{ fontSize: 13 }}>
+                            ดูทั้งหมด {openPaged.totalItems.toLocaleString("th-TH")} ใบ
+                            {openPaged.totalPages > 1 ? ` · หน้า ${openPaged.page}/${openPaged.totalPages}` : ""}
+                          </span>
+                          {openPaged.totalPages > 1 ? (
+                            <span className="cust-pager">
+                              {openPaged.page > 1 ? (
+                                <Link
+                                  href={`/chat-audit/bills${buildQuery({ q, type: selectedType ?? undefined, month: selectedMonth || undefined, open: key, p: openPaged.page - 1 })}`}
+                                  className="btn btn-ghost"
+                                  scroll={false}
+                                >
+                                  ← ก่อนหน้า
+                                </Link>
+                              ) : null}
+                              {openPaged.page < openPaged.totalPages ? (
+                                <Link
+                                  href={`/chat-audit/bills${buildQuery({ q, type: selectedType ?? undefined, month: selectedMonth || undefined, open: key, p: openPaged.page + 1 })}`}
+                                  className="btn btn-ghost"
+                                  scroll={false}
+                                >
+                                  ถัดไป →
+                                </Link>
+                              ) : null}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
-
-          {/* ---- แบ่งหน้า ---- */}
-          {paged.totalPages > 1 ? (
-            <div className="bills-pager">
-              {paged.page > 1 ? (
-                <Link
-                  href={`/chat-audit/bills${buildQuery({ customer: selectedCustomer, month: selectedMonth, page: paged.page - 1 })}`}
-                  className="btn btn-ghost"
-                >
-                  ← ก่อนหน้า
-                </Link>
-              ) : (
-                <span className="btn btn-ghost bill-open-disabled" aria-disabled="true">← ก่อนหน้า</span>
-              )}
-              <span className="muted" style={{ fontSize: 13 }}>หน้า {paged.page} / {paged.totalPages}</span>
-              {paged.page < paged.totalPages ? (
-                <Link
-                  href={`/chat-audit/bills${buildQuery({ customer: selectedCustomer, month: selectedMonth, page: paged.page + 1 })}`}
-                  className="btn btn-ghost"
-                >
-                  ถัดไป →
-                </Link>
-              ) : (
-                <span className="btn btn-ghost bill-open-disabled" aria-disabled="true">ถัดไป →</span>
-              )}
-            </div>
-          ) : null}
         </div>
       </div>
     </ChatAuditFrame>

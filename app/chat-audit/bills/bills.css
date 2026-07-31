@@ -9,6 +9,200 @@
   gap: 10px;
   align-items: center;
 }
+.nova-dash .bills-search {
+  flex: 1 1 220px;
+  max-width: 320px;
+  padding: 8px 12px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+}
+.nova-dash .bills-search:focus {
+  outline: none;
+  border-color: var(--navy-800);
+}
+
+/* ============================================================
+   การ์ดลูกค้า (accordion) — เรียงตามจำนวนบิลมากสุด
+   ============================================================ */
+.nova-dash .cust-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.nova-dash .cust-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.nova-dash .cust-card.open {
+  border-color: var(--navy-700, #1e40af);
+}
+
+/* กลุ่มยังไม่จับคู่ = เส้นประ + โทน amber */
+.nova-dash .cust-unassigned {
+  border-style: dashed;
+  border-color: var(--amber, #d97706);
+  background: var(--amber-bg, #fef3c7);
+}
+
+/* หัวการ์ด (คลิกเพื่อกาง/พับ) */
+.nova-dash .cust-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+.nova-dash .cust-head:hover {
+  background: rgba(30, 58, 138, 0.04);
+}
+.nova-dash .cust-unassigned .cust-head:hover {
+  background: rgba(217, 119, 6, 0.08);
+}
+
+/* avatar = รหัสลูกค้า (mono) */
+.nova-dash .cust-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  height: 40px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--navy-800, #1e3a8a);
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.nova-dash .cust-avatar.un {
+  background: var(--amber, #d97706);
+}
+
+.nova-dash .cust-id {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0; /* ให้ ellipsis ทำงานในflex */
+  flex: 1 1 auto;
+}
+.nova-dash .cust-name {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--navy-800);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nova-dash .cust-unassigned .cust-name {
+  color: #92400e;
+}
+.nova-dash .csub {
+  font-size: 12px;
+  color: var(--muted);
+}
+.nova-dash .cust-unassigned .csub {
+  color: #b45309;
+}
+
+/* ป้ายแยกประเภทบนหัวการ์ด */
+.nova-dash .cust-kinds {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex: 0 1 auto;
+}
+.nova-dash .kind-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* สีตามชนิดเอกสาร */
+.nova-dash .k-slip { background: #eff6ff; color: #1d4ed8; }
+.nova-dash .k-sale { background: var(--green-bg, #dcfce7); color: #15803d; }
+.nova-dash .k-hand { background: var(--amber-bg, #fef3c7); color: #b45309; }
+.nova-dash .k-purchase { background: #f3e8ff; color: #7e22ce; }
+.nova-dash .k-cash { background: #ccfbf1; color: #0f766e; }
+.nova-dash .k-other { background: #f1f5f9; color: #475569; }
+
+.nova-dash .cust-total {
+  flex: 0 0 auto;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--navy-800);
+  font-variant-numeric: tabular-nums;
+}
+.nova-dash .cust-unassigned .cust-total {
+  color: #92400e;
+}
+.nova-dash .cust-chev {
+  flex: 0 0 auto;
+  color: var(--muted-2);
+  font-size: 14px;
+  transition: transform 0.15s ease;
+}
+.nova-dash .cust-chev.up {
+  transform: rotate(180deg);
+}
+
+/* เนื้อหากางออก */
+.nova-dash .cust-body {
+  padding: 4px 14px 14px;
+  border-top: 1px solid var(--line);
+}
+.nova-dash .cust-unassigned .cust-body {
+  border-top-color: rgba(217, 119, 6, 0.35);
+}
+.nova-dash .cust-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.nova-dash .cust-pager {
+  display: flex;
+  gap: 10px;
+}
+
+/* ป้ายชนิดเอกสารมุมซ้ายบนของรูปย่อ (ในการ์ดกางออก) */
+.nova-dash .bill-kind {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  box-shadow: var(--shadow-sm);
+}
+
+@media (max-width: 640px) {
+  /* จอแคบ: ซ่อนป้ายประเภทบนหัวการ์ด (กางดูรายละเอียดในบิลแทน) */
+  .nova-dash .cust-kinds {
+    display: none;
+  }
+}
 
 /* grid การ์ดบิล — auto-fill ปรับตามความกว้าง (responsive) */
 .nova-dash .bills-grid {
@@ -86,14 +280,6 @@
   flex-direction: column;
   gap: 4px;
 }
-.nova-dash .bill-customer {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--navy-800);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .nova-dash .bill-date {
   font-size: 12px;
   color: var(--muted);
@@ -108,15 +294,6 @@
   opacity: 0.55;
   cursor: not-allowed;
   pointer-events: none;
-}
-
-/* แถบแบ่งหน้า */
-.nova-dash .bills-pager {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  margin-top: 16px;
 }
 
 @media (max-width: 560px) {
