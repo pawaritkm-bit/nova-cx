@@ -13,7 +13,14 @@ vi.mock("@/lib/ai/bill-extract", () => ({
   extractBillData: (...a: unknown[]) => extractMock(...a),
 }));
 
-import { processBillExtraction, decideEntrySide } from "@/lib/line/bill-extract-worker";
+import {
+  processBillExtraction,
+  decideEntrySide,
+  redecideExistingEntries,
+  normalizeName,
+  nameSimilarity,
+  digitsOnly,
+} from "@/lib/line/bill-extract-worker";
 
 /** เก็บ insert เพื่อ assert */
 type Captured = { table: string; rows: Record<string, unknown>[] };
@@ -24,6 +31,7 @@ function makeWorkerDb(opts: {
   existingEntries?: { attachment_id: string }[];
   chatGroupCustomer?: string | null;
   customerName?: string | null;
+  customerTaxId?: string | null;
   downloadOk?: boolean;
 }): { db: SupabaseClient; inserts: Captured[] } {
   const inserts: Captured[] = [];
@@ -65,7 +73,10 @@ function makeWorkerDb(opts: {
       if (table === "chat_messages") return { data: { chat_group_id: "g1" }, error: null };
       if (table === "chat_groups") return { data: { customer_id: opts.chatGroupCustomer ?? null }, error: null };
       if (table === "customers")
-        return { data: { name: opts.customerName ?? null, business_name: null }, error: null };
+        return {
+          data: { name: opts.customerName ?? null, business_name: null, tax_id: opts.customerTaxId ?? null },
+          error: null,
+        };
       return { data: null, error: null };
     }
     function resolveList(): { data: unknown; error: unknown } {
@@ -251,34 +262,193 @@ describe("processBillExtraction", () => {
 describe("decideEntrySide — ตัดสินซื้อ/ขายจากลูกค้าเรา (pure)", () => {
   const seller = { name: "ร้านวัสดุ เอบีซี จำกัด", taxId: "0105500000009" };
   const buyer = { name: "บริษัท ลูกค้าเรา จำกัด", taxId: "0994000000001" };
-
-  it("ลูกค้าเรา = ผู้ซื้อ → purchase, counterparty = ผู้ขาย", () => {
-    const d = decideEntrySide(["ลูกค้าเรา"], seller, buyer);
-    expect(d.entryType).toBe("purchase");
-    expect(d.counterpartyName).toBe(seller.name);
-    expect(d.counterpartyTaxId).toBe(seller.taxId);
+  const cust = (p: Partial<{ name: string; businessName: string; taxId: string }>) => ({
+    name: p.name ?? null,
+    businessName: p.businessName ?? null,
+    taxId: p.taxId ?? null,
   });
 
-  it("ลูกค้าเรา = ผู้ขาย → sale, counterparty = ผู้ซื้อ", () => {
-    const d = decideEntrySide(["เอบีซี"], seller, buyer);
-    expect(d.entryType).toBe("sale");
-    expect(d.counterpartyName).toBe(buyer.name);
+  describe("ชั้น 1 — เลขภาษี (definitive)", () => {
+    it("tax_id ลูกค้า = ผู้ขาย → sale (counterparty = ผู้ซื้อ)", () => {
+      const d = decideEntrySide(cust({ name: "ชื่อเพี้ยนไม่ตรง", taxId: "0105500000009" }), seller, buyer);
+      expect(d.entryType).toBe("sale");
+      expect(d.counterpartyName).toBe(buyer.name);
+    });
+
+    it("tax_id ลูกค้า = ผู้ซื้อ → purchase (แม้ชื่อ AI อ่านเพี้ยน)", () => {
+      const d = decideEntrySide(cust({ name: "ยูนิไวส์", taxId: "0994000000001" }), seller, buyer);
+      expect(d.entryType).toBe("purchase");
+      expect(d.counterpartyName).toBe(seller.name);
+      expect(d.counterpartyTaxId).toBe(seller.taxId);
+    });
+
+    it("tax_id มี dash/ช่องว่าง → strip แล้วยัง match", () => {
+      const d = decideEntrySide(cust({ taxId: "0-9940-00000-00-1" }), seller, buyer);
+      expect(d.entryType).toBe("purchase");
+    });
+
+    it("tax_id ไม่ตรงฝั่งไหน → ตกไปช่องชื่อ (unspecified ถ้าชื่อก็ไม่ตรง)", () => {
+      const d = decideEntrySide(cust({ name: "คนละชื่อเลย", taxId: "1111111111111" }), seller, buyer);
+      expect(d.entryType).toBe("unspecified");
+    });
   });
 
-  it("ไม่มีชื่อลูกค้า → unspecified", () => {
-    expect(decideEntrySide([], seller, buyer).entryType).toBe("unspecified");
+  describe("ชั้น 2 — fuzzy ชื่อไทย (fallback)", () => {
+    it("ลูกค้าเรา = ผู้ซื้อ (ชื่อตรงหลัง normalize) → purchase", () => {
+      const d = decideEntrySide(cust({ name: "ลูกค้าเรา" }), seller, buyer);
+      expect(d.entryType).toBe("purchase");
+      expect(d.counterpartyName).toBe(seller.name);
+    });
+
+    it("ลูกค้าเรา = ผู้ขาย (substring) → sale", () => {
+      const d = decideEntrySide(cust({ name: "เอบีซี" }), seller, buyer);
+      expect(d.entryType).toBe("sale");
+      expect(d.counterpartyName).toBe(buyer.name);
+    });
+
+    it("★ AI อ่านชื่อเพี้ยน 1-2 ตัว แต่ยังใกล้พอ → จับได้ (Levenshtein/Dice)", () => {
+      // ผู้ขายจริง "ยูนิเวิร์ส เทรดดิ้ง", AI อ่านชื่อลูกค้าเป็น seller เพี้ยนเล็กน้อย
+      const s = { name: "บริษัท ยูนิเวิร์ส จำกัด", taxId: null };
+      const b = { name: "ร้านทั่วไป", taxId: null };
+      const d = decideEntrySide(cust({ name: "ยูนิเวิรส์" }), s, b); // สลับ/ตกอักขระ
+      expect(d.entryType).toBe("sale");
+    });
+
+    it("match ทั้ง 2 ฝั่งพอกัน (กำกวม) → unspecified ไม่เดา", () => {
+      const s = { name: "บริษัท เอ จำกัด", taxId: null };
+      const b = { name: "บริษัท เอ จำกัด", taxId: null };
+      expect(decideEntrySide(cust({ name: "เอ" }), s, b).entryType).toBe("unspecified");
+    });
+
+    it("ไม่มีข้อมูลลูกค้า → unspecified", () => {
+      expect(decideEntrySide(cust({}), seller, buyer).entryType).toBe("unspecified");
+    });
+
+    it("ชื่อลูกค้าไม่ใกล้ฝั่งไหน → unspecified", () => {
+      expect(decideEntrySide(cust({ name: "องค์กรอื่นสิ้นดี" }), seller, buyer).entryType).toBe("unspecified");
+    });
+
+    it("ใช้ business_name จับได้ถ้า name ไม่ตรง", () => {
+      const d = decideEntrySide(cust({ name: "ชื่อเล่น", businessName: "ลูกค้าเรา" }), seller, buyer);
+      expect(d.entryType).toBe("purchase");
+    });
+  });
+});
+
+describe("normalizeName / nameSimilarity / digitsOnly (pure)", () => {
+  it("normalizeName ตัดคำนำหน้านิติบุคคล + ช่องว่าง", () => {
+    expect(normalizeName("บริษัท เอ บี ซี จำกัด")).toBe("เอบีซี");
+    expect(normalizeName("ห้างหุ้นส่วนจำกัด ก ข ค")).toBe("กขค");
+    expect(normalizeName("  ABC Co., Ltd.  ")).toBe("abc");
   });
 
-  it("ชื่อลูกค้าไม่ match ฝั่งไหนเลย → unspecified", () => {
-    expect(decideEntrySide(["บริษัท อื่น"], seller, buyer).entryType).toBe("unspecified");
+  it("nameSimilarity: เหมือนเป๊ะ = 1, substring สูง, เพี้ยนเล็กน้อยยังสูง, คนละเรื่องต่ำ", () => {
+    expect(nameSimilarity("ยูนิเวิร์ส", "ยูนิเวิร์ส")).toBe(1);
+    expect(nameSimilarity("ยูนิเวิร์ส", "บริษัท ยูนิเวิร์ส เทรดดิ้ง จำกัด")).toBeGreaterThanOrEqual(0.6);
+    expect(nameSimilarity("ยูนิเวิรส์", "ยูนิเวิร์ส")).toBeGreaterThanOrEqual(0.6);
+    expect(nameSimilarity("แมวเหมียว", "สุนัขน้อย")).toBeLessThan(0.6);
   });
 
-  it("match ทั้ง 2 ฝั่ง (กำกวม) → unspecified ไม่เดา", () => {
-    const d = decideEntrySide(["จำกัด"], seller, buyer); // 'จำกัด' ถูกตัดทิ้ง → ไม่ match
-    expect(d.entryType).toBe("unspecified");
+  it("ชื่อสั้น (<3 หลัง normalize) → 0", () => {
+    expect(nameSimilarity("ก", "กขคง")).toBe(0);
   });
 
-  it("ชื่อสั้นเกินไป (<3) → ไม่ match", () => {
-    expect(decideEntrySide(["ก"], seller, buyer).entryType).toBe("unspecified");
+  it("digitsOnly เหลือแต่ตัวเลข", () => {
+    expect(digitsOnly("0-9940 00000.00-1")).toBe("0994000000001");
+    expect(digitsOnly(null)).toBe("");
+  });
+});
+
+/** mock DB เฉพาะ redecideExistingEntries: list ต่อ table + เก็บ update */
+function makeRedecideDb(opts: {
+  entries: Record<string, unknown>[];
+  customers: Record<string, unknown>[];
+}): { db: SupabaseClient; updates: { payload: Record<string, unknown>; filters: Record<string, unknown> }[] } {
+  const updates: { payload: Record<string, unknown>; filters: Record<string, unknown> }[] = [];
+  function qb(table: string) {
+    const filters: Record<string, unknown> = {};
+    let mode: "select" | "update" = "select";
+    let payload: Record<string, unknown> = {};
+    const api: Record<string, unknown> = {};
+    api.select = () => api;
+    api.eq = (c: string, v: unknown) => {
+      filters[c] = v;
+      return api;
+    };
+    api.is = () => api;
+    api.in = () => api;
+    api.not = () => api;
+    api.limit = () => api;
+    api.update = (p: Record<string, unknown>) => {
+      mode = "update";
+      payload = p;
+      return api;
+    };
+    api.then = (onF: (v: { data: unknown; error: unknown }) => unknown) => {
+      if (mode === "update") {
+        updates.push({ payload, filters: { ...filters } });
+        return Promise.resolve({ data: null, error: null }).then(onF);
+      }
+      const data = table === "bill_entries" ? opts.entries : table === "customers" ? opts.customers : [];
+      return Promise.resolve({ data, error: null }).then(onF);
+    };
+    return api;
+  }
+  return { db: { from: (t: string) => qb(t) } as unknown as SupabaseClient, updates };
+}
+
+describe("redecideExistingEntries — ตัดสินฝั่งใหม่ให้ entry เดิม (ไม่เรียก AI)", () => {
+  it("entry unspecified + ลูกค้าเพิ่งมี tax_id ตรงผู้ซื้อ → อัปเดตเป็น purchase", async () => {
+    const { db, updates } = makeRedecideDb({
+      entries: [
+        {
+          id: "e1",
+          customer_id: "c1",
+          seller_name: "ร้านวัสดุ เอบีซี",
+          seller_tax_id: "0105500000009",
+          buyer_name: "ยูนิไวส์ (อ่านเพี้ยน)",
+          buyer_tax_id: "0994000000001",
+        },
+      ],
+      customers: [{ id: "c1", name: "ยูนิเวิร์ส", business_name: null, tax_id: "0994000000001" }],
+    });
+    const res = await redecideExistingEntries(db, "t1", { limit: 50 });
+    expect(res.scanned).toBe(1);
+    expect(res.updated).toBe(1);
+    expect(updates[0].payload.entry_type).toBe("purchase");
+    expect(updates[0].payload.counterparty_name).toBe("ร้านวัสดุ เอบีซี");
+    expect(updates[0].filters.tenant_id).toBe("t1");
+    expect(updates[0].filters.entry_type).toBe("unspecified"); // guard race
+  });
+
+  it("ยังตัดสินไม่ได้ (ชื่อ/เลขไม่ตรง) → ไม่อัปเดต คง unspecified", async () => {
+    const { db, updates } = makeRedecideDb({
+      entries: [
+        {
+          id: "e2",
+          customer_id: "c2",
+          seller_name: "ร้าน ก",
+          seller_tax_id: null,
+          buyer_name: "ร้าน ข",
+          buyer_tax_id: null,
+        },
+      ],
+      customers: [{ id: "c2", name: "องค์กรคนละเรื่อง", business_name: null, tax_id: null }],
+    });
+    const res = await redecideExistingEntries(db, "t1", { limit: 50 });
+    expect(res.updated).toBe(0);
+    expect(updates.length).toBe(0);
+  });
+
+  it("entry ไม่มีชื่อ/เลขคู่ค้าเลย → ข้าม (ตัดสินไม่ได้)", async () => {
+    const { db } = makeRedecideDb({
+      entries: [
+        { id: "e3", customer_id: "c3", seller_name: null, seller_tax_id: null, buyer_name: null, buyer_tax_id: null },
+      ],
+      customers: [{ id: "c3", name: "ลูกค้าเรา", business_name: null, tax_id: "0994000000001" }],
+    });
+    const res = await redecideExistingEntries(db, "t1", { limit: 50 });
+    expect(res.scanned).toBe(0);
+    expect(res.updated).toBe(0);
   });
 });

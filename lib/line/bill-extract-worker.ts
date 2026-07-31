@@ -77,62 +77,171 @@ export type SideDecision = {
   counterpartyTaxId: string | null;
 };
 
+/** ตัวตนลูกค้าเรา (ใช้จับฝั่งซื้อ/ขาย) */
+export type CustomerIdentity = {
+  name: string | null;
+  businessName: string | null;
+  taxId: string | null;
+};
+
+/** ฝั่งคู่ค้าในบิล (ชื่อ+เลขภาษี ที่ AI อ่าน) */
+export type BillParty = { name: string | null; taxId: string | null };
+
+/** เกณฑ์ fuzzy ชื่อ: ผ่านเมื่อคะแนน >= ACCEPT และชนะอีกฝั่งเกิน MARGIN */
+const NAME_ACCEPT = 0.6;
+const NAME_MARGIN = 0.1;
+
 /**
  * normalize ชื่อคู่ค้า/ลูกค้าเพื่อจับคู่ (ตัดคำนำหน้านิติบุคคล/ช่องว่าง/อักขระ)
  *   ให้ "บริษัท เอ บี ซี จำกัด" ≈ "เอบีซี"
  */
-function normalizeName(s: string | null | undefined): string {
+export function normalizeName(s: string | null | undefined): string {
   if (!s) return "";
   return s
     .toLowerCase()
-    .replace(/บริษัท|จำกัด|มหาชน|ห้างหุ้นส่วนจำกัด|ห้างหุ้นส่วน|หจก\.?|บจก\.?|บมจ\.?|co\.,?|ltd\.?|company|limited|partnership/g, "")
-    .replace(/[\s.,\-_()"'`]/g, "");
+    .replace(
+      /บริษัทมหาชนจำกัด|บริษัท|จำกัดมหาชน|มหาชน|จำกัด|ห้างหุ้นส่วนจำกัด|ห้างหุ้นส่วนสามัญ|ห้างหุ้นส่วน|หจก\.?|จก\.?|บจก\.?|บจ\.?|บมจ\.?|co\.,?|ltd\.?|company|limited|partnership/g,
+      ""
+    )
+    .replace(/[\s.,\-_()（）"'`]/g, "");
 }
 
-/** เทียบชื่อแบบ substring 2 ทาง (หลัง normalize) — ต้องยาวพอ (>=3) กัน match พร่ำเพรื่อ */
-function nameMatches(a: string, b: string): boolean {
-  if (a.length < 3 || b.length < 3) return false;
-  return a.includes(b) || b.includes(a);
+/** strip ให้เหลือเฉพาะตัวเลข (ใช้เทียบเลขภาษี — ตัดขีด/ช่องว่าง/อักขระ) */
+export function digitsOnly(s: string | null | undefined): string {
+  return (s ?? "").replace(/\D/g, "");
+}
+
+/** Levenshtein distance (เผื่อพิมพ์ผิด/AI อ่านเพี้ยน 1-2 ตัว) */
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** เซตของ bigram (คู่ตัวอักษรติดกัน) สำหรับ Dice coefficient */
+function bigrams(s: string): Map<string, number> {
+  const m = new Map<string, number>();
+  for (let i = 0; i < s.length - 1; i += 1) {
+    const g = s.slice(i, i + 2);
+    m.set(g, (m.get(g) ?? 0) + 1);
+  }
+  return m;
+}
+
+/** Dice coefficient ของ bigram (ทนต่อสลับ/เพี้ยนบางส่วน) 0..1 */
+function diceCoefficient(a: string, b: string): number {
+  if (a.length < 2 || b.length < 2) return a === b ? 1 : 0;
+  const ba = bigrams(a);
+  const bb = bigrams(b);
+  let overlap = 0;
+  for (const [g, ca] of ba) {
+    const cb = bb.get(g);
+    if (cb) overlap += Math.min(ca, cb);
+  }
+  const total = [...ba.values()].reduce((s, n) => s + n, 0) + [...bb.values()].reduce((s, n) => s + n, 0);
+  return total === 0 ? 0 : (2 * overlap) / total;
 }
 
 /**
- * ตัดสิน entry_type จาก "ลูกค้าเรา" เทียบ seller/buyer ที่ AI อ่าน (pure — เทสต์ได้)
- *   - ลูกค้าเรา match ผู้ขาย (ไม่ match ผู้ซื้อ) → 'sale' · counterparty = ผู้ซื้อ
- *   - ลูกค้าเรา match ผู้ซื้อ (ไม่ match ผู้ขาย) → 'purchase' · counterparty = ผู้ขาย
- *   - match ทั้งคู่ / ไม่ match เลย / ไม่มีชื่อลูกค้า → 'unspecified' · counterparty = null
- *     (ไม่เดา — ให้คนเลือกในหน้า UI)
+ * ความเหมือนชื่อ (หลัง normalize) 0..1 — รวมหลายสัญญาณ:
+ *   - substring 2 ทาง (ชื่อสั้นอยู่ในชื่อยาว) → 0.85 (จับ "ยูนิเวิร์ส" ⊂ "ยูนิเวิร์สเทรดดิ้ง")
+ *   - Levenshtein similarity (เผื่อ AI อ่านเพี้ยน "ยูนิเวิร์ส"→"ยูนิไวส์")
+ *   - Dice bigram (เผื่อสลับ/บางส่วน)
+ *   คืน max ของสามสัญญาณ · ชื่อสั้นเกิน (<3) = 0 (กัน match มั่ว)
+ */
+export function nameSimilarity(a: string, b: string): number {
+  const na = normalizeName(a);
+  const nb = normalizeName(b);
+  if (na.length < 3 || nb.length < 3) return 0;
+  let score = 0;
+  if (na.includes(nb) || nb.includes(na)) score = 0.85;
+  const lev = 1 - levenshtein(na, nb) / Math.max(na.length, nb.length);
+  const dice = diceCoefficient(na, nb);
+  return Math.max(score, lev, dice);
+}
+
+/** คะแนน fuzzy ชื่อลูกค้าเรา (ลอง name + business_name) เทียบชื่อคู่ค้า 1 ฝั่ง */
+function bestNameScore(customer: CustomerIdentity, partyName: string | null): number {
+  if (!partyName) return 0;
+  const candidates = [customer.name, customer.businessName].filter((n): n is string => !!n);
+  let best = 0;
+  for (const c of candidates) best = Math.max(best, nameSimilarity(c, partyName));
+  return best;
+}
+
+/** ประกอบผลลัพธ์ตามฝั่งที่ลูกค้าเราเป็น (seller=ขาย / buyer=ซื้อ) */
+function sideResult(side: "seller" | "buyer", seller: BillParty, buyer: BillParty): SideDecision {
+  return side === "seller"
+    ? { entryType: "sale", counterpartyName: buyer.name, counterpartyTaxId: buyer.taxId }
+    : { entryType: "purchase", counterpartyName: seller.name, counterpartyTaxId: seller.taxId };
+}
+
+/**
+ * ตัดสิน entry_type จาก "ลูกค้าเรา" เทียบ seller/buyer ที่ AI อ่าน (pure — เทสต์ได้/re-run ได้)
+ *   ★ ชั้น 1 (definitive): เลขภาษี — ลูกค้าเรามี tax_id → เทียบเลขล้วนกับ seller/buyer
+ *     ตรงฝั่งเดียว = ตัดสินทันที (แม่นสุด · AI อ่านตัวเลขชัดกว่าชื่อไทย)
+ *   ★ ชั้น 2 (fallback): fuzzy ชื่อไทย (normalize + substring + Levenshtein + Dice)
+ *     ผ่านเกณฑ์ NAME_ACCEPT และชนะอีกฝั่งเกิน NAME_MARGIN = ตัดสินฝั่งนั้น
+ *   ไม่เข้าเงื่อนไขไหน / กำกวม (สองฝั่งใกล้กัน) / ไม่มีข้อมูล → 'unspecified' (ไม่เดา)
  */
 export function decideEntrySide(
-  customerNames: string[],
-  seller: { name: string | null; taxId: string | null },
-  buyer: { name: string | null; taxId: string | null }
+  customer: CustomerIdentity,
+  seller: BillParty,
+  buyer: BillParty
 ): SideDecision {
-  const custNorms = customerNames.map(normalizeName).filter((n) => n.length >= 3);
-  const sellerNorm = normalizeName(seller.name);
-  const buyerNorm = normalizeName(buyer.name);
+  const unspecified: SideDecision = { entryType: "unspecified", counterpartyName: null, counterpartyTaxId: null };
 
-  const matchSeller = custNorms.some((c) => nameMatches(c, sellerNorm));
-  const matchBuyer = custNorms.some((c) => nameMatches(c, buyerNorm));
+  // ---- ชั้น 1: เลขภาษี (definitive) ----
+  const custTax = digitsOnly(customer.taxId);
+  if (custTax.length >= 10) {
+    const sellerTax = digitsOnly(seller.taxId);
+    const buyerTax = digitsOnly(buyer.taxId);
+    const matchSeller = sellerTax.length >= 10 && sellerTax === custTax;
+    const matchBuyer = buyerTax.length >= 10 && buyerTax === custTax;
+    if (matchSeller && !matchBuyer) return sideResult("seller", seller, buyer);
+    if (matchBuyer && !matchSeller) return sideResult("buyer", seller, buyer);
+    // ตรงทั้งคู่ (เลขภาษีเดียวกันสองฝั่ง — ผิดปกติ) → ตกไปช่องชื่อ
+  }
 
-  if (matchSeller && !matchBuyer) {
-    return { entryType: "sale", counterpartyName: buyer.name, counterpartyTaxId: buyer.taxId };
+  // ---- ชั้น 2: fuzzy ชื่อ ----
+  const sellerScore = bestNameScore(customer, seller.name);
+  const buyerScore = bestNameScore(customer, buyer.name);
+  if (sellerScore >= NAME_ACCEPT && sellerScore - buyerScore >= NAME_MARGIN) {
+    return sideResult("seller", seller, buyer);
   }
-  if (matchBuyer && !matchSeller) {
-    return { entryType: "purchase", counterpartyName: seller.name, counterpartyTaxId: seller.taxId };
+  if (buyerScore >= NAME_ACCEPT && buyerScore - sellerScore >= NAME_MARGIN) {
+    return sideResult("buyer", seller, buyer);
   }
-  return { entryType: "unspecified", counterpartyName: null, counterpartyTaxId: null };
+  return unspecified;
 }
 
+const EMPTY_CUSTOMER: CustomerIdentity & { id: null } = {
+  id: null,
+  name: null,
+  businessName: null,
+  taxId: null,
+};
+
 /**
- * หาลูกค้าเรา จาก chat_message → chat_group.customer_id → ชื่อลูกค้า (best-effort)
- *   คืน { id, names } — names รวม name + business_name (ใช้จับคู่ seller/buyer)
- *   พลาด/ไม่เจอ = { id:null, names:[] } (ไม่ทำให้ทั้ง entry ล้ม)
+ * หาลูกค้าเรา จาก chat_message → chat_group.customer_id → ชื่อ+เลขภาษี (best-effort)
+ *   คืน { id, name, businessName, taxId } (ใช้จับฝั่งซื้อ/ขาย)
+ *   พลาด/ไม่เจอ = id:null (ไม่ทำให้ทั้ง entry ล้ม)
  */
 async function resolveCustomer(
   db: SupabaseClient,
   chatMessageId: string | null
-): Promise<{ id: string | null; names: string[] }> {
-  if (!chatMessageId) return { id: null, names: [] };
+): Promise<CustomerIdentity & { id: string | null }> {
+  if (!chatMessageId) return EMPTY_CUSTOMER;
   try {
     const { data: msg } = await db
       .from("chat_messages")
@@ -140,25 +249,29 @@ async function resolveCustomer(
       .eq("id", chatMessageId)
       .maybeSingle();
     const groupId = (msg as { chat_group_id?: string } | null)?.chat_group_id;
-    if (!groupId) return { id: null, names: [] };
+    if (!groupId) return EMPTY_CUSTOMER;
     const { data: grp } = await db
       .from("chat_groups")
       .select("customer_id")
       .eq("id", groupId)
       .maybeSingle();
     const customerId = (grp as { customer_id?: string | null } | null)?.customer_id ?? null;
-    if (!customerId) return { id: null, names: [] };
+    if (!customerId) return EMPTY_CUSTOMER;
 
     const { data: cust } = await db
       .from("customers")
-      .select("name, business_name")
+      .select("name, business_name, tax_id")
       .eq("id", customerId)
       .maybeSingle();
-    const c = cust as { name?: string | null; business_name?: string | null } | null;
-    const names = [c?.name, c?.business_name].filter((n): n is string => !!n);
-    return { id: customerId, names };
+    const c = cust as { name?: string | null; business_name?: string | null; tax_id?: string | null } | null;
+    return {
+      id: customerId,
+      name: c?.name ?? null,
+      businessName: c?.business_name ?? null,
+      taxId: c?.tax_id ?? null,
+    };
   } catch {
-    return { id: null, names: [] };
+    return EMPTY_CUSTOMER;
   }
 }
 
@@ -242,9 +355,9 @@ export async function processBillExtraction(
 
     // 4) จับคู่ลูกค้าเราจาก chat_group (best-effort) + ตัดสินฝั่งซื้อ/ขาย
     const customer = await resolveCustomer(db, row.chat_message_id);
-    const seller = { name: bill?.seller_name ?? null, taxId: bill?.seller_tax_id ?? null };
-    const buyer = { name: bill?.buyer_name ?? null, taxId: bill?.buyer_tax_id ?? null };
-    const decision = decideEntrySide(customer.names, seller, buyer);
+    const seller: BillParty = { name: bill?.seller_name ?? null, taxId: bill?.seller_tax_id ?? null };
+    const buyer: BillParty = { name: bill?.buyer_name ?? null, taxId: bill?.buyer_tax_id ?? null };
+    const decision = decideEntrySide(customer, seller, buyer);
 
     // 5) สร้าง bill_entries (draft) — attachment_id unique กันซ้ำ (ถ้าชนก็ข้าม)
     const { data: entryIns, error: entryErr } = await db
@@ -319,4 +432,110 @@ export async function processBillExtraction(
   }
 
   return { scanned, created, extracted, blank };
+}
+
+export type RedecideResult = {
+  /** จำนวน entry unspecified ที่พิจารณา */
+  scanned: number;
+  /** จำนวนที่ตัดสินฝั่งได้ (อัปเดต entry_type) */
+  updated: number;
+};
+
+/** แถว entry ที่รอตัดสินฝั่งใหม่ */
+type UnspecifiedRow = {
+  id: string;
+  customer_id: string | null;
+  seller_name: string | null;
+  seller_tax_id: string | null;
+  buyer_name: string | null;
+  buyer_tax_id: string | null;
+};
+
+/**
+ * ตัดสินฝั่งซื้อ/ขายใหม่ ให้ entry เดิมที่ยัง 'unspecified' — ★ ไม่เรียก AI ซ้ำ
+ *   ใช้ seller/buyer ที่เก็บไว้แล้ว + ตัวตนลูกค้าล่าสุด (เผื่อ NOVA Sales เพิ่งส่ง tax_id มา
+ *   หรือแก้ชื่อ) แล้วเรียก decideEntrySide ใหม่ · ตัดสินได้ → อัปเดต entry_type + counterparty
+ *   (idempotent · ปลอดภัยรันซ้ำ — ยังไม่ชัดก็คง unspecified เหมือนเดิม)
+ *
+ *   ★ เฉพาะ entry ที่มี customer_id (ต้องมีลูกค้าถึงจะจับฝั่งได้) + มีชื่อฝั่งอย่างน้อย 1
+ *   ★ ไม่แตะ entry ที่ confirmed แล้ว (WHERE status='draft')
+ */
+export async function redecideExistingEntries(
+  db: SupabaseClient,
+  tenantId: string,
+  opts: { limit?: number } = {}
+): Promise<RedecideResult> {
+  const limit = opts.limit ?? 50;
+
+  const { data, error } = await db
+    .from("bill_entries")
+    .select("id, customer_id, seller_name, seller_tax_id, buyer_name, buyer_tax_id")
+    .eq("tenant_id", tenantId)
+    .eq("entry_type", "unspecified")
+    .eq("status", "draft")
+    .is("deleted_at", null)
+    .not("customer_id", "is", null)
+    .limit(limit);
+
+  if (error) {
+    console.warn(`[bill-extract-worker] redecide select error code=${(error as { code?: string }).code ?? "?"}`);
+    return { scanned: 0, updated: 0 };
+  }
+
+  const rows = (data ?? []) as unknown as UnspecifiedRow[];
+  if (rows.length === 0) return { scanned: 0, updated: 0 };
+
+  // โหลดตัวตนลูกค้าครั้งเดียว (name/business_name/tax_id) แล้ว map
+  const customerIds = [...new Set(rows.map((r) => r.customer_id).filter((x): x is string => !!x))];
+  const custById = new Map<string, CustomerIdentity>();
+  if (customerIds.length > 0) {
+    const { data: custData } = await db
+      .from("customers")
+      .select("id, name, business_name, tax_id")
+      .eq("tenant_id", tenantId)
+      .in("id", customerIds);
+    for (const c of (custData ?? []) as {
+      id: string;
+      name: string | null;
+      business_name: string | null;
+      tax_id: string | null;
+    }[]) {
+      custById.set(c.id, { name: c.name, businessName: c.business_name, taxId: c.tax_id });
+    }
+  }
+
+  let scanned = 0;
+  let updated = 0;
+  for (const row of rows) {
+    // ต้องมีชื่อฝั่งอย่างน้อย 1 ถึงจะตัดสินได้
+    if (!row.seller_name && !row.buyer_name && !row.seller_tax_id && !row.buyer_tax_id) continue;
+    const customer = row.customer_id ? custById.get(row.customer_id) : null;
+    if (!customer) continue;
+    scanned++;
+
+    const decision = decideEntrySide(
+      customer,
+      { name: row.seller_name, taxId: row.seller_tax_id },
+      { name: row.buyer_name, taxId: row.buyer_tax_id }
+    );
+    if (decision.entryType === "unspecified") continue; // ยังไม่ชัด → คงเดิม
+
+    const { error: updErr } = await db
+      .from("bill_entries")
+      .update({
+        entry_type: decision.entryType,
+        counterparty_name: decision.counterpartyName,
+        counterparty_tax_id: decision.counterpartyTaxId,
+      })
+      .eq("id", row.id)
+      .eq("tenant_id", tenantId)
+      .eq("entry_type", "unspecified"); // guard: อัปเดตเฉพาะที่ยัง unspecified (กัน race)
+    if (updErr) {
+      console.warn(`[bill-extract-worker] redecide update error code=${(updErr as { code?: string }).code ?? "?"}`);
+      continue;
+    }
+    updated++;
+  }
+
+  return { scanned, updated };
 }

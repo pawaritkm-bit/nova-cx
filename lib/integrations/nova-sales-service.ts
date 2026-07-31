@@ -191,6 +191,7 @@ export async function upsertCustomer(
   const updateFields = {
     name: payload.name,
     business_name: payload.business_name ?? null,
+    tax_id: payload.tax_id ?? null,
     service_start_date: payload.service_start_date ?? null,
     ...(payload.status ? { status: payload.status } : {}),
     ...(customerCode ? { customer_code: customerCode } : {}),
@@ -216,6 +217,7 @@ export async function upsertCustomer(
     external_ref: externalRef,
     name: payload.name,
     business_name: payload.business_name ?? null,
+    tax_id: payload.tax_id ?? null,
     service_start_date: payload.service_start_date ?? null,
     status: payload.status ?? "active",
     customer_code: customerCode,

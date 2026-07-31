@@ -259,6 +259,7 @@ describe("upsertCustomer — NOVA Sales เป็นเจ้าของรห�
     deleted_at: string | null;
     name?: string;
     status?: string;
+    tax_id?: string | null;
   };
   type CStore = { rows: CRow[]; seq: number };
 
@@ -316,6 +317,7 @@ describe("upsertCustomer — NOVA Sales เป็นเจ้าของรห�
           deleted_at: (row.deleted_at as string | null) ?? null,
           name: row.name as string | undefined,
           status: row.status as string | undefined,
+          tax_id: (row.tax_id as string | null) ?? null,
         });
         return { data: { id }, error: null };
       }
@@ -418,5 +420,45 @@ describe("upsertCustomer — NOVA Sales เป็นเจ้าของรห�
     expect(r.created).toBe(false);
     expect(r.id).toBe("cust-2");
     expect(find(store, "EXT-2")?.customer_code).toBe("NEWCODE");
+  });
+
+  it("(จ) เก็บ tax_id จาก payload (insert ใหม่)", async () => {
+    const store: CStore = { rows: [], seq: 0 };
+    await upsertCustomer(custDb(store), {
+      tenant_id: TENANT,
+      external_customer_id: "EXT-TAX",
+      customer_code: "P777",
+      name: "ลูกค้ามีเลขภาษี",
+      tax_id: "0994000000001",
+    } as never);
+    expect(find(store, "EXT-TAX")?.tax_id).toBe("0994000000001");
+  });
+
+  it("(ฉ) ไม่ส่ง tax_id มา → เก็บ null (ไม่บังคับ)", async () => {
+    const store: CStore = { rows: [], seq: 0 };
+    await upsertCustomer(custDb(store), {
+      tenant_id: TENANT,
+      external_customer_id: "EXT-NOTAX",
+      customer_code: "P778",
+      name: "ลูกค้าไม่มีเลขภาษี",
+    } as never);
+    expect(find(store, "EXT-NOTAX")?.tax_id).toBeNull();
+  });
+
+  it("(ช) update ตัวเดิม → อัปเดต tax_id ตาม payload", async () => {
+    const store: CStore = {
+      rows: [
+        { id: "cust-t", tenant_id: TENANT, external_ref: "EXT-T", customer_code: "T1", deleted_at: null, tax_id: null },
+      ],
+      seq: 0,
+    };
+    await upsertCustomer(custDb(store), {
+      tenant_id: TENANT,
+      external_customer_id: "EXT-T",
+      customer_code: "T1",
+      name: "ลูกค้า",
+      tax_id: "0105500000009",
+    } as never);
+    expect(find(store, "EXT-T")?.tax_id).toBe("0105500000009");
   });
 });

@@ -59,6 +59,7 @@ export type AppNavActive =
   | "chat-viewer"
   | "chat-eval"
   | "chat-bills"
+  | "chat-accounting"
   | "chat-admin"
   | "chat-report"
   | "reports"
@@ -108,6 +109,8 @@ const NAV_GROUPS: NavGroup[] = [
       { key: "cases", href: "/cases", label: "เคสร้องเรียน", canSee: isPrivilegedRole },
       // บิลลูกค้า (รูปบิลที่เก็บจากกลุ่ม LINE) — ข้อมูลการเงินอ่อนไหว เปิดเฉพาะ admin/executive
       { key: "chat-bills", href: "/chat-audit/bills", label: "บิลลูกค้า", canSee: isAdminRole },
+      // ลงบันทึกบัญชี ภาษีซื้อ/ขาย (แยกตามลูกค้า) — admin/executive เท่านั้น
+      { key: "chat-accounting", href: "/chat-audit/accounting", label: "ลงบันทึกบัญชี", canSee: isAdminRole },
     ],
   },
   {

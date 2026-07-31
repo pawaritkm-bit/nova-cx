@@ -86,6 +86,8 @@ export const customerUpsertSchema = z
     customer_code: z.string().optional(),
     name: z.string().min(1, "ต้องมีชื่อลูกค้า").optional(),
     business_name: z.string().optional(),
+    /** เลขประจำตัวผู้เสียภาษี 13 หลักของลูกค้า (ไม่บังคับ — ใช้จับฝั่งซื้อ/ขายในหน้าลงบัญชี) */
+    tax_id: z.string().optional(),
     service_start_date: z.string().optional(),
     status: z.enum(["active", "cancelled", "prospect"]).optional(),
     /** signal ลบลูกค้า (delete-sync): true → soft-delete แทน upsert; ไม่ส่ง/false → upsert ปกติ */
