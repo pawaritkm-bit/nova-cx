@@ -29,6 +29,10 @@
     {
       "path": "/api/cron/backfill-bill-classify",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/extract-bills",
+      "schedule": "*/15 * * * *"
     }
   ],
   "functions": {
