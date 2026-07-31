@@ -1,0 +1,95 @@
+/* ============================================================
+   บิลลูกค้า (/chat-audit/bills) — grid การ์ดรูปบิล
+   scoped ใต้ .nova-dash (สืบทอดตัวแปรสี/การ์ดจาก dashboard.css)
+   ============================================================ */
+
+/* แถวตัวกรอง: ให้ wrap ได้บนจอแคบ */
+.nova-dash .bills-filter {
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+/* grid การ์ดบิล — auto-fill ปรับตามความกว้าง (responsive) */
+.nova-dash .bills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 14px;
+}
+
+.nova-dash .bill-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+}
+
+/* รูปย่อ — สัดส่วนคงที่ กันการ์ดสูงไม่เท่ากัน */
+.nova-dash .bill-thumb {
+  display: block;
+  aspect-ratio: 3 / 4;
+  background: #f1f5f9;
+  overflow: hidden;
+}
+.nova-dash .bill-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.nova-dash .bill-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.nova-dash .bill-meta {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nova-dash .bill-customer {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy-800);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nova-dash .bill-date {
+  font-size: 12px;
+  color: var(--muted);
+}
+.nova-dash .bill-open {
+  margin-top: 6px;
+  text-align: center;
+  font-size: 12.5px;
+  padding: 6px 8px;
+}
+.nova-dash .bill-open-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* แถบแบ่งหน้า */
+.nova-dash .bills-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+@media (max-width: 560px) {
+  .nova-dash .bills-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  }
+}

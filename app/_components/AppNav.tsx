@@ -58,6 +58,7 @@ export type AppNavActive =
   | "chat-knowledge"
   | "chat-viewer"
   | "chat-eval"
+  | "chat-bills"
   | "chat-admin"
   | "chat-report"
   | "reports"
@@ -105,6 +106,8 @@ const NAV_GROUPS: NavGroup[] = [
       { key: "chat-risk", href: "/chat-audit/risk", label: "ลูกค้าเสี่ยง", canSee: canSeeRiskDashboard },
       // เคสร้องเรียนทั้งหมด — เฉพาะ privileged (executive/admin/cs)
       { key: "cases", href: "/cases", label: "เคสร้องเรียน", canSee: isPrivilegedRole },
+      // บิลลูกค้า (รูปบิลที่เก็บจากกลุ่ม LINE) — ข้อมูลการเงินอ่อนไหว เปิดเฉพาะ admin/executive
+      { key: "chat-bills", href: "/chat-audit/bills", label: "บิลลูกค้า", canSee: isAdminRole },
     ],
   },
   {
