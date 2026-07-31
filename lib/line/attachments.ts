@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import { getLineClient } from "@/lib/line/client";
 import { isBillStorageEnabled, storeBillFile } from "@/lib/storage/bill-storage";
+import { classifyBillImage } from "@/lib/ai/bill-classify";
 
 /**
  * Bill Attachment pipeline (เฟส 1 ฝั่ง CX)
@@ -12,7 +13,10 @@ import { isBillStorageEnabled, storeBillFile } from "@/lib/storage/bill-storage"
  * ★ backend เลือกผ่าน lib/storage/bill-storage (BILL_STORAGE_BACKEND, default = supabase)
  * ★ inert-by-default: ถ้า !isBillStorageEnabled() → return { disabled:true } (no-op)
  * ★ เฟสนี้ทำเฉพาะ attachment_type='image' เท่านั้น (ข้าม video/audio/file)
- * ★ ยังไม่ส่งต่อ NOVA Sales / ยังไม่อ่าน-จำแนกบิล (เฟสถัดไป)
+ * ★ คัดกรองด้วย AI (classifyBillImage) ก่อน store — เก็บเฉพาะเอกสารการเงิน
+ *   keep=false (มั่นใจสูงว่าไม่ใช่บิล) → ไม่ store นับเป็น skipped ('not_a_bill')
+ *   degrade: ไม่มี OpenAI key/error → classify คืน null → เก็บทุกรูปเหมือนเดิม (keep-if-unsure)
+ * ★ ยังไม่ส่งต่อ NOVA Sales (เฟสถัดไป)
  *
  * ⚠️ ความเสี่ยง timing: content ฝั่ง LINE มีอายุจำกัด ถ้า cron (ทุก 5 นาที) ดึงช้า
  *    เกินอายุ → getMessageContent คืน null → mark 'failed' + retry ได้ถึง 3 ครั้ง
@@ -132,6 +136,33 @@ async function markFailed(
 }
 
 /**
+ * ปิดงานแบบ "ไม่ใช่บิล" — AI คัดกรองมั่นใจสูงว่าไม่ใช่เอกสารการเงิน → ไม่เก็บไฟล์
+ *   นับเป็น skipped (ไม่ใช่ stored/failed): fetch_status='skipped', fetch_error='not_a_bill'
+ *   บันทึกผลคัด (doc_kind='other', doc_checked=true) กัน backfill มาคัดซ้ำ
+ *   ★ ใช้เฉพาะเมื่อ keep=false เท่านั้น (keep-if-unsure บังคับใน classifyBillImage แล้ว)
+ */
+async function markSkippedNotBill(
+  db: SupabaseClient,
+  id: string,
+  confidence: number | null
+): Promise<void> {
+  const { error } = await db
+    .from("message_attachments")
+    .update({
+      fetch_status: "skipped",
+      fetch_error: "not_a_bill",
+      fetched_at: new Date().toISOString(),
+      doc_kind: "other",
+      doc_confidence: confidence,
+      doc_checked: true,
+    })
+    .eq("id", id);
+  if (error) {
+    console.warn(`[line/attachments] markSkippedNotBill update error id=${id} code=${(error as { code?: string }).code ?? "?"}`);
+  }
+}
+
+/**
  * ปิดงานแบบ reuse ลิงก์ไฟล์เดิม (dedup ในรอบ/ข้ามรอบ) — ไฟล์มีอยู่จริงบน Drive แล้ว
  *   จึงบันทึกลิงก์ + set 'stored' ในสเต็ปเดียวได้ (ไม่มีความเสี่ยง orphan เพราะไม่ได้อัปใหม่)
  */
@@ -141,6 +172,7 @@ async function finalizeReuse(
   sha256: string,
   bytes: number,
   reuse: { fileId: string | null; url: string },
+  docFields: Record<string, unknown>,
   onOk: () => void,
   onFail: () => void
 ): Promise<void> {
@@ -154,6 +186,7 @@ async function finalizeReuse(
       fetched_at: new Date().toISOString(),
       fetch_status: "stored",
       fetch_error: null,
+      ...docFields,
     })
     .eq("id", row.id);
   if (error) {
@@ -294,10 +327,27 @@ export async function processPendingAttachments(
 
     const sha256 = createHash("sha256").update(content.data).digest("hex");
 
+    // 2.5) คัดกรองด้วย AI (vision) — เก็บเฉพาะเอกสารการเงิน
+    //   ★ keep-if-unsure บังคับใน classifyBillImage: keep=false เฉพาะเมื่อมั่นใจสูงว่าไม่ใช่บิล
+    //   ★ degrade: ไม่มี OpenAI key / error / timeout → คืน null → ถือว่า keep (เก็บทุกรูปเหมือนเดิม)
+    const classified = await classifyBillImage(content.data, content.mime);
+    if (classified && !classified.keep) {
+      // มั่นใจว่าไม่ใช่เอกสารการเงิน → ไม่ store · ปิดงานเป็น skipped ('not_a_bill')
+      await markSkippedNotBill(db, row.id, classified.confidence);
+      skipped++;
+      continue;
+    }
+    // keep=true หรือ classify=null → เก็บต่อ + แนบผลคัด (doc_checked=true เสมอบนเส้นทาง forward)
+    const docFields: Record<string, unknown> = {
+      doc_kind: classified ? classified.kind : null,
+      doc_confidence: classified ? classified.confidence : null,
+      doc_checked: true,
+    };
+
     // 3) dedup (ในรอบนี้): เจอ sha256 ที่เพิ่งอัปในรอบเดียวกัน → reuse ทันที ไม่แตะ Drive/DB dedup
     const inBatch = batchDedup.get(sha256);
     if (inBatch) {
-      await finalizeReuse(db, row, sha256, content.data.length, inBatch, () => {
+      await finalizeReuse(db, row, sha256, content.data.length, inBatch, docFields, () => {
         skipped++;
       }, () => {
         failed++;
@@ -324,7 +374,7 @@ export async function processPendingAttachments(
     if (dupRow && dupRow.drive_url) {
       const reuse = { fileId: dupRow.drive_file_id, url: dupRow.drive_url };
       batchDedup.set(sha256, reuse);
-      await finalizeReuse(db, row, sha256, content.data.length, reuse, () => {
+      await finalizeReuse(db, row, sha256, content.data.length, reuse, docFields, () => {
         skipped++;
       }, () => {
         failed++;
@@ -369,6 +419,7 @@ export async function processPendingAttachments(
         sha256,
         fetched_at: new Date().toISOString(),
         fetch_error: null,
+        ...docFields,
       })
       .eq("id", row.id);
     if (linkErr) {

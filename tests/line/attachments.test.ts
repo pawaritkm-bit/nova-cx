@@ -28,6 +28,12 @@ vi.mock("@/lib/line/client", () => ({
   getLineClient: (oa: string) => getLineClientMock(oa),
 }));
 
+// mock AI classify — default: คืน null (ไม่มี key/degrade → keep ทุกรูป)
+const classifyBillImageMock = vi.fn();
+vi.mock("@/lib/ai/bill-classify", () => ({
+  classifyBillImage: (data: Buffer, mime: string) => classifyBillImageMock(data, mime),
+}));
+
 import { processPendingAttachments } from "@/lib/line/attachments";
 
 // ---------------------------------------------------------------------
@@ -163,6 +169,8 @@ beforeEach(() => {
   isBillStorageEnabledMock.mockReturnValue(true);
   storeBillFileMock.mockResolvedValue({ objectPath: "t1/cust/2026-07/x.jpg", url: "https://signed/x" });
   getLineClientMock.mockImplementation(() => lineClientReturning(Buffer.from("IMG")));
+  // default: classify คืน null (degrade — เก็บทุกรูป) เพื่อไม่กระทบเทสต์เดิม
+  classifyBillImageMock.mockResolvedValue(null);
 });
 
 describe("processPendingAttachments — inert-by-default", () => {
@@ -295,6 +303,50 @@ describe("processPendingAttachments — ชื่อโฟลเดอร์ ASC
     expect(call.folderParts[0]).toBe("unassigned-abcd1234");
     // ยืนยัน ASCII ล้วน
     expect(/^[\x00-\x7f]+$/.test(call.folderParts[0])).toBe(true);
+  });
+});
+
+describe("processPendingAttachments — AI คัดกรอง (classify)", () => {
+  it("keep=false (มั่นใจว่าไม่ใช่บิล) → ไม่ store · นับเป็น skipped ('not_a_bill')", async () => {
+    classifyBillImageMock.mockResolvedValue({ keep: false, kind: "other", confidence: 0.95 });
+    const { db, updates } = makeFakeDb({ candidates: [candRow()], dedup: () => null });
+
+    const res = await processPendingAttachments(db);
+
+    expect(res.skipped).toBe(1);
+    expect(res.stored).toBe(0);
+    expect(res.failed).toBe(0);
+    expect(storeBillFileMock).not.toHaveBeenCalled(); // ไม่ store รูปที่ไม่ใช่บิล
+    const skip = updates.find((u) => u.payload.fetch_status === "skipped");
+    expect(skip?.payload.fetch_error).toBe("not_a_bill");
+    expect(skip?.payload.doc_kind).toBe("other");
+    expect(skip?.payload.doc_checked).toBe(true);
+  });
+
+  it("keep=true → store ตามเดิม + แนบ doc_kind/doc_confidence/doc_checked=true", async () => {
+    classifyBillImageMock.mockResolvedValue({ keep: true, kind: "slip", confidence: 0.9 });
+    const { db, updates } = makeFakeDb({ candidates: [candRow()], dedup: () => null });
+
+    const res = await processPendingAttachments(db);
+
+    expect(res.stored).toBe(1);
+    expect(storeBillFileMock).toHaveBeenCalledTimes(1);
+    const linkStep = updates.find((u) => "drive_url" in u.payload);
+    expect(linkStep?.payload.doc_kind).toBe("slip");
+    expect(linkStep?.payload.doc_confidence).toBe(0.9);
+    expect(linkStep?.payload.doc_checked).toBe(true);
+  });
+
+  it("classify คืน null (degrade/ไม่มี key) → store ทุกรูป (doc_checked=true, kind=null)", async () => {
+    classifyBillImageMock.mockResolvedValue(null);
+    const { db, updates } = makeFakeDb({ candidates: [candRow()], dedup: () => null });
+
+    const res = await processPendingAttachments(db);
+
+    expect(res.stored).toBe(1);
+    const linkStep = updates.find((u) => "drive_url" in u.payload);
+    expect(linkStep?.payload.doc_checked).toBe(true);
+    expect(linkStep?.payload.doc_kind).toBeNull();
   });
 });
 
