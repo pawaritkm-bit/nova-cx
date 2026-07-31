@@ -114,6 +114,7 @@ export default function EntryEditor({
   const [lines, setLines] = useState<LineRow[]>(() => initLines(entry));
   const [deletedLineIds, setDeletedLineIds] = useState<string[]>([]);
   const [zoom, setZoom] = useState(false);
+  const [rotation, setRotation] = useState(0); // องศาหมุนรูปบิล (0/90/180/270) — บิลถ่ายตะแคง
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const close = useCallback(() => {
@@ -307,11 +308,20 @@ export default function EntryEditor({
                   src={viewUrl}
                   alt="รูปบิล"
                   className={`acc-bill-img${zoom ? " zoom" : ""}`}
+                  style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
                   onClick={() => setZoom((z) => !z)}
                 />
                 <div className="acc-bill-tools">
                   <button type="button" className="btn btn-ghost" onClick={() => setZoom((z) => !z)}>
                     {zoom ? "ย่อ" : "ซูม"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setRotation((r) => (r + 90) % 360)}
+                    title="หมุนรูป 90°"
+                  >
+                    ↻ หมุน
                   </button>
                   <a href={viewUrl} target="_blank" rel="noopener noreferrer" className="btn btn-ghost">เปิดรูปเต็ม</a>
                 </div>
