@@ -13,6 +13,7 @@ import {
   type BillItem,
 } from "@/lib/chat-audit/bills";
 import ChatAuditFrame from "../_Frame";
+import DeleteBillButton from "./DeleteBillButton";
 import "../chat-admin.css";
 import "./bills.css";
 
@@ -306,6 +307,8 @@ export default async function BillsPage({
             <div className="bills-grid">
               {bills.map((b) => (
                 <div key={b.id} className="bill-card">
+                  {/* ปุ่มลบมุมการ์ด (admin) — ยืนยันก่อนลบเสมอ, ลบไฟล์จริง + mark DB */}
+                  <DeleteBillButton attachmentId={b.id} />
                   {b.viewUrl ? (
                     <a href={b.viewUrl} target="_blank" rel="noopener noreferrer" className="bill-thumb" aria-label="เปิดรูปบิล">
                       {/* eslint-disable-next-line @next/next/no-img-element */}

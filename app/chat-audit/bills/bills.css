@@ -18,6 +18,7 @@
 }
 
 .nova-dash .bill-card {
+  position: relative; /* ยึดปุ่มลบมุมการ์ด */
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -25,6 +26,36 @@
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
+}
+
+/* ปุ่มลบมุมขวาบนของการ์ด (admin) — โทนแดง/ghost ตามธีม navy */
+.nova-dash .bill-delete-form {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  margin: 0;
+}
+.nova-dash .bill-delete {
+  border: 1px solid var(--red, #dc2626);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--red, #dc2626);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.nova-dash .bill-delete:hover:not(:disabled) {
+  background: var(--red, #dc2626);
+  color: #fff;
+}
+.nova-dash .bill-delete:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* รูปย่อ — สัดส่วนคงที่ กันการ์ดสูงไม่เท่ากัน */
