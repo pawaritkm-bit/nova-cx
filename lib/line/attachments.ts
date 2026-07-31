@@ -12,12 +12,13 @@ import { classifyBillImage } from "@/lib/ai/bill-classify";
  *
  * ★ backend เลือกผ่าน lib/storage/bill-storage (BILL_STORAGE_BACKEND, default = supabase)
  * ★ inert-by-default: ถ้า !isBillStorageEnabled() → return { disabled:true } (no-op)
- * ★ ทำ attachment_type ∈ {'image','file'} (ข้าม video/audio):
+ * ★ image-only (ปรับใหม่): คิวป้อนเฉพาะ attachment_type='image' — เก็บแค่ "รูปบิล"
+ *   ไม่ดึงไฟล์ (PDF/เอกสาร) ที่ลูกค้าส่งในกลุ่มอีกต่อไป (เจ้าของต้องการหน้าบิล = รูปบิลล้วน)
  *   - รูป (image): คัดกรองด้วย AI (classifyBillImage) ก่อน store — เก็บเฉพาะเอกสารการเงิน
  *       keep=false (มั่นใจสูงว่าไม่ใช่บิล) → ไม่ store นับเป็น skipped ('not_a_bill')
  *       degrade: ไม่มี OpenAI key/error → classify คืน null → เก็บทุกรูปเหมือนเดิม (keep-if-unsure)
- *   - ไฟล์ (file, เช่น PDF/เอกสาร): ★ ไม่คัด AI — เก็บทุกไฟล์ (keep เสมอ),
- *       set doc_kind='file', doc_checked=true · ชื่อไฟล์ storage ใช้ original_name (sanitize ASCII)
+ *   - ไฟล์ (file): ★ โค้ดจัดการไฟล์ด้านล่างคงไว้ (inert) เผื่อย้อนกลับ — คิวไม่ป้อน file แล้ว
+ *       ไฟล์เก่าที่เคยเก็บไม่ถูกลบ (non-destructive)
  * ★ ยังไม่ส่งต่อ NOVA Sales (เฟสถัดไป)
  *
  * ⚠️ ความเสี่ยง timing: content ฝั่ง LINE มีอายุจำกัด ถ้า cron (ทุก 5 นาที) ดึงช้า
@@ -300,7 +301,10 @@ export async function processPendingAttachments(
          )
        )`
     )
-    .in("attachment_type", ["image", "file"])
+    // ★ image-only: เก็บแค่ "รูปบิล" — ไม่ดึงไฟล์ (PDF/เอกสาร) ที่ลูกค้าส่งในกลุ่มอีกต่อไป
+    //   (เจ้าของต้องการหน้าบิลลูกค้าเป็นรูปบิลอย่างเดียว) · โค้ดสาย 'file' ด้านล่างคงไว้เฉย ๆ
+    //   (inert — คิวไม่ป้อน file แล้ว) ไฟล์เก่าที่เคยเก็บไม่ถูกลบ (non-destructive)
+    .eq("attachment_type", "image")
     .lt("fetch_attempts", 3)
     .or(
       `fetch_status.in.(pending,failed),and(fetch_status.eq.processing,fetched_at.lt.${staleCutoffIso})`

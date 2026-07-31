@@ -26,6 +26,8 @@ import ChatAuditFrame from "../_Frame";
 import EntryEditor from "./EntryEditor";
 import RowActions from "./RowActions";
 import CustomerTaxIdField from "./CustomerTaxIdField";
+import UploadFileButton from "./UploadFileButton";
+import { extOf } from "@/lib/accounting/upload";
 import "../chat-admin.css";
 import "../bills/bills.css";
 import "./accounting.css";
@@ -57,6 +59,23 @@ function formatDate(iso: string | null): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("th-TH", { year: "numeric", month: "short", day: "numeric" });
+}
+
+/** object path ของไฟล์บิลของ entry (บิลไลน์ ก่อน แล้วไฟล์อัปเอง) — null = ไม่มีไฟล์ */
+function entryObjectPath(e: BillEntry): string | null {
+  return e.attachmentObjectPath ?? e.uploadPath;
+}
+
+/** ไฟล์ของ entry เป็น "รูป" ไหม (บิลไลน์ = รูปเสมอ · ไฟล์อัปเอง = ดูจาก uploadMime) */
+function entryIsImage(e: BillEntry): boolean {
+  if (e.attachmentObjectPath) return true;
+  return (e.uploadMime ?? "").startsWith("image/");
+}
+
+/** ป้ายนามสกุลไฟล์ (PDF/XLSX/CSV…) สำหรับ thumbnail ของไฟล์ที่ไม่ใช่รูป */
+function fileExtLabel(name: string | null, objectPath: string | null): string {
+  const ext = extOf(name || objectPath || "");
+  return ext ? ext.toUpperCase() : "ไฟล์";
 }
 
 /** ป้ายชื่อลูกค้า (มีรหัส → "N023 · ชื่อ") */
@@ -140,6 +159,25 @@ async function fetchCustomerTaxIds(
     map.set(c.id, c.tax_id);
   }
   return map;
+}
+
+/**
+ * ดึงรายชื่อลูกค้าทั้งหมดของ tenant (id + label) — สำหรับ dropdown เลือกลูกค้าตอนอัปไฟล์เอง
+ *   เรียงตามรหัสลูกค้า (natural) · cap กันดึงเยอะเกิน · ไม่ log ชื่อลูกค้า
+ */
+async function fetchCustomerSelectOptions(
+  service: SupabaseClient,
+  tenantId: string
+): Promise<{ id: string; label: string }[]> {
+  const { data } = await service
+    .from("customers")
+    .select("id, customer_code, name")
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .order("customer_code", { ascending: true, nullsFirst: false })
+    .limit(5000);
+  const rows = (data ?? []) as { id: string; customer_code: string | null; name: string | null }[];
+  return rows.map((c) => ({ id: c.id, label: customerLabel(c.customer_code, c.name) }));
 }
 
 /** สร้าง signed URL (batch) ให้ object path ที่ต้องโชว์เท่านั้น (PDPA/perf) */
@@ -227,7 +265,9 @@ function EntryTable({
             tWht += s.wht;
             tNet += s.net;
             const multi = e.lines.length > 1;
-            const viewUrl = e.attachmentObjectPath ? signed.get(e.attachmentObjectPath) ?? null : null;
+            const objectPath = entryObjectPath(e);
+            const isImg = entryIsImage(e);
+            const viewUrl = objectPath ? signed.get(objectPath) ?? null : null;
             const editHref = editHrefOf(e.id);
             const single = e.lines[0] ?? null;
 
@@ -236,10 +276,14 @@ function EntryTable({
                 {/* ---- docrow (หัวเอกสาร) ---- */}
                 <tr className={`acc-docrow${e.status === "confirmed" ? " is-confirmed" : ""}`}>
                   <td>
-                    {viewUrl ? (
+                    {viewUrl && isImg ? (
                       <Link href={editHref} className="acc-thumb" aria-label="เปิดตรวจ/แก้บิล" scroll={false}>
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={viewUrl} alt="บิล" loading="lazy" />
+                      </Link>
+                    ) : objectPath ? (
+                      <Link href={editHref} className="acc-thumb acc-thumb-file" aria-label="เปิดตรวจ/แก้ไฟล์" scroll={false}>
+                        <span className="acc-thumb-ext">{fileExtLabel(e.uploadName, objectPath)}</span>
                       </Link>
                     ) : (
                       <Link href={editHref} className="acc-thumb acc-thumb-empty" aria-label="ตรวจ/แก้" scroll={false}>
@@ -408,12 +452,13 @@ export default async function AccountingPage({
     );
   }
 
-  // รหัสลูกค้า (สำหรับ avatar/ชื่อ/ค้นหา/ไฟล์ Excel)
+  // รหัสลูกค้า (สำหรับ avatar/ชื่อ/ค้นหา/ไฟล์ Excel) + รายชื่อลูกค้าทั้งหมด (dropdown อัปไฟล์)
   const service = createServiceRoleClient();
   const custIds = [...new Set(allEntries.map((e) => e.customerId).filter((x): x is string => !!x))];
-  const [codeById, taxIdById] = await Promise.all([
+  const [codeById, taxIdById, customerSelectOptions] = await Promise.all([
     fetchCustomerCodes(service, tenantId, custIds),
     fetchCustomerTaxIds(service, tenantId, custIds),
+    fetchCustomerSelectOptions(service, tenantId),
   ]);
 
   // ---- ตัวกรอง (validate ก่อนใช้) ----
@@ -446,13 +491,18 @@ export default async function AccountingPage({
   const editId = sp.edit ?? "";
   const editEntry = editId ? allEntries.find((e) => e.id === editId) ?? null : null;
 
-  // ---- sign รูปเฉพาะที่โชว์: entry ของแท็บที่เปิด + entry ที่กำลังแก้ ----
+  // ---- sign ไฟล์เฉพาะที่โชว์: entry ของแท็บที่เปิด + entry ที่กำลังแก้ (บิลไลน์ + ไฟล์อัปเอง) ----
   const shownEntries = openGroup ? entriesOfType(openGroup, selectedType) : [];
   const pathsToSign: string[] = [];
-  for (const e of shownEntries) if (e.attachmentObjectPath) pathsToSign.push(e.attachmentObjectPath);
-  if (editEntry?.attachmentObjectPath) pathsToSign.push(editEntry.attachmentObjectPath);
+  for (const e of shownEntries) {
+    const p = entryObjectPath(e);
+    if (p) pathsToSign.push(p);
+  }
+  const editObjectPath = editEntry ? entryObjectPath(editEntry) : null;
+  if (editObjectPath) pathsToSign.push(editObjectPath);
   const signed = await signPaths(service, pathsToSign);
-  const editViewUrl = editEntry?.attachmentObjectPath ? signed.get(editEntry.attachmentObjectPath) ?? null : null;
+  const editViewUrl = editObjectPath ? signed.get(editObjectPath) ?? null : null;
+  const editIsImage = editEntry ? entryIsImage(editEntry) : false;
 
   const hasAnyFilter = !!(q || selectedMonth);
   const exportAllHref = `/chat-audit/accounting/export${buildQuery({ month: selectedMonth || undefined })}`;
@@ -497,6 +547,8 @@ export default async function AccountingPage({
               <input type="hidden" name="entryType" value="purchase" />
               <button type="submit" className="btn">+ เพิ่มรายการเอง</button>
             </form>
+            {/* อัปโหลดไฟล์เอง (เลือกลูกค้าได้) */}
+            <UploadFileButton customers={customerSelectOptions} />
             {/* Excel รวมทั้งหมด */}
             <a href={exportAllHref} className="btn btn-ghost">บันทึกเป็น Excel (รวม)</a>
           </form>
@@ -590,6 +642,13 @@ export default async function AccountingPage({
                             <input type="hidden" name="entryType" value={selectedType} />
                             <button type="submit" className="btn">+ เพิ่มรายการ</button>
                           </form>
+                          {/* อัปโหลดไฟล์เองให้ลูกค้ารายนี้ (ผูกลูกค้า) */}
+                          <UploadFileButton
+                            lockedCustomerId={g.customerId}
+                            lockedCustomerLabel={customerLabel(code, g.name)}
+                            defaultEntryType={selectedType}
+                            label="อัปไฟล์"
+                          />
                           {/* Excel ของลูกค้ารายนี้ */}
                           {g.customerId ? (
                             <a
@@ -629,6 +688,8 @@ export default async function AccountingPage({
         <EntryEditor
           entry={editEntry}
           viewUrl={editViewUrl}
+          viewIsImage={editIsImage}
+          fileName={editEntry.uploadName}
           customerLabel={customerLabel(
             editEntry.customerId ? codeById.get(editEntry.customerId) ?? null : null,
             editEntry.customerName

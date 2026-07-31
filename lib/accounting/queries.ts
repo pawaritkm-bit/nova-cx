@@ -44,6 +44,12 @@ export type BillEntry = {
   customerName: string | null;
   /** object path ของไฟล์บิลใน bucket (ให้ UI เอาไป sign รูป) — null = ไม่มีไฟล์ */
   attachmentObjectPath: string | null;
+  /** ไฟล์ที่นักบัญชี "อัปเอง" (ไม่ได้มาทางไลน์) — object path ใน bucket `bills` · null = ไม่มี */
+  uploadPath: string | null;
+  /** ชื่อไฟล์เดิมที่อัป (ไว้โชว์/ตั้งชื่อดาวน์โหลด) · null = ไม่มี */
+  uploadName: string | null;
+  /** MIME ของไฟล์ที่อัป (แยกรูป=inline vs pdf/excel=ปุ่มเปิด) · null = ไม่มี */
+  uploadMime: string | null;
   entryType: EntryType;
   docDate: string | null;
   docNo: string | null;
@@ -167,6 +173,9 @@ type RawEntry = {
   tenant_id: string;
   attachment_id: string | null;
   customer_id: string | null;
+  upload_path: string | null;
+  upload_name: string | null;
+  upload_mime: string | null;
   entry_type: string;
   doc_date: string | null;
   doc_no: string | null;
@@ -228,7 +237,7 @@ export async function listEntries(
   let q = db
     .from("bill_entries")
     .select(
-      "id, tenant_id, attachment_id, customer_id, entry_type, doc_date, doc_no, counterparty_name, counterparty_tax_id, seller_name, seller_tax_id, buyer_name, buyer_tax_id, wht_form, status, source, ai_confidence, notes, created_at, confirmed_at"
+      "id, tenant_id, attachment_id, customer_id, upload_path, upload_name, upload_mime, entry_type, doc_date, doc_no, counterparty_name, counterparty_tax_id, seller_name, seller_tax_id, buyer_name, buyer_tax_id, wht_form, status, source, ai_confidence, notes, created_at, confirmed_at"
     )
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
@@ -302,6 +311,9 @@ export async function listEntries(
     customerId: e.customer_id,
     customerName: e.customer_id ? nameByCustomer.get(e.customer_id) ?? null : null,
     attachmentObjectPath: e.attachment_id ? pathByAttachment.get(e.attachment_id) ?? null : null,
+    uploadPath: e.upload_path,
+    uploadName: e.upload_name,
+    uploadMime: e.upload_mime,
     entryType: e.entry_type === "sale" ? "sale" : e.entry_type === "purchase" ? "purchase" : "unspecified",
     docDate: e.doc_date,
     docNo: e.doc_no,

@@ -69,11 +69,17 @@ function initLines(entry: BillEntry): LineRow[] {
 export default function EntryEditor({
   entry,
   viewUrl,
+  viewIsImage = true,
+  fileName = null,
   customerLabel,
   closeHref,
 }: {
   entry: BillEntry;
   viewUrl: string | null;
+  /** ไฟล์ที่แนบเป็น "รูป" ไหม (บิลไลน์=รูป · ไฟล์อัปเอง pdf/excel/csv=false → โชว์ปุ่มเปิด/ดาวน์โหลด) */
+  viewIsImage?: boolean;
+  /** ชื่อไฟล์อัปเอง (ไว้โชว์/ตั้งชื่อดาวน์โหลด) */
+  fileName?: string | null;
   customerLabel: string;
   closeHref: string;
 }) {
@@ -225,9 +231,9 @@ export default function EntryEditor({
         ) : null}
 
         <div className="acc-modal-body">
-          {/* ---- ซ้าย: รูปบิลจริง ---- */}
+          {/* ---- ซ้าย: รูปบิล / ไฟล์แนบจริง ---- */}
           <div className="acc-bill-pane">
-            {viewUrl ? (
+            {viewUrl && viewIsImage ? (
               <>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -243,8 +249,18 @@ export default function EntryEditor({
                   <a href={viewUrl} target="_blank" rel="noopener noreferrer" className="btn btn-ghost">เปิดรูปเต็ม</a>
                 </div>
               </>
+            ) : viewUrl ? (
+              /* ไฟล์ที่ไม่ใช่รูป (PDF/Excel/CSV) — เปิด/ดาวน์โหลด (sign URL อายุสั้น) */
+              <div className="acc-bill-file">
+                <span className="acc-bill-file-icon" aria-hidden="true">📄</span>
+                <div className="acc-bill-file-name" title={fileName ?? undefined}>{fileName || "ไฟล์แนบ"}</div>
+                <div className="acc-bill-tools">
+                  <a href={viewUrl} target="_blank" rel="noopener noreferrer" className="btn">เปิดไฟล์</a>
+                  <a href={`${viewUrl}&download`} target="_blank" rel="noopener noreferrer" className="btn btn-ghost">ดาวน์โหลด</a>
+                </div>
+              </div>
             ) : (
-              <div className="acc-bill-empty">ไม่มีรูปบิล (รายการคีย์เอง หรือไฟล์ถูกลบ)</div>
+              <div className="acc-bill-empty">ไม่มีไฟล์แนบ (รายการคีย์เอง หรือไฟล์ถูกลบ)</div>
             )}
           </div>
 

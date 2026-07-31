@@ -29,6 +29,7 @@ import {
 } from "@/lib/accounting/actions-lib";
 import type { EntryType, VatType, WhtForm } from "@/lib/accounting/queries";
 import { normalizeTaxId } from "@/lib/accounting/tax-id";
+import { validateUpload, sanitizeUploadName, extOf } from "@/lib/accounting/upload";
 import { redecideExistingEntries } from "@/lib/line/bill-extract-worker";
 import { pushCustomerTaxId } from "@/lib/integrations/nova-sales-outbound";
 
@@ -313,19 +314,25 @@ export async function deleteEntryAction(entryId: string): Promise<SaveResult> {
     const ctx = await requireAdminContext(authed);
     const service = createServiceRoleClient();
 
-    // อ่าน attachment ต้นทางก่อนลบ (scope tenant)
+    // อ่าน attachment ต้นทาง + ไฟล์อัปเอง ก่อนลบ (scope tenant)
     const { data: entryRow } = await service
       .from("bill_entries")
-      .select("attachment_id")
+      .select("attachment_id, upload_path")
       .eq("id", entryId)
       .eq("tenant_id", ctx.tenantId)
       .is("deleted_at", null)
       .maybeSingle();
     const attachmentId = (entryRow as { attachment_id: string | null } | null)?.attachment_id ?? null;
+    const uploadPath = (entryRow as { upload_path: string | null } | null)?.upload_path ?? null;
 
     // 1) soft-delete entry
     const res = await deleteEntry(service, ctx.tenantId, entryId);
     if (!res.ok) return { ok: false, message: friendlyError(res.error) };
+
+    // 1.5) entry ที่อัปไฟล์เอง → ลบไฟล์จริงออกจาก bucket ด้วย (best-effort)
+    if (uploadPath) {
+      await service.storage.from(BILLS_BUCKET).remove([uploadPath]);
+    }
 
     // 2) มาร์ค attachment ต้นทางว่าไม่ใช่บิล + ลบไฟล์ (ถ้ามี)
     if (attachmentId) {
@@ -390,6 +397,110 @@ export async function createEntryAction(formData: FormData): Promise<void> {
   sp.set("type", entryType);
   if (res.ok) sp.set("edit", res.data.id);
   redirect(`${PATH}?${sp.toString()}`);
+}
+
+/** เดือน 'YYYY-MM' (UTC) จากเวลาปัจจุบัน — โฟลเดอร์เก็บไฟล์ */
+function monthFolder(now = new Date()): string {
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** timestamp ปลอดภัยกับชื่อไฟล์ (ตัด : และ .) กันชนกันในโฟลเดอร์เดียว */
+function safeStamp(now = new Date()): string {
+  return now.toISOString().replace(/[:.]/g, "-");
+}
+
+/** sanitize ส่วนของ path เป็น ASCII (กัน key ไทย/`/` → 400 InvalidKey / path traversal) */
+function sanitizePathPart(raw: string): string {
+  const s = (raw ?? "").replace(/[^A-Za-z0-9._-]/g, "_").replace(/_{2,}/g, "_");
+  return s || "unassigned";
+}
+
+/**
+ * "อัปโหลดไฟล์เอง" เข้าบัญชี — นักบัญชีแนบเอกสาร (Excel/PDF/รูป/CSV) ที่ไม่ได้มาทางไลน์
+ *   flow ความปลอดภัย (เหมือน write path อื่น):
+ *     1) guard admin/executive + tenant จาก session (ไม่เชื่อ client)
+ *     2) validate ไฟล์ (ชนิด image/pdf/excel/csv + ขนาด ≤ 15MB)
+ *     3) resolve customer_code (ถ้าเลือกลูกค้า) → ชื่อโฟลเดอร์ (ASCII)
+ *     4) อัปเข้า bucket `bills` path manual/{code|unassigned}/{YYYY-MM}/{stamp}_{ชื่อ sanitize}
+ *        (service role · upsert:false — ไม่ทับไฟล์เดิม)
+ *     5) สร้าง bill_entries ใหม่ (source='manual', status='draft') + set upload_path/name/mime
+ *        + สร้าง 1 line ว่างให้คีย์
+ *     6) revalidatePath — คืน { ok, message, id } (ให้ client พาไปหน้าแก้)
+ *   ★ PDPA: ไม่ log ชื่อไฟล์/ลูกค้า/URL/path (ไม่มี console.* ที่นี่)
+ */
+export async function uploadAccountingFileAction(formData: FormData): Promise<SaveResult> {
+  try {
+    const authed = await createClient();
+    const ctx = await requireAdminContext(authed);
+    const service = createServiceRoleClient();
+
+    // 1) validate อินพุตควบคุม (ลูกค้า/ประเภท)
+    const rawCustomer = formData.get("customerId");
+    const customerId = isUuid(rawCustomer) ? rawCustomer : null;
+    // ถ้าส่ง customerId มาแต่รูปแบบผิด (ไม่ใช่ uuid และไม่ว่าง) = ปฏิเสธ กันผูกผิด
+    if (rawCustomer != null && rawCustomer !== "" && !customerId) {
+      return { ok: false, message: "ลูกค้าไม่ถูกต้อง" };
+    }
+    const entryType = asEntryType(formData.get("entryType"));
+
+    // 2) validate ไฟล์
+    const file = formData.get("file");
+    if (!(file instanceof File)) return { ok: false, message: "ไม่พบไฟล์ที่เลือก" };
+    const v = validateUpload({ mime: file.type, name: file.name, size: file.size });
+    if (!v.ok) return { ok: false, message: v.error };
+
+    // 3) resolve customer_code เป็นชื่อโฟลเดอร์ (ASCII) — ต้องมีลูกค้าจริงถ้าเลือกมา
+    let folderCode = "unassigned";
+    if (customerId) {
+      const { data: cust } = await service
+        .from("customers")
+        .select("customer_code")
+        .eq("id", customerId)
+        .eq("tenant_id", ctx.tenantId)
+        .is("deleted_at", null)
+        .maybeSingle();
+      if (!cust) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+      const code = (cust as { customer_code: string | null }).customer_code?.trim();
+      folderCode = code ? sanitizePathPart(code) : `unassigned-${customerId.slice(0, 8)}`;
+    }
+
+    // 4) อัปเข้า Supabase Storage bucket `bills` (ตรงเข้า supabase เสมอ — ให้ sign แสดงได้)
+    const safeName = sanitizeUploadName(file.name) || `file.${extOf(file.name) || "bin"}`;
+    const objectPath = [
+      ctx.tenantId,
+      "manual",
+      folderCode,
+      monthFolder(),
+      `${safeStamp()}_${safeName}`,
+    ].join("/");
+
+    const buf = Buffer.from(await file.arrayBuffer());
+    const { error: upErr } = await service.storage
+      .from(BILLS_BUCKET)
+      .upload(objectPath, buf, { contentType: file.type || "application/octet-stream", upsert: false });
+    if (upErr) return { ok: false, message: "อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่" };
+
+    // 5) สร้าง entry ใหม่ (manual/draft) + แนบไฟล์ + 1 line ว่าง
+    const up = await upsertEntry(service, ctx.tenantId, {
+      entryType,
+      customerId,
+      uploadPath: objectPath,
+      uploadName: file.name.slice(0, 200),
+      uploadMime: file.type || null,
+    });
+    if (!up.ok) {
+      // สร้าง entry ไม่ได้ → เก็บไฟล์ค้างไว้ไม่ได้ (orphan) ลบทิ้ง best-effort
+      await service.storage.from(BILLS_BUCKET).remove([objectPath]);
+      return { ok: false, message: friendlyError(up.error) };
+    }
+    await addLine(service, ctx.tenantId, up.data.id, {});
+
+    revalidatePath(PATH);
+    return { ok: true, message: "อัปโหลดไฟล์แล้ว — คีย์รายการต่อได้เลย", id: up.data.id };
+  } catch (e) {
+    if (e instanceof AdminAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่" };
+  }
 }
 
 /**

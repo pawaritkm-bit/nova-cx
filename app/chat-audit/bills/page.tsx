@@ -113,7 +113,9 @@ async function fetchAllBillItems(
          )`
       )
       .eq("tenant_id", tenantId)
-      .in("attachment_type", ["image", "file"])
+      // ★ image-only: หน้าบิลลูกค้าโชว์ "รูปบิล" อย่างเดียว — ไม่รวมไฟล์ (PDF/เอกสาร)
+      //   ไฟล์เก่าที่เคยเก็บยังอยู่ใน bucket แต่ไม่แสดงผล (non-destructive)
+      .eq("attachment_type", "image")
       .eq("fetch_status", "stored")
       .order("created_at", { ascending: false })
       .range(from, from + SCAN_CHUNK - 1);

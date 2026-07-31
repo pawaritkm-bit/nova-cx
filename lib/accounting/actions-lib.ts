@@ -23,6 +23,14 @@ export type UpsertEntryInput = {
   counterpartyTaxId?: string | null;
   whtForm?: WhtForm | null;
   notes?: string | null;
+  /**
+   * ไฟล์ที่นักบัญชี "อัปเอง" (แนบตอน insert entry ใหม่เท่านั้น)
+   *   ★ ส่งเมื่อ create เท่านั้น — ปล่อย undefined ตอน update เพื่อ "ไม่ทับ" ค่าเดิม
+   *   (saveEntryAction ไม่เคยส่ง 3 ค่านี้ → update จึงคงไฟล์อัปไว้)
+   */
+  uploadPath?: string | null;
+  uploadName?: string | null;
+  uploadMime?: string | null;
 };
 
 export type LineInput = {
@@ -68,7 +76,7 @@ export async function upsertEntry(
   tenantId: string,
   input: UpsertEntryInput
 ): Promise<ActionResult> {
-  const payload = {
+  const payload: Record<string, unknown> = {
     entry_type: input.entryType,
     attachment_id: input.attachmentId ?? null,
     customer_id: input.customerId ?? null,
@@ -79,6 +87,10 @@ export async function upsertEntry(
     wht_form: input.whtForm ?? null,
     notes: input.notes ?? null,
   };
+  // ไฟล์อัปเอง: ใส่เฉพาะเมื่อส่งค่ามา (undefined = ไม่แตะ — กัน update ทับไฟล์เดิมเป็น null)
+  if (input.uploadPath !== undefined) payload.upload_path = input.uploadPath;
+  if (input.uploadName !== undefined) payload.upload_name = input.uploadName;
+  if (input.uploadMime !== undefined) payload.upload_mime = input.uploadMime;
 
   if (input.id) {
     // กันแก้ของที่ยืนยันแล้ว

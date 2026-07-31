@@ -1,0 +1,175 @@
+"use client";
+
+import { useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { uploadAccountingFileAction } from "./actions";
+import { UPLOAD_ACCEPT, MAX_UPLOAD_BYTES, validateUpload } from "@/lib/accounting/upload";
+import type { EntryType } from "@/lib/accounting/queries";
+
+/**
+ * ปุ่ม "อัปโหลดไฟล์เอง" (client) — นักบัญชีแนบเอกสาร (Excel/PDF/รูป/CSV) ที่ไม่ได้มาทางไลน์
+ *
+ * ★ เปิดฟอร์ม (modal): เลือกลูกค้า (ถ้าไม่ได้อยู่ในบริบทลูกค้า) + ไฟล์ + ประเภท (ซื้อ/ขาย/รอระบุ)
+ * ★ upload ผ่าน server action (guard admin + service-role) — client แค่ validate เบื้องต้น
+ * ★ สำเร็จ → พาไปหน้าแก้ (?edit=<id>) เพื่อคีย์ตัวเลขต่อทันที
+ */
+export default function UploadFileButton({
+  customers,
+  lockedCustomerId,
+  lockedCustomerLabel,
+  defaultEntryType = "purchase",
+  label = "อัปโหลดไฟล์เอง",
+}: {
+  /** ตัวเลือกลูกค้า (โหมด toolbar — ไม่ผูกลูกค้า) */
+  customers?: { id: string; label: string }[];
+  /** ผูกลูกค้า (โหมดในการ์ดลูกค้า) — ล็อก ไม่ให้เลือก */
+  lockedCustomerId?: string | null;
+  lockedCustomerLabel?: string;
+  defaultEntryType?: EntryType;
+  label?: string;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string>("");
+  const [customerId, setCustomerId] = useState<string>(lockedCustomerId ?? "");
+  const [entryType, setEntryType] = useState<EntryType>(defaultEntryType);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const locked = lockedCustomerId != null;
+
+  function reset() {
+    setErr(null);
+    setFileName("");
+    setEntryType(defaultEntryType);
+    if (!locked) setCustomerId("");
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function close() {
+    setOpen(false);
+    reset();
+  }
+
+  function submit() {
+    const file = fileRef.current?.files?.[0] ?? null;
+    if (!file) {
+      setErr("กรุณาเลือกไฟล์ก่อน");
+      return;
+    }
+    // validate เบื้องต้นฝั่ง client (server validate ซ้ำอีกชั้นเสมอ)
+    const v = validateUpload({ mime: file.type, name: file.name, size: file.size });
+    if (!v.ok) {
+      setErr(v.error);
+      return;
+    }
+    setErr(null);
+
+    const fd = new FormData();
+    fd.set("file", file);
+    fd.set("entryType", entryType);
+    if (customerId) fd.set("customerId", customerId);
+
+    startTransition(async () => {
+      const res = await uploadAccountingFileAction(fd);
+      if (res.ok) {
+        const openKey = customerId || "unassigned";
+        const sp = new URLSearchParams();
+        sp.set("open", openKey);
+        sp.set("type", entryType);
+        if (res.id) sp.set("edit", res.id);
+        setOpen(false);
+        reset();
+        router.push(`/chat-audit/accounting?${sp.toString()}`);
+        router.refresh();
+      } else {
+        setErr(res.message);
+      }
+    });
+  }
+
+  return (
+    <>
+      <button type="button" className="btn" onClick={() => setOpen(true)}>
+        + {label}
+      </button>
+
+      {open ? (
+        <div className="acc-modal-backdrop" role="dialog" aria-modal="true" aria-label="อัปโหลดไฟล์เข้าบัญชี">
+          <button type="button" className="acc-modal-scrim" aria-label="ปิด" onClick={close} />
+          <div className="acc-modal acc-modal-sm">
+            <div className="acc-modal-head">
+              <div>
+                <div className="acc-modal-title">อัปโหลดไฟล์เข้าบัญชี</div>
+                <div className="acc-modal-sub">แนบเอกสารที่ไม่ได้มาทางไลน์ (รูป / PDF / Excel / CSV ≤ 15MB)</div>
+              </div>
+              <button type="button" className="acc-modal-close" onClick={close} aria-label="ปิด">✕</button>
+            </div>
+
+            <div className="acc-upload-form">
+              {/* ลูกค้า */}
+              {locked ? (
+                <div className="acc-field acc-field-wide">
+                  <span>ลูกค้า</span>
+                  <div className="acc-upload-locked">{lockedCustomerLabel || "ลูกค้าที่เลือก"}</div>
+                </div>
+              ) : (
+                <label className="acc-field acc-field-wide">
+                  <span>ลูกค้า</span>
+                  <select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+                    <option value="">— ไม่ระบุลูกค้า (ยังไม่จับคู่) —</option>
+                    {(customers ?? []).map((c) => (
+                      <option key={c.id} value={c.id}>{c.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {/* ประเภท */}
+              <label className="acc-field">
+                <span>ประเภท</span>
+                <select value={entryType} onChange={(e) => setEntryType(e.target.value as EntryType)}>
+                  <option value="purchase">ภาษีซื้อ</option>
+                  <option value="sale">ภาษีขาย</option>
+                  <option value="unspecified">รอระบุ</option>
+                </select>
+              </label>
+
+              {/* ไฟล์ */}
+              <label className="acc-field acc-field-wide">
+                <span>ไฟล์</span>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept={UPLOAD_ACCEPT}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    setErr(null);
+                    if (f && f.size > MAX_UPLOAD_BYTES) {
+                      setErr("ไฟล์ใหญ่เกิน 15MB");
+                      setFileName("");
+                    } else {
+                      setFileName(f?.name ?? "");
+                    }
+                  }}
+                />
+                {fileName ? <span className="acc-upload-fname" title={fileName}>{fileName}</span> : null}
+              </label>
+
+              {err ? <div className="action-msg err">{err}</div> : null}
+
+              <div className="acc-modal-actions">
+                <button type="button" className="btn" onClick={submit} disabled={pending}>
+                  {pending ? "กำลังอัปโหลด…" : "อัปโหลด"}
+                </button>
+                <span className="acc-toolbar-spacer" />
+                <button type="button" className="btn btn-ghost" onClick={close} disabled={pending}>ยกเลิก</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
