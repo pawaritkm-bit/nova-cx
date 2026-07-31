@@ -31,8 +31,14 @@ describe("normalizeClassification — keep-if-unsure", () => {
     expect(r.keep).toBe(true);
   });
 
-  it("other แต่โมเดลบอก keep=true → keep=true", () => {
+  it("other + confidence สูง → keep=false (ไม่พึ่ง flag keep ของโมเดลที่ตอบไม่นิ่ง)", () => {
+    // แม้โมเดลดัน keep=true มา ถ้า kind='other' + conf สูง = ทิ้ง (ตัดสินจาก kind+conf)
     const r = normalizeClassification({ kind: "other", keep: true, confidence: 0.95 });
+    expect(r.keep).toBe(false);
+  });
+
+  it("other + confidence ต่ำกว่าเกณฑ์ → keep=true (keep-if-unsure)", () => {
+    const r = normalizeClassification({ kind: "other", keep: false, confidence: 0.5 });
     expect(r.keep).toBe(true);
   });
 

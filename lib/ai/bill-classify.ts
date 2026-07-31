@@ -78,11 +78,12 @@ export function normalizeClassification(raw: Record<string, unknown> | null): Bi
   }
 
   // นอกเหนือจากนั้น เก็บลง kind='other' เสมอ · ทิ้งได้เฉพาะเมื่อ:
-  //   โมเดลตอบ kind='other' ตรง ๆ (ไม่ใช่ค่าแปลกที่ parse ไม่ตรง) + keep=false + มั่นใจสูง
-  //   (keep-if-unsure: kind แปลก/ก้ำกึ่ง/confidence ต่ำกว่าเกณฑ์ = เก็บไว้ก่อน)
+  //   โมเดลตอบ kind='other' ตรง ๆ (ไม่ใช่ค่าแปลกที่ parse ไม่ตรง) + มั่นใจสูง (>= KEEP_THRESHOLD)
+  //   ★ ตัดสินจาก kind+confidence เท่านั้น — ไม่พึ่ง flag `keep` ของโมเดล (ตอบไม่นิ่ง:
+  //     มัน classify เป็น other conf สูง แต่ดัน keep=true → ไม่เคยลบเลย)
+  //   keep-if-unsure: kind แปลก/parse ไม่ตรง 'other' / confidence ต่ำกว่าเกณฑ์ = เก็บไว้ก่อน
   const explicitOther = kindRaw === "other";
-  const modelDiscard = raw.keep === false;
-  const keep = explicitOther && modelDiscard && confidence >= KEEP_THRESHOLD ? false : true;
+  const keep = explicitOther && confidence >= KEEP_THRESHOLD ? false : true;
   return { keep, kind: "other", confidence };
 }
 
