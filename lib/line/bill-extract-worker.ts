@@ -276,6 +276,62 @@ async function resolveCustomer(
 }
 
 /**
+ * เพดานสแกน eligible ต่อรอบ — ครอบคลุมจำนวนบิลทั้งหมดที่คาดว่ามี (หลักร้อย–พัน)
+ *   เรียงเก่า→ใหม่แล้วตัด done ออก จึงเดินหน้าได้เรื่อย ๆ ตราบใดที่ eligible ≤ ค่านี้
+ *   (ถ้าโตเกินนี้จริง ค่อยเพิ่ม/ทำ pagination — ตอนนี้พอสำหรับ scale ปัจจุบัน)
+ */
+const CANDIDATE_SCAN_LIMIT = 2000;
+/** เพดานดึง done set (attachment ที่มี entry แล้ว) */
+const DONE_SCAN_LIMIT = 50000;
+
+/**
+ * เลือกบิลที่ยังไม่มี entry (subtract-done + เรียงเก่า→ใหม่) — แยกออกมาให้เทสต์ได้
+ *   1) done set = attachment_id ที่มี bill_entries (ยังไม่ลบ) ทั้งหมด
+ *   2) eligible = message_attachments (stored + เอกสารการเงิน + มีไฟล์) เรียง created_at asc
+ *   3) ตัด done ออก → slice(limit) · เก่าก่อน = คิวเดินหน้าไม่ค้างชุดเดิม
+ */
+export async function selectExtractionCandidates(
+  db: SupabaseClient,
+  limit: number
+): Promise<QueueRow[]> {
+  // 1) done set (ทุก tenant — cron เป็น service-role สแกนรวม)
+  const { data: doneData, error: doneErr } = await db
+    .from("bill_entries")
+    .select("attachment_id")
+    .is("deleted_at", null)
+    .not("attachment_id", "is", null)
+    .limit(DONE_SCAN_LIMIT);
+  if (doneErr) {
+    console.warn(`[bill-extract-worker] select done error code=${(doneErr as { code?: string }).code ?? "?"}`);
+    return [];
+  }
+  const done = new Set(
+    ((doneData ?? []) as { attachment_id: string | null }[])
+      .map((e) => e.attachment_id)
+      .filter((x): x is string => !!x)
+  );
+
+  // 2) eligible เรียงเก่า→ใหม่ (สแกนครอบคลุม)
+  const { data, error } = await db
+    .from("message_attachments")
+    .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id")
+    .eq("fetch_status", "stored")
+    .in("attachment_type", ["image", "file"])
+    .in("doc_kind", BILL_DOC_KINDS)
+    .not("drive_file_id", "is", null)
+    .order("created_at", { ascending: true })
+    .limit(CANDIDATE_SCAN_LIMIT);
+  if (error) {
+    console.warn(`[bill-extract-worker] select queue error code=${(error as { code?: string }).code ?? "?"}`);
+    return [];
+  }
+
+  // 3) ตัด done ออก → เอา limit ตัวแรก (เก่าสุดที่ยังไม่ทำ)
+  const eligible = (data ?? []) as unknown as QueueRow[];
+  return eligible.filter((r) => !done.has(r.id)).slice(0, limit);
+}
+
+/**
  * ประมวลผลบิลที่รอสกัด (batch)
  *   @returns สรุปผล
  */
@@ -286,39 +342,14 @@ export async function processBillExtraction(
   const limit = opts.limit ?? 10;
   const empty: ExtractWorkerResult = { scanned: 0, created: 0, extracted: 0, blank: 0 };
 
-  // 1) หาบิลที่เก็บแล้ว + เป็นเอกสารการเงิน + ยังไม่มี entry
-  //    (ดึงมากกว่า limit เผื่อกรอง "มี entry แล้ว" ออก แล้วค่อยตัดให้เหลือ limit)
-  const { data, error } = await db
-    .from("message_attachments")
-    .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id")
-    .eq("fetch_status", "stored")
-    .in("attachment_type", ["image", "file"])
-    .in("doc_kind", BILL_DOC_KINDS)
-    .not("drive_file_id", "is", null)
-    .limit(limit * 5);
-
-  if (error) {
-    console.warn(`[bill-extract-worker] select queue error code=${(error as { code?: string }).code ?? "?"}`);
-    return empty;
-  }
-
-  const candidates = (data ?? []) as unknown as QueueRow[];
-  if (candidates.length === 0) return empty;
-
-  // 2) กรองอันที่ "มี bill_entries อยู่แล้ว" ออก (dedup) — query entries ของ attachment เหล่านี้
-  const attachmentIds = candidates.map((r) => r.id);
-  const { data: existing } = await db
-    .from("bill_entries")
-    .select("attachment_id")
-    .in("attachment_id", attachmentIds)
-    .is("deleted_at", null);
-  const done = new Set(
-    ((existing ?? []) as { attachment_id: string | null }[])
-      .map((e) => e.attachment_id)
-      .filter((x): x is string => !!x)
-  );
-
-  const rows = candidates.filter((r) => !done.has(r.id)).slice(0, limit);
+  // 1) หาบิลที่ "ยังไม่มี entry" จริง ๆ (กันคิวค้าง)
+  //    ★ บั๊กเดิม: ดึง 50 ใบแรกตาม default order (ไม่มี ORDER BY) แล้วค่อยกรอง done ออก
+  //      → ถ้า 50 ใบนั้น done หมด = เหลือ 0 ทั้งที่ยังมีอีกหลายร้อยใบ (created=0 ค้างตลอด)
+  //    วิธีแก้ (subtract-done): ดึง attachment_id ที่ "มี entry แล้ว" มาเป็น set ก่อน →
+  //      แล้วสแกน eligible แบบเรียงเก่า→ใหม่ (ครอบคลุมพอ) → ตัด done ออก → slice(limit)
+  //      เก่าก่อน = คิวเดินหน้าไปเรื่อย ๆ จนครบ (ไม่วนอยู่ชุดเดิม)
+  const rows = await selectExtractionCandidates(db, limit);
+  if (rows.length === 0) return empty;
 
   let scanned = 0;
   let created = 0;

@@ -15,6 +15,7 @@ vi.mock("@/lib/ai/bill-extract", () => ({
 
 import {
   processBillExtraction,
+  selectExtractionCandidates,
   decideEntrySide,
   redecideExistingEntries,
   normalizeName,
@@ -103,6 +104,53 @@ function makeWorkerDb(opts: {
 
 beforeEach(() => {
   extractMock.mockReset();
+});
+
+describe("selectExtractionCandidates — subtract-done กันคิวค้าง", () => {
+  const att = (id: string) => ({
+    id,
+    tenant_id: "t1",
+    attachment_type: "image",
+    doc_kind: "purchase",
+    drive_file_id: `t1/${id}.jpg`,
+    chat_message_id: null,
+  });
+
+  it("ตัดใบที่มี entry แล้วออก → คืนเฉพาะใบที่ยังไม่ทำ", async () => {
+    const { db } = makeWorkerDb({
+      attachments: [att("a1"), att("a2"), att("a3"), att("a4")],
+      existingEntries: [{ attachment_id: "a1" }, { attachment_id: "a2" }],
+    });
+    const rows = await selectExtractionCandidates(db, 10);
+    expect(rows.map((r) => r.id)).toEqual(["a3", "a4"]);
+  });
+
+  it("★ done เต็มชุดแรก แต่ยังมีใบใหม่ท้าย ๆ → ต้องโผล่ (ไม่ค้าง 0)", async () => {
+    // จำลองบั๊กเดิม: a1..a3 ทำแล้ว (เคยเป็น 50 ใบแรก) แต่ a4,a5 ยังไม่ทำ
+    const { db } = makeWorkerDb({
+      attachments: [att("a1"), att("a2"), att("a3"), att("a4"), att("a5")],
+      existingEntries: [{ attachment_id: "a1" }, { attachment_id: "a2" }, { attachment_id: "a3" }],
+    });
+    const rows = await selectExtractionCandidates(db, 10);
+    expect(rows.map((r) => r.id)).toEqual(["a4", "a5"]);
+  });
+
+  it("slice ตาม limit (เอาเก่าสุดก่อน)", async () => {
+    const { db } = makeWorkerDb({
+      attachments: [att("a1"), att("a2"), att("a3"), att("a4")],
+      existingEntries: [],
+    });
+    const rows = await selectExtractionCandidates(db, 2);
+    expect(rows.map((r) => r.id)).toEqual(["a1", "a2"]);
+  });
+
+  it("ทุกใบ done → คืน [] (ไม่มีอะไรให้ทำ)", async () => {
+    const { db } = makeWorkerDb({
+      attachments: [att("a1"), att("a2")],
+      existingEntries: [{ attachment_id: "a1" }, { attachment_id: "a2" }],
+    });
+    expect(await selectExtractionCandidates(db, 10)).toEqual([]);
+  });
 });
 
 describe("processBillExtraction", () => {
