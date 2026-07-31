@@ -98,6 +98,85 @@ export async function listAccountingTeamsWithLeader(
   });
 }
 
+/** 1 ตัวเลือกใน dropdown "เลือกชื่อของคุณ" (พนักงานเดิมที่เป็น staff ได้) */
+export type RegisterableEmployee = {
+  id: string;
+  /** ชื่อสำหรับแสดง (ชื่อเล่นก่อนชื่อจริง) — ★ ไม่คืน line_user_id/PII อื่น (PDPA) */
+  name: string;
+  /** true = record นี้เคยผูก LINE ไว้แล้ว (โชว์ป้าย "ผูกแล้ว"; ยังเลือกเพื่อ re-link ได้) */
+  linked: boolean;
+};
+
+/**
+ * รายชื่อพนักงานที่ "เป็น staff ได้ทั้งหมด" ให้ผู้ลงทะเบียนเลือกตัวเอง (scope tenant)
+ * เกณฑ์: active + ไม่ลบ + เป็นนักบัญชี "หรือ" หัวหน้าทีมบัญชี
+ *   - accountant: employees.employee_type = 'accountant'
+ *   - หัวหน้าทีมบัญชี: อยู่เป็น teams.lead_employee_id ของ teams type='accounting'
+ *     (หัวหน้าอาจ type อื่น จึงต้องรวมเข้ามาด้วย)
+ * ★ คืน "ทั้งหมด" (ทั้งที่ผูกแล้ว/ยังไม่ผูก) พร้อมธง linked — คนที่ผูกไว้ด้วย userId เก่าที่
+ *   login ไม่ได้ ต้องเลือกชื่อตัวเองเพื่อ re-link ได้
+ * ★ ผู้เรียก (route) ต้อง verify code ก่อน — ห้าม leak รายชื่อพนักงานให้คนไม่มีรหัส
+ * ★ อ่าน line_user_id ฝั่ง server เพื่อคำนวณ linked เท่านั้น — คืนแค่ { id, name, linked } ไม่คืน PII
+ */
+export async function listRegisterableEmployees(
+  db: DB,
+  tenantId: string
+): Promise<RegisterableEmployee[]> {
+  const displayName = (r: { first_name?: string | null; nickname?: string | null }) =>
+    (r.nickname?.trim() || r.first_name?.trim() || "").trim();
+
+  // (1) นักบัญชีทั้งหมด (active, ไม่ลบ) — ผูกแล้วหรือยังไม่ผูกก็คืน
+  const { data: accs, error: e1 } = await db
+    .from("employees")
+    .select("id, first_name, nickname, line_user_id")
+    .eq("tenant_id", tenantId)
+    .eq("employee_type", "accountant")
+    .eq("is_active", true)
+    .is("deleted_at", null)
+    .order("first_name", { ascending: true });
+  if (e1) throw new Error(e1.message);
+
+  const byId = new Map<string, RegisterableEmployee>();
+  for (const a of (accs ?? []) as {
+    id: string;
+    first_name?: string | null;
+    nickname?: string | null;
+    line_user_id?: string | null;
+  }[]) {
+    const name = displayName(a);
+    if (name) byId.set(a.id, { id: a.id, name, linked: !!a.line_user_id });
+  }
+
+  // (2) หัวหน้าทีมบัญชี (อาจไม่ใช่ type accountant) — join lead มาเช็คเงื่อนไขเดียวกัน
+  const { data: teams, error: e2 } = await db
+    .from("teams")
+    .select("id, lead:lead_employee_id(id, first_name, nickname, line_user_id, is_active, deleted_at)")
+    .eq("tenant_id", tenantId)
+    .eq("type", "accounting")
+    .is("deleted_at", null);
+  if (e2) throw new Error(e2.message);
+
+  type LeadRow = {
+    id?: string;
+    first_name?: string | null;
+    nickname?: string | null;
+    line_user_id?: string | null;
+    is_active?: boolean | null;
+    deleted_at?: string | null;
+  };
+  for (const t of (teams ?? []) as { lead: LeadRow | LeadRow[] | null }[]) {
+    const lead = Array.isArray(t.lead) ? t.lead[0] ?? null : t.lead;
+    if (!lead?.id) continue;
+    // เงื่อนไข: active + ไม่ลบ (ไม่กรอง line_user_id — คืนทั้งที่ผูกแล้ว/ยังไม่ผูก)
+    if (lead.is_active === false || lead.deleted_at) continue;
+    if (byId.has(lead.id)) continue;
+    const name = displayName(lead);
+    if (name) byId.set(lead.id, { id: lead.id, name, linked: !!lead.line_user_id });
+  }
+
+  return [...byId.values()];
+}
+
 export type RegisterStaffInput = {
   /** LINE userId จริง (มาจาก verifyLineIdToken เท่านั้น) */
   userId: string;
@@ -108,6 +187,12 @@ export type RegisterStaffInput = {
   teamName?: string | null;
   /** teamId ตรง ๆ (ถ้า UI ส่งมา) — จะ verify ว่าอยู่ tenant นี้ */
   teamId?: string | null;
+  /**
+   * ★ [เลือกจากรายชื่อ] employeeId ของพนักงานเดิมที่ผู้ลงทะเบียนเลือก
+   *   มีค่า = ผูก LINE เข้ากับ "record เดิมนั้น" (ไม่สร้างใหม่)
+   *   ไม่มี = พฤติกรรมเดิม (upsert by line_user_id / สร้างใหม่)
+   */
+  employeeId?: string | null;
 };
 
 export type RegisterStaffResult = {
@@ -128,7 +213,8 @@ async function upsertEmployeeByLineUser(
   db: DB,
   tenantId: string,
   input: RegisterStaffInput
-): Promise<{ id: string; created: boolean }> {
+): Promise<{ id: string; created: boolean; displayName: string }> {
+  const inputDisplayName = input.nickname?.trim() || input.name;
   const selectExisting = () =>
     db
       .from("employees")
@@ -156,7 +242,7 @@ async function upsertEmployeeByLineUser(
       .eq("id", existingId)
       .eq("tenant_id", tenantId);
     if (error) throw new Error(error.message);
-    return { id: existingId, created: false };
+    return { id: existingId, created: false, displayName: inputDisplayName };
   }
 
   // ยังไม่มี → สร้างใหม่ (นักบัญชี)
@@ -185,7 +271,7 @@ async function upsertEmployeeByLineUser(
           .update({ first_name: input.name, nickname: input.nickname ?? null })
           .eq("id", afterId)
           .eq("tenant_id", tenantId);
-        return { id: afterId, created: false };
+        return { id: afterId, created: false, displayName: inputDisplayName };
       }
     }
     throw new Error(error.message);
@@ -193,7 +279,105 @@ async function upsertEmployeeByLineUser(
 
   const newId = (inserted as { id?: string } | null)?.id;
   if (!newId) throw new Error("สร้างพนักงานไม่สำเร็จ");
-  return { id: newId, created: true };
+  return { id: newId, created: true, displayName: inputDisplayName };
+}
+
+// =====================================================================
+// 1b) ★ [เลือกจากรายชื่อ] ผูก LINE เข้ากับ "record เดิม" ที่ผู้ใช้เลือก
+// =====================================================================
+
+/** true ถ้าพนักงานคนนี้เป็นนักบัญชี หรือ เป็นหัวหน้าทีมบัญชี (มีสิทธิ์เป็น staff) */
+async function isAccountingEligible(
+  db: DB,
+  tenantId: string,
+  employeeId: string,
+  employeeType: string | null | undefined
+): Promise<boolean> {
+  if (employeeType === "accountant") return true;
+  // ไม่ใช่ accountant → ผ่านได้ก็ต่อเมื่อเป็นหัวหน้าทีมบัญชีสักทีม
+  const { data } = await db
+    .from("teams")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("lead_employee_id", employeeId)
+    .eq("type", "accounting")
+    .is("deleted_at", null)
+    .limit(1)
+    .maybeSingle();
+  return !!(data as { id?: string } | null)?.id;
+}
+
+/**
+ * ผูก/re-link LINE userId เข้ากับ record พนักงานเดิมที่เลือก (update ไม่สร้างใหม่)
+ * ตรวจก่อนผูก:
+ *   - มีจริงใน tenant, active, ไม่ลบ
+ *   - เป็น accountant หรือ หัวหน้าทีมบัญชี
+ *
+ * ★ re-link เสมอ (แก้เคสจริง): overwrite line_user_id ด้วย userId ปัจจุบันที่ verify จาก
+ *   login channel ปัจจุบันเสมอ — แม้ record จะเคยมี line_user_id เก่า (stale จาก channel เดิม
+ *   ที่ทำให้ login ไม่ได้) ก็ทับด้วยของใหม่ให้เข้าได้
+ * การจัดการเคสชนกัน:
+ *   - ถ้า userId ปัจจุบันนี้เคยไปผูกกับ "อีก record" ไว้ → ปลด line_user_id ของ record นั้นทิ้งก่อน
+ *     เพื่อให้ผลลัพธ์สุดท้าย = LINE นี้ชี้มาที่ record ที่เลือก "เท่านั้น" (ไม่ค้างผูกซ้อน)
+ */
+async function verifyAndLinkExistingEmployee(
+  db: DB,
+  tenantId: string,
+  employeeId: string,
+  input: RegisterStaffInput
+): Promise<{ id: string; created: boolean; displayName: string }> {
+  const { data, error } = await db
+    .from("employees")
+    .select("id, first_name, nickname, line_user_id, employee_type, is_active")
+    .eq("id", employeeId)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+
+  const emp = data as {
+    id?: string;
+    first_name?: string | null;
+    nickname?: string | null;
+    line_user_id?: string | null;
+    employee_type?: string | null;
+    is_active?: boolean | null;
+  } | null;
+
+  if (!emp?.id) throw new Error("ไม่พบรายชื่อพนักงานที่เลือก");
+  if (emp.is_active === false) throw new Error("รายชื่อนี้ถูกปิดใช้งาน กรุณาติดต่อผู้ดูแล");
+
+  const eligible = await isAccountingEligible(db, tenantId, emp.id, emp.employee_type);
+  if (!eligible) throw new Error("รายชื่อนี้ไม่ใช่นักบัญชี กรุณาติดต่อผู้ดูแล");
+
+  // ★ ไม่บล็อกกรณี record มี line_user_id เก่าอยู่ — ตั้งใจ re-link ทับด้วย userId ปัจจุบัน
+  //   (เคสจริง: userId เก่า stale จาก channel เดิม → login ไม่ได้ ต้องทับให้เข้าได้)
+
+  // (1) ปลด LINE นี้ออกจากทุก record เดิมในกองก่อน (เผื่อ userId ปัจจุบันเคยไปผูก record อื่น)
+  //     → กัน userId ค้างผูกกับหลาย record; เดี๋ยวขั้น (2) ค่อยผูกกลับที่ record ที่เลือก
+  const { error: unlinkErr } = await db
+    .from("employees")
+    .update({ line_user_id: null })
+    .eq("tenant_id", tenantId)
+    .eq("line_user_id", input.userId);
+  if (unlinkErr) throw new Error(unlinkErr.message);
+
+  // (2) ผูก LINE เข้ากับ record ที่เลือก + เติมชื่อ "เฉพาะเมื่อของเดิมว่าง"
+  //     (คงชื่อจริง/ชื่อเล่นเดิมในระบบไว้ ไม่ทับด้วยชื่อจากฟอร์ม)
+  const patch: Record<string, unknown> = { line_user_id: input.userId };
+  if (!emp.first_name?.trim() && input.name?.trim()) patch.first_name = input.name.trim();
+  if (!emp.nickname?.trim() && input.nickname?.trim()) patch.nickname = input.nickname.trim();
+
+  const { error: linkErr } = await db
+    .from("employees")
+    .update(patch)
+    .eq("id", employeeId)
+    .eq("tenant_id", tenantId);
+  if (linkErr) throw new Error(linkErr.message);
+
+  const displayName =
+    emp.nickname?.trim() || emp.first_name?.trim() || input.nickname?.trim() || input.name;
+  return { id: employeeId, created: false, displayName };
 }
 
 // =====================================================================
@@ -295,8 +479,12 @@ export async function registerStaff(
   tenantId: string,
   input: RegisterStaffInput
 ): Promise<RegisterStaffResult> {
-  // 1) upsert พนักงานตาม LINE userId
-  const employee = await upsertEmployeeByLineUser(db, tenantId, input);
+  // 1) หา/ผูกพนักงาน:
+  //    - ส่ง employeeId มา → ผูก LINE เข้า record เดิมที่เลือก (ไม่สร้างใหม่)
+  //    - ไม่ส่ง → พฤติกรรมเดิม (upsert by line_user_id / สร้างใหม่) เพื่อ backward compat
+  const employee = input.employeeId
+    ? await verifyAndLinkExistingEmployee(db, tenantId, input.employeeId, input)
+    : await upsertEmployeeByLineUser(db, tenantId, input);
 
   // 2) ผูกทีม (best-effort)
   const team = await resolveTeam(db, tenantId, input);
@@ -326,7 +514,8 @@ export async function registerStaff(
 
   return {
     employeeId: employee.id,
-    employeeName: input.nickname?.trim() || input.name,
+    // เส้นเลือก record เดิม = ใช้ชื่อจริงในระบบ; เส้นสร้างใหม่ = ชื่อจากฟอร์ม
+    employeeName: employee.displayName,
     created: employee.created,
     teamLinked: !!team,
     teamName: team?.name ?? null,

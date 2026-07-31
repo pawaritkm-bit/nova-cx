@@ -12,7 +12,12 @@ export const registerStaffSchema = z.object({
   idToken: z.string().trim().min(1, "ไม่พบ idToken").max(8000, "idToken ไม่ถูกต้อง"),
   // รหัสลงทะเบียน (secret) — เทียบ constant-time ที่ route
   code: z.string().min(1, "กรุณากรอกรหัสลงทะเบียน").max(200, "รหัสลงทะเบียนไม่ถูกต้อง"),
-  name: z.string().trim().min(1, "กรุณากรอกชื่อ-นามสกุล").max(200, "ชื่อยาวเกินไป"),
+  // ชื่อ-นามสกุล — optional เพราะเส้น "เลือกจากรายชื่อ" (employeeId) ใช้ชื่อเดิมในระบบ
+  // ไม่ต้องกรอก; เส้นสร้างใหม่จะ fallback เป็นชื่อจาก LINE ที่ route
+  name: z.preprocess(
+    emptyToUndef,
+    z.string().trim().min(1, "กรุณากรอกชื่อ-นามสกุล").max(200, "ชื่อยาวเกินไป").optional()
+  ),
   nickname: z.preprocess(
     emptyToUndef,
     z.string().trim().max(200, "ชื่อเล่นยาวเกินไป").optional()
@@ -24,6 +29,11 @@ export const registerStaffSchema = z.object({
   teamId: z.preprocess(
     emptyToUndef,
     z.string().uuid("รหัสทีมไม่ถูกต้อง").optional()
+  ),
+  // ★ [เลือกจากรายชื่อ] id พนักงานเดิมที่ผู้ใช้เลือก — ผูก LINE เข้า record นั้น (ไม่สร้างใหม่)
+  employeeId: z.preprocess(
+    emptyToUndef,
+    z.string().uuid("รหัสพนักงานไม่ถูกต้อง").optional()
   ),
 });
 

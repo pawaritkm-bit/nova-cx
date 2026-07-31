@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TeamLeaderOption } from "@/lib/register-staff/service";
+import type { TeamLeaderOption, RegisterableEmployee } from "@/lib/register-staff/service";
+
+/** ค่าพิเศษใน dropdown ชื่อ = "ไม่มีชื่อฉันในรายการ" → กรอกชื่อเอง (สร้างพนักงานใหม่) */
+const MANUAL_EMPLOYEE = "__manual__";
 
 /** ความยาวขั้นต่ำของรหัสก่อนจะ auto-โหลดรายชื่อทีม (กันยิง 403 รัวตอนพิมพ์ยังไม่ครบ) */
 const MIN_CODE_LEN = 6;
@@ -92,6 +95,12 @@ export default function RegisterClient({
   const [teamsLoading, setTeamsLoading] = useState(false);
   const [teamsError, setTeamsError] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState("");
+
+  // dropdown "เลือกชื่อของคุณ" — รายชื่อพนักงานเดิมที่ยังไม่ผูก LINE (โหลดคู่กับรายชื่อทีม)
+  const [employeeOptions, setEmployeeOptions] = useState<RegisterableEmployee[] | null>(null);
+  // "" = ยังไม่เลือก · <uuid> = เลือก record เดิม · MANUAL_EMPLOYEE = กรอกชื่อเอง
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
+
   // รหัสที่ "เริ่มโหลดไปแล้ว" (สำเร็จ/กำลังโหลด) — กันยิงซ้ำรหัสเดิม (idempotent)
   const loadedCodeRef = useRef<string>("");
 
@@ -113,21 +122,38 @@ export default function RegisterClient({
     setTeamsLoading(true);
     setTeamsError(null);
     try {
-      const res = await fetch("/api/register-staff/teams", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: c }),
-      });
-      const data = await res.json();
-      if (res.ok && data?.ok) {
-        setTeamOptions(data.teams as TeamLeaderOption[]);
-        if ((data.teams as TeamLeaderOption[]).length === 0) {
+      // โหลดคู่กัน: รายชื่อทีม (เลือกหัวหน้า) + รายชื่อพนักงานเดิม (เลือกชื่อตัวเอง)
+      const [teamsRes, empRes] = await Promise.all([
+        fetch("/api/register-staff/teams", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: c }),
+        }),
+        fetch("/api/register-staff/employees", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: c }),
+        }),
+      ]);
+      const teamsData = await teamsRes.json();
+      const empData = await empRes.json();
+
+      if (teamsRes.status === 403) {
+        setTeamsError("รหัสลงทะเบียนไม่ถูกต้อง");
+        return;
+      }
+      if (teamsRes.ok && teamsData?.ok) {
+        setTeamOptions(teamsData.teams as TeamLeaderOption[]);
+        if ((teamsData.teams as TeamLeaderOption[]).length === 0) {
           setTeamsError("ยังไม่มีทีมบัญชีในระบบ — พิมพ์ชื่อทีมเองด้านล่างได้");
         }
-      } else if (res.status === 403) {
-        setTeamsError("รหัสลงทะเบียนไม่ถูกต้อง");
       } else {
-        setTeamsError(data?.message ?? "โหลดรายชื่อทีมไม่สำเร็จ");
+        setTeamsError(teamsData?.message ?? "โหลดรายชื่อทีมไม่สำเร็จ");
+      }
+
+      // รายชื่อพนักงาน (best-effort — ถ้าโหลดไม่ได้ ผู้ใช้ยังกรอกชื่อเองได้)
+      if (empRes.ok && empData?.ok) {
+        setEmployeeOptions(empData.employees as RegisterableEmployee[]);
       }
     } catch {
       loadedCodeRef.current = ""; // network error = ให้ลองใหม่ได้
@@ -200,12 +226,26 @@ export default function RegisterClient({
     };
   }, [liffId, featureOn]);
 
+  // มีรายชื่อให้เลือกไหม / เลือก record เดิมอยู่ไหม / โหมดกรอกเอง
+  const hasEmployeeList = !!employeeOptions && employeeOptions.length > 0;
+  const useExistingEmployee =
+    !!selectedEmployeeId && selectedEmployeeId !== MANUAL_EMPLOYEE;
+  const manualMode = !hasEmployeeList || selectedEmployeeId === MANUAL_EMPLOYEE;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!idToken) {
       setSubmitError("ยังยืนยันตัวตน LINE ไม่สำเร็จ กรุณาลองใหม่");
       return;
     }
+    // ถ้ามีรายชื่อให้เลือกแต่ยังไม่เลือก (และไม่ได้กดกรอกเอง) → เตือน
+    if (hasEmployeeList && !selectedEmployeeId) {
+      setSubmitError("กรุณาเลือกชื่อของคุณจากรายชื่อ หรือเลือก \"ไม่มีชื่อฉันในรายการ\"");
+      return;
+    }
+    const selectedName = useExistingEmployee
+      ? employeeOptions?.find((x) => x.id === selectedEmployeeId)?.name ?? ""
+      : "";
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -214,8 +254,11 @@ export default function RegisterClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           idToken,
-          name: name.trim(),
-          nickname: nickname.trim() || undefined,
+          // เลือก record เดิม → ส่ง employeeId (ผูก LINE เข้า record นั้น) + ชื่อเดิมเป็น name
+          // กรอกเอง → ส่ง name/nickname จากฟอร์ม (สร้างพนักงานใหม่)
+          employeeId: useExistingEmployee ? selectedEmployeeId : undefined,
+          name: useExistingEmployee ? selectedName || undefined : name.trim() || undefined,
+          nickname: useExistingEmployee ? undefined : nickname.trim() || undefined,
           // เลือกจาก dropdown = ส่ง teamId (แม่นสุด); ไม่ได้เลือก = fallback พิมพ์ชื่อทีม
           teamId: selectedTeamId || undefined,
           teamName: selectedTeamId ? undefined : teamName.trim() || undefined,
@@ -328,25 +371,6 @@ export default function RegisterClient({
           ยืนยัน LINE แล้ว — กรอกข้อมูลเพื่อผูกบัญชีของคุณกับระบบ NOVA-CX
         </p>
 
-        <Field label="ชื่อ-นามสกุล *">
-          <input
-            required
-            maxLength={200}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="เช่น สมชาย ใจดี"
-            style={inputStyle}
-          />
-        </Field>
-        <Field label="ชื่อเล่น">
-          <input
-            maxLength={200}
-            value={nickname}
-            onChange={(e) => setNickname(e.target.value)}
-            placeholder="เช่น ชาย"
-            style={inputStyle}
-          />
-        </Field>
         <Field label="รหัสลงทะเบียน *">
           <input
             required
@@ -354,9 +378,11 @@ export default function RegisterClient({
             value={code}
             onChange={(e) => {
               setCode(e.target.value);
-              // รหัสเปลี่ยน → รายชื่อทีมเดิมใช้ไม่ได้แล้ว รีเซ็ต + ให้ auto-โหลดใหม่
+              // รหัสเปลี่ยน → รายชื่อเดิมใช้ไม่ได้แล้ว รีเซ็ต + ให้ auto-โหลดใหม่
               setTeamOptions(null);
               setSelectedTeamId("");
+              setEmployeeOptions(null);
+              setSelectedEmployeeId("");
               setTeamsError(null);
               loadedCodeRef.current = ""; // เคลียร์ guard → debounce/blur โหลดรหัสใหม่ได้
             }}
@@ -366,6 +392,50 @@ export default function RegisterClient({
             autoComplete="off"
           />
         </Field>
+
+        {/* เลือกชื่อของคุณจากรายชื่อพนักงานเดิม — auto-โหลดเมื่อกรอกรหัสครบ */}
+        {hasEmployeeList && (
+          <Field label="เลือกชื่อของคุณ *">
+            <select
+              value={selectedEmployeeId}
+              onChange={(e) => setSelectedEmployeeId(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="">— เลือกชื่อของคุณ —</option>
+              {employeeOptions!.map((emp) => (
+                <option key={emp.id} value={emp.id}>
+                  {emp.linked ? `${emp.name} (ผูกแล้ว)` : emp.name}
+                </option>
+              ))}
+              <option value={MANUAL_EMPLOYEE}>ไม่มีชื่อฉันในรายการ (กรอกเอง)</option>
+            </select>
+          </Field>
+        )}
+
+        {/* ชื่อ-นามสกุล/ชื่อเล่น — เฉพาะโหมดกรอกเอง (พนักงานใหม่จริง ๆ) */}
+        {manualMode && (
+          <>
+            <Field label="ชื่อ-นามสกุล *">
+              <input
+                required
+                maxLength={200}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="เช่น สมชาย ใจดี"
+                style={inputStyle}
+              />
+            </Field>
+            <Field label="ชื่อเล่น">
+              <input
+                maxLength={200}
+                value={nickname}
+                onChange={(e) => setNickname(e.target.value)}
+                placeholder="เช่น ชาย"
+                style={inputStyle}
+              />
+            </Field>
+          </>
+        )}
 
         {/* เลือกหัวหน้าทีม — auto-โหลดเมื่อกรอกรหัสครบ (ไม่ต้องกดปุ่ม) */}
         <Field label="หัวหน้าทีมของคุณ">

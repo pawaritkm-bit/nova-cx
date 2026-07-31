@@ -3,6 +3,7 @@ import {
   registerStaff,
   resolveRegisterTenantId,
   listAccountingTeamsWithLeader,
+  listRegisterableEmployees,
   type RegisterStaffInput,
 } from "@/lib/register-staff/service";
 import { makeFakeDb, type ResolverArg, type Capture } from "../helpers/fake-supabase";
@@ -194,6 +195,224 @@ describe("registerStaff", () => {
     );
     const res = await registerStaff(db, TENANT, baseInput({ teamName: undefined }));
     expect(res.teamLinked).toBe(false);
+  });
+});
+
+// =====================================================================
+// ★ [เลือกจากรายชื่อ] registerStaff แบบส่ง employeeId → ผูก/re-link record เดิม
+// =====================================================================
+describe("registerStaff — เลือก employeeId (ผูก record เดิม / re-link)", () => {
+  /** resolver สำหรับเส้น employeeId: employees(select)=record, employees(update)=ok */
+  function makeLinkResolver(opts: {
+    record: Record<string, unknown> | null;
+    /** ผล eligibility (teams maybeSingle) เมื่อ record ไม่ใช่ accountant */
+    leadOfTeam?: { id: string } | null;
+  }) {
+    return (q: ResolverArg): { data?: unknown; error?: unknown } => {
+      if (q.table === "employees") {
+        if (q.op === "update") return { data: null };
+        return { data: opts.record }; // select maybeSingle → record ที่เลือก
+      }
+      if (q.table === "teams") {
+        // eligibility ใช้ maybeSingle; resolveTeam (teamName) ใช้ await → []
+        if (q.terminal === "await") return { data: [] };
+        return { data: opts.leadOfTeam ?? null };
+      }
+      if (q.table === "chat_members") return { data: [] };
+      if (q.table === "audit_logs") return { data: null };
+      if (q.table === "tenants") return { data: { id: TENANT } };
+      return { data: null };
+    };
+  }
+
+  it("เลือก record accountant ที่ยังไม่ผูก → update line_user_id (ไม่ insert) + created=false + ใช้ชื่อเดิม", async () => {
+    const capture: Capture = { inserts: [], updates: [], filters: [] };
+    const { db } = makeFakeDb(
+      makeLinkResolver({
+        record: {
+          id: "emp-5",
+          first_name: "พิมพ์ใจ",
+          nickname: null,
+          line_user_id: null,
+          employee_type: "accountant",
+          is_active: true,
+        },
+      }),
+      capture
+    );
+    const res = await registerStaff(db, TENANT, baseInput({ employeeId: "emp-5", userId: "Unew" }));
+
+    expect(res.created).toBe(false);
+    expect(res.employeeId).toBe("emp-5");
+    expect(res.employeeName).toBe("พิมพ์ใจ"); // คงชื่อเดิมในระบบ ไม่ใช่ชื่อจากฟอร์ม
+    // ไม่สร้างพนักงานใหม่
+    expect(capture.inserts.find((i) => i.table === "employees")).toBeUndefined();
+    // link update: set line_user_id = userId ปัจจุบัน
+    const empUpdates = capture.updates.filter((u) => u.table === "employees");
+    expect(
+      empUpdates.some((u) => (u.payload as Record<string, unknown>).line_user_id === "Unew")
+    ).toBe(true);
+  });
+
+  it("re-link: record มี line_user_id เก่า (stale) → ทับด้วย userId ปัจจุบัน (ไม่ error)", async () => {
+    const capture: Capture = { inserts: [], updates: [], filters: [] };
+    const { db } = makeFakeDb(
+      makeLinkResolver({
+        record: {
+          id: "emp-7",
+          first_name: "เก่ง",
+          nickname: null,
+          line_user_id: "Uold-channel", // ผูกไว้ด้วย userId เก่า (login ไม่ได้)
+          employee_type: "accountant",
+          is_active: true,
+        },
+      }),
+      capture
+    );
+    const res = await registerStaff(db, TENANT, baseInput({ employeeId: "emp-7", userId: "Unew" }));
+
+    expect(res.created).toBe(false);
+    expect(res.employeeId).toBe("emp-7");
+    const empUpdates = capture.updates.filter((u) => u.table === "employees");
+    // ต้องมี update ที่ทับ line_user_id เป็น userId ปัจจุบัน
+    expect(
+      empUpdates.some((u) => (u.payload as Record<string, unknown>).line_user_id === "Unew")
+    ).toBe(true);
+  });
+
+  it("ย้าย userId: ปลด line_user_id ออกจาก record อื่นที่ userId ปัจจุบันเคยผูก (update line_user_id=null filter by userId)", async () => {
+    const capture: Capture = { inserts: [], updates: [], filters: [] };
+    const { db } = makeFakeDb(
+      makeLinkResolver({
+        record: {
+          id: "emp-8",
+          first_name: "นก",
+          nickname: null,
+          line_user_id: null,
+          employee_type: "accountant",
+          is_active: true,
+        },
+      }),
+      capture
+    );
+    await registerStaff(db, TENANT, baseInput({ employeeId: "emp-8", userId: "Umove" }));
+
+    // มี update employees ที่ set line_user_id=null (unlink อันเก่า)
+    const empUpdates = capture.updates.filter((u) => u.table === "employees");
+    expect(
+      empUpdates.some((u) => (u.payload as Record<string, unknown>).line_user_id === null)
+    ).toBe(true);
+    // และ filter unlink ยิงด้วย line_user_id = userId ปัจจุบัน (ปลดเฉพาะของ userId นี้)
+    const empFilters = capture.filters.filter((f) => f.table === "employees");
+    expect(
+      empFilters.some((f) => f.column === "line_user_id" && f.value === "Umove")
+    ).toBe(true);
+  });
+
+  it("record ไม่ใช่ accountant และไม่ใช่หัวหน้าทีมบัญชี → throw (กันคนนอก)", async () => {
+    const { db } = makeFakeDb(
+      makeLinkResolver({
+        record: {
+          id: "emp-9",
+          first_name: "ขาย",
+          nickname: null,
+          line_user_id: null,
+          employee_type: "sales",
+          is_active: true,
+        },
+        leadOfTeam: null, // ไม่ได้เป็นหัวหน้าทีมบัญชี
+      })
+    );
+    await expect(
+      registerStaff(db, TENANT, baseInput({ employeeId: "emp-9" }))
+    ).rejects.toThrow();
+  });
+
+  it("record เป็นหัวหน้าทีมบัญชี (type อื่น) → ผูกได้", async () => {
+    const capture: Capture = { inserts: [], updates: [], filters: [] };
+    const { db } = makeFakeDb(
+      makeLinkResolver({
+        record: {
+          id: "emp-10",
+          first_name: "หัวหน้า",
+          nickname: null,
+          line_user_id: null,
+          employee_type: "other",
+          is_active: true,
+        },
+        leadOfTeam: { id: "team-1" }, // เป็นหัวหน้าทีมบัญชี → eligible
+      }),
+      capture
+    );
+    const res = await registerStaff(db, TENANT, baseInput({ employeeId: "emp-10", userId: "Ux" }));
+    expect(res.created).toBe(false);
+    expect(res.employeeId).toBe("emp-10");
+  });
+
+  it("record ที่เลือกถูกปิดใช้งาน (is_active=false) → throw", async () => {
+    const { db } = makeFakeDb(
+      makeLinkResolver({
+        record: {
+          id: "emp-11",
+          first_name: "ปิด",
+          nickname: null,
+          line_user_id: null,
+          employee_type: "accountant",
+          is_active: false,
+        },
+      })
+    );
+    await expect(
+      registerStaff(db, TENANT, baseInput({ employeeId: "emp-11" }))
+    ).rejects.toThrow();
+  });
+});
+
+describe("listRegisterableEmployees", () => {
+  it("คืน staff ทั้งหมด (accountant + หัวหน้าทีมบัญชี) พร้อมธง linked, dedup, กรอง inactive/deleted", async () => {
+    const capture: Capture = { inserts: [], updates: [], filters: [] };
+    const { db } = makeFakeDb((q) => {
+      if (q.table === "employees") {
+        return {
+          data: [
+            { id: "e1", first_name: "สมชาย", nickname: null, line_user_id: null },
+            { id: "e2", first_name: "สมหญิง", nickname: "หญิง", line_user_id: "Ulinked" },
+          ],
+        };
+      }
+      if (q.table === "teams") {
+        return {
+          data: [
+            {
+              id: "t1",
+              lead: { id: "e3", first_name: "หัวหน้าบัญชี", nickname: null, line_user_id: null, is_active: true, deleted_at: null },
+            },
+            // dedup: e2 เป็นหัวหน้าด้วย แต่มีในลิสต์ accountant แล้ว
+            {
+              id: "t2",
+              lead: { id: "e2", first_name: "สมหญิง", nickname: "หญิง", line_user_id: "Ulinked", is_active: true, deleted_at: null },
+            },
+            // inactive → ตัดออก
+            {
+              id: "t3",
+              lead: { id: "e4", first_name: "ปิด", nickname: null, line_user_id: null, is_active: false, deleted_at: null },
+            },
+          ],
+        };
+      }
+      return { data: null };
+    }, capture);
+
+    const emps = await listRegisterableEmployees(db, TENANT);
+    expect(emps).toEqual([
+      { id: "e1", name: "สมชาย", linked: false },
+      { id: "e2", name: "หญิง", linked: true }, // มี line_user_id → linked
+      { id: "e3", name: "หัวหน้าบัญชี", linked: false },
+    ]);
+    // scope: employees ต้อง filter tenant + employee_type=accountant + is_active
+    const ef = capture.filters.filter((f) => f.table === "employees");
+    expect(ef.some((f) => f.column === "tenant_id" && f.value === TENANT)).toBe(true);
+    expect(ef.some((f) => f.column === "employee_type" && f.value === "accountant")).toBe(true);
   });
 });
 
