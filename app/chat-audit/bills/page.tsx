@@ -54,6 +54,8 @@ type RawBillRow = {
   drive_file_id: string | null;
   created_at: string;
   doc_kind: string | null;
+  attachment_type: string | null;
+  original_name: string | null;
   chat_messages: {
     sent_at: string | null;
     chat_groups: {
@@ -76,6 +78,8 @@ function toBillItem(row: RawBillRow): BillItem {
     customerCode: customer?.customer_code ?? null,
     customerName: customer?.name ?? null,
     docKind: normalizeDocKind(row.doc_kind),
+    attachmentType: row.attachment_type === "file" ? "file" : "image",
+    originalName: row.original_name,
   };
 }
 
@@ -99,7 +103,7 @@ async function fetchAllBillItems(
     const { data, error } = await service
       .from("message_attachments")
       .select(
-        `id, drive_file_id, created_at, doc_kind,
+        `id, drive_file_id, created_at, doc_kind, attachment_type, original_name,
          chat_messages!inner (
            sent_at,
            chat_groups!inner (
@@ -109,7 +113,7 @@ async function fetchAllBillItems(
          )`
       )
       .eq("tenant_id", tenantId)
-      .eq("attachment_type", "image")
+      .in("attachment_type", ["image", "file"])
       .eq("fetch_status", "stored")
       .order("created_at", { ascending: false })
       .range(from, from + SCAN_CHUNK - 1);
@@ -176,6 +180,19 @@ function formatDateShort(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "-";
   return d.toLocaleDateString("th-TH", { year: "numeric", month: "short", day: "numeric" });
+}
+
+/** ไอคอนไฟล์ตามนามสกุล (เดาจาก original_name ก่อน แล้ว objectPath) — PDF = 📄, อื่น = 📎 */
+function fileIcon(name: string | null, objectPath: string | null): string {
+  const src = (name || objectPath || "").toLowerCase();
+  if (src.endsWith(".pdf")) return "📄";
+  return "📎";
+}
+
+/** ชื่อไฟล์ที่โชว์: original_name (ถ้ามี) หรือ "เอกสาร {วันที่}" เมื่อไม่มีชื่อ */
+function fileDisplayName(name: string | null, billDate: string): string {
+  const n = (name ?? "").trim();
+  return n || `เอกสาร ${formatDateShort(billDate)}`;
 }
 
 /** ชื่อลูกค้าแสดงผล (มีรหัส → "N023 · ชื่อ") */
@@ -416,6 +433,9 @@ export default async function BillsPage({
                             {KIND_META[k].label} {g.kinds[k]}
                           </span>
                         ))}
+                        {g.fileCount > 0 ? (
+                          <span className="kind-badge k-file">ไฟล์ {g.fileCount}</span>
+                        ) : null}
                       </span>
 
                       <span className="cust-total">{g.total.toLocaleString("th-TH")} ใบ</span>
@@ -429,40 +449,76 @@ export default async function BillsPage({
                           <p className="empty">ไม่มีบิลในหน้านี้</p>
                         ) : (
                           <div className="bills-grid">
-                            {openBills.map((b) => (
-                              <div key={b.id} className="bill-card">
-                                {b.docKind ? (
-                                  <span className={`bill-kind ${KIND_META[b.docKind].cls}`}>
-                                    {KIND_META[b.docKind].label}
-                                  </span>
-                                ) : null}
-                                {/* ปุ่มลบมุมการ์ด (admin) — ยืนยันก่อนลบเสมอ, ลบไฟล์จริง + mark DB */}
-                                <DeleteBillButton attachmentId={b.id} />
-                                {b.viewUrl ? (
-                                  <a href={b.viewUrl} target="_blank" rel="noopener noreferrer" className="bill-thumb" aria-label="เปิดรูปบิล">
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={b.viewUrl} alt="รูปบิล" loading="lazy" />
-                                  </a>
-                                ) : (
-                                  <div className="bill-thumb bill-thumb-empty" aria-hidden="true">เปิดไม่ได้</div>
-                                )}
-                                <div className="bill-meta">
-                                  <div className="bill-date">{formatBillDate(b.billDate)}</div>
-                                  {b.viewUrl ? (
-                                    <a
-                                      href={`${b.viewUrl}&download`}
-                                      className="btn bill-open"
-                                      target="_blank"
-                                      rel="noopener noreferrer"
+                            {openBills.map((b) =>
+                              b.attachmentType === "file" ? (
+                                /* ---- การ์ดไฟล์ (PDF/เอกสาร) — ไอคอน + ชื่อไฟล์ + เปิด/ดาวน์โหลด ---- */
+                                <div key={b.id} className="bill-card bill-card-file">
+                                  <span className="bill-kind k-file">ไฟล์</span>
+                                  {/* ปุ่มลบมุมการ์ด (admin) — reuse ตัวเดียวกับบิล */}
+                                  <DeleteBillButton attachmentId={b.id} />
+                                  <div className="file-body">
+                                    <span className="file-icon" aria-hidden="true">
+                                      {fileIcon(b.originalName, b.objectPath)}
+                                    </span>
+                                    <span
+                                      className="file-name"
+                                      title={fileDisplayName(b.originalName, b.billDate)}
                                     >
-                                      เปิด / ดาวน์โหลด
+                                      {fileDisplayName(b.originalName, b.billDate)}
+                                    </span>
+                                  </div>
+                                  <div className="bill-meta">
+                                    <div className="bill-date">{formatBillDate(b.billDate)}</div>
+                                    {b.viewUrl ? (
+                                      <a
+                                        href={`${b.viewUrl}&download`}
+                                        className="btn bill-open"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                      >
+                                        เปิด / ดาวน์โหลด
+                                      </a>
+                                    ) : (
+                                      <span className="btn bill-open bill-open-disabled" aria-disabled="true">ไฟล์ไม่พร้อม</span>
+                                    )}
+                                  </div>
+                                </div>
+                              ) : (
+                                /* ---- การ์ดรูปบิล (image) — thumbnail เดิม ---- */
+                                <div key={b.id} className="bill-card">
+                                  {b.docKind ? (
+                                    <span className={`bill-kind ${KIND_META[b.docKind].cls}`}>
+                                      {KIND_META[b.docKind].label}
+                                    </span>
+                                  ) : null}
+                                  {/* ปุ่มลบมุมการ์ด (admin) — ยืนยันก่อนลบเสมอ, ลบไฟล์จริง + mark DB */}
+                                  <DeleteBillButton attachmentId={b.id} />
+                                  {b.viewUrl ? (
+                                    <a href={b.viewUrl} target="_blank" rel="noopener noreferrer" className="bill-thumb" aria-label="เปิดรูปบิล">
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img src={b.viewUrl} alt="รูปบิล" loading="lazy" />
                                     </a>
                                   ) : (
-                                    <span className="btn bill-open bill-open-disabled" aria-disabled="true">ไฟล์ไม่พร้อม</span>
+                                    <div className="bill-thumb bill-thumb-empty" aria-hidden="true">เปิดไม่ได้</div>
                                   )}
+                                  <div className="bill-meta">
+                                    <div className="bill-date">{formatBillDate(b.billDate)}</div>
+                                    {b.viewUrl ? (
+                                      <a
+                                        href={`${b.viewUrl}&download`}
+                                        className="btn bill-open"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                      >
+                                        เปิด / ดาวน์โหลด
+                                      </a>
+                                    ) : (
+                                      <span className="btn bill-open bill-open-disabled" aria-disabled="true">ไฟล์ไม่พร้อม</span>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              )
+                            )}
                           </div>
                         )}
 

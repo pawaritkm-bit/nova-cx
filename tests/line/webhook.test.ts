@@ -88,6 +88,25 @@ describe("trimLineEvent (follow/unfollow เดิมไม่พัง)", () =>
     expect(trimmed.message?.id).toBe("m1");
     expect(trimmed.message?.text).toBe("ยอดเดือนนี้");
   });
+
+  it("message file → เก็บ fileName ไว้ส่งต่อ (ไว้ตั้งชื่อ/โชว์ original_name)", () => {
+    const trimmed = trimLineEvent({
+      type: "message",
+      source: { type: "group", groupId: "Cg1", userId: "Uabc" },
+      message: { id: "f1", type: "file", fileName: "ใบกำกับภาษี ม.ค..pdf" },
+    });
+    expect(trimmed.message?.type).toBe("file");
+    expect(trimmed.message?.fileName).toBe("ใบกำกับภาษี ม.ค..pdf");
+  });
+
+  it("message ที่ไม่ใช่ file → ไม่มี fileName ติดไป (แม้ event เผลอส่งมา)", () => {
+    const trimmed = trimLineEvent({
+      type: "message",
+      source: { type: "group", groupId: "Cg1", userId: "Uabc" },
+      message: { id: "i1", type: "image", fileName: "should-not-carry.png" },
+    });
+    expect(trimmed.message?.fileName).toBeUndefined();
+  });
 });
 
 describe("toQueuedEvent (เข้ารหัสก่อนเก็บ — ไม่มี plaintext ในคิว)", () => {
@@ -124,5 +143,18 @@ describe("toQueuedEvent (เข้ารหัสก่อนเก็บ — �
     expect(queued.type).toBe("follow");
     expect(queued.source?.userId).toBe("Uxyz");
     expect(queued.message).toBeUndefined();
+  });
+
+  it("message file → fileName ผ่านเข้าคิว (ไม่เข้ารหัส เพราะไม่ใช่เนื้อหาแชต)", () => {
+    const trimmed = trimLineEvent({
+      type: "message",
+      source: { type: "group", groupId: "Cg1", userId: "Uabc" },
+      message: { id: "f1", type: "file", fileName: "receipt-2026-07.pdf" },
+    });
+    const queued = toQueuedEvent(trimmed, fakeEncrypt);
+    expect(queued.message?.type).toBe("file");
+    expect(queued.message?.fileName).toBe("receipt-2026-07.pdf");
+    // ไม่มี text/contentEnc ปนมา (file ไม่มีเนื้อหาแชต)
+    expect(queued.message?.contentEnc).toBeNull();
   });
 });

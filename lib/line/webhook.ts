@@ -22,6 +22,8 @@ export type LineWebhookEvent = {
     id?: string;
     type?: string;
     text?: string;
+    /** ชื่อไฟล์เดิม — LINE ส่งมาเฉพาะ file message (type='file') */
+    fileName?: string;
   };
 };
 
@@ -44,6 +46,8 @@ export type TrimmedLineEvent = {
     id?: string;
     type?: string;
     text?: string;
+    /** ชื่อไฟล์เดิม (file message เท่านั้น) — ส่งต่อ handler เก็บลง original_name */
+    fileName?: string;
   };
 };
 
@@ -67,6 +71,8 @@ export type QueuedLineEvent = {
     contentEnc?: string | null;
     /** true เมื่อมี text แต่เข้ารหัสไม่ได้ (ไม่มี CREDENTIAL_ENC_KEY) → ตัดทิ้งไม่เก็บ plaintext */
     encSkipped?: boolean;
+    /** ชื่อไฟล์เดิม (file message เท่านั้น) — ไม่ใช่เนื้อหาแชต ไม่เข้ารหัส (ไว้โชว์/ตั้งชื่อไฟล์) */
+    fileName?: string;
   };
 };
 
@@ -91,6 +97,10 @@ export function trimLineEvent(event: LineWebhookEvent): TrimmedLineEvent {
     if (event.message.id) trimmed.message.id = event.message.id;
     if (event.message.type) trimmed.message.type = event.message.type;
     if (typeof event.message.text === "string") trimmed.message.text = event.message.text;
+    // file message เท่านั้น: เก็บชื่อไฟล์เดิมไว้ส่งต่อ handler (ไม่ใช่เนื้อหาแชต)
+    if (event.message.type === "file" && typeof event.message.fileName === "string") {
+      trimmed.message.fileName = event.message.fileName;
+    }
   }
   return trimmed;
 }
@@ -113,10 +123,14 @@ export function toQueuedEvent(
   if (event.source) queued.source = { ...event.source };
 
   if (event.type === "message" && event.message) {
-    const { id, type, text } = event.message;
+    const { id, type, text, fileName } = event.message;
     const msg: NonNullable<QueuedLineEvent["message"]> = {};
     if (id) msg.id = id;
     if (type) msg.type = type;
+    // ชื่อไฟล์ (file message) — เก็บดิบไว้โชว์/ตั้งชื่อไฟล์ (ไม่ใช่เนื้อหาแชต ไม่ต้องเข้ารหัส)
+    if (type === "file" && typeof fileName === "string" && fileName.length > 0) {
+      msg.fileName = fileName;
+    }
 
     if (typeof text === "string" && text.length > 0) {
       if (encrypt) {

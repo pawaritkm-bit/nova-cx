@@ -12,10 +12,12 @@ import { classifyBillImage } from "@/lib/ai/bill-classify";
  *
  * ★ backend เลือกผ่าน lib/storage/bill-storage (BILL_STORAGE_BACKEND, default = supabase)
  * ★ inert-by-default: ถ้า !isBillStorageEnabled() → return { disabled:true } (no-op)
- * ★ เฟสนี้ทำเฉพาะ attachment_type='image' เท่านั้น (ข้าม video/audio/file)
- * ★ คัดกรองด้วย AI (classifyBillImage) ก่อน store — เก็บเฉพาะเอกสารการเงิน
- *   keep=false (มั่นใจสูงว่าไม่ใช่บิล) → ไม่ store นับเป็น skipped ('not_a_bill')
- *   degrade: ไม่มี OpenAI key/error → classify คืน null → เก็บทุกรูปเหมือนเดิม (keep-if-unsure)
+ * ★ ทำ attachment_type ∈ {'image','file'} (ข้าม video/audio):
+ *   - รูป (image): คัดกรองด้วย AI (classifyBillImage) ก่อน store — เก็บเฉพาะเอกสารการเงิน
+ *       keep=false (มั่นใจสูงว่าไม่ใช่บิล) → ไม่ store นับเป็น skipped ('not_a_bill')
+ *       degrade: ไม่มี OpenAI key/error → classify คืน null → เก็บทุกรูปเหมือนเดิม (keep-if-unsure)
+ *   - ไฟล์ (file, เช่น PDF/เอกสาร): ★ ไม่คัด AI — เก็บทุกไฟล์ (keep เสมอ),
+ *       set doc_kind='file', doc_checked=true · ชื่อไฟล์ storage ใช้ original_name (sanitize ASCII)
  * ★ ยังไม่ส่งต่อ NOVA Sales (เฟสถัดไป)
  *
  * ⚠️ ความเสี่ยง timing: content ฝั่ง LINE มีอายุจำกัด ถ้า cron (ทุก 5 นาที) ดึงช้า
@@ -51,6 +53,10 @@ type AttachmentRow = {
   line_content_id: string | null;
   created_at: string;
   fetch_attempts: number;
+  /** 'image' | 'file' — คัดวิธีจัดการ (รูปคัด AI, ไฟล์เก็บทุกอัน) */
+  attachment_type: string;
+  /** ชื่อไฟล์เดิม (file เท่านั้น) — ไว้ตั้งชื่อ storage + โชว์ · null ได้ */
+  original_name: string | null;
   chat_messages: {
     sent_at: string | null;
     chat_groups: GroupContext | null;
@@ -65,16 +71,43 @@ type GroupContext = {
   chat_channels: { oa_type: string | null } | null;
 };
 
-/** map mime รูป → นามสกุลไฟล์ (fallback bin) */
+/** map mime → นามสกุลไฟล์ (รูป + เอกสารทั่วไป) · เดาไม่ได้ = bin */
 function extFromMime(mime: string): string {
   const m = mime.toLowerCase();
+  // รูป
   if (m.includes("jpeg") || m.includes("jpg")) return "jpg";
   if (m.includes("png")) return "png";
   if (m.includes("gif")) return "gif";
   if (m.includes("webp")) return "webp";
   if (m.includes("heic")) return "heic";
   if (m.includes("heif")) return "heif";
+  // เอกสาร (file message มักเป็น PDF/Office)
+  if (m.includes("pdf")) return "pdf";
+  if (m.includes("wordprocessingml")) return "docx";
+  if (m.includes("msword")) return "doc";
+  if (m.includes("spreadsheetml")) return "xlsx";
+  if (m.includes("ms-excel")) return "xls";
+  if (m.includes("presentationml")) return "pptx";
+  if (m.includes("ms-powerpoint")) return "ppt";
+  if (m.includes("zip")) return "zip";
+  if (m.includes("csv")) return "csv";
+  if (m.includes("plain")) return "txt";
   return "bin";
+}
+
+/**
+ * sanitize ชื่อไฟล์เดิมให้เป็น "ASCII-safe" สำหรับ storage key (Supabase ไม่รับไทย → 400)
+ *   เก็บเฉพาะ [A-Za-z0-9._-] · อักขระอื่น (ไทย/ช่องว่าง/`/`) → `_` แล้วยุบ `_` ซ้ำ
+ *   คืน "" ถ้าผลลัพธ์ว่าง/เหลือแต่จุด (caller จะ fallback เป็นชื่อ timestamp)
+ */
+function sanitizeAsciiFileName(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .replace(/[^A-Za-z0-9._-]/g, "_")
+    .replace(/_{2,}/g, "_")
+    .replace(/^[._]+/, ""); // ตัด . / _ นำหน้า (กันไฟล์ซ่อน/ชื่อเพี้ยน)
+  // เหลือแต่จุด/ว่าง = ถือว่าใช้ไม่ได้
+  return /[A-Za-z0-9]/.test(cleaned) ? cleaned : "";
 }
 
 /** 'YYYY-MM' จาก timestamp string (fallback เดือนปัจจุบันถ้า parse ไม่ได้) */
@@ -257,7 +290,7 @@ export async function processPendingAttachments(
   const { data, error } = await db
     .from("message_attachments")
     .select(
-      `id, tenant_id, line_content_id, created_at, fetch_attempts,
+      `id, tenant_id, line_content_id, created_at, fetch_attempts, attachment_type, original_name,
        chat_messages!inner (
          sent_at,
          chat_groups!inner (
@@ -267,7 +300,7 @@ export async function processPendingAttachments(
          )
        )`
     )
-    .eq("attachment_type", "image")
+    .in("attachment_type", ["image", "file"])
     .lt("fetch_attempts", 3)
     .or(
       `fetch_status.in.(pending,failed),and(fetch_status.eq.processing,fetched_at.lt.${staleCutoffIso})`
@@ -326,23 +359,31 @@ export async function processPendingAttachments(
     }
 
     const sha256 = createHash("sha256").update(content.data).digest("hex");
+    const isFile = row.attachment_type === "file";
 
-    // 2.5) คัดกรองด้วย AI (vision) — เก็บเฉพาะเอกสารการเงิน
-    //   ★ keep-if-unsure บังคับใน classifyBillImage: keep=false เฉพาะเมื่อมั่นใจสูงว่าไม่ใช่บิล
-    //   ★ degrade: ไม่มี OpenAI key / error / timeout → คืน null → ถือว่า keep (เก็บทุกรูปเหมือนเดิม)
-    const classified = await classifyBillImage(content.data, content.mime);
-    if (classified && !classified.keep) {
-      // มั่นใจว่าไม่ใช่เอกสารการเงิน → ไม่ store · ปิดงานเป็น skipped ('not_a_bill')
-      await markSkippedNotBill(db, row.id, classified.confidence);
-      skipped++;
-      continue;
+    // 2.5) คัดกรอง (ต่างกันตามชนิด):
+    //   - ไฟล์ (file, PDF/เอกสาร): ★ ไม่คัด AI — เก็บทุกไฟล์เสมอ (classifyBillImage ใช้กับรูปเท่านั้น)
+    //       set doc_kind='file' (ไม่ใช่ค่าใน DocKind หน้า UI — หน้าจอแยกไฟล์ด้วย attachment_type)
+    //   - รูป (image): คัด AI (keep-if-unsure) เก็บเฉพาะเอกสารการเงิน · keep=false = ทิ้ง (not_a_bill)
+    //       degrade: ไม่มี OpenAI key / error / timeout → classify คืน null → ถือว่า keep
+    let docFields: Record<string, unknown>;
+    if (isFile) {
+      docFields = { doc_kind: "file", doc_confidence: null, doc_checked: true };
+    } else {
+      const classified = await classifyBillImage(content.data, content.mime);
+      if (classified && !classified.keep) {
+        // มั่นใจว่าไม่ใช่เอกสารการเงิน → ไม่ store · ปิดงานเป็น skipped ('not_a_bill')
+        await markSkippedNotBill(db, row.id, classified.confidence);
+        skipped++;
+        continue;
+      }
+      // keep=true หรือ classify=null → เก็บต่อ + แนบผลคัด (doc_checked=true เสมอบนเส้นทาง forward)
+      docFields = {
+        doc_kind: classified ? classified.kind : null,
+        doc_confidence: classified ? classified.confidence : null,
+        doc_checked: true,
+      };
     }
-    // keep=true หรือ classify=null → เก็บต่อ + แนบผลคัด (doc_checked=true เสมอบนเส้นทาง forward)
-    const docFields: Record<string, unknown> = {
-      doc_kind: classified ? classified.kind : null,
-      doc_confidence: classified ? classified.confidence : null,
-      doc_checked: true,
-    };
 
     // 3) dedup (ในรอบนี้): เจอ sha256 ที่เพิ่งอัปในรอบเดียวกัน → reuse ทันที ไม่แตะ Drive/DB dedup
     const inBatch = batchDedup.get(sha256);
@@ -383,11 +424,19 @@ export async function processPendingAttachments(
     }
 
     // 5) เก็บไฟล์ผ่าน storage abstraction: โฟลเดอร์ [ชื่อลูกค้า, เดือน YYYY-MM]
-    //    ชื่อไฟล์ = <sent_at>_<contentId>.<ext>
+    //    ชื่อไฟล์:
+    //      - รูป (image): <sent_at>_<contentId>.<ext> (เหมือนเดิม)
+    //      - ไฟล์ (file): <contentId>_<original_name ที่ sanitize ASCII> ถ้ามีชื่อเดิม
+    //          (prefix contentId = กันชื่อชนกันในโฟลเดอร์เดียว เพราะ upload upsert:false)
+    //          ไม่มีชื่อเดิม/ชื่อ sanitize แล้วว่าง → fallback <sent_at>_<contentId>.<ext(mime)>
     const customerFolder = group ? resolveCustomerFolder(group) : "unassigned";
     const month = monthFolder(row.created_at);
-    const ext = extFromMime(content.mime);
-    const fileName = `${safeStamp(row.chat_messages?.sent_at ?? null)}_${contentId}.${ext}`;
+    const stampBase = `${safeStamp(row.chat_messages?.sent_at ?? null)}_${contentId}`;
+    let fileName = `${stampBase}.${extFromMime(content.mime)}`;
+    if (isFile) {
+      const sanitized = row.original_name ? sanitizeAsciiFileName(row.original_name) : "";
+      if (sanitized) fileName = `${contentId}_${sanitized}`;
+    }
 
     const saved = await storeBillFile({
       db,

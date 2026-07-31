@@ -23,6 +23,8 @@ function bill(p: Partial<BillItem> & { id: string; billDate: string }): BillItem
     customerCode: p.customerCode ?? null,
     customerName: p.customerName ?? null,
     docKind: p.docKind ?? null,
+    attachmentType: p.attachmentType ?? "image",
+    originalName: p.originalName ?? null,
   };
 }
 
@@ -215,6 +217,23 @@ describe("groupBillsByCustomer", () => {
 
   it("ลิสต์ว่าง → []", () => {
     expect(groupBillsByCustomer([])).toEqual([]);
+  });
+
+  it("นับ fileCount (attachment_type='file') แยกจาก kinds — ไฟล์ไม่เข้า kinds แต่รวมใน total", () => {
+    const mixed: BillItem[] = [
+      // ลูกค้า c1: 1 รูป (slip) + 2 ไฟล์
+      bill({ id: "img1", billDate: "2026-07-10T00:00:00Z", customerId: "c1", customerCode: "N003", docKind: "slip" }),
+      bill({ id: "f1", billDate: "2026-07-11T00:00:00Z", customerId: "c1", customerCode: "N003", attachmentType: "file", docKind: null, originalName: "ใบกำกับ.pdf" }),
+      bill({ id: "f2", billDate: "2026-07-12T00:00:00Z", customerId: "c1", customerCode: "N003", attachmentType: "file", docKind: null, originalName: null }),
+    ];
+    const g = groupBillsByCustomer(mixed);
+    const c1 = g.find((x) => x.customerId === "c1")!;
+    expect(c1.total).toBe(3); // รูป + ไฟล์ รวมใน total
+    expect(c1.fileCount).toBe(2); // ไฟล์ 2 อัน
+    expect(c1.kinds.slip).toBe(1); // รูป slip 1
+    // ไฟล์ไม่ถูกนับใน kinds เลย
+    const sumKinds = Object.values(c1.kinds).reduce((a, b) => a + b, 0);
+    expect(sumKinds).toBe(1);
   });
 });
 

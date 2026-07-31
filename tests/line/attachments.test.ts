@@ -350,6 +350,56 @@ describe("processPendingAttachments — AI คัดกรอง (classify)", ()
   });
 });
 
+describe("processPendingAttachments — ไฟล์ (attachment_type='file')", () => {
+  it("ไฟล์ → ไม่คัด AI (classify ไม่ถูกเรียก) + store พร้อม doc_kind='file', doc_checked=true", async () => {
+    const { db, updates } = makeFakeDb({
+      candidates: [candRow({ attachment_type: "file", original_name: "receipt.pdf" })],
+      dedup: () => null,
+    });
+
+    const res = await processPendingAttachments(db);
+
+    expect(res.stored).toBe(1);
+    expect(res.skipped).toBe(0);
+    expect(classifyBillImageMock).not.toHaveBeenCalled(); // ★ ไฟล์ไม่ผ่าน AI คัด
+    const linkStep = updates.find((u) => "drive_url" in u.payload);
+    expect(linkStep?.payload.doc_kind).toBe("file");
+    expect(linkStep?.payload.doc_checked).toBe(true);
+    expect(linkStep?.payload.doc_confidence).toBeNull();
+  });
+
+  it("ไฟล์มี original_name → ชื่อ storage = <contentId>_<sanitize ASCII> (กันชนกัน)", async () => {
+    const { db } = makeFakeDb({
+      candidates: [candRow({ attachment_type: "file", original_name: "receipt final.pdf", line_content_id: "cid9" })],
+      dedup: () => null,
+    });
+
+    await processPendingAttachments(db);
+
+    const call = storeBillFileMock.mock.calls[0][0] as { fileName: string };
+    // ช่องว่าง → _ , prefix contentId กันชนกันในโฟลเดอร์เดียว
+    expect(call.fileName).toBe("cid9_receipt_final.pdf");
+    // ASCII ล้วน
+    expect(/^[\x00-\x7f]+$/.test(call.fileName)).toBe(true);
+  });
+
+  it("ไฟล์ไม่มี original_name → fallback <stamp>_<contentId>.<ext จาก mime>", async () => {
+    getLineClientMock.mockImplementation(() =>
+      lineClientReturning(Buffer.from("%PDF-1.4"), "application/pdf")
+    );
+    const { db } = makeFakeDb({
+      candidates: [candRow({ attachment_type: "file", original_name: null, line_content_id: "cid7" })],
+      dedup: () => null,
+    });
+
+    await processPendingAttachments(db);
+
+    const call = storeBillFileMock.mock.calls[0][0] as { fileName: string };
+    expect(call.fileName).toContain("cid7");
+    expect(call.fileName.endsWith(".pdf")).toBe(true); // ext เดาจาก mime application/pdf
+  });
+});
+
 describe("processPendingAttachments — storeBillFile ล้ม (คืน null)", () => {
   it("อัป storage ไม่สำเร็จ → mark failed 'storage_upload_failed' + attempts +1", async () => {
     storeBillFileMock.mockResolvedValue(null); // จำลอง upload ล้ม (จับ error ภายในแล้วคืน null)

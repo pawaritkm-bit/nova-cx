@@ -333,18 +333,22 @@ async function ensureAttachment(
   tenantId: string,
   chatMessageId: string,
   attachmentType: string,
-  lineContentId: string
+  lineContentId: string,
+  originalName?: string | null
 ): Promise<void> {
-  const { error } = await db.from("message_attachments").upsert(
-    {
-      tenant_id: tenantId,
-      chat_message_id: chatMessageId,
-      attachment_type: attachmentType,
-      line_content_id: lineContentId, // LINE ใช้ message.id เป็น content id สำหรับดึง binary
-      status: "pending",
-    },
-    { onConflict: "chat_message_id,line_content_id" }
-  );
+  const row: Record<string, unknown> = {
+    tenant_id: tenantId,
+    chat_message_id: chatMessageId,
+    attachment_type: attachmentType,
+    line_content_id: lineContentId, // LINE ใช้ message.id เป็น content id สำหรับดึง binary
+    status: "pending",
+  };
+  // ชื่อไฟล์เดิม (file message) — ใส่เฉพาะเมื่อมี เพื่อไม่เขียนทับค่าเดิมเป็น null ตอน re-ingest ซ้ำ
+  if (originalName) row.original_name = originalName;
+
+  const { error } = await db
+    .from("message_attachments")
+    .upsert(row, { onConflict: "chat_message_id,line_content_id" });
   if (error) {
     console.warn(
       `[line/ingest] message_attachments upsert failed (code=${
@@ -380,6 +384,8 @@ export async function ingestGroupMessage(
 
   const messageType = event.message?.type ?? "text";
   const isMedia = MEDIA_TYPES.has(messageType);
+  // ชื่อไฟล์เดิม — เฉพาะ file message (ไว้เก็บ original_name สำหรับโชว์/ตั้งชื่อไฟล์ storage)
+  const originalName = messageType === "file" ? event.message?.fileName ?? null : null;
 
   // --- (1) resolve/สร้าง chat_group (ไม่เขียนทับ is_active/tenant_id/customer_id ของกลุ่มเดิม) ---
   const chatChannelId = await resolveChatChannelId(db, tenantId, oa);
@@ -444,7 +450,7 @@ export async function ingestGroupMessage(
   const existingId = await selectExistingMessageId(db, lineMessageId);
   if (existingId) {
     // กัน attachment หายถ้ารอบก่อน insert message สำเร็จแต่ attachment ล้ม (rev-M1)
-    if (isMedia) await ensureAttachment(db, tenantId, existingId, messageType, lineMessageId);
+    if (isMedia) await ensureAttachment(db, tenantId, existingId, messageType, lineMessageId, originalName);
     return { status: "duplicate", lineMessageId };
   }
 
@@ -473,7 +479,7 @@ export async function ingestGroupMessage(
     // race idempotency: webhook ยิงซ้ำพร้อมกัน → insert ตัวที่สองชน unique(line_message_id) (H1)
     if (isUniqueViolation(msgErr)) {
       const dupId = await selectExistingMessageId(db, lineMessageId);
-      if (dupId && isMedia) await ensureAttachment(db, tenantId, dupId, messageType, lineMessageId);
+      if (dupId && isMedia) await ensureAttachment(db, tenantId, dupId, messageType, lineMessageId, originalName);
       return { status: "duplicate", lineMessageId };
     }
     throw msgErr;
@@ -483,7 +489,7 @@ export async function ingestGroupMessage(
 
   // --- (5) media → metadata ใน message_attachments (idempotent; Phase 1 ยังไม่ดึง binary) ---
   if (chatMessageId && isMedia) {
-    await ensureAttachment(db, tenantId, chatMessageId, messageType, lineMessageId);
+    await ensureAttachment(db, tenantId, chatMessageId, messageType, lineMessageId, originalName);
   }
 
   return { status: "stored", chatGroupId, lineMessageId, customerId };
@@ -585,6 +591,8 @@ export async function ingestDirectMessage(
 
   const messageType = event.message?.type ?? "text";
   const isMedia = MEDIA_TYPES.has(messageType);
+  // ชื่อไฟล์เดิม — เฉพาะ file message (ไว้เก็บ original_name สำหรับโชว์/ตั้งชื่อไฟล์ storage)
+  const originalName = messageType === "file" ? event.message?.fileName ?? null : null;
 
   // --- (1) ensure บทสนทนา 1-1 (group_kind='user', group_ref=userId) ---
   const chatChannelId = await resolveChatChannelId(db, tenantId, oa);
@@ -628,7 +636,7 @@ export async function ingestDirectMessage(
   // --- (3) idempotency (pre-check): line_message_id ซ้ำ → duplicate ---
   const existingId = await selectExistingMessageId(db, lineMessageId);
   if (existingId) {
-    if (isMedia) await ensureAttachment(db, tenantId, existingId, messageType, lineMessageId);
+    if (isMedia) await ensureAttachment(db, tenantId, existingId, messageType, lineMessageId, originalName);
     return { status: "duplicate", lineMessageId };
   }
 
@@ -655,7 +663,7 @@ export async function ingestDirectMessage(
   if (msgErr) {
     if (isUniqueViolation(msgErr)) {
       const dupId = await selectExistingMessageId(db, lineMessageId);
-      if (dupId && isMedia) await ensureAttachment(db, tenantId, dupId, messageType, lineMessageId);
+      if (dupId && isMedia) await ensureAttachment(db, tenantId, dupId, messageType, lineMessageId, originalName);
       return { status: "duplicate", lineMessageId };
     }
     throw msgErr;
@@ -663,7 +671,7 @@ export async function ingestDirectMessage(
 
   const chatMessageId = (msgRow as { id?: string } | null)?.id;
   if (chatMessageId && isMedia) {
-    await ensureAttachment(db, tenantId, chatMessageId, messageType, lineMessageId);
+    await ensureAttachment(db, tenantId, chatMessageId, messageType, lineMessageId, originalName);
   }
 
   return { status: "stored", chatGroupId, lineMessageId, customerId };

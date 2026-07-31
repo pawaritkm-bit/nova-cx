@@ -39,8 +39,12 @@ export type BillItem = {
   customerCode: string | null;
   /** ชื่อลูกค้า — null ถ้ายังไม่จับคู่ */
   customerName: string | null;
-  /** ชนิดเอกสาร (slip/sale/...) — null = ยังไม่คัด/ไม่รู้จัก */
+  /** ชนิดเอกสาร (slip/sale/...) — null = ยังไม่คัด/ไม่รู้จัก (ไฟล์ = null เสมอ) */
   docKind: DocKind | null;
+  /** ชนิดไฟล์แนบ: 'image' = รูปบิล · 'file' = ไฟล์ (PDF/เอกสาร) */
+  attachmentType: "image" | "file";
+  /** ชื่อไฟล์เดิม (file เท่านั้น) — ไว้โชว์บนการ์ดไฟล์ · null = ไม่มีชื่อ */
+  originalName: string | null;
 };
 
 /** ตัวเลือกใน dropdown ลูกค้า (เฉพาะลูกค้าที่มีบิล) */
@@ -206,10 +210,12 @@ export type CustomerBillGroup = {
   customerId: string | null;
   code: string | null;
   name: string | null;
-  /** จำนวนบิลรวมในกลุ่ม */
+  /** จำนวนบิลรวมในกลุ่ม (รวมรูป + ไฟล์) */
   total: number;
-  /** จำนวนแยกตามชนิดเอกสาร */
+  /** จำนวนแยกตามชนิดเอกสาร (เฉพาะรูปที่คัดชนิดแล้ว) */
   kinds: BillKindCounts;
+  /** จำนวน "ไฟล์" (attachment_type='file') ในกลุ่ม — โชว์เป็นป้ายแยก */
+  fileCount: number;
   /** วันที่บิลล่าสุดในกลุ่ม (ISO; "" ถ้าไม่มี/ผิดรูป) */
   latestAt: string;
 };
@@ -242,6 +248,7 @@ export function groupBillsByCustomer(items: BillItem[]): CustomerBillGroup[] {
           name: it.customerName,
           total: 0,
           kinds: emptyKindCounts(),
+          fileCount: 0,
           latestAt: "",
         };
         assigned.set(it.customerId, g);
@@ -254,13 +261,15 @@ export function groupBillsByCustomer(items: BillItem[]): CustomerBillGroup[] {
           name: null,
           total: 0,
           kinds: emptyKindCounts(),
+          fileCount: 0,
           latestAt: "",
         };
       }
       g = unassigned;
     }
     g.total++;
-    if (it.docKind) g.kinds[it.docKind]++;
+    if (it.attachmentType === "file") g.fileCount++;
+    else if (it.docKind) g.kinds[it.docKind]++;
     const d = it.billDate || "";
     if (d > g.latestAt) g.latestAt = d;
   }

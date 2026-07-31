@@ -210,6 +210,41 @@ describe("ingestGroupMessage", () => {
     expect(att!.row.status).toBe("pending");
   });
 
+  it("media (file) → upsert message_attachments เก็บ original_name (fileName) + attachment_type='file'", async () => {
+    const store = baseStore();
+    await ingestGroupMessage({ db: makeDb(store), now: NOW }, "t-1", "care", groupTextEvent({
+      message: { id: "file-9", type: "file", contentEnc: null, fileName: "ใบกำกับภาษี.pdf" },
+    }));
+
+    const att = store.upserts.find((u) => u.table === "message_attachments");
+    expect(att).toBeDefined();
+    expect(att!.row.attachment_type).toBe("file");
+    expect(att!.row.line_content_id).toBe("file-9");
+    expect(att!.row.original_name).toBe("ใบกำกับภาษี.pdf");
+  });
+
+  it("media (file) ไม่มี fileName → ไม่ใส่ original_name (คง null ไม่ทับตอน re-ingest)", async () => {
+    const store = baseStore();
+    await ingestGroupMessage({ db: makeDb(store), now: NOW }, "t-1", "care", groupTextEvent({
+      message: { id: "file-10", type: "file", contentEnc: null },
+    }));
+
+    const att = store.upserts.find((u) => u.table === "message_attachments");
+    expect(att!.row.attachment_type).toBe("file");
+    expect((att!.row as Record<string, unknown>).original_name).toBeUndefined();
+  });
+
+  it("media (image) → ไม่มี original_name แม้ event เผลอส่ง fileName (fileName เฉพาะ file)", async () => {
+    const store = baseStore();
+    await ingestGroupMessage({ db: makeDb(store), now: NOW }, "t-1", "care", groupTextEvent({
+      message: { id: "img-11", type: "image", contentEnc: null, fileName: "x.png" },
+    }));
+
+    const att = store.upserts.find((u) => u.table === "message_attachments");
+    expect(att!.row.attachment_type).toBe("image");
+    expect((att!.row as Record<string, unknown>).original_name).toBeUndefined();
+  });
+
   it("1:1 (source.type=user) → skip ไม่เก็บ (survey/follow domain เดิม)", async () => {
     const store = baseStore();
     const res = await ingestGroupMessage(

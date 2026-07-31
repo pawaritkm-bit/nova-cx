@@ -141,6 +141,7 @@
 .nova-dash .k-purchase { background: #f3e8ff; color: #7e22ce; }
 .nova-dash .k-cash { background: #ccfbf1; color: #0f766e; }
 .nova-dash .k-other { background: #f1f5f9; color: #475569; }
+.nova-dash .k-file { background: #e0e7ff; color: #4338ca; }
 
 .nova-dash .cust-total {
   flex: 0 0 auto;
@@ -294,6 +295,36 @@
   opacity: 0.55;
   cursor: not-allowed;
   pointer-events: none;
+}
+
+/* ============================================================
+   การ์ดไฟล์ (PDF/เอกสาร) — แทน thumbnail ด้วยไอคอน + ชื่อไฟล์
+   ============================================================ */
+.nova-dash .bill-card-file .file-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  aspect-ratio: 3 / 4;
+  padding: 14px 12px;
+  background: #f8fafc;
+  text-align: center;
+}
+.nova-dash .file-icon {
+  font-size: 40px;
+  line-height: 1;
+}
+.nova-dash .file-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--navy-800, #1e3a8a);
+  /* ตัดชื่อยาวไม่ให้ล้นการ์ด (แสดง 3 บรรทัด) */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 @media (max-width: 560px) {
