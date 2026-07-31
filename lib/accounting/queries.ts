@@ -89,6 +89,12 @@ export type ListEntriesFilter = {
   /** เดือน YYYY-MM (กรองที่ doc_date) */
   month?: string;
   customerId?: string;
+  /**
+   * จำกัดเฉพาะลูกค้าในชุดนี้ (สโคปนักบัญชี — เห็นเฉพาะลูกค้าที่ตัวเองดูแล)
+   *   - [] (ว่าง) = ไม่มีลูกค้าในสโคป → คืนผลว่าง (ไม่ใช่ "ไม่กรอง")
+   *   - undefined = ไม่กรองด้วยชุดนี้ (admin/lead เห็นทุกลูกค้า)
+   */
+  customerIds?: string[];
   status?: EntryStatus;
 };
 
@@ -234,6 +240,11 @@ export async function listEntries(
   tenantId: string,
   filter: ListEntriesFilter = {}
 ): Promise<EntriesResult> {
+  // สโคปนักบัญชี: ชุดลูกค้าว่าง = ไม่มีสิทธิ์เห็นลูกค้าใดเลย → คืนผลว่างทันที
+  if (filter.customerIds && filter.customerIds.length === 0) {
+    return { entries: [], summary: emptySummary() };
+  }
+
   let q = db
     .from("bill_entries")
     .select(
@@ -248,6 +259,9 @@ export async function listEntries(
   if (filter.entryType) q = q.eq("entry_type", filter.entryType);
   if (filter.status) q = q.eq("status", filter.status);
   if (filter.customerId) q = q.eq("customer_id", filter.customerId);
+  if (filter.customerIds && filter.customerIds.length > 0) {
+    q = q.in("customer_id", filter.customerIds);
+  }
   const range = monthRange(filter.month);
   if (range) q = q.gte("doc_date", range.start).lt("doc_date", range.end);
 

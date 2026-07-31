@@ -4,7 +4,9 @@
  * Server actions ของหน้า "ลงบันทึกบัญชี" (/chat-audit/accounting) — admin เท่านั้น
  *
  * flow ความปลอดภัย (ยึดมาตรฐาน write path — ห้ามเชื่อ scope จาก client):
- *   1) resolve viewer จาก session จริง (cookie) → requireAdminContext บังคับ role∈{admin,executive}
+ *   1) resolve สิทธิ์จาก session จริง → requireAccountingAccess:
+ *        - admin/executive (Supabase Auth) หรือ lead (LINE) = เห็น/แก้ได้ทุกลูกค้า
+ *        - accountant (LINE) = แก้ได้เฉพาะลูกค้าที่ตัวเองดูแล (assertCustomerInScope ทุกครั้ง)
  *      + ได้ tenantId จาก session (ไม่เชื่อค่าจาก client)
  *   2) validate อินพุตทุกตัว (uuid / enum / ตัวเลข) ก่อนเขียน
  *   3) เขียนผ่าน actions-lib (pure) ด้วย service-role client + tenantId จาก session
@@ -17,7 +19,13 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { requireAdminContext, AdminAuthError } from "@/lib/admin/guard";
+import {
+  requireAccountingAccess,
+  assertCustomerInScope,
+  customerInScope,
+  loadEntryCustomerId,
+  AccountingAuthError,
+} from "@/lib/accounting/access";
 import {
   upsertEntry,
   addLine,
@@ -151,8 +159,8 @@ export type SaveEntryInput = {
 export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult> {
   try {
     const authed = await createClient();
-    const ctx = await requireAdminContext(authed);
     const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
 
     // id ต้องเป็น uuid ถ้าส่งมา (แก้ของเดิม)
     if (input.id !== undefined && !isUuid(input.id)) {
@@ -164,6 +172,17 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
     if (input.attachmentId != null && !isUuid(input.attachmentId)) {
       return { ok: false, message: "ไฟล์แนบไม่ถูกต้อง" };
     }
+
+    // ★ สโคปนักบัญชี (server-side): แก้ของเดิม → ลูกค้าปัจจุบันของ entry ต้องอยู่ในความดูแล
+    //   + ลูกค้าปลายทางที่จะบันทึกก็ต้องอยู่ในความดูแล (admin/lead ผ่านทุกกรณี)
+    if (input.id) {
+      const currentCustomer = await loadEntryCustomerId(service, ctx.tenantId, input.id);
+      if (currentCustomer === undefined) {
+        return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
+      }
+      assertCustomerInScope(ctx, currentCustomer);
+    }
+    assertCustomerInScope(ctx, input.customerId ?? null);
 
     // 1) upsert หัวเอกสาร
     const up = await upsertEntry(service, ctx.tenantId, {
@@ -228,7 +247,7 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
       id: entryId,
     };
   } catch (e) {
-    if (e instanceof AdminAuthError) return { ok: false, message: e.message };
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "บันทึกไม่สำเร็จ กรุณาลองใหม่ หรือติดต่อผู้ดูแลระบบ" };
   }
 }
@@ -245,8 +264,8 @@ export async function moveEntryTypeAction(
   const type = asEntryType(target);
   try {
     const authed = await createClient();
-    const ctx = await requireAdminContext(authed);
     const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
 
     // อ่านหัวเดิม (scope tenant) เพื่อคงค่าอื่นไว้
     const { data: cur } = await service
@@ -271,6 +290,9 @@ export async function moveEntryTypeAction(
       notes: string | null;
     };
 
+    // ★ สโคปนักบัญชี: ต้องเป็นลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
+    assertCustomerInScope(ctx, c.customer_id);
+
     const res = await upsertEntry(service, ctx.tenantId, {
       id: entryId,
       entryType: type,
@@ -289,7 +311,7 @@ export async function moveEntryTypeAction(
     const label = type === "purchase" ? "ภาษีซื้อ" : type === "sale" ? "ภาษีขาย" : "รอระบุ";
     return { ok: true, message: `ย้ายไป ${label} แล้ว` };
   } catch (e) {
-    if (e instanceof AdminAuthError) return { ok: false, message: e.message };
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "ย้ายประเภทไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
@@ -311,19 +333,22 @@ export async function deleteEntryAction(entryId: string): Promise<SaveResult> {
   if (!isUuid(entryId)) return { ok: false, message: "ไม่พบรายการที่เลือก" };
   try {
     const authed = await createClient();
-    const ctx = await requireAdminContext(authed);
     const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
 
-    // อ่าน attachment ต้นทาง + ไฟล์อัปเอง ก่อนลบ (scope tenant)
+    // อ่าน attachment ต้นทาง + ไฟล์อัปเอง + ลูกค้า ก่อนลบ (scope tenant)
     const { data: entryRow } = await service
       .from("bill_entries")
-      .select("attachment_id, upload_path")
+      .select("attachment_id, upload_path, customer_id")
       .eq("id", entryId)
       .eq("tenant_id", ctx.tenantId)
       .is("deleted_at", null)
       .maybeSingle();
-    const attachmentId = (entryRow as { attachment_id: string | null } | null)?.attachment_id ?? null;
-    const uploadPath = (entryRow as { upload_path: string | null } | null)?.upload_path ?? null;
+    if (!entryRow) return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
+    // ★ สโคปนักบัญชี: ลบได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
+    assertCustomerInScope(ctx, (entryRow as { customer_id: string | null }).customer_id);
+    const attachmentId = (entryRow as { attachment_id: string | null }).attachment_id ?? null;
+    const uploadPath = (entryRow as { upload_path: string | null }).upload_path ?? null;
 
     // 1) soft-delete entry
     const res = await deleteEntry(service, ctx.tenantId, entryId);
@@ -367,7 +392,7 @@ export async function deleteEntryAction(entryId: string): Promise<SaveResult> {
     revalidatePath("/chat-audit/bills");
     return { ok: true, message: "ลบรายการแล้ว" };
   } catch (e) {
-    if (e instanceof AdminAuthError) return { ok: false, message: e.message };
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
@@ -379,14 +404,20 @@ export async function deleteEntryAction(entryId: string): Promise<SaveResult> {
  */
 export async function createEntryAction(formData: FormData): Promise<void> {
   const authed = await createClient();
-  const ctx = await requireAdminContext(authed); // throw ถ้าไม่ใช่ admin → error boundary
   const service = createServiceRoleClient();
+  const ctx = await requireAccountingAccess(authed, service); // throw ถ้าไม่มีสิทธิ์ → error boundary
 
   const rawCustomer = formData.get("customerId");
   const customerId = isUuid(rawCustomer) ? rawCustomer : null;
   // แท็บ unspecified → เริ่มเป็น purchase (คีย์เองรู้ฝั่งอยู่แล้ว, ให้ยืนยันได้ทันที)
   const rawType = asEntryType(formData.get("entryType"));
   const entryType: EntryType = rawType === "unspecified" ? "purchase" : rawType;
+
+  // ★ สโคปนักบัญชี: สร้างได้เฉพาะลูกค้าที่ตัวเองดูแล (ห้ามสร้างแบบไม่ผูกลูกค้า/ลูกค้าคนอื่น)
+  //   นอกสโคป → ไม่สร้าง กลับหน้าเดิม (ไม่ throw เพื่อไม่ให้ crash flow redirect)
+  if (!customerInScope(ctx, customerId)) {
+    redirect(customerId ? `${PATH}?open=${customerId}` : PATH);
+  }
 
   const res = await upsertEntry(service, ctx.tenantId, { entryType, customerId });
   revalidatePath(PATH);
@@ -431,8 +462,8 @@ function sanitizePathPart(raw: string): string {
 export async function uploadAccountingFileAction(formData: FormData): Promise<SaveResult> {
   try {
     const authed = await createClient();
-    const ctx = await requireAdminContext(authed);
     const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
 
     // 1) validate อินพุตควบคุม (ลูกค้า/ประเภท)
     const rawCustomer = formData.get("customerId");
@@ -440,6 +471,10 @@ export async function uploadAccountingFileAction(formData: FormData): Promise<Sa
     // ถ้าส่ง customerId มาแต่รูปแบบผิด (ไม่ใช่ uuid และไม่ว่าง) = ปฏิเสธ กันผูกผิด
     if (rawCustomer != null && rawCustomer !== "" && !customerId) {
       return { ok: false, message: "ลูกค้าไม่ถูกต้อง" };
+    }
+    // ★ สโคปนักบัญชี: อัปไฟล์เข้าได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
+    if (!customerInScope(ctx, customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
     }
     const entryType = asEntryType(formData.get("entryType"));
 
@@ -498,7 +533,7 @@ export async function uploadAccountingFileAction(formData: FormData): Promise<Sa
     revalidatePath(PATH);
     return { ok: true, message: "อัปโหลดไฟล์แล้ว — คีย์รายการต่อได้เลย", id: up.data.id };
   } catch (e) {
-    if (e instanceof AdminAuthError) return { ok: false, message: e.message };
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
@@ -521,11 +556,15 @@ export async function saveCustomerTaxIdAction(input: {
 }): Promise<SaveResult> {
   try {
     const authed = await createClient();
-    const ctx = await requireAdminContext(authed);
     const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
 
     if (!isUuid(input.customerId)) {
       return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    }
+    // ★ สโคปนักบัญชี: กรอกเลขภาษีได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
+    if (!customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
     }
     const taxId = normalizeTaxId(input.taxId);
     if (!taxId) {
@@ -574,7 +613,7 @@ export async function saveCustomerTaxIdAction(input: {
     const suffix = redecided > 0 ? ` · จับคู่ซื้อ/ขายให้ ${redecided} รายการแล้ว` : "";
     return { ok: true, message: `บันทึกเลขภาษีแล้ว${suffix}` };
   } catch (e) {
-    if (e instanceof AdminAuthError) return { ok: false, message: e.message };
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "บันทึกเลขภาษีไม่สำเร็จ กรุณาลองใหม่" };
   }
 }

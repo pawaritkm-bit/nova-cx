@@ -105,6 +105,34 @@ export function getStaffRegisterCode(): string | undefined {
   return process.env.STAFF_REGISTER_CODE || undefined;
 }
 
+/**
+ * channel secret ของ LINE Login channel — ใช้แลก authorization code เป็น token
+ *   (staff login ด้วย LINE) คืน undefined ถ้ายังไม่ตั้ง → ปิด flow login (route redirect กลับ)
+ */
+export function getLineLoginChannelSecret(): string | undefined {
+  return process.env.LINE_LOGIN_CHANNEL_SECRET || undefined;
+}
+
+/**
+ * redirect URI ของ LINE Login callback (ต้องตรงเป๊ะกับที่ตั้งใน LINE Developers Console)
+ *   ลำดับ: LINE_LOGIN_REDIRECT_URI → ประกอบจาก getAppBaseUrl() + /api/auth/line/callback
+ *   (ตัด trailing slash กัน // ตอนต่อ path)
+ */
+export function getLineLoginRedirectUri(): string {
+  const explicit = process.env.LINE_LOGIN_REDIRECT_URI;
+  if (explicit) return explicit.replace(/\/+$/, "");
+  return `${getAppBaseUrl()}/api/auth/line/callback`;
+}
+
+/**
+ * secret สำหรับเซ็น session cookie ของนักบัญชี (staff LINE login) + OAuth state
+ *   คืน undefined ถ้ายังไม่ตั้ง → ปิด staff login ทั้งหมด (fail-safe: ออกโทเค็น/verify ไม่ได้)
+ *   ★ ต้องเป็นค่าสุ่มยาว (≥32 ตัวอักษร) และเก็บเป็นความลับ
+ */
+export function getStaffSessionSecret(): string | undefined {
+  return process.env.STAFF_SESSION_SECRET || undefined;
+}
+
 export type LineOaCredentials = {
   /** channel id (optional — ใช้เฉพาะบางการเรียก) */
   channelId?: string;

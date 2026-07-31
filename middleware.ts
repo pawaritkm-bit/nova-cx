@@ -2,6 +2,7 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseEnv } from "@/lib/env";
 import { shouldRedirectToLogin } from "@/lib/auth/guard";
+import { STAFF_SESSION_COOKIE } from "@/lib/staff/cookie";
 
 /**
  * รีเฟรช session ของพนักงาน (Supabase Auth) ในทุก request + guard /dashboard
@@ -36,8 +37,13 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
+  // staff (นักบัญชี) login ด้วย LINE ไม่มี Supabase user — เช็ก "มี cookie ไหม" เพื่อไม่ redirect
+  //   ★ นี่แค่ชั้น UX (edge): ไม่ verify ลายเซ็นที่นี่ (กัน node:crypto ใน edge) —
+  //     สิทธิ์จริง verify ที่หน้า/action ผ่าน resolveStaffContext (fail-closed)
+  const hasStaffCookie = !!request.cookies.get(STAFF_SESSION_COOKIE)?.value;
+
   const pathname = request.nextUrl.pathname;
-  if (shouldRedirectToLogin(pathname, !!user)) {
+  if (shouldRedirectToLogin(pathname, !!user || hasStaffCookie)) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
     loginUrl.search = "";

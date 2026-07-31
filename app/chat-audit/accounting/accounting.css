@@ -495,3 +495,68 @@
   word-break: break-all;
   max-width: 100%;
 }
+
+/* ===== หน้าแรกเลือกนักบัญชี (admin/lead) — การ์ดนักบัญชี ===== */
+.acc-team-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.acc-team-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 14px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
+  background: #fff;
+  text-align: center;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s;
+  text-decoration: none;
+  color: inherit;
+}
+.acc-team-card:hover {
+  border-color: var(--brand-light, #2f7d6b);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+}
+.acc-team-card:active {
+  transform: translateY(1px);
+}
+.acc-team-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  background: var(--brand, #10403b);
+  color: #fff;
+  font-weight: 700;
+  font-size: 15px;
+}
+.acc-team-all .acc-team-avatar {
+  background: #6b7280;
+  font-size: 12px;
+}
+.acc-team-name {
+  font-weight: 700;
+  font-size: 15px;
+}
+.acc-team-sub {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+/* ===== แถบสโคป (นักบัญชีที่กำลังดู) ===== */
+.acc-scopebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.acc-scope-label {
+  font-weight: 700;
+  font-size: 15px;
+}

@@ -152,12 +152,33 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+/**
+ * เมนูจำกัดสำหรับ staff (นักบัญชี login ด้วย LINE) — เห็นเฉพาะ "ลงบันทึกบัญชี (ของฉัน)"
+ * ไม่โชว์เมนู admin อื่น (staff เห็นแค่บัญชีตัวเอง)
+ */
+const STAFF_NAV_GROUPS: NavGroup[] = [
+  {
+    id: "staff-service",
+    label: "บัญชีของฉัน",
+    emphasis: true,
+    items: [
+      {
+        key: "chat-accounting",
+        href: "/chat-audit/accounting",
+        label: "ลงบันทึกบัญชี (ของฉัน)",
+        canSee: () => true,
+      },
+    ],
+  },
+];
+
 export default function AppNav({
   active,
   role,
   authed,
   title,
   subtitle,
+  staffOnly = false,
 }: {
   /** หน้าปัจจุบัน (ใช้ทำ active state ของลิงก์) */
   active: AppNavActive;
@@ -167,17 +188,21 @@ export default function AppNav({
   authed: boolean;
   title: string;
   subtitle: string;
+  /** true = โหมด staff (นักบัญชี LINE) → เมนูจำกัดเฉพาะบัญชีของตัวเอง */
+  staffOnly?: boolean;
 }) {
   // แสดงเมนู/ควบคุมเฉพาะเมื่อ login จริงและมีบทบาท (หน้าถูก guard redirect อยู่แล้วถ้าไม่มี session)
   const showControls = authed && !!role;
   // กรองลิงก์ในแต่ละกลุ่มด้วย allow-list เดิม แล้วตัดกลุ่มที่ไม่มีลิงก์ให้บทบาทนี้เห็นทิ้ง
-  // (ไม่โชว์หัวข้อกลุ่มลอย ๆ)
-  const visibleGroups = role
-    ? NAV_GROUPS.map((group) => ({
+  // (ไม่โชว์หัวข้อกลุ่มลอย ๆ) — โหมด staff ใช้เมนูจำกัด ไม่ผ่าน allow-list admin
+  const visibleGroups = !role
+    ? []
+    : staffOnly
+    ? STAFF_NAV_GROUPS
+    : NAV_GROUPS.map((group) => ({
         ...group,
         items: group.items.filter((item) => item.canSee(role)),
-      })).filter((group) => group.items.length > 0)
-    : [];
+      })).filter((group) => group.items.length > 0);
 
   return (
     <>

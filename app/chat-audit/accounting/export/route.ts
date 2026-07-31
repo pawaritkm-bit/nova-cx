@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { resolveAdminContext } from "@/lib/admin/guard";
+import { resolveAccountingAccess } from "@/lib/accounting/access";
+import { customerIdsForAccountant } from "@/lib/accounting/accountant-scope";
 import { listEntries, type EntryType, type ListEntriesFilter } from "@/lib/accounting/queries";
 import { buildBillEntriesWorkbook } from "@/lib/accounting/excel";
 
@@ -24,6 +25,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const customerId = url.searchParams.get("customerId") ?? "";
+  const accountant = url.searchParams.get("accountant") ?? "";
   const month = url.searchParams.get("month") ?? "";
   const type = url.searchParams.get("type") ?? "";
 
@@ -44,22 +46,40 @@ export async function GET(req: Request) {
 
   try {
     const authed = await createClient();
-    const ctx = await resolveAdminContext(authed);
-    if (!ctx.hasSession) {
-      return NextResponse.json({ error: "unauthorized", message: "ต้องเข้าสู่ระบบก่อน" }, { status: 401 });
-    }
-    if (!ctx.isAdmin || !ctx.tenantId) {
+    const service = createServiceRoleClient();
+    const access = await resolveAccountingAccess(authed, service);
+    if (!access) {
       return NextResponse.json({ error: "forbidden", message: "ไม่มีสิทธิ์ออกรายงาน" }, { status: 403 });
     }
 
-    const service = createServiceRoleClient();
-
     const filter: ListEntriesFilter = {};
     if (validMonth) filter.month = validMonth;
-    if (customerId) filter.customerId = customerId;
     if (validType) filter.entryType = validType;
 
-    const { entries } = await listEntries(service, ctx.tenantId, filter);
+    // ---- สโคปลูกค้า (server-side enforce) ----
+    if (access.allowedCustomerIds !== null) {
+      // นักบัญชี: จำกัดเฉพาะลูกค้าที่ตัวเองดูแล
+      if (customerId) {
+        if (!access.allowedCustomerIds.has(customerId)) {
+          return NextResponse.json(
+            { error: "forbidden", message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" },
+            { status: 403 }
+          );
+        }
+        filter.customerId = customerId;
+      } else {
+        filter.customerIds = [...access.allowedCustomerIds];
+      }
+    } else {
+      // admin/lead: ตามลูกค้าที่ระบุ หรือ สโคปตามนักบัญชีที่เลือก (ถ้ามี) ไม่งั้นทั้งสำนักงาน
+      if (customerId) {
+        filter.customerId = customerId;
+      } else if (UUID_RE.test(accountant)) {
+        filter.customerIds = await customerIdsForAccountant(service, access.tenantId, accountant);
+      }
+    }
+
+    const { entries } = await listEntries(service, access.tenantId, filter);
     const xlsx = await buildBillEntriesWorkbook(entries);
 
     // ชื่อไฟล์ไทย: ใส่รหัสลูกค้า (ไม่ใช่ชื่อ — PDPA) ถ้าเป็นรายลูกค้า
@@ -69,7 +89,7 @@ export async function GET(req: Request) {
         .from("customers")
         .select("customer_code")
         .eq("id", customerId)
-        .eq("tenant_id", ctx.tenantId)
+        .eq("tenant_id", access.tenantId)
         .maybeSingle();
       const code = (cust as { customer_code?: string | null } | null)?.customer_code;
       codePart = code ? `-${code.replace(/[^\w.-]/g, "")}` : `-${customerId.slice(0, 8)}`;

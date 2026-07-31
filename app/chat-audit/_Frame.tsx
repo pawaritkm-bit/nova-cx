@@ -13,6 +13,7 @@ export default function ChatAuditFrame({
   authed,
   title,
   subtitle,
+  staffOnly = false,
   children,
 }: {
   active: AppNavActive;
@@ -20,12 +21,21 @@ export default function ChatAuditFrame({
   authed: boolean;
   title: string;
   subtitle: string;
+  /** true = โหมด staff (นักบัญชี LINE) → เมนูจำกัดเฉพาะบัญชีของตัวเอง */
+  staffOnly?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <main className="nova-dash">
       <header>
-        <AppNav active={active} role={role} authed={authed} title={title} subtitle={subtitle} />
+        <AppNav
+          active={active}
+          role={role}
+          authed={authed}
+          title={title}
+          subtitle={subtitle}
+          staffOnly={staffOnly}
+        />
       </header>
       {children}
     </main>

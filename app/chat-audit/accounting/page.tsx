@@ -3,7 +3,13 @@ import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { resolveAdminContext } from "@/lib/admin/guard";
+import { resolveAccountingAccess } from "@/lib/accounting/access";
+import {
+  customerIdsForAccountant,
+  getEmployeeName,
+  listAccountantsWithCounts,
+  type AccountantCard,
+} from "@/lib/accounting/accountant-scope";
 import {
   listEntries,
   lineNet,
@@ -100,8 +106,9 @@ function isValidMonth(v: string | null | undefined): v is string {
   return typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v);
 }
 
-/** ประกอบ query string คงบริบท (q/month/open/type/edit) */
+/** ประกอบ query string คงบริบท (accountant/q/month/open/type/edit) */
 function buildQuery(params: {
+  accountant?: string;
   q?: string;
   month?: string;
   open?: string;
@@ -109,6 +116,7 @@ function buildQuery(params: {
   edit?: string;
 }): string {
   const sp = new URLSearchParams();
+  if (params.accountant) sp.set("accountant", params.accountant);
   if (params.q) sp.set("q", params.q);
   if (params.month) sp.set("month", params.month);
   if (params.open) sp.set("open", params.open);
@@ -116,6 +124,53 @@ function buildQuery(params: {
   if (params.edit) sp.set("edit", params.edit);
   const s = sp.toString();
   return s ? `?${s}` : "";
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** การ์ดนักบัญชี (หน้าแรก admin/lead) — คลิกเข้าดูลูกค้าของคนนั้น */
+function AccountantHome({ accountants }: { accountants: AccountantCard[] }) {
+  return (
+    <div className="dash-views">
+      <div className="card">
+        <div className="section-title">
+          <span>เลือกนักบัญชี</span>
+          <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>
+            {accountants.length.toLocaleString("th-TH")} คน
+          </span>
+        </div>
+        <div className="acc-team-grid">
+          {/* ทั้งสำนักงาน (ดูรวมทุกคน) */}
+          <Link href="/chat-audit/accounting?accountant=all" className="acc-team-card acc-team-all">
+            <span className="acc-team-avatar">ALL</span>
+            <span className="acc-team-name">ทั้งสำนักงาน</span>
+            <span className="acc-team-sub">ดูลูกค้าทุกคนรวมกัน</span>
+          </Link>
+
+          {accountants.length === 0 ? (
+            <p className="empty" style={{ gridColumn: "1 / -1" }}>
+              ยังไม่มีนักบัญชีที่ถูกกำหนดเป็นผู้ดูแลกลุ่มลูกค้า
+            </p>
+          ) : (
+            accountants.map((a) => (
+              <Link
+                key={a.employeeId}
+                href={`/chat-audit/accounting?accountant=${a.employeeId}`}
+                className="acc-team-card"
+              >
+                <span className="acc-team-avatar">{a.name.slice(0, 2)}</span>
+                <span className="acc-team-name">{a.name}</span>
+                <span className="acc-team-sub">
+                  {a.customerCount.toLocaleString("th-TH")} ลูกค้า ·{" "}
+                  {a.billCount.toLocaleString("th-TH")} รายการ
+                </span>
+              </Link>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** คีย์ ?open= ของกลุ่ม (unassigned = ค่าพิเศษ) */
@@ -405,6 +460,7 @@ export default async function AccountingPage({
   searchParams,
 }: {
   searchParams: Promise<{
+    accountant?: string;
     q?: string;
     month?: string;
     open?: string;
@@ -423,37 +479,72 @@ export default async function AccountingPage({
   }
 
   const authed = await createClient();
-  const ctx = await resolveAdminContext(authed);
+  const service = createServiceRoleClient();
+  const access = await resolveAccountingAccess(authed, service);
 
-  if (!ctx.hasSession) redirect("/login?redirect=/chat-audit/accounting");
-  if (!ctx.isAdmin || !ctx.tenantId) {
-    return (
-      <ChatAuditFrame active="chat-accounting" role={ctx.role} authed={ctx.hasSession && !!ctx.role} title="ลงบันทึกบัญชี" subtitle="ภาษีซื้อ/ขาย">
-        <div className="card">
-          <p style={{ fontWeight: 700, marginBottom: 4 }}>คุณไม่มีสิทธิ์เข้าถึงหน้านี้</p>
-          <p className="muted" style={{ fontSize: 13 }}>ข้อมูลบัญชี/ภาษีเป็นข้อมูลอ่อนไหว เปิดเฉพาะผู้ดูแลระบบ (admin) และผู้บริหาร (executive)</p>
-          <p style={{ marginTop: 12 }}><Link href="/chat-audit" className="underline">← กลับ</Link></p>
-        </div>
-      </ChatAuditFrame>
-    );
+  // ไม่มีสิทธิ์ (ยังไม่ login / ไม่ใช่ admin / ไม่ใช่นักบัญชี) → ไปหน้า login
+  if (!access) redirect("/login?redirect=/chat-audit/accounting");
+
+  const tenantId = access.tenantId;
+  const navRole = access.navRole;
+  // staff (นักบัญชี/หัวหน้า LINE) → เมนูจำกัดเฉพาะบัญชีของตัวเอง
+  const staffOnly = access.mode === "accountant" || access.mode === "lead";
+
+  // ---- โหมด & สโคปลูกค้า ----
+  // scopeCustomerIds: undefined = เห็นทุกลูกค้า (admin/lead ที่เลือก "ทั้งสำนักงาน")
+  //                   string[]  = จำกัดเฉพาะชุดนี้ (นักบัญชี หรือ admin ที่เลือกนักบัญชีคนหนึ่ง)
+  const accountantParam = (sp.accountant ?? "").trim();
+  let scopeCustomerIds: string[] | undefined;
+  let selectedAccountantName: string | null = null;
+
+  if (access.mode === "accountant") {
+    // ★ บังคับสโคปตัวเอง — ไม่ให้ override ผ่าน query param คนอื่น (server-side enforce)
+    scopeCustomerIds = [...(access.allowedCustomerIds ?? new Set<string>())];
+  } else {
+    // admin / lead — หน้าแรกเลือกนักบัญชี, เลือกแล้วเห็นลูกค้าของคนนั้น
+    if (accountantParam === "all") {
+      scopeCustomerIds = undefined; // ทั้งสำนักงาน
+    } else if (UUID_RE.test(accountantParam)) {
+      scopeCustomerIds = await customerIdsForAccountant(service, tenantId, accountantParam);
+      selectedAccountantName = await getEmployeeName(service, tenantId, accountantParam);
+    } else {
+      // ยังไม่เลือก → หน้าแรก = การ์ดนักบัญชี
+      const accountants = await listAccountantsWithCounts(service, tenantId);
+      return (
+        <ChatAuditFrame
+          active="chat-accounting"
+          role={navRole}
+          authed
+          staffOnly={staffOnly}
+          title="ลงบันทึกบัญชี"
+          subtitle="เลือกนักบัญชีเพื่อดูลูกค้าที่ดูแล"
+        >
+          <AccountantHome accountants={accountants} />
+        </ChatAuditFrame>
+      );
+    }
   }
 
-  const tenantId = ctx.tenantId;
   let allEntries: BillEntry[];
   try {
-    const service = createServiceRoleClient();
-    const res = await listEntries(service, tenantId, {});
+    const res = await listEntries(
+      service,
+      tenantId,
+      scopeCustomerIds === undefined ? {} : { customerIds: scopeCustomerIds }
+    );
     allEntries = res.entries;
   } catch {
     return (
-      <ChatAuditFrame active="chat-accounting" role={ctx.role} authed title="ลงบันทึกบัญชี" subtitle="ภาษีซื้อ/ขาย">
+      <ChatAuditFrame active="chat-accounting" role={navRole} authed staffOnly={staffOnly} title="ลงบันทึกบัญชี" subtitle="ภาษีซื้อ/ขาย">
         <div className="card">อ่านข้อมูลไม่สำเร็จ — ตรวจว่าตั้งค่า SUPABASE_SERVICE_ROLE_KEY และ apply migration ครบ</div>
       </ChatAuditFrame>
     );
   }
 
+  // param accountant ที่ต้องคงไว้เวลากดสลับลูกค้า/แท็บ (เฉพาะ admin/lead ที่เลือกแล้ว)
+  const accParam = access.mode === "accountant" ? undefined : accountantParam || undefined;
+
   // รหัสลูกค้า (สำหรับ avatar/ชื่อ/ค้นหา/ไฟล์ Excel) + รายชื่อลูกค้าทั้งหมด (dropdown อัปไฟล์)
-  const service = createServiceRoleClient();
   const custIds = [...new Set(allEntries.map((e) => e.customerId).filter((x): x is string => !!x))];
   const [codeById, taxIdById, customerSelectOptions] = await Promise.all([
     fetchCustomerCodes(service, tenantId, custIds),
@@ -505,23 +596,48 @@ export default async function AccountingPage({
   const editIsImage = editEntry ? entryIsImage(editEntry) : false;
 
   const hasAnyFilter = !!(q || selectedMonth);
-  const exportAllHref = `/chat-audit/accounting/export${buildQuery({ month: selectedMonth || undefined })}`;
+  // export: ส่ง accountant เฉพาะกรณีเลือกนักบัญชีคนหนึ่ง (ไม่ใช่ "ทั้งสำนักงาน")
+  //   นักบัญชี (staff) ไม่ต้องส่ง — export route สโคปจาก session ให้เอง
+  const exportAccountant = accParam && accParam !== "all" ? accParam : undefined;
+  const exportAllHref = `/chat-audit/accounting/export${buildQuery({ accountant: exportAccountant, month: selectedMonth || undefined })}`;
+
+  // ป้ายบอกสโคป + ปุ่มกลับไปเลือกนักบัญชี (เฉพาะ admin/lead)
+  const scopeLabel =
+    access.mode === "accountant"
+      ? "ลูกค้าที่คุณดูแล"
+      : accountantParam === "all"
+      ? "ทั้งสำนักงาน (ทุกนักบัญชี)"
+      : `นักบัญชี: ${selectedAccountantName ?? "—"}`;
+  const showAccountantPicker = access.mode !== "accountant";
 
   return (
     <ChatAuditFrame
       active="chat-accounting"
-      role={ctx.role}
+      role={navRole}
       authed
+      staffOnly={staffOnly}
       title="ลงบันทึกบัญชี"
       subtitle="ภาษีซื้อ/ขาย แยกตามลูกค้า — ตรวจบิลจริง แก้ได้ทุกช่อง แล้วออกรายงาน Excel"
     >
       <div className="dash-views">
+        {/* ---- แถบสโคป (นักบัญชีที่กำลังดู) ---- */}
+        <div className="card acc-scopebar">
+          <span className="acc-scope-label">{scopeLabel}</span>
+          {showAccountantPicker ? (
+            <Link href="/chat-audit/accounting" className="btn btn-ghost">
+              ← เปลี่ยนนักบัญชี
+            </Link>
+          ) : null}
+        </div>
+
         {/* ---- KPI รวม (ตามตัวกรอง) ---- */}
         <KpiRow s={globalSummary} />
 
         {/* ---- toolbar ---- */}
         <div className="card">
           <form method="get" className="inline-form bills-filter">
+            {/* คงบริบทนักบัญชีที่กำลังดูไว้เวลากรอง (form GET จะไม่ทิ้ง accountant) */}
+            {accParam ? <input type="hidden" name="accountant" value={accParam} /> : null}
             <input
               type="search"
               name="q"
@@ -538,7 +654,7 @@ export default async function AccountingPage({
               ))}
             </select>
             <button type="submit" className="btn">กรอง</button>
-            {hasAnyFilter ? <Link href="/chat-audit/accounting" className="btn btn-ghost">ล้าง</Link> : null}
+            {hasAnyFilter ? <Link href={`/chat-audit/accounting${buildQuery({ accountant: accParam })}`} className="btn btn-ghost">ล้าง</Link> : null}
 
             <span className="acc-toolbar-spacer" />
 
@@ -573,6 +689,7 @@ export default async function AccountingPage({
                 const isUnassigned = g.customerId === null;
                 const code = g.customerId ? codeById.get(g.customerId) ?? null : null;
                 const toggleHref = `/chat-audit/accounting${buildQuery({
+                  accountant: accParam,
                   q,
                   month: selectedMonth || undefined,
                   open: isOpen ? undefined : key,
@@ -617,6 +734,7 @@ export default async function AccountingPage({
                             const n = countOfType(g, t.type);
                             const active = selectedType === t.type;
                             const href = `/chat-audit/accounting${buildQuery({
+                              accountant: accParam,
                               q,
                               month: selectedMonth || undefined,
                               open: key,
@@ -665,6 +783,7 @@ export default async function AccountingPage({
                           signed={signed}
                           editHrefOf={(id) =>
                             `/chat-audit/accounting${buildQuery({
+                              accountant: accParam,
                               q,
                               month: selectedMonth || undefined,
                               open: key,
@@ -695,6 +814,7 @@ export default async function AccountingPage({
             editEntry.customerName
           )}
           closeHref={`/chat-audit/accounting${buildQuery({
+            accountant: accParam,
             q,
             month: selectedMonth || undefined,
             open: sp.open && sp.open !== "" ? sp.open : undefined,

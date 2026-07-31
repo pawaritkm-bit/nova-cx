@@ -3,9 +3,22 @@ import { getSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import { resolveViewer } from "@/lib/dashboard/session";
 import { resolveHomePath } from "@/lib/auth/home";
+import { resolveStaffContext } from "@/lib/staff/guard";
 import { LoginForm } from "./_form";
 
 export const dynamic = "force-dynamic";
+
+/** ข้อความ error จาก LINE login (แปลง ?error= เป็นข้อความไทยสุภาพ) */
+const LINE_ERROR_MESSAGES: Record<string, string> = {
+  not_staff: "บัญชี LINE นี้ยังไม่ได้ลงทะเบียนเป็นนักบัญชี กรุณาลงทะเบียนก่อน หรือติดต่อผู้ดูแล",
+  line_denied: "ยกเลิกการเข้าสู่ระบบด้วย LINE",
+  line_unavailable: "ระบบเข้าสู่ระบบด้วย LINE ยังไม่พร้อมใช้งาน กรุณาติดต่อผู้ดูแล",
+  line_state: "เซสชันหมดอายุ กรุณาลองเข้าสู่ระบบด้วย LINE อีกครั้ง",
+  line_invalid: "คำขอไม่ถูกต้อง กรุณาลองใหม่",
+  line_exchange: "ยืนยันตัวตนกับ LINE ไม่สำเร็จ กรุณาลองใหม่",
+  line_verify: "ยืนยันตัวตนกับ LINE ไม่สำเร็จ กรุณาลองใหม่",
+  server: "เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่",
+};
 
 /**
  * หน้าเข้าสู่ระบบพนักงาน (Supabase Auth)
@@ -16,14 +29,27 @@ export const dynamic = "force-dynamic";
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ redirect?: string }>;
+  searchParams: Promise<{ redirect?: string; error?: string }>;
 }) {
-  const { redirect: redirectParam } = await searchParams;
+  const { redirect: redirectParam, error: errorParam } = await searchParams;
   // ยอมรับเฉพาะ path ภายใน (กัน open-redirect) — null = ไม่มีปลายทางชัดเจน
   const explicitRedirect =
     redirectParam && redirectParam.startsWith("/") && !redirectParam.startsWith("//")
       ? redirectParam
       : null;
+
+  const lineError = errorParam ? LINE_ERROR_MESSAGES[errorParam] ?? null : null;
+
+  // staff (นักบัญชี) ที่ login LINE อยู่แล้ว → พาไปหน้าลงบันทึกบัญชี (ข้ามฟอร์ม admin)
+  const staff = await resolveStaffContext();
+  if (staff) {
+    redirect(explicitRedirect ?? "/chat-audit/accounting");
+  }
+
+  // ลิงก์เริ่ม LINE login (คงปลายทางเดิมถ้ามี)
+  const lineLoginHref = explicitRedirect
+    ? `/api/auth/line/login?redirect=${encodeURIComponent(explicitRedirect)}`
+    : "/api/auth/line/login";
 
   // ถ้าตั้ง env แล้ว → เช็ก session; ★ resolve นอก try/catch เพื่อไม่ให้ catch กลืน
   //   NEXT_REDIRECT ที่ redirect() โยนออกมา
@@ -58,7 +84,32 @@ export default async function LoginPage({
           ใช้บัญชีอีเมลพนักงาน Finovas เพื่อดู dashboard ตามบทบาทของคุณ
         </p>
 
+        {lineError ? (
+          <p
+            role="alert"
+            className="mt-4 rounded-lg bg-status-critical/10 px-3 py-2 text-sm text-status-critical"
+          >
+            {lineError}
+          </p>
+        ) : null}
+
         <LoginForm redirectTo={redirectTo} />
+
+        {/* เข้าสู่ระบบด้วย LINE (สำหรับนักบัญชี) — ไม่มีรหัสผ่าน ใช้ LINE ยืนยันตัวตน */}
+        <div className="mt-6">
+          <div className="relative mb-4 text-center">
+            <span className="relative z-10 bg-white px-3 text-xs text-brand/40">
+              หรือสำหรับนักบัญชี
+            </span>
+            <span className="absolute inset-x-0 top-1/2 -z-0 block border-t border-black/10" />
+          </div>
+          <a
+            href={lineLoginHref}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#06C755] px-4 py-2.5 text-sm font-medium text-white transition hover:brightness-95"
+          >
+            เข้าสู่ระบบด้วย LINE
+          </a>
+        </div>
       </div>
 
       <p className="mt-6 text-center text-sm text-brand/40">
