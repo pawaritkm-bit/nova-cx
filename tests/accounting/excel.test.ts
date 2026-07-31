@@ -15,6 +15,8 @@ function line(p: Partial<BillEntryLine>): BillEntryLine {
     lineNo: p.lineNo ?? 1,
     vatType: p.vatType ?? "vat",
     description: p.description ?? null,
+    accountCode: p.accountCode ?? null,
+    accountName: p.accountName ?? null,
     amount: p.amount ?? 0,
     vatAmount: p.vatAmount ?? 0,
     whtRate: p.whtRate ?? 0,
@@ -88,7 +90,7 @@ describe("buildBillEntriesWorkbook", () => {
         docDate: "2026-07-10",
         docNo: "INV-9",
         lines: [
-          line({ amount: 100, vatAmount: 7, description: "ของ A" }),
+          line({ amount: 100, vatAmount: 7, description: "ของ A", accountCode: "5010", accountName: "ซื้อสินค้า" }),
           line({ amount: 50, vatAmount: 0, vatType: "novat", description: "ของ B" }),
         ],
       }),
@@ -97,18 +99,22 @@ describe("buildBillEntriesWorkbook", () => {
     await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
     const ws = wb.getWorksheet("ภาษีซื้อ")!;
 
-    // หัวคอลัมน์
+    // หัวคอลัมน์ (คอลัมน์: วันที่1 เลขที่2 คู่ค้า3 เลขภาษี4 รายการ5 รหัสบัญชี6 ชื่อบัญชี7 ประเภทVAT8 มูลค่า9 VAT10 ...)
     expect(ws.getRow(1).getCell(1).value).toBe("วันที่");
-    expect(ws.getRow(1).getCell(7).value).toBe("มูลค่า");
+    expect(ws.getRow(1).getCell(6).value).toBe("รหัสบัญชี");
+    expect(ws.getRow(1).getCell(7).value).toBe("ชื่อบัญชี");
+    expect(ws.getRow(1).getCell(9).value).toBe("มูลค่า");
 
     // 2 line + 1 แถวรวม = 3 แถวข้อมูล (row 2,3,4)
-    expect(ws.getRow(2).getCell(7).value).toBe(100);
-    expect(ws.getRow(3).getCell(7).value).toBe(50);
-    // แถวรวมท้าย: มูลค่า 150, VAT 7
+    expect(ws.getRow(2).getCell(6).value).toBe("5010");
+    expect(ws.getRow(2).getCell(7).value).toBe("ซื้อสินค้า");
+    expect(ws.getRow(2).getCell(9).value).toBe(100);
+    expect(ws.getRow(3).getCell(9).value).toBe(50);
+    // แถวรวมท้าย: มูลค่า 150, VAT 7 (รวมทั้งสิ้น อยู่คอลัมน์ "รายการ" = 5)
     const totalRow = ws.getRow(4);
     expect(totalRow.getCell(5).value).toBe("รวมทั้งสิ้น");
-    expect(totalRow.getCell(7).value).toBe(150);
-    expect(totalRow.getCell(8).value).toBe(7);
+    expect(totalRow.getCell(9).value).toBe(150);
+    expect(totalRow.getCell(10).value).toBe(7);
   });
 
   it("ไม่มี entry เลย → ยังได้ 2 ชีท + แถวรวม 0", async () => {
@@ -117,7 +123,7 @@ describe("buildBillEntriesWorkbook", () => {
     await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
     expect(wb.worksheets.length).toBe(2);
     const ws = wb.getWorksheet("ภาษีขาย")!;
-    // มีแค่หัว (row1) + แถวรวม (row2)
-    expect(ws.getRow(2).getCell(7).value).toBe(0);
+    // มีแค่หัว (row1) + แถวรวม (row2) — มูลค่าอยู่คอลัมน์ 9
+    expect(ws.getRow(2).getCell(9).value).toBe(0);
   });
 });

@@ -331,6 +331,88 @@
 .nova-dash .acc-line-desc { display: flex; gap: 6px; align-items: center; }
 .nova-dash .acc-vat-sel { flex: 0 0 76px; }
 .nova-dash .acc-desc-inp { flex: 1 1 auto; }
+
+/* ---- ตัวเลือกบัญชี (ผังบัญชี) ต่อบรรทัด ---- */
+.nova-dash .acc-acct {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.nova-dash .acc-acct-combo { position: relative; }
+.nova-dash .acc-acct-search { width: 100%; }
+/* รหัสบัญชีล็อก (badge อ่านอย่างเดียว) */
+.nova-dash .acc-acct-code {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--navy-50, #eef4ff);
+  color: var(--navy-800);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.nova-dash .acc-acct-name { flex: 1 1 auto; min-width: 0; }
+.nova-dash .acc-acct-change {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.nova-dash .acc-acct-change:hover { border-color: var(--navy-700); color: var(--navy-800); }
+/* โหมดอ่านอย่างเดียว (ยืนยันแล้ว) */
+.nova-dash .acc-acct-ro { gap: 8px; }
+.nova-dash .acc-acct-name-ro { font-size: 12.5px; color: var(--navy-800); }
+/* dropdown รายการบัญชี */
+.nova-dash .acc-acct-list {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  padding: 4px;
+}
+.nova-dash .acc-acct-opt {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--navy-800);
+  cursor: pointer;
+}
+.nova-dash .acc-acct-opt:hover { background: var(--navy-50, #eef4ff); }
+.nova-dash .acc-acct-opt-code {
+  flex: 0 0 52px;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.nova-dash .acc-acct-opt-name { flex: 1 1 auto; }
+.nova-dash .acc-acct-empty { padding: 8px; font-size: 12px; color: var(--muted); }
 .nova-dash .acc-net { font-weight: 700; color: var(--navy-800); text-align: right; font-variant-numeric: tabular-nums; }
 .nova-dash .acc-line-del {
   border: 1px solid var(--red);
@@ -657,3 +739,191 @@
   line-height: 1.7;
 }
 .nova-dash .acc-review-warn-list strong { color: #b45309; }
+
+/* ============================================================
+   ตัดงานรายเดือน — แถบเลือกเดือน + คอลัมน์ซื้อ/ขาย + กล่องยังไม่ลงวันที่
+   ============================================================ */
+
+/* ---- แถบเลือกเดือน (month rail) ---- */
+.nova-dash .acc-rail-card { padding: 12px; }
+.nova-dash .acc-rail {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.nova-dash .acc-mtab {
+  flex: none;
+  min-width: 150px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: #fff;
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color .15s, background .15s;
+}
+.nova-dash .acc-mtab:hover { border-color: var(--blue-600); }
+.nova-dash .acc-mtab.active {
+  border-color: var(--navy-800);
+  background: var(--blue-bg);
+  box-shadow: inset 0 0 0 1px var(--navy-800);
+}
+.nova-dash .acc-mtab-warn {
+  border-color: var(--amber);
+  background: var(--amber-bg);
+}
+.nova-dash .acc-mtab-warn.active { box-shadow: inset 0 0 0 1px var(--amber); }
+.nova-dash .acc-mo { display: block; font-weight: 800; font-size: 15px; }
+.nova-dash .acc-mc {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 5px;
+}
+.nova-dash .acc-mc .b { color: var(--blue-600); font-weight: 700; }
+.nova-dash .acc-mc .s { color: var(--green); font-weight: 700; }
+.nova-dash .acc-done { display: block; font-size: 11px; font-weight: 700; color: var(--green); margin-top: 6px; }
+.nova-dash .acc-pend { display: block; font-size: 11px; font-weight: 700; color: #b45309; margin-top: 6px; }
+
+/* ---- KPI สรุปเดือน ---- */
+.nova-dash .acc-mkpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 4px 0 16px;
+}
+.nova-dash .acc-mkpi {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 13px 15px;
+  background: #f8fafc;
+}
+.nova-dash .acc-mkpi .v { font-size: 21px; font-weight: 800; }
+.nova-dash .acc-mkpi .lbl { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.nova-dash .acc-mkpi.buy { background: var(--blue-bg); }
+.nova-dash .acc-mkpi.buy .v { color: var(--blue-600); }
+.nova-dash .acc-mkpi.sell { background: var(--green-bg); }
+.nova-dash .acc-mkpi.sell .v { color: var(--green); }
+
+/* ---- 2 คอลัมน์ ซื้อ/ขาย ---- */
+.nova-dash .acc-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.nova-dash .acc-col {
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  overflow: hidden;
+}
+.nova-dash .acc-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 15px;
+  font-weight: 800;
+  font-size: 14.5px;
+}
+.nova-dash .acc-col.buy .acc-col-head { background: var(--blue-bg); color: var(--blue-600); }
+.nova-dash .acc-col.sell .acc-col-head { background: var(--green-bg); color: var(--green); }
+.nova-dash .acc-col-sum { font-size: 12.5px; font-weight: 700; }
+.nova-dash .acc-crow {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--text);
+}
+.nova-dash .acc-crow:hover { background: #f5f9ff; }
+.nova-dash .acc-crow.open { background: var(--blue-bg); }
+.nova-dash .acc-cc {
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--navy-800);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 0;
+  text-align: center;
+}
+.nova-dash .acc-cn { display: flex; flex-direction: column; min-width: 0; }
+.nova-dash .acc-cn .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nova-dash .acc-cn .sub { font-size: 11.5px; color: var(--muted); }
+.nova-dash .acc-flag { color: #b45309; font-weight: 700; }
+.nova-dash .acc-camt { font-weight: 700; }
+.nova-dash .acc-col-foot {
+  padding: 11px 14px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.nova-dash .btn.acc-btn-buy { background: var(--blue-600); border-color: var(--blue-600); color: #fff; }
+.nova-dash .btn.acc-btn-sell { background: var(--green); border-color: var(--green); color: #fff; }
+
+.nova-dash .acc-month-hint { font-size: 12.5px; color: var(--muted); margin: 14px 2px 0; }
+.nova-dash .acc-detail .section-title { margin-bottom: 4px; }
+
+/* ---- กล่อง "บิลยังไม่ลงวันที่" ---- */
+.nova-dash .acc-undated { border: 1px solid var(--amber); background: var(--amber-bg); }
+.nova-dash .acc-ud-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  font-size: 14.5px;
+  color: #b45309;
+  margin-bottom: 10px;
+}
+.nova-dash .acc-ud-cnt { margin-left: auto; font-size: 12.5px; font-weight: 600; }
+.nova-dash .acc-ud-row {
+  display: grid;
+  grid-template-columns: 48px 1fr auto auto;
+  gap: 11px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid rgba(217, 119, 6, .25);
+  font-size: 13px;
+}
+.nova-dash .acc-ud-thumb {
+  width: 40px;
+  height: 50px;
+  border-radius: 7px;
+  background: #fff;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+}
+.nova-dash .acc-ud-info { display: flex; flex-direction: column; min-width: 0; }
+.nova-dash .acc-ud-info .nm { font-weight: 700; }
+.nova-dash .acc-ud-info .sub { font-size: 11.5px; color: var(--muted); }
+.nova-dash .acc-udate { display: flex; flex-direction: column; gap: 3px; }
+.nova-dash .acc-udate-input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  background: #fff;
+  color: var(--text);
+}
+.nova-dash .acc-udate-msg { font-size: 11px; }
+.nova-dash .acc-udate-msg.ok { color: var(--green); }
+.nova-dash .acc-udate-msg.err { color: var(--red); }
+.nova-dash .acc-ud-note { font-size: 12px; color: #92600a; margin: 10px 0 0; }
+
+@media (max-width: 720px) {
+  .nova-dash .acc-mkpis { grid-template-columns: repeat(2, 1fr); }
+  .nova-dash .acc-cols { grid-template-columns: 1fr; }
+  .nova-dash .acc-ud-row { grid-template-columns: 40px 1fr; }
+  .nova-dash .acc-ud-row .acc-udate,
+  .nova-dash .acc-ud-row .btn { grid-column: 2; }
+}

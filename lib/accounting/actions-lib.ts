@@ -37,6 +37,10 @@ export type LineInput = {
   lineNo?: number;
   vatType?: VatType;
   description?: string | null;
+  /** รหัสบัญชีจากผังบัญชี (ล็อกเมื่อเลือกแล้ว) · null = ล้าง */
+  accountCode?: string | null;
+  /** ชื่อบัญชี (แก้ต่อบรรทัดได้) · null = ล้าง */
+  accountName?: string | null;
   amount?: number | null;
   vatAmount?: number | null;
   whtRate?: number | null;
@@ -171,6 +175,8 @@ export async function addLine(
       line_no: lineNo,
       vat_type: input.vatType === "novat" ? "novat" : "vat",
       description: input.description ?? null,
+      account_code: input.accountCode ?? null,
+      account_name: input.accountName ?? null,
       amount,
       vat_amount: safeAmount(input.vatAmount),
       wht_rate: wht.rate,
@@ -204,6 +210,8 @@ export async function updateLine(
   const patch: Record<string, unknown> = {};
   if (input.vatType !== undefined) patch.vat_type = input.vatType === "novat" ? "novat" : "vat";
   if (input.description !== undefined) patch.description = input.description;
+  if (input.accountCode !== undefined) patch.account_code = input.accountCode;
+  if (input.accountName !== undefined) patch.account_name = input.accountName;
   if (input.lineNo !== undefined) patch.line_no = input.lineNo;
   if (input.amount !== undefined) patch.amount = safeAmount(input.amount);
   if (input.vatAmount !== undefined) patch.vat_amount = safeAmount(input.vatAmount);

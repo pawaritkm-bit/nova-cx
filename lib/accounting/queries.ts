@@ -28,6 +28,10 @@ export type BillEntryLine = {
   lineNo: number;
   vatType: VatType;
   description: string | null;
+  /** รหัสบัญชีจากผังบัญชีมาตรฐาน (ล็อกเมื่อเลือกแล้ว) · null = ยังไม่เลือก */
+  accountCode: string | null;
+  /** ชื่อบัญชี (prefill จากผัง แก้ต่อบรรทัดได้) · null = ยังไม่เลือก */
+  accountName: string | null;
   amount: number;
   vatAmount: number;
   whtRate: number;
@@ -167,6 +171,8 @@ type RawLine = {
   line_no: number;
   vat_type: string;
   description: string | null;
+  account_code: string | null;
+  account_name: string | null;
   amount: number | string | null;
   vat_amount: number | string | null;
   wht_rate: number | string | null;
@@ -207,6 +213,8 @@ function mapLine(r: RawLine): BillEntryLine {
     lineNo: r.line_no,
     vatType: r.vat_type === "novat" ? "novat" : "vat",
     description: r.description,
+    accountCode: r.account_code,
+    accountName: r.account_name,
     amount: num(r.amount),
     vatAmount: num(r.vat_amount),
     whtRate: num(r.wht_rate),
@@ -278,7 +286,7 @@ export async function listEntries(
   // lines ของ entry เหล่านี้
   const { data: lineData } = await db
     .from("bill_entry_lines")
-    .select("id, entry_id, line_no, vat_type, description, amount, vat_amount, wht_rate, wht_amount, ai_filled")
+    .select("id, entry_id, line_no, vat_type, description, account_code, account_name, amount, vat_amount, wht_rate, wht_amount, ai_filled")
     .eq("tenant_id", tenantId)
     .in("entry_id", entryIds)
     .order("line_no", { ascending: true });

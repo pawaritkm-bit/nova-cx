@@ -14,6 +14,8 @@ function line(p: Partial<BillEntryLine>): BillEntryLine {
     lineNo: p.lineNo ?? 1,
     vatType: p.vatType ?? "vat",
     description: p.description ?? null,
+    accountCode: p.accountCode ?? null,
+    accountName: p.accountName ?? null,
     amount: p.amount ?? 0,
     vatAmount: p.vatAmount ?? 0,
     whtRate: p.whtRate ?? 0,

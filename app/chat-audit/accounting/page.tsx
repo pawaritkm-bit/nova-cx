@@ -27,11 +27,21 @@ import {
   type CustomerEntryGroup,
 } from "@/lib/accounting/group";
 import { formatMoney } from "@/lib/accounting/calc";
+import {
+  monthKeyOf,
+  buildMonthlyIndex,
+  summarizeMonth,
+  customerColumnRows,
+  thaiMonthLabel,
+  type MonthBucket,
+  type MonthKpi,
+} from "@/lib/accounting/monthly";
 import { createEntryAction } from "./actions";
 import ChatAuditFrame from "../_Frame";
 import EntryEditor from "./EntryEditor";
 import RowActions from "./RowActions";
 import CustomerTaxIdField from "./CustomerTaxIdField";
+import EntryDateField from "./EntryDateField";
 import UploadFileButton from "./UploadFileButton";
 import { extOf } from "@/lib/accounting/upload";
 import "../chat-admin.css";
@@ -95,11 +105,6 @@ function customerLabel(code: string | null, name: string | null): string {
 /** avatar สั้นจากรหัสลูกค้า (ไม่มี → "?") */
 function avatarText(code: string | null): string {
   return code ? code.slice(0, 4) : "?";
-}
-
-/** YYYY-MM ของ entry (จาก docDate) */
-function monthKeyOf(e: BillEntry): string | null {
-  return e.docDate && /^\d{4}-\d{2}/.test(e.docDate) ? e.docDate.slice(0, 7) : null;
 }
 
 function isValidMonth(v: string | null | undefined): v is string {
@@ -451,6 +456,200 @@ function EntryTable({
 }
 
 /**
+ * แถบเลือกเดือน (month rail) — เห็นยอด ซื้อ/ขาย + รอตรวจ ของแต่ละเดือนในพริบตา
+ *   คลิกเดือน → set month · การ์ดพิเศษ "ยังไม่ลงวันที่" → month=none · "ทุกเดือน" = accordion เดิม
+ */
+function MonthRail({
+  months,
+  undatedCount,
+  selectedMonth,
+  undatedMode,
+  accParam,
+  q,
+}: {
+  months: MonthBucket[];
+  undatedCount: number;
+  selectedMonth: string;
+  undatedMode: boolean;
+  accParam?: string;
+  q?: string;
+}) {
+  const allActive = !selectedMonth && !undatedMode;
+  return (
+    <div className="card acc-rail-card">
+      <div className="acc-rail">
+        {/* ทุกเดือน (พฤติกรรมเดิม — accordion รายลูกค้า) */}
+        <Link
+          href={`/chat-audit/accounting${buildQuery({ accountant: accParam, q })}`}
+          className={`acc-mtab acc-mtab-all${allActive ? " active" : ""}`}
+          scroll={false}
+        >
+          <span className="acc-mo">ทุกเดือน</span>
+          <span className="acc-mc">ดูรวมทุกเดือน (รายลูกค้า)</span>
+        </Link>
+
+        {months.map((m) => {
+          const active = selectedMonth === m.month;
+          return (
+            <Link
+              key={m.month}
+              href={`/chat-audit/accounting${buildQuery({ accountant: accParam, q, month: m.month })}`}
+              className={`acc-mtab${active ? " active" : ""}`}
+              scroll={false}
+            >
+              <span className="acc-mo">{thaiMonthLabel(m.month)}</span>
+              <span className="acc-mc">
+                <span className="b">ซื้อ {m.purchaseCount}</span>
+                <span className="s">ขาย {m.saleCount}</span>
+              </span>
+              {m.pendingCount > 0 ? (
+                <span className="acc-pend">⏳ รอตรวจ {m.pendingCount} ใบ</span>
+              ) : (
+                <span className="acc-done">✅ ครบแล้ว</span>
+              )}
+            </Link>
+          );
+        })}
+
+        {/* กล่องพิเศษ: ยังไม่ลงวันที่ */}
+        {undatedCount > 0 ? (
+          <Link
+            href={`/chat-audit/accounting${buildQuery({ accountant: accParam, q, month: "none" })}`}
+            className={`acc-mtab acc-mtab-warn${undatedMode ? " active" : ""}`}
+            scroll={false}
+          >
+            <span className="acc-mo">⚠️ ยังไม่ลงวันที่</span>
+            <span className="acc-mc">อ่านวันที่ไม่ได้ {undatedCount} ใบ</span>
+            <span className="acc-pend">ต้องลงวันที่ก่อนเข้าเดือน</span>
+          </Link>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** KPI สรุปเดือน (ฐาน/VAT ซื้อ·ขาย + หัก ณ ที่จ่าย + ยืนยันแล้ว X/Y) */
+function MonthKpiRow({ k }: { k: MonthKpi }) {
+  const remain = k.totalCount - k.confirmedCount;
+  return (
+    <div className="acc-mkpis">
+      <div className="acc-mkpi buy">
+        <div className="v">{formatMoney(k.purchaseBase)}</div>
+        <div className="lbl">ภาษีซื้อ (ฐาน) · VAT {formatMoney(k.purchaseVat)}</div>
+      </div>
+      <div className="acc-mkpi sell">
+        <div className="v">{formatMoney(k.saleBase)}</div>
+        <div className="lbl">ภาษีขาย (ฐาน) · VAT {formatMoney(k.saleVat)}</div>
+      </div>
+      <div className="acc-mkpi">
+        <div className="v">{formatMoney(k.wht)}</div>
+        <div className="lbl">หัก ณ ที่จ่าย (ภ.ง.ด.3/53)</div>
+      </div>
+      <div className="acc-mkpi">
+        <div className="v">
+          {k.confirmedCount.toLocaleString("th-TH")} / {k.totalCount.toLocaleString("th-TH")}
+        </div>
+        <div className="lbl">
+          ยืนยันแล้ว{remain > 0 ? ` · เหลือ ${remain.toLocaleString("th-TH")}` : ""}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 2 คอลัมน์ ซื้อ/ขาย ของเดือนที่เลือก — ลิสต์รายลูกค้า + ปุ่มออกรายงานรายเดือน
+ *   คลิกลูกค้า → toggle open (เปิดตารางบิลของลูกค้ารายนั้นเฉพาะเดือนนี้ ด้านล่าง)
+ */
+function BuySellColumns({
+  filtered,
+  codeById,
+  accParam,
+  q,
+  selectedMonth,
+  openKey,
+  exportAccountant,
+}: {
+  filtered: BillEntry[];
+  codeById: Map<string, string | null>;
+  accParam?: string;
+  q?: string;
+  selectedMonth: string;
+  openKey: string;
+  exportAccountant?: string;
+}) {
+  const columns: { type: "purchase" | "sale"; title: string; cls: string }[] = [
+    { type: "purchase", title: "📥 บิลซื้อ (ภาษีซื้อ)", cls: "buy" },
+    { type: "sale", title: "📤 บิลขาย (ภาษีขาย)", cls: "sell" },
+  ];
+  return (
+    <div className="acc-cols">
+      {columns.map((col) => {
+        const rows = customerColumnRows(filtered, col.type);
+        const totalBase = rows.reduce((s, r) => s + r.base, 0);
+        const totalCount = rows.reduce((s, r) => s + r.count, 0);
+        // export รายเดือนทั้งคอลัมน์ (ทุกลูกค้าในสโคปของเดือน — ไม่ใส่ customerId)
+        const exportHref = `/chat-audit/accounting/export?month=${selectedMonth}&type=${col.type}${
+          exportAccountant ? `&accountant=${exportAccountant}` : ""
+        }`;
+        return (
+          <div key={col.type} className={`acc-col ${col.cls}`}>
+            <div className="acc-col-head">
+              <span>{col.title}</span>
+              <span className="acc-col-sum">
+                {totalCount.toLocaleString("th-TH")} ใบ · ฿{formatMoney(totalBase)}
+              </span>
+            </div>
+            {rows.length === 0 ? (
+              <p className="empty" style={{ margin: "14px" }}>ยังไม่มีบิลในเดือนนี้</p>
+            ) : (
+              rows.map((r) => {
+                const key = r.customerId ?? UNASSIGNED_CUSTOMER;
+                const isOpen = openKey === key;
+                const code = r.customerId ? codeById.get(r.customerId) ?? null : null;
+                const href = `/chat-audit/accounting${buildQuery({
+                  accountant: accParam,
+                  q,
+                  month: selectedMonth,
+                  open: isOpen ? undefined : key,
+                  type: col.type,
+                })}`;
+                return (
+                  <Link
+                    key={key}
+                    href={href}
+                    scroll={false}
+                    className={`acc-crow${isOpen ? " open" : ""}`}
+                    aria-expanded={isOpen}
+                  >
+                    <span className="acc-cc">{avatarText(code)}</span>
+                    <span className="acc-cn">
+                      <span className="nm">{customerLabel(code, r.customerName)}</span>
+                      <span className="sub">
+                        {r.count.toLocaleString("th-TH")} ใบ · ฿{formatMoney(r.base)}
+                        {r.draftCount > 0 ? (
+                          <span className="acc-flag"> · ร่าง {r.draftCount}</span>
+                        ) : null}
+                      </span>
+                    </span>
+                    <span className="acc-camt">฿{formatMoney(r.vat)}</span>
+                  </Link>
+                );
+              })
+            )}
+            <div className="acc-col-foot">
+              <a className={`btn ${col.cls === "buy" ? "acc-btn-buy" : "acc-btn-sell"}`} href={exportHref}>
+                ⬇ ภพ.30 {col.type === "purchase" ? "ซื้อ" : "ขาย"} (Excel)
+              </a>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * /chat-audit/accounting — "ลงบันทึกบัญชี ภาษีซื้อ/ขาย" (admin/executive เท่านั้น)
  *   ★ ลูกค้าเป็นตัวจัดกลุ่มหลัก (accordion) — แต่ละลูกค้ายื่นภาษีแยกกัน
  *   ★ ในลูกค้า: แท็บย่อย ภาษีซื้อ/ขาย/รอระบุ + ตารางบิล + แก้ได้ทุกช่อง (verify + auto-calc)
@@ -556,13 +755,24 @@ export default async function AccountingPage({
   const q = (sp.q ?? "").trim();
   const monthOptions = [...new Set(allEntries.map(monthKeyOf).filter((m): m is string => !!m))].sort((a, b) => b.localeCompare(a));
   const selectedMonth = isValidMonth(sp.month) && monthOptions.includes(sp.month) ? sp.month : "";
+  // โหมด "ยังไม่ลงวันที่" (บิล doc_date=null) — month=none
+  const undatedMode = sp.month === "none";
+  // ค่า month ที่ต้องคงในลิงก์ย่อย (เดือนจริง หรือ none) — undefined = ทุกเดือน
+  const monthParam = undatedMode ? "none" : selectedMonth || undefined;
   const selectedType: EntryType =
     sp.type === "sale" ? "sale" : sp.type === "unspecified" ? "unspecified" : "purchase";
 
-  // กรอง (เดือน + ค้นหาลูกค้า) ก่อนจัดกลุ่ม
+  // ดัชนีเดือน (แถบเลือกเดือน) — จากทั้งสโคป (ไม่ผูกกับคำค้น/เดือนที่เลือก)
+  const monthlyIndex = buildMonthlyIndex(allEntries);
+
+  // กรอง (เดือน/undated + ค้นหาลูกค้า) ก่อนจัดกลุ่ม
   const qLower = q.toLowerCase();
   const filtered = allEntries.filter((e) => {
-    if (selectedMonth && monthKeyOf(e) !== selectedMonth) return false;
+    if (undatedMode) {
+      if (monthKeyOf(e) !== null) return false;
+    } else if (selectedMonth && monthKeyOf(e) !== selectedMonth) {
+      return false;
+    }
     if (q) {
       const code = e.customerId ? codeById.get(e.customerId) ?? "" : "";
       const hay = `${code} ${e.customerName ?? ""}`.toLowerCase();
@@ -597,7 +807,7 @@ export default async function AccountingPage({
   const editViewUrl = editObjectPath ? signed.get(editObjectPath) ?? null : null;
   const editIsImage = editEntry ? entryIsImage(editEntry) : false;
 
-  const hasAnyFilter = !!(q || selectedMonth);
+  const hasAnyFilter = !!(q || selectedMonth || undatedMode);
   // export: ส่ง accountant เฉพาะกรณีเลือกนักบัญชีคนหนึ่ง (ไม่ใช่ "ทั้งสำนักงาน")
   //   นักบัญชี (staff) ไม่ต้องส่ง — export route สโคปจาก session ให้เอง
   const exportAccountant = accParam && accParam !== "all" ? accParam : undefined;
@@ -612,6 +822,90 @@ export default async function AccountingPage({
       ? "ทั้งสำนักงาน (ทุกนักบัญชี)"
       : `นักบัญชี: ${selectedAccountantName ?? "—"}`;
   const showAccountantPicker = access.mode !== "accountant";
+
+  /**
+   * เนื้อหากางออกของลูกค้า 1 ราย (เลขภาษี + KPI + แท็บซื้อ/ขาย/รอระบุ + ตารางบิล)
+   *   ใช้ซ้ำได้ทั้งโหมด accordion (ทุกเดือน) และโหมดเลือกเดือน (กดลูกค้าในคอลัมน์ซื้อ/ขาย)
+   */
+  const renderCustomerBody = (g: CustomerEntryGroup, key: string, code: string | null) => (
+    <div className="cust-body">
+      {/* เลขภาษีของลูกค้า (loop เก็บเลขภาษี) — กรอก/แก้ได้ เฉพาะลูกค้าที่จับคู่แล้ว */}
+      {g.customerId ? (
+        <CustomerTaxIdField
+          customerId={g.customerId}
+          initialTaxId={taxIdById.get(g.customerId) ?? null}
+        />
+      ) : null}
+
+      {/* สรุปของลูกค้ารายนี้ */}
+      <KpiRow s={g.summary.all} />
+
+      {/* แท็บย่อย ภาษีซื้อ/ขาย/รอระบุ */}
+      <div className="acc-subtabs">
+        {TYPE_TABS.map((t) => {
+          const n = countOfType(g, t.type);
+          const active = selectedType === t.type;
+          const href = `/chat-audit/accounting${buildQuery({
+            accountant: accParam,
+            q,
+            month: monthParam,
+            open: key,
+            type: t.type,
+          })}`;
+          return (
+            <Link
+              key={t.type}
+              href={href}
+              scroll={false}
+              className={`acc-subtab${active ? " active" : ""}${t.type === "unspecified" && n > 0 ? " amber" : ""}`}
+              aria-current={active ? "page" : undefined}
+            >
+              {t.label} <span className="acc-subtab-n">{n}</span>
+            </Link>
+          );
+        })}
+
+        <span className="acc-toolbar-spacer" />
+        {/* เพิ่มรายการเองให้ลูกค้ารายนี้ */}
+        <form action={createEntryAction} className="acc-inline">
+          {g.customerId ? <input type="hidden" name="customerId" value={g.customerId} /> : null}
+          <input type="hidden" name="entryType" value={selectedType} />
+          <button type="submit" className="btn">+ เพิ่มรายการ</button>
+        </form>
+        {/* อัปโหลดไฟล์เองให้ลูกค้ารายนี้ (ผูกลูกค้า) */}
+        <UploadFileButton
+          lockedCustomerId={g.customerId}
+          lockedCustomerLabel={customerLabel(code, g.name)}
+          defaultEntryType={selectedType}
+          label="อัปไฟล์"
+        />
+        {/* ตรวจทาน + Excel ของลูกค้ารายนี้ */}
+        {g.customerId ? (
+          <a
+            href={`/chat-audit/accounting/review${buildQuery({ month: selectedMonth || undefined })}${selectedMonth ? "&" : "?"}customerId=${g.customerId}`}
+            className="btn btn-ghost"
+          >
+            ตรวจทาน / ออก Excel
+          </a>
+        ) : null}
+      </div>
+
+      <EntryTable
+        entries={entriesOfType(g, selectedType)}
+        signed={signed}
+        editHrefOf={(id) =>
+          `/chat-audit/accounting${buildQuery({
+            accountant: accParam,
+            q,
+            month: monthParam,
+            open: key,
+            type: selectedType,
+            edit: id,
+          })}`
+        }
+      />
+    </div>
+  );
 
   return (
     <ChatAuditFrame
@@ -633,8 +927,15 @@ export default async function AccountingPage({
           ) : null}
         </div>
 
-        {/* ---- KPI รวม (ตามตัวกรอง) ---- */}
-        <KpiRow s={globalSummary} />
+        {/* ---- แถบเลือกเดือน (ตัดงานรายเดือน) ---- */}
+        <MonthRail
+          months={monthlyIndex.months}
+          undatedCount={monthlyIndex.undatedCount}
+          selectedMonth={selectedMonth}
+          undatedMode={undatedMode}
+          accParam={accParam}
+          q={q}
+        />
 
         {/* ---- toolbar ---- */}
         <div className="card">
@@ -653,7 +954,7 @@ export default async function AccountingPage({
             <select id="f-month" name="month" defaultValue={selectedMonth}>
               <option value="">— ทุกเดือน —</option>
               {monthOptions.map((m) => (
-                <option key={m} value={m}>{m}</option>
+                <option key={m} value={m}>{thaiMonthLabel(m)}</option>
               ))}
             </select>
             <button type="submit" className="btn">กรอง</button>
@@ -673,136 +974,159 @@ export default async function AccountingPage({
           </form>
         </div>
 
-        {/* ---- รายการลูกค้า (accordion) ---- */}
-        <div className="card">
-          <div className="section-title">
-            <span>ลูกค้า</span>
-            <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>
-              {groups.length.toLocaleString("th-TH")} ราย · {filtered.length.toLocaleString("th-TH")} รายการ
-            </span>
-          </div>
-
-          {groups.length === 0 ? (
-            <p className="empty">ยังไม่มีรายการตามเงื่อนไขที่เลือก</p>
-          ) : (
-            <div className="cust-list">
-              {groups.map((g) => {
-                const key = groupOpenKey(g);
-                const isOpen = openKey === key;
-                const isUnassigned = g.customerId === null;
-                const code = g.customerId ? codeById.get(g.customerId) ?? null : null;
-                const toggleHref = `/chat-audit/accounting${buildQuery({
-                  accountant: accParam,
-                  q,
-                  month: selectedMonth || undefined,
-                  open: isOpen ? undefined : key,
-                  type: isOpen ? undefined : selectedType,
-                })}`;
-
-                return (
-                  <div key={key} className={`cust-card${isUnassigned ? " cust-unassigned" : ""}${isOpen ? " open" : ""}`}>
-                    {/* หัวการ์ด */}
-                    <Link href={toggleHref} className="cust-head" aria-expanded={isOpen} scroll={false}>
-                      <span className={`cust-avatar${isUnassigned ? " un" : ""}`}>{avatarText(code)}</span>
-                      <span className="cust-id">
-                        <span className="cust-name">{customerLabel(code, g.name)}</span>
-                        <span className="csub">รวมจ่ายจริง {formatMoney(g.summary.all.net)} บาท</span>
-                      </span>
-                      <span className="cust-kinds">
-                        {g.purchaseCount > 0 ? <span className="kind-badge k-purchase">ซื้อ {g.purchaseCount}</span> : null}
-                        {g.saleCount > 0 ? <span className="kind-badge k-sale">ขาย {g.saleCount}</span> : null}
-                        {g.unspecifiedCount > 0 ? <span className="kind-badge k-hand">รอระบุ {g.unspecifiedCount}</span> : null}
-                      </span>
-                      <span className="cust-total">{g.count.toLocaleString("th-TH")} รายการ</span>
-                      <span className={`cust-chev${isOpen ? " up" : ""}`} aria-hidden="true">▾</span>
-                    </Link>
-
-                    {/* เนื้อหากางออก */}
-                    {isOpen ? (
-                      <div className="cust-body">
-                        {/* เลขภาษีของลูกค้า (loop เก็บเลขภาษี) — กรอก/แก้ได้ เฉพาะลูกค้าที่จับคู่แล้ว */}
-                        {g.customerId ? (
-                          <CustomerTaxIdField
-                            customerId={g.customerId}
-                            initialTaxId={taxIdById.get(g.customerId) ?? null}
-                          />
-                        ) : null}
-
-                        {/* สรุปของลูกค้ารายนี้ */}
-                        <KpiRow s={g.summary.all} />
-
-                        {/* แท็บย่อย ภาษีซื้อ/ขาย/รอระบุ */}
-                        <div className="acc-subtabs">
-                          {TYPE_TABS.map((t) => {
-                            const n = countOfType(g, t.type);
-                            const active = selectedType === t.type;
-                            const href = `/chat-audit/accounting${buildQuery({
-                              accountant: accParam,
-                              q,
-                              month: selectedMonth || undefined,
-                              open: key,
-                              type: t.type,
-                            })}`;
-                            return (
-                              <Link
-                                key={t.type}
-                                href={href}
-                                scroll={false}
-                                className={`acc-subtab${active ? " active" : ""}${t.type === "unspecified" && n > 0 ? " amber" : ""}`}
-                                aria-current={active ? "page" : undefined}
-                              >
-                                {t.label} <span className="acc-subtab-n">{n}</span>
-                              </Link>
-                            );
-                          })}
-
-                          <span className="acc-toolbar-spacer" />
-                          {/* เพิ่มรายการเองให้ลูกค้ารายนี้ */}
-                          <form action={createEntryAction} className="acc-inline">
-                            {g.customerId ? <input type="hidden" name="customerId" value={g.customerId} /> : null}
-                            <input type="hidden" name="entryType" value={selectedType} />
-                            <button type="submit" className="btn">+ เพิ่มรายการ</button>
-                          </form>
-                          {/* อัปโหลดไฟล์เองให้ลูกค้ารายนี้ (ผูกลูกค้า) */}
-                          <UploadFileButton
-                            lockedCustomerId={g.customerId}
-                            lockedCustomerLabel={customerLabel(code, g.name)}
-                            defaultEntryType={selectedType}
-                            label="อัปไฟล์"
-                          />
-                          {/* ตรวจทาน + Excel ของลูกค้ารายนี้ */}
-                          {g.customerId ? (
-                            <a
-                              href={`/chat-audit/accounting/review${buildQuery({ month: selectedMonth || undefined })}${selectedMonth ? "&" : "?"}customerId=${g.customerId}`}
-                              className="btn btn-ghost"
-                            >
-                              ตรวจทาน / ออก Excel
-                            </a>
-                          ) : null}
-                        </div>
-
-                        <EntryTable
-                          entries={entriesOfType(g, selectedType)}
-                          signed={signed}
-                          editHrefOf={(id) =>
-                            `/chat-audit/accounting${buildQuery({
-                              accountant: accParam,
-                              q,
-                              month: selectedMonth || undefined,
-                              open: key,
-                              type: selectedType,
-                              edit: id,
-                            })}`
-                          }
-                        />
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
+        {/* ================= เนื้อหาตามโหมด ================= */}
+        {undatedMode ? (
+          /* ---- โหมด "บิลยังไม่ลงวันที่" (ลงวันที่ด่วน → เด้งเข้าเดือน) ---- */
+          <div className="card acc-undated">
+            <div className="acc-ud-head">
+              ⚠️ บิลยังไม่ลงวันที่
+              <span className="acc-ud-cnt">
+                {filtered.length.toLocaleString("th-TH")} ใบ (AI อ่านวันที่ไม่ได้ / บิลเขียนมือ)
+              </span>
             </div>
-          )}
-        </div>
+            {filtered.length === 0 ? (
+              <p className="empty">ไม่มีบิลที่ยังไม่ลงวันที่ 🎉</p>
+            ) : (
+              <>
+                <div className="acc-ud-body">
+                  {filtered.map((e) => {
+                    const code = e.customerId ? codeById.get(e.customerId) ?? null : null;
+                    const kindLabel =
+                      e.entryType === "purchase" ? "ซื้อ" : e.entryType === "sale" ? "ขาย" : "ยังไม่ระบุ ซื้อ/ขาย";
+                    const s = summarizeEntry(e.lines);
+                    const openHref = `/chat-audit/accounting${buildQuery({
+                      accountant: accParam,
+                      q,
+                      month: "none",
+                      edit: e.id,
+                    })}`;
+                    return (
+                      <div key={e.id} className="acc-ud-row">
+                        <div className="acc-ud-thumb" aria-hidden="true">🧾</div>
+                        <div className="acc-ud-info">
+                          <span className="nm">{customerLabel(code, e.customerName)}</span>
+                          <span className="sub">฿{formatMoney(s.net)} · {kindLabel}</span>
+                        </div>
+                        <EntryDateField entryId={e.id} />
+                        <Link href={openHref} className="btn btn-ghost" scroll={false}>เปิดบิล</Link>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="acc-ud-note">
+                  พอลงวันที่ → บิลย้ายเข้าเดือนที่ถูกต้องอัตโนมัติ (ออกจากกล่องนี้)
+                </p>
+              </>
+            )}
+          </div>
+        ) : selectedMonth ? (
+          /* ---- โหมดเลือกเดือน: KPI เดือน + 2 คอลัมน์ ซื้อ/ขาย + (กดลูกค้า) ตารางบิล ---- */
+          <>
+            <div className="card acc-month-head">
+              <div className="section-title">
+                <span>เดือน {thaiMonthLabel(selectedMonth)}</span>
+                <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>
+                  {filtered.length.toLocaleString("th-TH")} รายการ
+                </span>
+              </div>
+              <MonthKpiRow k={summarizeMonth(filtered)} />
+              <BuySellColumns
+                filtered={filtered}
+                codeById={codeById}
+                accParam={accParam}
+                q={q}
+                selectedMonth={selectedMonth}
+                openKey={openKey}
+                exportAccountant={exportAccountant}
+              />
+              <p className="acc-month-hint">
+                กดชื่อลูกค้า → เข้าดู/แก้บิลของลูกค้ารายนั้น <b>เฉพาะเดือนนี้</b> · แต่ละลูกค้ายื่นภาษีแยกกัน
+              </p>
+            </div>
+
+            {/* ตารางบิลของลูกค้าที่กดเลือก (เฉพาะเดือนนี้) */}
+            {openGroup ? (
+              <div className="card acc-detail">
+                <div className="section-title">
+                  <span>
+                    {customerLabel(
+                      openGroup.customerId ? codeById.get(openGroup.customerId) ?? null : null,
+                      openGroup.name
+                    )}
+                  </span>
+                  <Link
+                    href={`/chat-audit/accounting${buildQuery({ accountant: accParam, q, month: monthParam })}`}
+                    className="btn btn-ghost"
+                    scroll={false}
+                  >
+                    ปิด
+                  </Link>
+                </div>
+                {renderCustomerBody(
+                  openGroup,
+                  openKey,
+                  openGroup.customerId ? codeById.get(openGroup.customerId) ?? null : null
+                )}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          /* ---- โหมด "ทุกเดือน" (เดิม): KPI รวม + accordion รายลูกค้า ---- */
+          <>
+            <KpiRow s={globalSummary} />
+            <div className="card">
+              <div className="section-title">
+                <span>ลูกค้า</span>
+                <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>
+                  {groups.length.toLocaleString("th-TH")} ราย · {filtered.length.toLocaleString("th-TH")} รายการ
+                </span>
+              </div>
+
+              {groups.length === 0 ? (
+                <p className="empty">ยังไม่มีรายการตามเงื่อนไขที่เลือก</p>
+              ) : (
+                <div className="cust-list">
+                  {groups.map((g) => {
+                    const key = groupOpenKey(g);
+                    const isOpen = openKey === key;
+                    const isUnassigned = g.customerId === null;
+                    const code = g.customerId ? codeById.get(g.customerId) ?? null : null;
+                    const toggleHref = `/chat-audit/accounting${buildQuery({
+                      accountant: accParam,
+                      q,
+                      month: monthParam,
+                      open: isOpen ? undefined : key,
+                      type: isOpen ? undefined : selectedType,
+                    })}`;
+
+                    return (
+                      <div key={key} className={`cust-card${isUnassigned ? " cust-unassigned" : ""}${isOpen ? " open" : ""}`}>
+                        {/* หัวการ์ด */}
+                        <Link href={toggleHref} className="cust-head" aria-expanded={isOpen} scroll={false}>
+                          <span className={`cust-avatar${isUnassigned ? " un" : ""}`}>{avatarText(code)}</span>
+                          <span className="cust-id">
+                            <span className="cust-name">{customerLabel(code, g.name)}</span>
+                            <span className="csub">รวมจ่ายจริง {formatMoney(g.summary.all.net)} บาท</span>
+                          </span>
+                          <span className="cust-kinds">
+                            {g.purchaseCount > 0 ? <span className="kind-badge k-purchase">ซื้อ {g.purchaseCount}</span> : null}
+                            {g.saleCount > 0 ? <span className="kind-badge k-sale">ขาย {g.saleCount}</span> : null}
+                            {g.unspecifiedCount > 0 ? <span className="kind-badge k-hand">รอระบุ {g.unspecifiedCount}</span> : null}
+                          </span>
+                          <span className="cust-total">{g.count.toLocaleString("th-TH")} รายการ</span>
+                          <span className={`cust-chev${isOpen ? " up" : ""}`} aria-hidden="true">▾</span>
+                        </Link>
+
+                        {/* เนื้อหากางออก */}
+                        {isOpen ? renderCustomerBody(g, key, code) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* ---- หน้าต่างตรวจ/แก้ (verify panel) ---- */}
@@ -821,7 +1145,7 @@ export default async function AccountingPage({
           closeHref={`/chat-audit/accounting${buildQuery({
             accountant: accParam,
             q,
-            month: selectedMonth || undefined,
+            month: monthParam,
             open: sp.open && sp.open !== "" ? sp.open : undefined,
             type: selectedType,
           })}`}

@@ -123,6 +123,10 @@ export type EditableLineInput = {
   id?: string;
   vatType: VatType;
   description?: string | null;
+  /** รหัสบัญชีที่เลือกจากผังบัญชี (ล็อกเมื่อเลือกแล้ว) */
+  accountCode?: string | null;
+  /** ชื่อบัญชี (แก้ต่อบรรทัดได้) */
+  accountName?: string | null;
   amount: number;
   vatAmount: number;
   whtRate: number;
@@ -217,6 +221,9 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
         lineNo: lineNo++,
         vatType: asVatType(l.vatType),
         description: clampText(l.description, 300),
+        // ★ account_code = รหัสจากผังบัญชี (ตัดสั้น กันค่าปลอม) · account_name = ชื่อที่แก้ได้
+        accountCode: clampText(l.accountCode, 20),
+        accountName: clampText(l.accountName, 200),
         amount: asNumber(l.amount),
         vatAmount: asNumber(l.vatAmount),
         whtRate: asNumber(l.whtRate),
@@ -428,6 +435,51 @@ export async function createEntryAction(formData: FormData): Promise<void> {
   sp.set("type", entryType);
   if (res.ok) sp.set("edit", res.data.id);
   redirect(`${PATH}?${sp.toString()}`);
+}
+
+/**
+ * ลงวันที่ให้บิลที่ "ยังไม่ลงวันที่" (doc_date=null) แบบด่วน — จากกล่อง undated
+ *   บิลที่ AI อ่านวันที่ไม่ได้ (บิลเขียนมือ/เงินสด) ตกเดือนไม่ได้จนกว่าจะลงวันที่
+ *   พอลงวันที่ → บิลย้ายเข้าเดือนที่ถูกต้องอัตโนมัติ (หลุดจากกล่อง)
+ *
+ * ★ action เล็ก — แก้เฉพาะ doc_date (ไม่ใช่ save เต็มใบ)
+ * ★ guard: requireAccountingAccess + assertCustomerInScope (นักบัญชีแก้ได้เฉพาะลูกค้าตัวเอง)
+ * ★ validate date รูปแบบ YYYY-MM-DD ก่อนเขียน · เขียนผ่าน service-role + tenant จาก session
+ * ★ PDPA: ไม่ log entryId/วันที่/ลูกค้า
+ */
+export async function setEntryDocDateAction(
+  entryId: string,
+  date: string
+): Promise<SaveResult> {
+  if (!isUuid(entryId)) return { ok: false, message: "ไม่พบรายการที่เลือก" };
+  const docDate = asDate(date);
+  if (!docDate) return { ok: false, message: "วันที่ไม่ถูกต้อง (ต้องเป็น ปี-เดือน-วัน)" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    // ★ สโคปนักบัญชี: ลงวันที่ได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
+    const currentCustomer = await loadEntryCustomerId(service, ctx.tenantId, entryId);
+    if (currentCustomer === undefined) {
+      return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
+    }
+    assertCustomerInScope(ctx, currentCustomer);
+
+    const { error } = await service
+      .from("bill_entries")
+      .update({ doc_date: docDate })
+      .eq("id", entryId)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null);
+    if (error) return { ok: false, message: "ลงวันที่ไม่สำเร็จ กรุณาลองใหม่" };
+
+    revalidatePath(PATH);
+    return { ok: true, message: "ลงวันที่แล้ว — บิลย้ายเข้าเดือนที่ถูกต้อง" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ลงวันที่ไม่สำเร็จ กรุณาลองใหม่" };
+  }
 }
 
 /** เดือน 'YYYY-MM' (UTC) จากเวลาปัจจุบัน — โฟลเดอร์เก็บไฟล์ */

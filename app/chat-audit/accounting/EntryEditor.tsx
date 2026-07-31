@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveEntryAction, deleteEntryAction, type SaveEntryInput } from "./actions";
+import { searchChart } from "@/lib/accounting/chart-of-accounts";
 import {
   parseAmountInput,
   calcVat,
@@ -31,7 +32,12 @@ type LineRow = {
   key: string;
   id?: string;
   vatType: VatType;
+  /** รายละเอียดเดิม (คงไว้เพื่อความเข้ากันได้ย้อนหลัง — ตอนบันทึก sync = accountName) */
   description: string;
+  /** รหัสบัญชีจากผังบัญชี (ล็อกเมื่อเลือกแล้ว) · "" = ยังไม่เลือก */
+  accountCode: string;
+  /** ชื่อบัญชี (prefill จากผัง แก้ได้ต่อบรรทัด) */
+  accountName: string;
   amount: string;
   vatAmount: string;
   whtRate: string;
@@ -52,7 +58,7 @@ function numToInput(n: number): string {
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
     return [
-      { key: newKey(), vatType: "vat", description: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "" },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "" },
     ];
   }
   return entry.lines.map((l) => ({
@@ -60,6 +66,8 @@ function initLines(entry: BillEntry): LineRow[] {
     id: l.id,
     vatType: l.vatType,
     description: l.description ?? "",
+    accountCode: l.accountCode ?? "",
+    accountName: l.accountName ?? "",
     amount: numToInput(l.amount),
     vatAmount: numToInput(l.vatAmount),
     whtRate: numToInput(l.whtRate),
@@ -158,7 +166,7 @@ export default function EntryEditor({
   const addLine = () => {
     setLines((prev) => [
       ...prev,
-      { key: newKey(), vatType: "vat", description: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "" },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "" },
     ]);
   };
 
@@ -194,7 +202,11 @@ export default function EntryEditor({
       lines: lines.map((l) => ({
         id: l.id,
         vatType: l.vatType,
-        description: l.description || null,
+        // ★ sync description = ชื่อบัญชี (ถ้าเลือกบัญชี) เพื่อให้ Excel/รายงานเดิม (คอลัมน์ "รายการ")
+        //   ยังมีข้อความ · ถ้ายังไม่เลือกบัญชี คงรายละเอียดเดิมไว้
+        description: (l.accountName.trim() || l.description) || null,
+        accountCode: l.accountCode.trim() || null,
+        accountName: l.accountName.trim() || null,
         amount: parseAmountInput(l.amount),
         vatAmount: parseAmountInput(l.vatAmount),
         whtRate: parseAmountInput(l.whtRate),
@@ -415,13 +427,12 @@ export default function EntryEditor({
                         <option value="vat">VAT</option>
                         <option value="novat">ไม่ VAT</option>
                       </select>
-                      <input
-                        type="text"
-                        value={l.description}
-                        onChange={(e) => patchLine(l.key, { description: e.target.value })}
-                        disabled={readOnly}
-                        placeholder="รายละเอียด"
-                        className="acc-desc-inp"
+                      <AccountCell
+                        line={l}
+                        readOnly={readOnly}
+                        onSelect={(code, name) => patchLine(l.key, { accountCode: code, accountName: name })}
+                        onNameChange={(name) => patchLine(l.key, { accountName: name })}
+                        onClear={() => patchLine(l.key, { accountCode: "", accountName: "" })}
                       />
                     </div>
                     <input className="num" inputMode="decimal" value={l.amount} onChange={(e) => onAmountChange(l, e.target.value)} disabled={readOnly} placeholder="0.00" aria-label="มูลค่า" />
@@ -475,6 +486,132 @@ export default function EntryEditor({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * AccountCell — ตัวเลือก "บัญชี" จากผังบัญชีมาตรฐานกลาง ต่อ 1 บรรทัด
+ *   3 โหมด:
+ *     - readOnly (ยืนยันแล้ว) : แสดงรหัส + ชื่อ อ่านอย่างเดียว
+ *     - ยังไม่เลือก           : combobox ค้นหา (พิมพ์กรอง → คลิก/Enter เลือก · Esc ปิด)
+ *     - เลือกแล้ว             : รหัส (badge ล็อก อ่านอย่างเดียว) + ชื่อบัญชี (แก้ได้) + ปุ่ม "เปลี่ยน"
+ *   ★ รหัสล็อกเสมอ — เปลี่ยนได้เฉพาะกด "เปลี่ยน" (ล้าง code+name) แล้วเลือกใหม่
+ *   ★ เขียน combobox เองด้วย state (ไม่พึ่งไลบรารีนอก)
+ */
+function AccountCell({
+  line,
+  readOnly,
+  onSelect,
+  onNameChange,
+  onClear,
+}: {
+  line: LineRow;
+  readOnly: boolean;
+  onSelect: (code: string, name: string) => void;
+  onNameChange: (name: string) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const boxRef = useRef<HTMLDivElement>(null);
+  // จำกัด 50 รายการแรก (กันลิสต์ยาวเกิน) — ผังมี 75 บัญชี
+  const results = useMemo(() => searchChart(q).slice(0, 50), [q]);
+  const selected = !!line.accountCode;
+
+  // ปิด dropdown เมื่อคลิกนอกกล่อง
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const pick = (code: string, name: string) => {
+    onSelect(code, name);
+    setOpen(false);
+    setQ("");
+  };
+
+  // ยืนยันแล้ว → อ่านอย่างเดียว
+  if (readOnly) {
+    return (
+      <div className="acc-acct acc-acct-ro">
+        {line.accountCode ? <span className="acc-acct-code">{line.accountCode}</span> : null}
+        <span className="acc-acct-name-ro">{line.accountName || line.description || "—"}</span>
+      </div>
+    );
+  }
+
+  // เลือกแล้ว → รหัสล็อก + ชื่อแก้ได้ + ปุ่มเปลี่ยน
+  if (selected) {
+    return (
+      <div className="acc-acct">
+        <span className="acc-acct-code" title="รหัสบัญชี (ล็อก — กด 'เปลี่ยน' เพื่อเลือกใหม่)">
+          {line.accountCode}
+        </span>
+        <input
+          type="text"
+          className="acc-acct-name"
+          value={line.accountName}
+          onChange={(e) => onNameChange(e.target.value)}
+          placeholder="ชื่อบัญชี"
+          aria-label="ชื่อบัญชี"
+        />
+        <button type="button" className="acc-acct-change" onClick={onClear} title="เลือกบัญชีใหม่">
+          เปลี่ยน
+        </button>
+      </div>
+    );
+  }
+
+  // ยังไม่เลือก → combobox ค้นหา
+  return (
+    <div className="acc-acct acc-acct-combo" ref={boxRef}>
+      <input
+        type="text"
+        className="acc-acct-search"
+        value={q}
+        onChange={(e) => {
+          setQ(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            const first = results[0];
+            if (first) pick(first.code, first.name);
+          } else if (e.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+        placeholder="เลือก/ค้นหาบัญชี…"
+        aria-label="ค้นหาบัญชีจากผังบัญชี"
+      />
+      {open ? (
+        <div className="acc-acct-list" role="listbox">
+          {results.length === 0 ? (
+            <div className="acc-acct-empty">ไม่พบบัญชีที่ค้นหา</div>
+          ) : (
+            results.map((a) => (
+              <button
+                key={a.code}
+                type="button"
+                role="option"
+                aria-selected={false}
+                className="acc-acct-opt"
+                onClick={() => pick(a.code, a.name)}
+              >
+                <span className="acc-acct-opt-code">{a.code}</span>
+                <span className="acc-acct-opt-name">{a.name}</span>
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
