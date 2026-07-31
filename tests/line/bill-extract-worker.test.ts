@@ -18,6 +18,7 @@ import {
   selectExtractionCandidates,
   decideEntrySide,
   redecideExistingEntries,
+  backfillEntryAccounts,
   normalizeName,
   nameSimilarity,
   digitsOnly,
@@ -195,6 +196,54 @@ describe("processBillExtraction", () => {
 
     const lineIns = inserts.find((i) => i.table === "bill_entry_lines")!;
     expect(lineIns.rows[0].amount).toBe(100);
+    expect(lineIns.rows[0].ai_filled).toBe(true);
+  });
+
+  it("★ AI แนะนำบัญชี → เขียน account_code + account_name (จากผัง) + ai_filled", async () => {
+    extractMock.mockResolvedValue({
+      doc_date: "2026-07-15",
+      doc_no: "F-1",
+      seller_name: "ปั๊มน้ำมัน",
+      seller_tax_id: null,
+      buyer_name: "ลูกค้าเรา",
+      buyer_tax_id: null,
+      lines: [{ vat_type: "vat", description: "น้ำมัน", amount: 500, vat_amount: 35, account_code: "5340" }],
+      overall_confidence: 0.9,
+    });
+    const { db, inserts } = makeWorkerDb({
+      attachments: [
+        { id: "att-f", tenant_id: "t1", attachment_type: "image", doc_kind: "purchase", drive_file_id: "t1/f.jpg", chat_message_id: null },
+      ],
+    });
+    await processBillExtraction(db, { limit: 10 });
+    const lineIns = inserts.find((i) => i.table === "bill_entry_lines")!;
+    expect(lineIns.rows[0].account_code).toBe("5340");
+    // ชื่อบัญชีมาจากผังกลางเสมอ (ไม่เชื่อชื่อจากโมเดล)
+    expect(lineIns.rows[0].account_name).toBe("ค่าน้ำมัน");
+    expect(lineIns.rows[0].ai_filled).toBe(true);
+  });
+
+  it("AI ไม่แนะนำบัญชี (account_code null) → account_code/account_name = null", async () => {
+    extractMock.mockResolvedValue({
+      doc_date: null,
+      doc_no: "N-1",
+      seller_name: "ร้าน",
+      seller_tax_id: null,
+      buyer_name: null,
+      buyer_tax_id: null,
+      lines: [{ vat_type: "vat", description: null, amount: 80, vat_amount: 0, account_code: null }],
+      overall_confidence: 0.85,
+    });
+    const { db, inserts } = makeWorkerDb({
+      attachments: [
+        { id: "att-n", tenant_id: "t1", attachment_type: "image", doc_kind: "purchase", drive_file_id: "t1/n.jpg", chat_message_id: null },
+      ],
+    });
+    await processBillExtraction(db, { limit: 10 });
+    const lineIns = inserts.find((i) => i.table === "bill_entry_lines")!;
+    expect(lineIns.rows[0].account_code).toBeNull();
+    expect(lineIns.rows[0].account_name).toBeNull();
+    // ai_filled ยัง true เพราะ AI เติม amount
     expect(lineIns.rows[0].ai_filled).toBe(true);
   });
 
@@ -543,5 +592,135 @@ describe("redecideExistingEntries — ตัดสินฝั่งใหม่
     expect(updates.length).toBe(1);
     expect(updates[0].filters.id).toBe("e1");
     expect(updates[0].payload.entry_type).toBe("purchase");
+  });
+});
+
+/** mock DB สำหรับ backfillEntryAccounts: list ต่อ table + storage + เก็บ update ของ bill_entry_lines */
+function makeBackfillDb(opts: {
+  entries: Record<string, unknown>[];
+  nullLines: Record<string, unknown>[];
+  attachments: Record<string, unknown>[];
+  downloadOk?: boolean;
+}): { db: SupabaseClient; updates: { id: unknown; payload: Record<string, unknown> }[] } {
+  const updates: { id: unknown; payload: Record<string, unknown> }[] = [];
+  function qb(table: string) {
+    const filters: Record<string, unknown> = {};
+    let mode: "select" | "update" = "select";
+    let payload: Record<string, unknown> = {};
+    const api: Record<string, unknown> = {};
+    api.select = () => api;
+    api.eq = (c: string, v: unknown) => {
+      filters[c] = v;
+      return api;
+    };
+    api.is = () => api;
+    api.in = () => api;
+    api.not = () => api;
+    api.order = () => api;
+    api.limit = () => api;
+    api.update = (p: Record<string, unknown>) => {
+      mode = "update";
+      payload = p;
+      return api;
+    };
+    api.then = (onF: (v: { data: unknown; error: unknown }) => unknown) => {
+      if (mode === "update") {
+        updates.push({ id: filters.id, payload });
+        return Promise.resolve({ data: null, error: null }).then(onF);
+      }
+      let data: unknown[] = [];
+      if (table === "bill_entries") data = opts.entries;
+      else if (table === "bill_entry_lines") data = opts.nullLines;
+      else if (table === "message_attachments") data = opts.attachments;
+      return Promise.resolve({ data, error: null }).then(onF);
+    };
+    return api;
+  }
+  const db = {
+    from: (t: string) => qb(t),
+    storage: {
+      from: () => ({
+        download: async () =>
+          opts.downloadOk === false
+            ? { data: null, error: { message: "nope" } }
+            : { data: { arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }, error: null },
+      }),
+    },
+  };
+  return { db: db as unknown as SupabaseClient, updates };
+}
+
+describe("backfillEntryAccounts — เติมบัญชีบิลเดิม (ยิง AI เอาเฉพาะ account_code)", () => {
+  it("บรรทัดที่ account_code ว่าง + AI แนะนำได้ → update account_code/name + ai_filled", async () => {
+    extractMock.mockResolvedValue({
+      doc_date: null,
+      doc_no: null,
+      seller_name: null,
+      seller_tax_id: null,
+      buyer_name: null,
+      buyer_tax_id: null,
+      lines: [{ vat_type: "vat", description: null, amount: 100, vat_amount: 7, account_code: "5340" }],
+      overall_confidence: 0.9,
+    });
+    const { db, updates } = makeBackfillDb({
+      entries: [{ id: "e1", tenant_id: "t1", attachment_id: "att1" }],
+      nullLines: [{ id: "lx", entry_id: "e1", line_no: 1 }],
+      attachments: [{ id: "att1", drive_file_id: "t1/bill.jpg" }],
+    });
+    const res = await backfillEntryAccounts(db, { limit: 10 });
+    expect(res.scanned).toBe(1);
+    expect(res.entriesFilled).toBe(1);
+    expect(res.linesFilled).toBe(1);
+    expect(updates.length).toBe(1);
+    expect(updates[0].id).toBe("lx");
+    expect(updates[0].payload.account_code).toBe("5340");
+    expect(updates[0].payload.account_name).toBe("ค่าน้ำมัน");
+    expect(updates[0].payload.ai_filled).toBe(true);
+  });
+
+  it("AI ไม่แนะนำบัญชี (account_code null) → ไม่ update", async () => {
+    extractMock.mockResolvedValue({
+      doc_date: null, doc_no: null, seller_name: null, seller_tax_id: null, buyer_name: null, buyer_tax_id: null,
+      lines: [{ vat_type: "vat", description: null, amount: 100, vat_amount: 7, account_code: null }],
+      overall_confidence: 0.9,
+    });
+    const { db, updates } = makeBackfillDb({
+      entries: [{ id: "e1", tenant_id: "t1", attachment_id: "att1" }],
+      nullLines: [{ id: "lx", entry_id: "e1", line_no: 1 }],
+      attachments: [{ id: "att1", drive_file_id: "t1/bill.jpg" }],
+    });
+    const res = await backfillEntryAccounts(db, { limit: 10 });
+    expect(res.linesFilled).toBe(0);
+    expect(updates.length).toBe(0);
+  });
+
+  it("entry ไม่มีบรรทัดที่ account_code ว่าง → ข้าม (ไม่ยิง AI)", async () => {
+    const { db, updates } = makeBackfillDb({
+      entries: [{ id: "e1", tenant_id: "t1", attachment_id: "att1" }],
+      nullLines: [], // ทุกบรรทัดมีบัญชีแล้ว
+      attachments: [{ id: "att1", drive_file_id: "t1/bill.jpg" }],
+    });
+    const res = await backfillEntryAccounts(db, { limit: 10 });
+    expect(res.scanned).toBe(0);
+    expect(extractMock).not.toHaveBeenCalled();
+    expect(updates.length).toBe(0);
+  });
+
+  it("ไฟล์ PDF → ข้าม (vision อ่านไม่ได้) ไม่ยิง AI", async () => {
+    const { db, updates } = makeBackfillDb({
+      entries: [{ id: "e1", tenant_id: "t1", attachment_id: "att1" }],
+      nullLines: [{ id: "lx", entry_id: "e1", line_no: 1 }],
+      attachments: [{ id: "att1", drive_file_id: "t1/doc.pdf" }],
+    });
+    const res = await backfillEntryAccounts(db, { limit: 10 });
+    expect(res.scanned).toBe(0);
+    expect(extractMock).not.toHaveBeenCalled();
+    expect(updates.length).toBe(0);
+  });
+
+  it("ไม่มี entry เลย → คืนศูนย์", async () => {
+    const { db } = makeBackfillDb({ entries: [], nullLines: [], attachments: [] });
+    const res = await backfillEntryAccounts(db, { limit: 10 });
+    expect(res).toEqual({ scanned: 0, entriesFilled: 0, linesFilled: 0 });
   });
 });

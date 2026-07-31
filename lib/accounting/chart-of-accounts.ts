@@ -129,5 +129,66 @@ export function searchChartNonBank(q: string): ChartAccount[] {
   return searchChart(q).filter((a) => !a.bank);
 }
 
+/**
+ * เซตรหัสบัญชี non-bank ที่มีอยู่จริงในผัง — ใช้ validate account_code ที่ AI แนะนำ
+ *   (กันรหัสมั่ว/นอกผัง และกันหมวดเงินฝากธนาคารที่ AI ห้ามเลือก)
+ */
+export const NONBANK_ACCOUNT_CODES: ReadonlySet<string> = new Set(
+  CHART_OF_ACCOUNTS.filter((a) => !a.bank).map((a) => a.code)
+);
+
+/** รหัสนี้เป็นบัญชี non-bank ที่มีในผังไหม (AI เลือกได้เฉพาะชุดนี้) */
+export function isValidNonBankCode(code: string | null | undefined): boolean {
+  return !!code && NONBANK_ACCOUNT_CODES.has(code.trim());
+}
+
+/** ชื่อหมวดตามเลขหลักแรกของรหัส (1..6) — ใช้เป็นหัวข้อคั่นใน dropdown */
+export const CATEGORY_BY_DIGIT: Record<string, string> = {
+  "1": "สินทรัพย์",
+  "2": "หนี้สิน",
+  "3": "ส่วนของผู้ถือหุ้น",
+  "4": "รายได้",
+  "5": "ค่าใช้จ่าย",
+  "6": "อื่น ๆ",
+};
+
+/** หมวด (เลขหลักแรก 1..6) ของรหัสบัญชี — "6" (อื่น ๆ) ถ้าไม่ขึ้นต้นด้วย 1..6 */
+export function categoryDigitOf(code: string): string {
+  const c = (code ?? "").trim();
+  return /^[1-6]/.test(c) ? c[0] : "6";
+}
+
+/** กลุ่มบัญชีตามหมวด (สำหรับ dropdown ที่มีหัวข้อคั่น) */
+export type ChartGroup = { digit: string; category: string; accounts: ChartAccount[] };
+
+/**
+ * ค้นผังกลาง (non-bank) แบบ "จัดกลุ่มตามหมวด" สำหรับ dropdown เลือกบัญชี
+ *   - q เป็นเลขหลักเดียว 1–6 → เด้งทั้งหมวดนั้น (code ขึ้นต้นด้วยเลขนั้น) ให้เลื่อนเลือกทั้งหมด
+ *   - q อย่างอื่น (ชื่อ/รหัสหลายหลัก/ว่าง) → ค้น substring code/ชื่อ ตามเดิม
+ *   คืนเฉพาะกลุ่มที่มีรายการ เรียงตามเลขหมวด 1→6
+ */
+export function searchChartNonBankGrouped(q: string): ChartGroup[] {
+  const s = (q ?? "").trim();
+  const singleDigit = /^[1-6]$/.test(s);
+  const matched = singleDigit
+    ? CHART_OF_ACCOUNTS.filter((a) => !a.bank && a.code.startsWith(s))
+    : searchChartNonBank(s);
+
+  // จัดกลุ่มตามหมวด (เลขหลักแรก) แล้วเรียง 1→6 (คงลำดับเดิมภายในหมวด)
+  const byDigit = new Map<string, ChartAccount[]>();
+  for (const a of matched) {
+    const d = categoryDigitOf(a.code);
+    const arr = byDigit.get(d) ?? [];
+    arr.push(a);
+    byDigit.set(d, arr);
+  }
+  const groups: ChartGroup[] = [];
+  for (const d of ["1", "2", "3", "4", "5", "6"]) {
+    const arr = byDigit.get(d);
+    if (arr && arr.length > 0) groups.push({ digit: d, category: CATEGORY_BY_DIGIT[d], accounts: arr });
+  }
+  return groups;
+}
+
 /** เฉพาะบัญชีเงินฝาก generic (bank:true) — ใช้ fallback ตอนลูกค้ายังไม่มีบัญชีของตัวเอง */
 export const BANK_ACCOUNTS: ChartAccount[] = CHART_OF_ACCOUNTS.filter((a) => a.bank);

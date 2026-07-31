@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { extractBillData } from "@/lib/ai/bill-extract";
+import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
 
 /**
  * Bill extract worker — ไล่บิลที่เก็บแล้วแต่ยังไม่มี bill_entries → AI สกัด → สร้าง draft
@@ -425,18 +426,23 @@ export async function processBillExtraction(
     if (!entryId) continue;
 
     // 6) สร้าง bill_entry_lines — ช่องที่ AI เว้น null = ไม่เติม (ค่า 0 ตาม default DB)
-    //    ai_filled=true เฉพาะ line ที่ AI เติม amount/vat จริง (รู้ที่มา)
+    //    ai_filled=true เฉพาะ line ที่ AI เติม amount/vat/บัญชี จริง (รู้ที่มา)
     const lines = bill?.lines ?? [
-      { vat_type: "vat" as const, description: null, amount: null, vat_amount: null },
+      { vat_type: "vat" as const, description: null, amount: null, vat_amount: null, account_code: null },
     ];
     const lineRows = lines.map((l, i) => {
-      const aiFilled = !!bill && (l.amount !== null || l.vat_amount !== null);
+      // ★ บัญชีที่ AI แนะนำ: ชื่อดึงจากผังกลางเสมอ (ไม่เชื่อชื่อจากโมเดล)
+      const accountCode = l.account_code ?? null;
+      const accountName = accountCode ? CHART_BY_CODE[accountCode]?.name ?? null : null;
+      const aiFilled = !!bill && (l.amount !== null || l.vat_amount !== null || accountCode !== null);
       return {
         entry_id: entryId,
         tenant_id: row.tenant_id,
         line_no: i + 1,
         vat_type: l.vat_type,
         description: l.description,
+        account_code: accountCode,
+        account_name: accountName,
         amount: l.amount ?? 0,
         vat_amount: l.vat_amount ?? 0,
         wht_rate: 0,
@@ -573,4 +579,125 @@ export async function redecideExistingEntries(
   }
 
   return { scanned, updated };
+}
+
+export type BackfillAccountsResult = {
+  /** จำนวน entry (ai draft) ที่ยิง AI เพื่อเติมบัญชีในรอบนี้ */
+  scanned: number;
+  /** จำนวน entry ที่เติมบัญชีได้อย่างน้อย 1 บรรทัด */
+  entriesFilled: number;
+  /** จำนวนบรรทัดที่เติม account_code สำเร็จ */
+  linesFilled: number;
+};
+
+/**
+ * Backfill บัญชีให้บิลเดิม — เติม account_code/account_name ให้ bill_entry_lines ของ entry ที่
+ *   AI สร้างไว้ก่อนมีฟีเจอร์แนะนำบัญชี (มีบรรทัดที่ account_code ยังว่าง)
+ *   ★ ยิง AI ใหม่จากรูปบิล เอา "เฉพาะบัญชี" มาเติม — ไม่แตะ amount/vat/หัก (คนอาจแก้ไว้แล้ว)
+ *   ★ เฉพาะ source='ai' + status='draft' (ยังไม่ยืนยัน) + มีไฟล์รูป (PDF ข้าม vision อ่านไม่ได้)
+ *   ★ guard: update เฉพาะบรรทัดที่ account_code ยัง null (กัน race/คนเพิ่งเลือก) · idempotent
+ *   ★ จำกัด limit = จำนวน entry ที่ยิง AI จริงต่อรอบ (คุมค่าใช้จ่าย) · เรียกผ่าน cron mode=accounts
+ *   ★ PDPA: log แค่ตัวเลขสรุป ไม่มี path/เนื้อบิล
+ */
+export async function backfillEntryAccounts(
+  db: SupabaseClient,
+  opts: { limit?: number } = {}
+): Promise<BackfillAccountsResult> {
+  const limit = opts.limit ?? 10;
+  const empty: BackfillAccountsResult = { scanned: 0, entriesFilled: 0, linesFilled: 0 };
+
+  // 1) หา entry (ai draft, ยังไม่ลบ, มีไฟล์แนบ) — ดึงเผื่อ (บางใบไม่มีบรรทัดว่าง/เป็น PDF)
+  const { data: entryData, error: entryErr } = await db
+    .from("bill_entries")
+    .select("id, tenant_id, attachment_id")
+    .eq("source", "ai")
+    .eq("status", "draft")
+    .is("deleted_at", null)
+    .not("attachment_id", "is", null)
+    .order("created_at", { ascending: true })
+    .limit(limit * 5);
+  if (entryErr) {
+    console.warn(`[bill-extract-worker] backfill select entries error code=${(entryErr as { code?: string }).code ?? "?"}`);
+    return empty;
+  }
+  const entries = (entryData ?? []) as { id: string; tenant_id: string; attachment_id: string | null }[];
+  if (entries.length === 0) return empty;
+
+  // 2) บรรทัดที่ account_code ยังว่าง ของ entry เหล่านี้ (เรียง line_no เพื่อจับคู่ตามลำดับ)
+  const entryIds = entries.map((e) => e.id);
+  const { data: lineData } = await db
+    .from("bill_entry_lines")
+    .select("id, entry_id, line_no, account_code")
+    .in("entry_id", entryIds)
+    .is("account_code", null)
+    .order("line_no", { ascending: true });
+  const nullLinesByEntry = new Map<string, { id: string; lineNo: number }[]>();
+  for (const l of (lineData ?? []) as { id: string; entry_id: string; line_no: number }[]) {
+    const arr = nullLinesByEntry.get(l.entry_id) ?? [];
+    arr.push({ id: l.id, lineNo: l.line_no });
+    nullLinesByEntry.set(l.entry_id, arr);
+  }
+
+  // 3) object path ของไฟล์บิล (message_attachments.drive_file_id)
+  const attIds = [...new Set(entries.map((e) => e.attachment_id).filter((x): x is string => !!x))];
+  const pathByAtt = new Map<string, string | null>();
+  if (attIds.length > 0) {
+    const { data: attData } = await db
+      .from("message_attachments")
+      .select("id, drive_file_id")
+      .in("id", attIds);
+    for (const a of (attData ?? []) as { id: string; drive_file_id: string | null }[]) {
+      pathByAtt.set(a.id, a.drive_file_id);
+    }
+  }
+
+  let scanned = 0;
+  let entriesFilled = 0;
+  let linesFilled = 0;
+
+  for (const e of entries) {
+    if (scanned >= limit) break; // คุมจำนวน AI call ต่อรอบ
+    const nullLines = nullLinesByEntry.get(e.id);
+    if (!nullLines || nullLines.length === 0) continue; // ไม่มีบรรทัดที่ต้องเติม
+    const objectPath = e.attachment_id ? pathByAtt.get(e.attachment_id) ?? null : null;
+    if (!objectPath) continue;
+    const mime = mimeFromPath(objectPath);
+    if (isNonImage(null, mime)) continue; // PDF/เอกสาร — vision อ่านไม่ได้ ข้าม
+
+    scanned++;
+
+    // ดาวน์โหลด + สกัดใหม่ (เอาเฉพาะ account_code)
+    let buf: Buffer;
+    try {
+      const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(objectPath);
+      if (dlErr || !blob) continue;
+      buf = Buffer.from(await blob.arrayBuffer());
+    } catch {
+      continue;
+    }
+    const bill = await extractBillData(buf, mime);
+    if (!bill) continue;
+
+    // จับคู่บรรทัดเดิม (เรียง line_no) กับบรรทัดที่ AI สกัดใหม่ (ตามลำดับ) → เติมเฉพาะบัญชี
+    let filledThisEntry = 0;
+    for (let i = 0; i < nullLines.length; i += 1) {
+      const code = bill.lines[i]?.account_code ?? null;
+      if (!code) continue;
+      const name = CHART_BY_CODE[code]?.name ?? null;
+      const { error: updErr } = await db
+        .from("bill_entry_lines")
+        .update({ account_code: code, account_name: name, ai_filled: true })
+        .eq("id", nullLines[i].id)
+        .is("account_code", null); // guard: เติมเฉพาะที่ยังว่าง
+      if (updErr) continue;
+      filledThisEntry += 1;
+      linesFilled += 1;
+    }
+    if (filledThisEntry > 0) entriesFilled += 1;
+  }
+
+  console.log(
+    `[bill-extract-worker] backfill accounts scanned=${scanned} entriesFilled=${entriesFilled} linesFilled=${linesFilled}`
+  );
+  return { scanned, entriesFilled, linesFilled };
 }

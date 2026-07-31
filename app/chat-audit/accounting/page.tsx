@@ -27,6 +27,7 @@ import {
   type CustomerEntryGroup,
 } from "@/lib/accounting/group";
 import { formatMoney } from "@/lib/accounting/calc";
+import { countNeedsReview } from "@/lib/accounting/line-status";
 import {
   listCustomerBankAccounts,
   type CustomerBankAccount,
@@ -1102,6 +1103,8 @@ export default async function AccountingPage({
                     const isOpen = openKey === key;
                     const isUnassigned = g.customerId === null;
                     const code = g.customerId ? codeById.get(g.customerId) ?? null : null;
+                    // จำนวนบิลที่ AI ลงให้แล้วยัง "รอตรวจ" (ร่าง + มีบรรทัด 🟡) — เตือนนักบัญชี
+                    const needsReview = countNeedsReview(g.entries);
                     const toggleHref = `/chat-audit/accounting${buildQuery({
                       accountant: accParam,
                       q,
@@ -1123,6 +1126,7 @@ export default async function AccountingPage({
                             {g.purchaseCount > 0 ? <span className="kind-badge k-purchase">ซื้อ {g.purchaseCount}</span> : null}
                             {g.saleCount > 0 ? <span className="kind-badge k-sale">ขาย {g.saleCount}</span> : null}
                             {g.unspecifiedCount > 0 ? <span className="kind-badge k-hand">รอระบุ {g.unspecifiedCount}</span> : null}
+                            {needsReview > 0 ? <span className="kind-badge k-review">🟡 รอตรวจ {needsReview}</span> : null}
                           </span>
                           <span className="cust-total">{g.count.toLocaleString("th-TH")} รายการ</span>
                           <span className={`cust-chev${isOpen ? " up" : ""}`} aria-hidden="true">▾</span>

@@ -13,11 +13,24 @@
  * ★ PDPA: ไม่ log เนื้อบิล/ผลละเอียด — log แค่ error สั้น ๆ ไม่มีข้อมูลอ่อนไหว
  */
 
+import { CHART_BY_CODE, searchChartNonBank } from "@/lib/accounting/chart-of-accounts";
+
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 60_000;
 
 /** เกณฑ์ความมั่นใจขั้นต่ำต่อ field — ต่ำกว่านี้ = เว้น null ให้คนคีย์ */
 const FIELD_THRESHOLD = 0.8;
+
+/**
+ * เกณฑ์ความมั่นใจขั้นต่ำของ "บัญชีที่ AI แนะนำ" (account_code)
+ *   ต่ำกว่านี้ = null ให้นักบัญชีเลือกเอง · ไม่เดามั่ว (ผิดบัญชี = ผิดหมวดรายงาน)
+ */
+const ACCOUNT_THRESHOLD = 0.7;
+
+/** รายการบัญชี non-bank (รหัส=ชื่อ) ใส่ใน prompt ให้โมเดลเลือก — สร้างครั้งเดียวตอนโหลด */
+const CHART_PROMPT_LIST = searchChartNonBank("")
+  .map((a) => `${a.code}=${a.name}`)
+  .join(", ");
 
 /** vat_type ที่รู้จัก */
 const VAT_TYPES = new Set(["vat", "novat"]);
@@ -30,6 +43,11 @@ export type ExtractedLine = {
   amount: number | null;
   /** ภาษีมูลค่าเพิ่ม · null = AI ไม่มั่นใจ ให้คนคีย์ */
   vat_amount: number | null;
+  /**
+   * รหัสบัญชีจากผังกลาง (non-bank) ที่ AI แนะนำ · null = ไม่มั่นใจ/นอกผัง (ให้คนเลือก)
+   *   ★ ชื่อบัญชีให้ worker เติมจากผัง (CHART_BY_CODE) — ไม่เชื่อชื่อจากโมเดล
+   */
+  account_code: string | null;
 };
 
 /**
@@ -83,10 +101,16 @@ const SYSTEM_PROMPT =
   "ฝั่งไหนไม่เห็น/ไม่ชัดให้ value=null. " +
   "doc_date เป็นรูปแบบ YYYY-MM-DD (ค.ศ.) ถ้าเป็น พ.ศ. ให้ลบ 543. " +
   "เลขประจำตัวผู้เสียภาษีเป็นเลข 13 หลัก. " +
-  "lines = รายการในบิล แต่ละรายการ {vat_type, description:{value,confidence}, amount:{value,confidence}, vat_amount:{value,confidence}} " +
+  "lines = รายการในบิล แต่ละรายการ {vat_type, description:{value,confidence}, amount:{value,confidence}, vat_amount:{value,confidence}, account_code:{value,confidence}} " +
   "โดย vat_type='vat' ถ้ารายการนั้นมี VAT 7%, 'novat' ถ้ายกเว้น/ไม่มี VAT. บิลที่มีทั้งของมี VAT และไม่มี VAT ให้แยกเป็นหลาย line. " +
   "amount = มูลค่าก่อน VAT (ฐานภาษี), vat_amount = ภาษีมูลค่าเพิ่มของรายการนั้น. " +
-  "ถ้าบิลมียอดเดียวรวม ๆ ให้ทำเป็น 1 line. overall_confidence = ความมั่นใจรวมทั้งใบ 0..1.";
+  "ถ้าบิลมียอดเดียวรวม ๆ ให้ทำเป็น 1 line. overall_confidence = ความมั่นใจรวมทั้งใบ 0..1. " +
+  // ★ ให้ AI แนะนำ "รหัสบัญชี" ต่อบรรทัดจากผังกลางเท่านั้น (non-bank) — ไม่มั่นใจ = null
+  "account_code = รหัสบัญชีที่เหมาะกับลักษณะรายการ เลือกจาก 'ผังบัญชี' ด้านล่างเท่านั้น " +
+  "(เช่น ค่าน้ำมัน→5340, ซื้อสินค้า→5010, ค่าบริการ→5342, ค่าไฟฟ้า→5320). " +
+  "ถ้าไม่มั่นใจว่าเข้าบัญชีไหน ให้ account_code value=null (ห้ามเดา — ให้นักบัญชีเลือกเอง). " +
+  "ห้ามใช้รหัสนอกรายการนี้ และห้ามเลือกหมวดเงินฝากธนาคาร. " +
+  "ผังบัญชี (รหัส=ชื่อ): " + CHART_PROMPT_LIST + ".";
 
 const USER_PROMPT =
   "อ่านบิลในรูปนี้แล้วสกัดข้อมูลเป็น JSON ตามรูปแบบ. จำไว้: ช่องไหนไม่มั่นใจโดยเฉพาะตัวเลข ให้ value=null ห้ามเดา.";
@@ -139,6 +163,29 @@ function gateNumber(field: ConfField | undefined): number | null {
   return n;
 }
 
+/**
+ * gate account_code ที่ AI แนะนำ: คืน code เฉพาะเมื่อ
+ *   - confidence >= ACCOUNT_THRESHOLD (ไม่มั่นใจ = null ให้คนเลือก)
+ *   - code อยู่ในผังกลาง "non-bank" จริง (กันรหัสมั่ว/นอกผัง/หมวดเงินฝากธนาคาร)
+ *   รองรับทั้งรูป {value, confidence} และ string ตรง ๆ (เผื่อโมเดลตอบต่างรูป)
+ */
+function gateAccountCode(raw: unknown): string | null {
+  let value: unknown = raw;
+  let conf = 1; // string ตรง ๆ (ไม่มี confidence) → ถือว่ามั่นใจ แล้วค่อย validate ด้วยผัง
+  if (raw && typeof raw === "object") {
+    value = (raw as ConfField).value;
+    conf = clampConfidence((raw as ConfField).confidence);
+  }
+  if (conf < ACCOUNT_THRESHOLD) return null;
+  if (typeof value !== "string") return null;
+  const code = value.trim();
+  if (!code) return null;
+  const acct = CHART_BY_CODE[code];
+  // ต้องมีในผัง + ไม่ใช่หมวดเงินฝากธนาคาร (bank = บัญชีต่อลูกค้า ห้าม AI เลือก)
+  if (!acct || acct.bank) return null;
+  return code;
+}
+
 /** normalize 1 line ดิบ → ExtractedLine พร้อม gate ตัวเลขทุกช่อง */
 function normalizeLine(raw: unknown): ExtractedLine | null {
   if (!raw || typeof raw !== "object") return null;
@@ -161,6 +208,7 @@ function normalizeLine(raw: unknown): ExtractedLine | null {
     description: gateString(o.description as ConfField),
     amount: gateNumber(o.amount as ConfField),
     vat_amount: gateNumber(o.vat_amount as ConfField),
+    account_code: gateAccountCode(o.account_code),
   };
 }
 
@@ -180,7 +228,7 @@ export function normalizeExtraction(raw: Record<string, unknown> | null): Extrac
 
   // ถ้าไม่มี line ใด ๆ ให้สร้าง 1 line ว่าง (vat) ไว้ให้คนคีย์ — ไม่ทิ้งทั้งใบ
   if (lines.length === 0) {
-    lines.push({ vat_type: "vat", description: null, amount: null, vat_amount: null });
+    lines.push({ vat_type: "vat", description: null, amount: null, vat_amount: null, account_code: null });
   }
 
   return {

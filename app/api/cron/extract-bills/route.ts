@@ -2,7 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { processBillExtraction, redecideExistingEntries } from "@/lib/line/bill-extract-worker";
+import {
+  processBillExtraction,
+  redecideExistingEntries,
+  backfillEntryAccounts,
+} from "@/lib/line/bill-extract-worker";
 import { newRequestId, logServerError, isValidCronAuth } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +23,8 @@ export const maxDuration = 60;
  *   'extract'        : สกัดบิลใหม่อย่างเดียว
  *   'redecide'       : ตัดสินฝั่งใหม่อย่างเดียว (ไม่เรียก AI — ใช้ seller/buyer ที่เก็บไว้
  *                      + tax_id/ชื่อลูกค้าล่าสุด เผื่อ NOVA Sales เพิ่งส่งเลขภาษีมา)
+ *   'accounts'       : backfill บัญชีให้บิลเดิม (ยิง AI ใหม่จากรูป เอาเฉพาะ account_code
+ *                      มาเติมบรรทัดที่ยังว่าง — ไม่แตะยอด/ไม่รวมใน 'both' เพราะมีค่า AI)
  *
  * ความปลอดภัย (fail-closed): ไม่ตั้ง CRON_SECRET → ปิด endpoint (503, ไม่รัน worker)
  *   มี secret แต่ auth ผิด → 401
@@ -80,7 +86,8 @@ async function handle(request: NextRequest) {
   }
 
   const modeRaw = (request.nextUrl.searchParams.get("mode") || "both").toLowerCase();
-  const mode = modeRaw === "extract" || modeRaw === "redecide" ? modeRaw : "both";
+  const mode =
+    modeRaw === "extract" || modeRaw === "redecide" || modeRaw === "accounts" ? modeRaw : "both";
 
   try {
     const db = createServiceRoleClient();
@@ -90,6 +97,10 @@ async function handle(request: NextRequest) {
     }
     if (mode === "redecide" || mode === "both") {
       result.redecide = await redecideAllTenants(db);
+    }
+    // backfill บัญชีบิลเดิม — เฉพาะ mode=accounts (ไม่รวมใน both เพราะยิง AI ราคาแพง)
+    if (mode === "accounts") {
+      result.accounts = await backfillEntryAccounts(db, { limit: 10 });
     }
     return NextResponse.json(result, { status: 200 });
   } catch (e) {

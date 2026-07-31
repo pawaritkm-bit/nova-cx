@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter } from "next/navigation";
 import { saveEntryAction, deleteEntryAction, type SaveEntryInput } from "./actions";
 import {
-  searchChartNonBank,
+  searchChartNonBankGrouped,
   BANK_ACCOUNTS,
 } from "@/lib/accounting/chart-of-accounts";
+import { lineBadge } from "@/lib/accounting/line-status";
 import {
   type CustomerBankAccount,
   bankAccountDisplayName,
@@ -51,6 +52,8 @@ type LineRow = {
   vatAmount: string;
   whtRate: string;
   whtAmount: string;
+  /** AI เติมค่าบรรทัดนี้ไหม (จากผลสกัด) — ใช้ทำป้าย 🟢/🟡 ช่วยตรวจ · บรรทัดที่คนเพิ่ม = false */
+  aiFilled: boolean;
 };
 
 let keySeq = 0;
@@ -67,7 +70,7 @@ function numToInput(n: number): string {
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
     return [
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "" },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false },
     ];
   }
   return entry.lines.map((l) => ({
@@ -81,6 +84,7 @@ function initLines(entry: BillEntry): LineRow[] {
     vatAmount: numToInput(l.vatAmount),
     whtRate: numToInput(l.whtRate),
     whtAmount: numToInput(l.whtAmount),
+    aiFilled: l.aiFilled,
   }));
 }
 
@@ -116,6 +120,8 @@ export default function EntryEditor({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const readOnly = entry.status === "confirmed";
+  // บิลนี้ AI เป็นคนลงให้ (source='ai') → โชว์ป้าย 🤖 บนช่องหัวที่ AI เติม + ป้าย 🟢/🟡 ต่อบรรทัด
+  const aiSrc = entry.source === "ai";
 
   // ---- นำทาง ก่อนหน้า/ถัดไป ในบริบทนี้ ----
   const nav = resolveEntryNav(orderIds, entry.id);
@@ -183,7 +189,7 @@ export default function EntryEditor({
   const addLine = () => {
     setLines((prev) => [
       ...prev,
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "" },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false },
     ]);
   };
 
@@ -389,7 +395,7 @@ export default function EntryEditor({
           <div className="acc-form-pane">
             <div className="acc-field-grid">
               <label className="acc-field">
-                <span>ประเภท</span>
+                <span>ประเภท {aiSrc && entry.entryType !== "unspecified" ? <AiTag /> : null}</span>
                 <select
                   value={entryType}
                   onChange={(e) => setEntryType(e.target.value as EntryType)}
@@ -401,7 +407,7 @@ export default function EntryEditor({
                 </select>
               </label>
               <label className="acc-field">
-                <span>วันที่เอกสาร</span>
+                <span>วันที่เอกสาร {aiSrc && entry.docDate ? <AiTag /> : null}</span>
                 <input type="date" value={docDate} onChange={(e) => setDocDate(e.target.value)} disabled={readOnly} />
               </label>
               <label className="acc-field">
@@ -417,11 +423,11 @@ export default function EntryEditor({
                 </select>
               </label>
               <label className="acc-field acc-field-wide">
-                <span>คู่ค้า</span>
+                <span>คู่ค้า {aiSrc && entry.counterpartyName ? <AiTag /> : null}</span>
                 <input type="text" value={partyName} onChange={(e) => setPartyName(e.target.value)} disabled={readOnly} placeholder="ชื่อผู้ขาย/ผู้ซื้อ" />
               </label>
               <label className="acc-field">
-                <span>เลขผู้เสียภาษี</span>
+                <span>เลขผู้เสียภาษี {aiSrc && entry.counterpartyTaxId ? <AiTag /> : null}</span>
                 <input type="text" value={partyTaxId} onChange={(e) => setPartyTaxId(e.target.value)} disabled={readOnly} placeholder="13 หลัก" />
               </label>
             </div>
@@ -443,9 +449,26 @@ export default function EntryEditor({
                 const vat = parseAmountInput(l.vatAmount);
                 const wht = parseAmountInput(l.whtAmount);
                 const net = calcNet(amt, vat, wht);
+                // ป้ายช่วยตรวจ (เฉพาะบิล AI ที่ยังแก้ได้): 🟢 AI เติมครบ · 🟡 ยังมีช่องว่าง
+                const badge = !readOnly
+                  ? lineBadge({ accountCode: l.accountCode, amount: amt, aiFilled: l.aiFilled }, entry.source)
+                  : null;
                 return (
                   <div className="acc-line" key={l.key}>
                     <div className="acc-line-desc">
+                      {badge ? (
+                        <span
+                          className={`acc-line-flag ${badge === "confident" ? "ok" : "warn"}`}
+                          title={
+                            badge === "confident"
+                              ? "AI เติมครบ (บัญชี + ยอด) — ช่วยตรวจให้ถูก"
+                              : "โปรดตรวจ: ยังมีช่องสำคัญว่าง (ยอด/บัญชี)"
+                          }
+                          aria-label={badge === "confident" ? "AI มั่นใจ" : "โปรดตรวจ"}
+                        >
+                          {badge === "confident" ? "🟢" : "🟡"}
+                        </span>
+                      ) : null}
                       <select
                         value={l.vatType}
                         onChange={(e) => onVatTypeChange(l, e.target.value as VatType)}
@@ -534,6 +557,15 @@ export default function EntryEditor({
   );
 }
 
+/** ป้ายเล็ก "🤖 AI" — บอกว่าช่องหัวนี้ AI เป็นคนเติมให้ (นักบัญชีตรวจ/แก้ได้) */
+function AiTag() {
+  return (
+    <span className="acc-ai-tag" title="AI เติมให้ — ช่วยตรวจ">
+      🤖 AI
+    </span>
+  );
+}
+
 /**
  * AccountCell — ตัวเลือก "บัญชี" จากผังบัญชีมาตรฐานกลาง ต่อ 1 บรรทัด
  *   3 โหมด:
@@ -567,8 +599,9 @@ function AccountCell({
   const boxRef = useRef<HTMLDivElement>(null);
   // กลุ่มบน = บัญชีเงินฝากของลูกค้ารายนี้ (กรองตาม q)
   const bankResults = useMemo(() => filterBankAccounts(bankAccounts, q), [bankAccounts, q]);
-  // ผังกลาง "ตัดหมวดเงินฝาก (bank:true) ออก" — จำกัด 50 รายการแรก (กันลิสต์ยาวเกิน)
-  const chartResults = useMemo(() => searchChartNonBank(q).slice(0, 50), [q]);
+  // ผังกลาง "ตัดหมวดเงินฝาก (bank:true) ออก" จัดกลุ่มตามหมวด
+  //   ★ พิมพ์เลข 1–6 = เด้งทั้งหมวดนั้นมาให้เลื่อนเลือก · อย่างอื่น = ค้น substring ตามเดิม
+  const chartGroups = useMemo(() => searchChartNonBankGrouped(q), [q]);
   // ลูกค้ายังไม่มีบัญชีของตัวเอง → โชว์ generic bank:true (กรองตาม q) ไว้ให้เห็นหมวด
   const genericBank = useMemo(
     () =>
@@ -651,7 +684,7 @@ function AccountCell({
               pick(firstBank.accountCode, bankAccountDisplayName(firstBank));
               return;
             }
-            const firstChart = chartResults[0];
+            const firstChart = chartGroups[0]?.accounts[0];
             if (firstChart) pick(firstChart.code, firstChart.name);
           } else if (e.key === "Escape") {
             setOpen(false);
@@ -708,23 +741,32 @@ function AccountCell({
             ＋ เพิ่มบัญชีธนาคารของลูกค้านี้
           </button>
 
-          {/* ---- กลุ่ม 2: ผังบัญชีกลาง (ตัดหมวดเงินฝากออกแล้ว) ---- */}
-          <div className="acc-acct-group">ผังบัญชี</div>
-          {chartResults.length === 0 ? (
-            <div className="acc-acct-empty">ไม่พบบัญชีที่ค้นหา</div>
+          {/* ---- กลุ่ม 2: ผังบัญชีกลาง จัดตามหมวด (พิมพ์เลข 1–6 = เด้งทั้งหมวด) ---- */}
+          {chartGroups.length === 0 ? (
+            <>
+              <div className="acc-acct-group">ผังบัญชี</div>
+              <div className="acc-acct-empty">ไม่พบบัญชีที่ค้นหา</div>
+            </>
           ) : (
-            chartResults.map((a) => (
-              <button
-                key={a.code}
-                type="button"
-                role="option"
-                aria-selected={false}
-                className="acc-acct-opt"
-                onClick={() => pick(a.code, a.name)}
-              >
-                <span className="acc-acct-opt-code">{a.code}</span>
-                <span className="acc-acct-opt-name">{a.name}</span>
-              </button>
+            chartGroups.map((grp) => (
+              <div key={grp.digit} className="acc-acct-cat">
+                <div className="acc-acct-group">
+                  {grp.digit} {grp.category}
+                </div>
+                {grp.accounts.map((a) => (
+                  <button
+                    key={a.code}
+                    type="button"
+                    role="option"
+                    aria-selected={false}
+                    className="acc-acct-opt"
+                    onClick={() => pick(a.code, a.name)}
+                  >
+                    <span className="acc-acct-opt-code">{a.code}</span>
+                    <span className="acc-acct-opt-name">{a.name}</span>
+                  </button>
+                ))}
+              </div>
             ))
           )}
         </div>

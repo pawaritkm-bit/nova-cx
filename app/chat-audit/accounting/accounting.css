@@ -413,6 +413,34 @@
 }
 .nova-dash .acc-acct-opt-name { flex: 1 1 auto; }
 .nova-dash .acc-acct-empty { padding: 8px; font-size: 12px; color: var(--muted); }
+/* คั่นหมวดในดรอปดาวน์ผังบัญชี (จัดกลุ่มตามหมวด 1–6) */
+.nova-dash .acc-acct-cat + .acc-acct-cat { margin-top: 4px; border-top: 1px dashed var(--line); }
+
+/* ============================================================
+   ป้ายช่วยตรวจ (AI ลงให้ก่อน — นักบัญชีตรวจ)
+   ============================================================ */
+/* ป้าย 🤖 AI บนช่องหัวที่ AI เติม (ประเภท/วันที่/คู่ค้า/เลขภาษี) */
+.nova-dash .acc-ai-tag {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #3730a3;
+  background: #eef2ff;
+  border: 1px solid #e0e7ff;
+  border-radius: 999px;
+  padding: 0 6px;
+  vertical-align: middle;
+}
+/* ป้าย 🟢/🟡 ต่อบรรทัด (compact — ข้อความเต็มอยู่ใน title) */
+.nova-dash .acc-line-flag {
+  flex: 0 0 auto;
+  font-size: 13px;
+  line-height: 1;
+  cursor: default;
+}
+/* ตัวนับ "รอตรวจ N" บนการ์ดลูกค้า (โทน amber เหมือนงานค้าง) */
+.nova-dash .kind-badge.k-review { background: var(--amber-bg); color: #b45309; }
 .nova-dash .acc-net { font-weight: 700; color: var(--navy-800); text-align: right; font-variant-numeric: tabular-nums; }
 .nova-dash .acc-line-del {
   border: 1px solid var(--red);

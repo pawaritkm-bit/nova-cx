@@ -95,6 +95,57 @@ describe("normalizeExtraction — high-confidence gating", () => {
   });
 });
 
+describe("normalizeExtraction — account_code (บัญชีที่ AI แนะนำ)", () => {
+  it("code non-bank ในผัง + confidence สูง → เก็บ (เช่น 5340 ค่าน้ำมัน)", () => {
+    const r = normalizeExtraction({
+      lines: [{ vat_type: "vat", amount: { value: 100, confidence: 0.9 }, account_code: { value: "5340", confidence: 0.9 } }],
+    });
+    expect(r?.lines[0].account_code).toBe("5340");
+  });
+
+  it("★ code หมวดเงินฝากธนาคาร (bank:true เช่น 1020) → null (ห้าม AI เลือก)", () => {
+    const r = normalizeExtraction({
+      lines: [{ vat_type: "vat", account_code: { value: "1020", confidence: 0.99 } }],
+    });
+    expect(r?.lines[0].account_code).toBeNull();
+  });
+
+  it("★ code นอกผัง (มั่ว) → null", () => {
+    const r = normalizeExtraction({
+      lines: [{ vat_type: "vat", account_code: { value: "9999", confidence: 0.99 } }],
+    });
+    expect(r?.lines[0].account_code).toBeNull();
+  });
+
+  it("confidence ต่ำ (<0.7) → null (ไม่มั่นใจ ให้คนเลือก)", () => {
+    const r = normalizeExtraction({
+      lines: [{ vat_type: "vat", account_code: { value: "5340", confidence: 0.5 } }],
+    });
+    expect(r?.lines[0].account_code).toBeNull();
+  });
+
+  it("value=null → null", () => {
+    const r = normalizeExtraction({
+      lines: [{ vat_type: "vat", account_code: { value: null, confidence: 0.9 } }],
+    });
+    expect(r?.lines[0].account_code).toBeNull();
+  });
+
+  it("ไม่ส่ง account_code มาเลย → null (ไม่ล้ม)", () => {
+    const r = normalizeExtraction({
+      lines: [{ vat_type: "vat", amount: { value: 50, confidence: 0.9 } }],
+    });
+    expect(r?.lines[0].account_code).toBeNull();
+  });
+
+  it("code เป็น string ตรง ๆ (ไม่มี confidence) แต่อยู่ในผัง → เก็บ", () => {
+    const r = normalizeExtraction({
+      lines: [{ vat_type: "vat", account_code: "5010" }],
+    });
+    expect(r?.lines[0].account_code).toBe("5010");
+  });
+});
+
 describe("extractBillData — degrade & error → null", () => {
   const origKey = process.env.OPENAI_API_KEY;
   afterEach(() => {
