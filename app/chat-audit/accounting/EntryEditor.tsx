@@ -303,14 +303,7 @@ export default function EntryEditor({
           <div className="acc-bill-pane">
             {viewUrl && viewIsImage ? (
               <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={viewUrl}
-                  alt="รูปบิล"
-                  className={`acc-bill-img${zoom ? " zoom" : ""}`}
-                  style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
-                  onClick={() => setZoom((z) => !z)}
-                />
+                {/* แถวปุ่มอยู่บนสุดเสมอ — กันรูปที่หมุนแล้วสูงล้นมาทับ (ปุ่มหาย) */}
                 <div className="acc-bill-tools">
                   <button type="button" className="btn btn-ghost" onClick={() => setZoom((z) => !z)}>
                     {zoom ? "ย่อ" : "ซูม"}
@@ -324,6 +317,16 @@ export default function EntryEditor({
                     ↻ หมุน
                   </button>
                   <a href={viewUrl} target="_blank" rel="noopener noreferrer" className="btn btn-ghost">เปิดรูปเต็ม</a>
+                </div>
+                <div className={`acc-bill-stage${rotation % 180 ? " rot" : ""}`}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={viewUrl}
+                    alt="รูปบิล"
+                    className={`acc-bill-img${zoom ? " zoom" : ""}`}
+                    style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
+                    onClick={() => setZoom((z) => !z)}
+                  />
                 </div>
               </>
             ) : viewUrl ? (

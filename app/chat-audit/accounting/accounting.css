@@ -238,18 +238,32 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  align-items: center;
+  align-items: stretch;
   max-height: 78vh;
+  overflow: hidden;
+}
+/* เวทีรูป: scroll แยก ปุ่มด้านบนไม่ถูกรูปหมุนทับ */
+.nova-dash .acc-bill-stage {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  display: grid;
+  place-items: center;
+  width: 100%;
 }
 .nova-dash .acc-bill-img {
   max-width: 100%;
+  max-height: 68vh;
   border-radius: 8px;
   cursor: zoom-in;
   background: #fff;
+  transition: transform .15s ease;
 }
-.nova-dash .acc-bill-img.zoom { cursor: zoom-out; max-width: none; width: auto; }
-.nova-dash .acc-bill-tools { display: flex; gap: 8px; }
+/* หมุนตั้ง (90/270): ด้าน "กว้างเดิม" กลายเป็นสูง → จำกัดด้วยความสูงเวทีให้พอดี ไม่ล้น */
+.nova-dash .acc-bill-stage.rot .acc-bill-img { max-width: 68vh; max-height: 100%; }
+.nova-dash .acc-bill-img.zoom { cursor: zoom-out; max-width: none; max-height: none; width: auto; }
+.nova-dash .acc-bill-stage.rot .acc-bill-img.zoom { max-width: none; max-height: none; }
+.nova-dash .acc-bill-tools { display: flex; gap: 8px; flex: none; }
 .nova-dash .acc-bill-empty {
   color: #cbd5e1;
   font-size: 13px;
