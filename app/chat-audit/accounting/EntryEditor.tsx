@@ -401,8 +401,8 @@ export default function EntryEditor({
                   onChange={(e) => setEntryType(e.target.value as EntryType)}
                   disabled={readOnly}
                 >
-                  <option value="purchase">ภาษีซื้อ</option>
-                  <option value="sale">ภาษีขาย</option>
+                  <option value="purchase">บิลซื้อ</option>
+                  <option value="sale">บิลขาย</option>
                   <option value="unspecified">รอระบุ</option>
                 </select>
               </label>
@@ -641,24 +641,26 @@ function AccountCell({
     );
   }
 
-  // เลือกแล้ว → รหัสล็อก + ชื่อแก้ได้ + ปุ่มเปลี่ยน
+  // เลือกแล้ว → 2 ช่องแยกไม่ชนกัน: แถวบน = รหัส (ล็อก) + ปุ่มเปลี่ยน · แถวล่าง = ชื่อ (แก้ได้)
   if (selected) {
     return (
-      <div className="acc-acct">
-        <span className="acc-acct-code" title="รหัสบัญชี (ล็อก — กด 'เปลี่ยน' เพื่อเลือกใหม่)">
-          {line.accountCode}
-        </span>
+      <div className="acc-acct acc-acct-picked">
+        <div className="acc-acct-toprow">
+          <span className="acc-acct-code" title="รหัสบัญชี (ล็อก — กด 'เปลี่ยน' เพื่อเลือกใหม่)">
+            🔒 {line.accountCode}
+          </span>
+          <button type="button" className="acc-acct-change" onClick={onClear} title="เลือกบัญชีใหม่">
+            เปลี่ยน
+          </button>
+        </div>
         <input
           type="text"
           className="acc-acct-name"
           value={line.accountName}
           onChange={(e) => onNameChange(e.target.value)}
-          placeholder="ชื่อบัญชี"
+          placeholder="ชื่อบัญชี (แก้ได้)"
           aria-label="ชื่อบัญชี"
         />
-        <button type="button" className="acc-acct-change" onClick={onClear} title="เลือกบัญชีใหม่">
-          เปลี่ยน
-        </button>
       </div>
     );
   }
