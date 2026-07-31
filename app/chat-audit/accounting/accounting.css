@@ -927,3 +927,98 @@
   .nova-dash .acc-ud-row .acc-udate,
   .nova-dash .acc-ud-row .btn { grid-column: 2; }
 }
+
+/* ============================================================
+   บัญชีเงินฝากธนาคาร "ต่อลูกค้า" (แยกเลขบัญชีต่อบริษัท)
+   - ปุ่ม ⚙️ บนหัว modal ตรวจบิล
+   - กลุ่ม/ปุ่มในดรอปดาวน์เลือกบัญชี (AccountCell)
+   - แผงจัดการ (BankAccountsPanel)
+   ============================================================ */
+/* ปุ่ม ⚙️ บนหัว modal (โทนเดียวกับ nav บนแถบสีเข้ม) */
+.nova-dash .acc-modal-gear {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nova-dash .acc-modal-gear:hover { background: rgba(255, 255, 255, 0.24); }
+
+/* หัวข้อกลุ่มในดรอปดาวน์เลือกบัญชี */
+.nova-dash .acc-acct-group {
+  padding: 6px 8px 3px;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+.nova-dash .acc-acct-group + .acc-acct-group { margin-top: 4px; border-top: 1px dashed var(--line); }
+/* generic bank (ยังไม่ตั้งเลขบัญชีจริง) — จางลงเล็กน้อย */
+.nova-dash .acc-acct-opt-generic { opacity: 0.72; font-style: italic; }
+/* ＋ เพิ่มบัญชีธนาคารของลูกค้านี้ */
+.nova-dash .acc-acct-add {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px dashed var(--navy-700);
+  background: #f5f9ff;
+  color: var(--navy-800);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 8px;
+  border-radius: 7px;
+  margin: 4px 0;
+  cursor: pointer;
+}
+.nova-dash .acc-acct-add:hover { background: #e8f0ff; }
+
+/* แผงจัดการบัญชีธนาคารของลูกค้า */
+.nova-dash .acc-bank-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+}
+.nova-dash .acc-bank-hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+.nova-dash .acc-bank-empty {
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+}
+.nova-dash .acc-bank-list { display: flex; flex-direction: column; gap: 8px; }
+.nova-dash .acc-bank-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1.2fr) minmax(110px, 1fr) auto auto;
+  gap: 6px;
+  align-items: center;
+}
+.nova-dash .acc-bank-row select,
+.nova-dash .acc-bank-row input {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12.5px;
+  background: #fff;
+  min-width: 0;
+}
+.nova-dash .acc-bank-save { white-space: nowrap; }
+
+@media (max-width: 620px) {
+  .nova-dash .acc-bank-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .nova-dash .acc-bank-code { grid-column: 1 / -1; }
+  .nova-dash .acc-bank-name { grid-column: 1 / -1; }
+}

@@ -5,14 +5,25 @@
  *   หมวดตามเลขหลักแรก: 1 สินทรัพย์ · 2 หนี้สิน · 3 ทุน · 4 รายได้ · 5 ค่าใช้จ่าย · 6 อื่น ๆ
  *   ไฟล์นี้ auto-generate — แก้ผังให้แก้ที่แหล่งแล้ว regenerate
  */
-export type ChartAccount = { code: string; name: string; category: string };
+export type ChartAccount = {
+  code: string;
+  name: string;
+  category: string;
+  /**
+   * true = บัญชี "เงินฝากธนาคาร" ที่ต้องแยกต่อลูกค้า (เลขบัญชีเป็นของบริษัทเดียว)
+   *   ★ ผังกลางเก็บชื่อ generic (#1/#2/#3) เท่านั้น — เลขบัญชีจริงอยู่ที่ customer_bank_accounts
+   *     (กันข้อมูลเลขบัญชีหลุดข้ามบริษัท / PDPA). UI แทนหมวดนี้ด้วยบัญชีของลูกค้าเจ้าของบิล
+   */
+  bank?: boolean;
+};
 
 export const CHART_OF_ACCOUNTS: ChartAccount[] = [
   { code: "1010", name: "เงินสด", category: "สินทรัพย์" },
   { code: "1015", name: "เงินสดย่อย", category: "สินทรัพย์" },
-  { code: "1020", name: "กสิกร 210-1-77368-2", category: "สินทรัพย์" },
-  { code: "1025", name: "กสิกรไทย 219-2-87099-5", category: "สินทรัพย์" },
-  { code: "1030", name: "เงินฝากธนาคาร 3", category: "สินทรัพย์" },
+  // ★ 3 บัญชีเงินฝากธนาคาร: ชื่อ generic + bank:true — เลขบัญชีจริงผูกต่อลูกค้า (customer_bank_accounts)
+  { code: "1020", name: "เงินฝากธนาคาร #1", category: "สินทรัพย์", bank: true },
+  { code: "1025", name: "เงินฝากธนาคาร #2", category: "สินทรัพย์", bank: true },
+  { code: "1030", name: "เงินฝากธนาคาร #3", category: "สินทรัพย์", bank: true },
   { code: "1140", name: "ลูกหนี้การค้า", category: "สินทรัพย์" },
   { code: "1145", name: "สำรองหนี้สูญ", category: "สินทรัพย์" },
   { code: "1150", name: "ลูกหนี้อื่น ๆ", category: "สินทรัพย์" },
@@ -98,3 +109,25 @@ export function searchChart(q: string): ChartAccount[] {
     (a) => a.code.toLowerCase().includes(s) || a.name.toLowerCase().includes(s)
   );
 }
+
+/**
+ * รหัสบัญชี "เงินฝากธนาคาร" ทั้งหมดในผังกลาง (คำนวณจาก bank:true — ไม่ hardcode ซ้ำ)
+ *   ใช้ validate ฝั่ง server (accountCode ที่ผูกกับ customer_bank_accounts ต้องเป็นรหัสเงินฝาก)
+ *   ★ ปัจจุบัน = ["1020","1025","1030"] — เพิ่มรหัสเงินฝากในผังกลางแล้วชุดนี้ขยายเอง
+ */
+export const BANK_ACCOUNT_CODES: readonly string[] = CHART_OF_ACCOUNTS.filter(
+  (a) => a.bank
+).map((a) => a.code);
+
+/** รหัสนี้เป็นบัญชีเงินฝากธนาคารไหม (ใช้ตรวจก่อนผูกบัญชีลูกค้า) */
+export function isBankAccountCode(code: string): boolean {
+  return BANK_ACCOUNT_CODES.includes(code);
+}
+
+/** ผังกลาง "ตัดหมวดเงินฝาก (bank:true) ออก" — ใช้ใน picker (แทนด้วยบัญชีของลูกค้าแทน) */
+export function searchChartNonBank(q: string): ChartAccount[] {
+  return searchChart(q).filter((a) => !a.bank);
+}
+
+/** เฉพาะบัญชีเงินฝาก generic (bank:true) — ใช้ fallback ตอนลูกค้ายังไม่มีบัญชีของตัวเอง */
+export const BANK_ACCOUNTS: ChartAccount[] = CHART_OF_ACCOUNTS.filter((a) => a.bank);

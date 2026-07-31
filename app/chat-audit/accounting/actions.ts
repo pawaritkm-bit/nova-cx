@@ -40,6 +40,7 @@ import { normalizeTaxId } from "@/lib/accounting/tax-id";
 import { validateUpload, sanitizeUploadName, extOf } from "@/lib/accounting/upload";
 import { redecideExistingEntries } from "@/lib/line/bill-extract-worker";
 import { pushCustomerTaxId } from "@/lib/integrations/nova-sales-outbound";
+import { validateBankAccountInput } from "@/lib/accounting/bank-accounts";
 
 const PATH = "/chat-audit/accounting";
 /** bucket รูปบิล (private) — ตรงกับหน้า bills / lib/storage/bill-storage.ts */
@@ -667,5 +668,134 @@ export async function saveCustomerTaxIdAction(input: {
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "บันทึกเลขภาษีไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+// ---------------------------------------------------------------------
+// บัญชีเงินฝากธนาคาร "ต่อลูกค้า" (customer_bank_accounts)
+//   ★ เลขบัญชีจริงของแต่ละบริษัทเก็บที่นี่ (ผังกลางเก็บแค่ generic #1/#2/#3)
+//   ★ ทุก action guard: requireAccountingAccess + assertCustomerInScope(customerId)
+//     + validate accountCode ต้องเป็นรหัสเงินฝาก (BANK_ACCOUNT_CODES) + sanitize ชื่อ/เลข
+//   ★ เขียนผ่าน service-role + tenantId จาก session (ไม่เชื่อ scope จาก client)
+//   ★ PDPA: ไม่ log ชื่อธนาคาร/เลขบัญชี/ลูกค้า
+// ---------------------------------------------------------------------
+
+/**
+ * เพิ่ม/แก้บัญชีเงินฝากของลูกค้า (มี id = แก้ · ไม่มี = เพิ่มใหม่)
+ *   - accountCode ต้องเป็นรหัสเงินฝากในผังกลาง (ไม่งั้นปฏิเสธ)
+ *   - unique (customer_id, account_code): 1 ลูกค้าผูก 1 รหัสเงินฝากได้ครั้งเดียว
+ */
+export async function upsertCustomerBankAccountAction(input: {
+  customerId: string;
+  id?: string;
+  accountCode: string;
+  bankName?: string | null;
+  accountNo?: string | null;
+}): Promise<SaveResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    if (!isUuid(input.customerId)) {
+      return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    }
+    if (input.id !== undefined && !isUuid(input.id)) {
+      return { ok: false, message: "ไม่พบบัญชีที่เลือก" };
+    }
+    // ★ สโคปนักบัญชี: จัดการบัญชีได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
+    if (!customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+
+    // validate + sanitize (accountCode ต้องเป็นรหัสเงินฝาก)
+    const v = validateBankAccountInput(input);
+    if (!v) {
+      return { ok: false, message: "รหัสบัญชีต้องเป็นบัญชีเงินฝากธนาคารในผังบัญชี" };
+    }
+
+    if (input.id) {
+      // แก้ของเดิม — ต้องเป็นบัญชีของลูกค้ารายนี้ + tenant นี้ (กันแก้ข้ามลูกค้า)
+      const { data: cur } = await service
+        .from("customer_bank_accounts")
+        .select("id")
+        .eq("id", input.id)
+        .eq("tenant_id", ctx.tenantId)
+        .eq("customer_id", input.customerId)
+        .is("deleted_at", null)
+        .maybeSingle();
+      if (!cur) return { ok: false, message: "ไม่พบบัญชี (อาจถูกลบไปแล้ว)" };
+
+      const { error } = await service
+        .from("customer_bank_accounts")
+        .update({
+          account_code: v.accountCode,
+          bank_name: v.bankName,
+          account_no: v.accountNo,
+        })
+        .eq("id", input.id)
+        .eq("tenant_id", ctx.tenantId)
+        .eq("customer_id", input.customerId)
+        .is("deleted_at", null);
+      if (error) {
+        // ชนกับ unique (customer_id, account_code) = รหัสนี้มีบัญชีอยู่แล้ว
+        return { ok: false, message: "บันทึกไม่สำเร็จ — รหัสเงินฝากนี้มีบัญชีอยู่แล้ว" };
+      }
+    } else {
+      const { error } = await service.from("customer_bank_accounts").insert({
+        tenant_id: ctx.tenantId,
+        customer_id: input.customerId,
+        account_code: v.accountCode,
+        bank_name: v.bankName,
+        account_no: v.accountNo,
+      });
+      if (error) {
+        return { ok: false, message: "เพิ่มไม่สำเร็จ — รหัสเงินฝากนี้มีบัญชีอยู่แล้ว" };
+      }
+    }
+
+    revalidatePath(PATH);
+    return { ok: true, message: input.id ? "แก้บัญชีธนาคารแล้ว" : "เพิ่มบัญชีธนาคารแล้ว" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "บันทึกบัญชีธนาคารไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * ลบบัญชีเงินฝากของลูกค้า (soft-delete) — guard scope ผ่าน customer_id ของ row
+ */
+export async function deleteCustomerBankAccountAction(id: string): Promise<SaveResult> {
+  if (!isUuid(id)) return { ok: false, message: "ไม่พบบัญชีที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    // อ่าน customer_id ของบัญชี (scope tenant) เพื่อตรวจสโคปก่อนลบ
+    const { data: row } = await service
+      .from("customer_bank_accounts")
+      .select("customer_id")
+      .eq("id", id)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (!row) return { ok: false, message: "ไม่พบบัญชี (อาจถูกลบไปแล้ว)" };
+    // ★ สโคปนักบัญชี: ลบได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
+    assertCustomerInScope(ctx, (row as { customer_id: string | null }).customer_id);
+
+    const { error } = await service
+      .from("customer_bank_accounts")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null);
+    if (error) return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
+
+    revalidatePath(PATH);
+    return { ok: true, message: "ลบบัญชีธนาคารแล้ว" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ลบบัญชีธนาคารไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
