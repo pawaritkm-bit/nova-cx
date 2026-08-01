@@ -29,6 +29,9 @@ const BILLS_BUCKET = "bills";
 /** doc_kind ที่ถือเป็นบิลต้องลงบัญชี */
 const BILL_DOC_KINDS = ["sale", "purchase", "handwritten", "cash"];
 
+/** doc_kind ที่ "ไม่ใช่ใบกำกับภาษี" → ไม่มี VAT แน่นอน (บังคับ novat ทุก line ไม่ต้องเดา) */
+const NONVAT_DOC_KINDS = new Set(["handwritten", "cash", "slip"]);
+
 export type ExtractWorkerResult = {
   /** จำนวนบิลที่หยิบมาพิจารณา */
   scanned: number;
@@ -427,6 +430,9 @@ export async function processBillExtraction(
 
     // 6) สร้าง bill_entry_lines — ช่องที่ AI เว้น null = ไม่เติม (ค่า 0 ตาม default DB)
     //    ai_filled=true เฉพาะ line ที่ AI เติม amount/vat/บัญชี จริง (รู้ที่มา)
+    // ★ เอกสารเขียนมือ/เงินสด/สลิป = ไม่ใช่ใบกำกับภาษี → บังคับ novat แน่นอน (ไม่ต้องเดา)
+    //   เฉพาะ purchase/sale (ใบกำกับ) ค่อยใช้ vat_type ที่ AI ตัดสิน
+    const forceNoVat = NONVAT_DOC_KINDS.has((row.doc_kind ?? "").trim().toLowerCase());
     const lines = bill?.lines ?? [
       { vat_type: "vat" as const, description: null, amount: null, vat_amount: null, account_code: null },
     ];
@@ -439,7 +445,7 @@ export async function processBillExtraction(
         entry_id: entryId,
         tenant_id: row.tenant_id,
         line_no: i + 1,
-        vat_type: l.vat_type,
+        vat_type: forceNoVat ? ("novat" as const) : l.vat_type,
         description: l.description,
         account_code: accountCode,
         account_name: accountName,
