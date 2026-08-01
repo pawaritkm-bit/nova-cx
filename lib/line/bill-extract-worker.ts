@@ -872,6 +872,28 @@ export type ReExtractResult = {
   stillEmpty: number;
 };
 
+/**
+ * mark entry ว่า "ลองสกัดใหม่แล้ว" (reextract_attempted_at = now) — เขียนผ่าน service-role
+ *   ★ กัน reextract วนบิลหน้าคิวเดิมที่ AI อ่านไม่ออก (null/ว่าง) ซ้ำทุกรอบ:
+ *     selection กรอง reextract_attempted_at is null → mark แล้ว = รอบหน้าข้ามไปใบใหม่
+ *   ★ guard (source=ai, status=draft, ยังไม่ลบ): ไม่ mark/ไม่แตะ entry ที่คนยืนยัน/ลบแล้ว
+ *   ★ PDPA: log แค่ error code ไม่มี id/เนื้อบิล
+ */
+export async function markReextractAttempted(db: SupabaseClient, entryId: string): Promise<void> {
+  const { error } = await db
+    .from("bill_entries")
+    .update({ reextract_attempted_at: new Date().toISOString() })
+    .eq("id", entryId)
+    .eq("source", "ai")
+    .eq("status", "draft")
+    .is("deleted_at", null);
+  if (error) {
+    console.warn(
+      `[bill-extract-worker] reextract mark attempted error code=${(error as { code?: string }).code ?? "?"}`
+    );
+  }
+}
+
 /** entry ที่รอสกัดใหม่ (ว่าง/ไม่ครบ) — created_at ใช้เป็น cursor ไล่หน้า */
 type ReExtractEntryRow = {
   id: string;
@@ -912,6 +934,9 @@ export async function reExtractIncompleteEntries(
         .eq("source", "ai")
         .eq("status", "draft")
         .is("deleted_at", null)
+        // ★ ข้าม entry ที่ "ลองสกัดใหม่แล้ว" (0052) — กันวนบิลหน้าคิวเดิมที่ AI อ่านไม่ออกซ้ำ
+        //   เฉพาะเส้น reextract เท่านั้น (backfill ใช้ query แยก ไม่กรองคอลัมน์นี้)
+        .is("reextract_attempted_at", null)
         .not("attachment_id", "is", null);
       if (cursor) q = q.gt("created_at", cursor); // ★ gt ต้องอยู่ก่อน order/limit (filter builder)
       const { data, error } = await q.order("created_at", { ascending: true }).limit(pageSize);
@@ -998,7 +1023,10 @@ export async function reExtractIncompleteEntries(
       continue;
     }
     const bill = await extractBillData(buf, mime);
-    if (!bill) continue; // สกัดไม่ได้ → คงว่างไว้ ไม่แตะ
+    // ★ mark "ลองสกัดใหม่แล้ว" ทันทีหลังยิง AI จริง (ครอบทุกผล: null/stillEmpty/updated)
+    //   → รอบหน้า selection ข้ามใบนี้ ไม่วนซ้ำบิลหน้าคิวเดิม (guard ai+draft: ไม่แตะที่คนยืนยันแล้ว)
+    await markReextractAttempted(db, e.id);
+    if (!bill) continue; // สกัดไม่ได้ → คงว่างไว้ (mark แล้ว รอบหน้าไม่วนซ้ำ)
 
     // ★ กันชนรอบทับ: re-read line ปัจจุบัน ตรวจว่ายัง "ว่างจริง" อยู่ (คนอาจเพิ่งคีย์)
     const { data: freshData } = await db

@@ -13,7 +13,7 @@ export const maxDuration = 60;
  *   ★ cron "ชั่วคราว" สำหรับไล่เติมบัญชีที่ AI แนะนำให้ "บิลเก่า" ที่ยังไม่มี account_code
  *     (บิลใหม่ได้บัญชีตอนสกัดอยู่แล้ว — อันนี้ backfill ของเดิม ~534 ใบ)
  *   แยกจาก extract-bills (ไม่พึ่ง query string ?mode= เพื่อให้ Vercel Cron เรียกได้ชัวร์)
- *   รอบละ 10 ใบ (ยิง OpenAI vision อ่านรูปใหม่ — แพง) · maxDuration 60s พอดี 10 ใบ
+ *   รอบละ 6 ใบ (ยิง OpenAI vision อ่านรูปใหม่ — แพง) · maxDuration 60s (10 ใบเคยชน 504)
  *   auth: CRON_SECRET (fail-closed) — Vercel Cron แนบ Bearer ให้เอง
  *   ★ ถอด route + cron entry นี้ออกได้เมื่อ backfill ครบ (drain แล้วเป็น no-op ราคาถูก)
  */
@@ -38,7 +38,8 @@ async function handle(request: NextRequest) {
 
   try {
     const db = createServiceRoleClient();
-    const accounts = await backfillEntryAccounts(db, { limit: 10 });
+    // ★ limit 6 (เดิม 10) — 10 vision call เกิน maxDuration 60s เป็นบางรอบ (504) → ลดกัน timeout
+    const accounts = await backfillEntryAccounts(db, { limit: 6 });
     return NextResponse.json({ status: "ok", accounts }, { status: 200 });
   } catch (e) {
     logServerError("cron/backfill-accounts", requestId, e);

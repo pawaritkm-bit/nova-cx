@@ -886,7 +886,11 @@ function makePaginatedDb(opts: {
       Promise.resolve(resolveList()).then(onF);
 
     function currentEntries(): Rec[] {
-      const rows = gtVal == null ? sorted : sorted.filter((r) => String(r.created_at) > gtVal!);
+      let rows = gtVal == null ? sorted : sorted.filter((r) => String(r.created_at) > gtVal!);
+      // ★ จำลอง .is("reextract_attempted_at", null) ของ reextract — ข้ามใบที่ mark แล้ว
+      if (isNullCols.includes("reextract_attempted_at")) {
+        rows = rows.filter((r) => r.reextract_attempted_at == null);
+      }
       return rows.slice(0, limitVal);
     }
     function resolveSingle(): { data: unknown; error: unknown } {
@@ -1016,5 +1020,112 @@ describe("reExtractIncompleteEntries — เจอ entry ว่างที่�
     expect(updates.find((u) => (u.filters as Rec).id === "empty1")).toBeTruthy();
     expect(deletes.some((d) => Array.isArray(d.ids) && (d.ids as unknown[]).includes("EL1"))).toBe(true);
     expect(inserts.some((i) => i.table === "bill_entry_lines")).toBe(true);
+  });
+});
+
+describe("reExtractIncompleteEntries — mark attempted กันวนบิลเดิม (0052)", () => {
+  /** entry ว่างจริง 1 บรรทัด (amount=0, ไม่มีบัญชี/รายละเอียด) */
+  const emptyLine = (id: string) => ({
+    id, line_no: 1, amount: 0, vat_amount: 0, account_code: null, description: null,
+  });
+
+  it("★ ข้าม entry ที่ reextract_attempted_at != null (ไม่วนซ้ำใบเดิมที่ลองแล้ว)", async () => {
+    // AI อ่านไม่ออก → คืน bill ว่าง (stillEmpty) ทุกครั้ง
+    extractMock.mockResolvedValue({
+      doc_date: null, doc_no: null, seller_name: null, seller_tax_id: null, buyer_name: null, buyer_tax_id: null,
+      lines: [{ vat_type: "vat", description: null, amount: null, vat_amount: null, account_code: null }],
+      overall_confidence: 0.3,
+    });
+    const entries: Rec[] = [
+      // ใบ A: ลองแล้ว (attempted) — ต้องถูกข้าม ไม่หยิบมาสกัดซ้ำ
+      { id: "attempted", tenant_id: "t1", attachment_id: "att-a", customer_id: null, created_at: "001", reextract_attempted_at: "2026-08-01T00:00:00Z" },
+      // ใบ B: ยังไม่ลอง — ต้องถูกหยิบ
+      { id: "fresh", tenant_id: "t1", attachment_id: "att-b", customer_id: null, created_at: "002", reextract_attempted_at: null },
+    ];
+    const linesByEntry: Record<string, (Rec & { id: string })[]> = {
+      attempted: [emptyLine("LA")],
+      fresh: [emptyLine("LB")],
+    };
+    const attachments = {
+      "att-a": { drive_file_id: "t1/a.jpg", doc_kind: "purchase" },
+      "att-b": { drive_file_id: "t1/b.jpg", doc_kind: "purchase" },
+    };
+    const { db, updates } = makePaginatedDb({ entries, linesByEntry, attachments });
+
+    const res = await reExtractIncompleteEntries(db, { limit: 5 });
+    // หยิบเฉพาะ fresh (attempted ถูกกรองออกตั้งแต่ selection)
+    expect(res.scanned).toBe(1);
+    // mark attempted ยิงให้ fresh (ไม่ยิงให้ attempted)
+    const markFresh = updates.find(
+      (u) => (u.filters as Rec).id === "fresh" && (u.payload as Rec).reextract_attempted_at != null
+    );
+    expect(markFresh).toBeTruthy();
+    expect(updates.some((u) => (u.filters as Rec).id === "attempted")).toBe(false);
+  });
+
+  it("★ mark attempted หลังประมวลผลทั้ง updated และ stillEmpty", async () => {
+    // ใบแรก (created 001) สกัดได้ข้อมูล → updated · ใบสอง (002) สกัดว่าง → stillEmpty
+    extractMock
+      .mockResolvedValueOnce({
+        doc_date: "2026-07-20", doc_no: "INV-1", seller_name: "ร้าน ก", seller_tax_id: null,
+        buyer_name: "ลูกค้า", buyer_tax_id: null,
+        lines: [{ vat_type: "vat", description: "ของ", amount: 300, vat_amount: 21, account_code: null }],
+        overall_confidence: 0.8,
+      })
+      .mockResolvedValueOnce({
+        doc_date: null, doc_no: null, seller_name: null, seller_tax_id: null, buyer_name: null, buyer_tax_id: null,
+        lines: [{ vat_type: "vat", description: null, amount: null, vat_amount: null, account_code: null }],
+        overall_confidence: 0.2,
+      });
+    const entries: Rec[] = [
+      { id: "e-upd", tenant_id: "t1", attachment_id: "att-1", customer_id: null, created_at: "001", reextract_attempted_at: null },
+      { id: "e-still", tenant_id: "t1", attachment_id: "att-2", customer_id: null, created_at: "002", reextract_attempted_at: null },
+    ];
+    const linesByEntry: Record<string, (Rec & { id: string })[]> = {
+      "e-upd": [emptyLine("L1")],
+      "e-still": [emptyLine("L2")],
+    };
+    const attachments = {
+      "att-1": { drive_file_id: "t1/1.jpg", doc_kind: "purchase" },
+      "att-2": { drive_file_id: "t1/2.jpg", doc_kind: "purchase" },
+    };
+    const { db, updates } = makePaginatedDb({ entries, linesByEntry, attachments });
+
+    const res = await reExtractIncompleteEntries(db, { limit: 5 });
+    expect(res.updated).toBe(1);
+    expect(res.stillEmpty).toBe(1);
+    // ทั้งสองใบต้องถูก mark attempted (ไม่ว่า updated หรือ stillEmpty)
+    const marked = (id: string) =>
+      updates.some((u) => (u.filters as Rec).id === id && (u.payload as Rec).reextract_attempted_at != null);
+    expect(marked("e-upd")).toBe(true);
+    expect(marked("e-still")).toBe(true);
+    // mark เขียนแบบ guard ai+draft (กันแตะที่คนยืนยันแล้ว)
+    const markUpd = updates.find(
+      (u) => (u.filters as Rec).id === "e-upd" && (u.payload as Rec).reextract_attempted_at != null
+    )!;
+    expect((markUpd.filters as Rec).source).toBe("ai");
+    expect((markUpd.filters as Rec).status).toBe("draft");
+  });
+
+  it("★ backfillEntryAccounts ไม่ถูกกระทบ — ยังหยิบ entry ที่ reextract mark แล้ว", async () => {
+    // entry นี้ reextract เคย mark ไว้ (reextract_attempted_at != null) แต่ backfill ต้องยังเติมบัญชีได้
+    extractMock.mockResolvedValue({
+      doc_date: null, doc_no: null, seller_name: null, seller_tax_id: null, buyer_name: null, buyer_tax_id: null,
+      lines: [{ vat_type: "vat", description: null, amount: 100, vat_amount: 7, account_code: "5340" }],
+      overall_confidence: 0.9,
+    });
+    const entries: Rec[] = [
+      { id: "e1", tenant_id: "t1", attachment_id: "att1", created_at: "001", reextract_attempted_at: "2026-08-01T00:00:00Z" },
+    ];
+    const linesByEntry: Record<string, (Rec & { id: string })[]> = {
+      e1: [{ id: "L1", line_no: 1, amount: 100, vat_amount: 7, account_code: null, description: "x" }],
+    };
+    const attachments = { att1: { drive_file_id: "t1/bill.jpg", doc_kind: "purchase" } };
+    const { db, updates } = makePaginatedDb({ entries, linesByEntry, attachments });
+
+    const res = await backfillEntryAccounts(db, { limit: 5 });
+    // backfill ไม่กรอง reextract_attempted_at → ยังเจอ + เติมบัญชีได้
+    expect(res.linesFilled).toBe(1);
+    expect(updates.find((u) => (u.filters as Rec).id === "L1")).toBeTruthy();
   });
 });
