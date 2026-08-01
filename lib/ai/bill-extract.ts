@@ -27,6 +27,12 @@ const FIELD_THRESHOLD = 0.8;
  */
 const ACCOUNT_THRESHOLD = 0.7;
 
+/**
+ * เกณฑ์ความมั่นใจของ vat_type ที่ AI ติ๊ก — ต่ำกว่านี้ = novat (ไม่เคลม VAT ถ้าไม่ชัดว่าเป็นใบกำกับภาษี)
+ *   ★ เป็น binary + นักบัญชีแก้ได้ (ไม่ล็อก) → เกณฑ์ต่ำกว่าตัวเลขได้
+ */
+const VAT_TYPE_THRESHOLD = 0.6;
+
 /** รายการบัญชี non-bank (รหัส=ชื่อ) ใส่ใน prompt ให้โมเดลเลือก — สร้างครั้งเดียวตอนโหลด */
 const CHART_PROMPT_LIST = searchChartNonBank("")
   .map((a) => `${a.code}=${a.name}`)
@@ -101,8 +107,10 @@ const SYSTEM_PROMPT =
   "ฝั่งไหนไม่เห็น/ไม่ชัดให้ value=null. " +
   "doc_date เป็นรูปแบบ YYYY-MM-DD (ค.ศ.) ถ้าเป็น พ.ศ. ให้ลบ 543. " +
   "เลขประจำตัวผู้เสียภาษีเป็นเลข 13 หลัก. " +
-  "lines = รายการในบิล แต่ละรายการ {vat_type, description:{value,confidence}, amount:{value,confidence}, vat_amount:{value,confidence}, account_code:{value,confidence}} " +
-  "โดย vat_type='vat' ถ้ารายการนั้นมี VAT 7%, 'novat' ถ้ายกเว้น/ไม่มี VAT. บิลที่มีทั้งของมี VAT และไม่มี VAT ให้แยกเป็นหลาย line. " +
+  "lines = รายการในบิล แต่ละรายการ {vat_type:{value,confidence}, description:{value,confidence}, amount:{value,confidence}, vat_amount:{value,confidence}, account_code:{value,confidence}} " +
+  "vat_type.value='vat' เฉพาะเมื่อ 'มั่นใจ' ว่าบิลเป็นใบกำกับภาษี/มีบรรทัดภาษีมูลค่าเพิ่ม (VAT) 7% ชัดเจน หรือแยกยอดก่อน+VAT ให้เห็น. " +
+  "value='novat' ถ้าเป็นบิลเงินสด/บิลเขียนมือ/ใบเสร็จธรรมดาที่ไม่มี VAT/ไม่ใช่ใบกำกับภาษี. ไม่แน่ใจให้ confidence ต่ำ (จะให้คนตรวจ). " +
+  "บิลที่มีทั้งของมี VAT และไม่มี VAT ให้แยกเป็นหลาย line. " +
   "amount = มูลค่าก่อน VAT (ฐานภาษี), vat_amount = ภาษีมูลค่าเพิ่มของรายการนั้น. " +
   "ถ้าบิลมียอดเดียวรวม ๆ ให้ทำเป็น 1 line. overall_confidence = ความมั่นใจรวมทั้งใบ 0..1. " +
   // ★ ให้ AI แนะนำ "รหัสบัญชี" ต่อบรรทัดจากผังกลางเท่านั้น (non-bank) — ไม่มั่นใจ = null
@@ -191,16 +199,21 @@ function normalizeLine(raw: unknown): ExtractedLine | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
 
-  // vat_type: อ่านตรง ๆ (ค่า string) — default 'vat' ถ้าไม่ระบุ/ไม่รู้จัก
-  let vatType: "vat" | "novat" = "vat";
+  // vat_type: AI ติ๊กให้ "เฉพาะที่มั่นใจ" (confidence >= เกณฑ์) — ไม่มั่นใจ = novat
+  //   (ปลอดภัยด้านภาษี: ไม่เคลม VAT ถ้าไม่ชัดว่าเป็นใบกำกับภาษี) · ไม่ล็อก นักบัญชีแก้ได้
+  //   รองรับทั้ง {value,confidence} (ใหม่) และ string ตรง ๆ (เก่า = เชื่อ conf=1)
+  let vatType: "vat" | "novat" = "novat";
+  const vtField = o.vat_type as ConfField | undefined;
   const vtRaw =
     typeof o.vat_type === "string"
       ? o.vat_type
-      : typeof (o.vat_type as ConfField)?.value === "string"
-        ? String((o.vat_type as ConfField).value)
+      : typeof vtField?.value === "string"
+        ? String(vtField.value)
         : "";
-  if (VAT_TYPES.has(vtRaw.trim().toLowerCase())) {
-    vatType = vtRaw.trim().toLowerCase() as "vat" | "novat";
+  const vtConf = typeof o.vat_type === "string" ? 1 : clampConfidence(vtField?.confidence);
+  const vtNorm = vtRaw.trim().toLowerCase();
+  if (VAT_TYPES.has(vtNorm) && vtConf >= VAT_TYPE_THRESHOLD) {
+    vatType = vtNorm as "vat" | "novat";
   }
 
   return {

@@ -22,6 +22,9 @@ export type ReviewRow = {
   counterparty: string | null;
   taxId: string | null;
   description: string | null;
+  /** รหัส/ชื่อบัญชีจากผังบัญชี (ต่อ line) */
+  accountCode: string | null;
+  accountName: string | null;
   /** null = entry ไม่มี line (แถวเปล่า) */
   vatType: VatType | null;
   amount: number;
@@ -88,6 +91,8 @@ export function buildReview(entries: BillEntry[]): ReviewData {
         counterparty: e.counterpartyName,
         taxId: e.counterpartyTaxId,
         description: l?.description ?? null,
+        accountCode: l?.accountCode ?? null,
+        accountName: l?.accountName ?? null,
         vatType: l ? l.vatType : null,
         amount,
         vat,

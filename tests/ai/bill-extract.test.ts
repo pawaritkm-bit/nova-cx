@@ -60,15 +60,23 @@ describe("normalizeExtraction — high-confidence gating", () => {
     expect(r?.lines[0].amount).toBeNull();
   });
 
-  it("vat_type novat อ่านได้ · ค่าแปลก → default vat", () => {
+  it("vat_type: AI ติ๊กเฉพาะที่มั่นใจ · ไม่ชัด/ค่าแปลก → default novat (ไม่เคลม VAT มั่ว)", () => {
     const r = normalizeExtraction({
       lines: [
+        // string ตรง ๆ (เก่า) = เชื่อ conf=1
         { vat_type: "novat", amount: { value: 50, confidence: 0.9 } },
+        // ค่าแปลก → default novat (เดิม default vat)
         { vat_type: "weird", amount: { value: 10, confidence: 0.9 } },
+        // {value,confidence} มั่นใจ vat → vat
+        { vat_type: { value: "vat", confidence: 0.9 }, amount: { value: 20, confidence: 0.9 } },
+        // {value,confidence} vat แต่ conf ต่ำ → novat (gate ไม่ผ่าน)
+        { vat_type: { value: "vat", confidence: 0.3 }, amount: { value: 30, confidence: 0.9 } },
       ],
     });
     expect(r?.lines[0].vat_type).toBe("novat");
-    expect(r?.lines[1].vat_type).toBe("vat");
+    expect(r?.lines[1].vat_type).toBe("novat");
+    expect(r?.lines[2].vat_type).toBe("vat");
+    expect(r?.lines[3].vat_type).toBe("novat");
   });
 
   it("amount เป็น string มี comma + confidence สูง → parse เป็นเลข", () => {

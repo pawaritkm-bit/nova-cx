@@ -59,7 +59,7 @@ function buildQuery(params: {
 function TotalRow({ label, t }: { label: string; t: ReviewTypeTotal }) {
   return (
     <tr className="acc-total">
-      <td colSpan={5} className="strong">
+      <td colSpan={7} className="strong">
         {label} · {t.count.toLocaleString("th-TH")} บิล
       </td>
       <td className="num strong">{formatMoney(t.amount)}</td>
@@ -100,6 +100,8 @@ function ReviewSection({
                 <th>เลขที่</th>
                 <th>คู่ค้า / เลขภาษี</th>
                 <th>รายการ</th>
+                <th>รหัสบัญชี</th>
+                <th>ชื่อบัญชี</th>
                 <th className="center">VAT</th>
                 <th className="num">มูลค่า</th>
                 <th className="num">VAT</th>
@@ -121,6 +123,8 @@ function ReviewSection({
                     <span className="acc-desc">{r.description || "—"}</span>
                     {r.whtForm ? <span className="acc-pnd">{whtFormLabel(r.whtForm)}</span> : null}
                   </td>
+                  <td className="mono">{r.accountCode || "—"}</td>
+                  <td>{r.accountName || "—"}</td>
                   <td className="center">
                     {r.vatType ? (
                       <span className={`vat-badge ${r.vatType === "novat" ? "no" : "yes"}`}>
