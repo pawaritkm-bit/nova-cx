@@ -6,8 +6,8 @@
  *   - ทุก field ให้โมเดลระบุ confidence · ช่องไหน confidence < FIELD_THRESHOLD (0.8)
  *     → คืน null (เว้นว่าง) ให้คนคีย์ · โดยเฉพาะ "ตัวเลข" (amount/vat) ถ้าไม่ชัด/
  *     เขียนมือ/เบลอ = null · เว้นว่างดีกว่าเดาผิด (ตัวเลขภาษีผิด = ยื่นผิด)
- *   - ไม่ให้ AI คำนวณ WHT (หัก ณ ที่จ่าย) — ปล่อย auto-calc/คนใส่
- *     (AI มักไม่รู้ประเภทค่าใช้จ่าย → เดาอัตราผิด)
+ *   - WHT (หัก ณ ที่จ่าย): อ่าน "เฉพาะที่บิลแสดงชัด" (high-confidence) → wht_rate/wht_amount
+ *     ไม่แสดง/ไม่ชัด = null (worker แนะนำอัตราจากประเภทบัญชีให้แทน — เป็นค่าแนะนำ ไม่ล็อก)
  *
  * ★ degrade ปลอดภัย: ไม่มี OPENAI_API_KEY → คืน null (worker ข้ามการสกัด)
  * ★ PDPA: ไม่ log เนื้อบิล/ผลละเอียด — log แค่ error สั้น ๆ ไม่มีข้อมูลอ่อนไหว
@@ -54,6 +54,16 @@ export type ExtractedLine = {
    *   ★ ชื่อบัญชีให้ worker เติมจากผัง (CHART_BY_CODE) — ไม่เชื่อชื่อจากโมเดล
    */
   account_code: string | null;
+  /**
+   * อัตราหัก ณ ที่จ่าย % ที่ "บิลแสดงไว้ชัด" · null = บิลไม่ได้แสดง/ไม่ชัด
+   *   ★ null = ให้ worker แนะนำอัตราจากประเภทบัญชีแทน (ไม่เดาตัวเลขจากรูป)
+   */
+  wht_rate: number | null;
+  /**
+   * ยอดเงินหัก ณ ที่จ่าย ที่ "บิลแสดงไว้ชัด" · null = บิลไม่ได้แสดง/ไม่ชัด
+   *   ★ null = ให้ worker auto-คำนวณจาก amount*rate แทน (ถ้ามีฐาน)
+   */
+  wht_amount: number | null;
 };
 
 /**
@@ -100,14 +110,16 @@ const SYSTEM_PROMPT =
   "ทุก field ที่เป็นค่าเดี่ยว ให้ตอบเป็น object {value, confidence} โดย confidence = ความมั่นใจ 0..1. " +
   "กฎสำคัญที่สุด: ถ้าไม่มั่นใจ อ่านไม่ชัด เบลอ เขียนมือ หรือไม่เห็นในรูป ให้ตั้ง value=null และ confidence ต่ำ " +
   "— ห้ามเดา โดยเฉพาะ 'ตัวเลข' (มูลค่า/ภาษี) ถ้าไม่ชัดให้ value=null เสมอ (เว้นว่างดีกว่าใส่เลขผิด). " +
-  "อย่าคำนวณภาษีหัก ณ ที่จ่าย (WHT) — ไม่ต้องส่งค่านั้น. " +
+  "ภาษีหัก ณ ที่จ่าย (WHT): ถ้าบิล 'แสดงไว้ชัดเจน' (มีบรรทัดหัก ณ ที่จ่าย/ระบุอัตรา % หรือยอดเงินที่หัก) " +
+  "ให้อ่านมาใส่ wht_rate (อัตรา % เช่น 3) และ/หรือ wht_amount (ยอดเงินที่หัก) พร้อม confidence. " +
+  "ถ้าบิลไม่ได้แสดงหัก ณ ที่จ่าย หรือไม่ชัด ให้ value=null ทั้งคู่ — ห้ามคำนวณเอง ห้ามเดา. " +
   "อย่าตัดสินว่าเป็นบิลซื้อหรือขาย — แค่สกัด 'ทั้งสองฝั่ง' ให้ครบ: " +
   "seller_name/seller_tax_id = ชื่อและเลขภาษีของ 'ผู้ขาย/ผู้ออกใบกำกับ' (มักอยู่หัวบิล), " +
   "buyer_name/buyer_tax_id = ชื่อและเลขภาษีของ 'ผู้ซื้อ/ลูกค้า' (มักอยู่ช่อง 'ลูกค้า/ผู้ซื้อ'). " +
   "ฝั่งไหนไม่เห็น/ไม่ชัดให้ value=null. " +
   "doc_date เป็นรูปแบบ YYYY-MM-DD (ค.ศ.) ถ้าเป็น พ.ศ. ให้ลบ 543. " +
   "เลขประจำตัวผู้เสียภาษีเป็นเลข 13 หลัก. " +
-  "lines = รายการในบิล แต่ละรายการ {vat_type:{value,confidence}, description:{value,confidence}, amount:{value,confidence}, vat_amount:{value,confidence}, account_code:{value,confidence}} " +
+  "lines = รายการในบิล แต่ละรายการ {vat_type:{value,confidence}, description:{value,confidence}, amount:{value,confidence}, vat_amount:{value,confidence}, account_code:{value,confidence}, wht_rate:{value,confidence}, wht_amount:{value,confidence}} " +
   "vat_type.value='vat' เฉพาะเมื่อ 'มั่นใจ' ว่าบิลเป็นใบกำกับภาษี/มีบรรทัดภาษีมูลค่าเพิ่ม (VAT) 7% ชัดเจน หรือแยกยอดก่อน+VAT ให้เห็น. " +
   "value='novat' ถ้าเป็นบิลเงินสด/บิลเขียนมือ/ใบเสร็จธรรมดาที่ไม่มี VAT/ไม่ใช่ใบกำกับภาษี. ไม่แน่ใจให้ confidence ต่ำ (จะให้คนตรวจ). " +
   "บิลที่มีทั้งของมี VAT และไม่มี VAT ให้แยกเป็นหลาย line. " +
@@ -222,6 +234,9 @@ function normalizeLine(raw: unknown): ExtractedLine | null {
     amount: gateNumber(o.amount as ConfField),
     vat_amount: gateNumber(o.vat_amount as ConfField),
     account_code: gateAccountCode(o.account_code),
+    // ★ WHT: gate ด้วย FIELD_THRESHOLD เหมือนตัวเลขอื่น — ไม่ชัด = null (ให้ worker แนะนำจากบัญชี)
+    wht_rate: gateNumber(o.wht_rate as ConfField),
+    wht_amount: gateNumber(o.wht_amount as ConfField),
   };
 }
 
@@ -241,7 +256,7 @@ export function normalizeExtraction(raw: Record<string, unknown> | null): Extrac
 
   // ถ้าไม่มี line ใด ๆ ให้สร้าง 1 line ว่าง (vat) ไว้ให้คนคีย์ — ไม่ทิ้งทั้งใบ
   if (lines.length === 0) {
-    lines.push({ vat_type: "vat", description: null, amount: null, vat_amount: null, account_code: null });
+    lines.push({ vat_type: "vat", description: null, amount: null, vat_amount: null, account_code: null, wht_rate: null, wht_amount: null });
   }
 
   return {

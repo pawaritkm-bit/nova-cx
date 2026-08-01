@@ -154,6 +154,53 @@ describe("normalizeExtraction — account_code (บัญชีที่ AI แ�
   });
 });
 
+describe("normalizeExtraction — wht_rate / wht_amount (หัก ณ ที่จ่าย)", () => {
+  it("WHT confidence สูง (>=0.8) → เก็บค่า", () => {
+    const r = normalizeExtraction({
+      lines: [
+        {
+          vat_type: "vat",
+          amount: { value: 1000, confidence: 0.9 },
+          wht_rate: { value: 3, confidence: 0.9 },
+          wht_amount: { value: 30, confidence: 0.9 },
+        },
+      ],
+    });
+    expect(r?.lines[0].wht_rate).toBe(3);
+    expect(r?.lines[0].wht_amount).toBe(30);
+  });
+
+  it("★ WHT confidence ต่ำ (<0.8) → null (ไม่เดา — worker แนะนำจากบัญชีแทน)", () => {
+    const r = normalizeExtraction({
+      lines: [
+        {
+          vat_type: "vat",
+          amount: { value: 1000, confidence: 0.9 },
+          wht_rate: { value: 3, confidence: 0.5 },
+          wht_amount: { value: 30, confidence: 0.7 },
+        },
+      ],
+    });
+    expect(r?.lines[0].wht_rate).toBeNull();
+    expect(r?.lines[0].wht_amount).toBeNull();
+  });
+
+  it("ไม่ส่ง WHT มาเลย → null ทั้งคู่ (ไม่ล้ม)", () => {
+    const r = normalizeExtraction({
+      lines: [{ vat_type: "vat", amount: { value: 50, confidence: 0.9 } }],
+    });
+    expect(r?.lines[0].wht_rate).toBeNull();
+    expect(r?.lines[0].wht_amount).toBeNull();
+  });
+
+  it("wht_rate ติดลบ → null (ค่าผิดปกติ)", () => {
+    const r = normalizeExtraction({
+      lines: [{ vat_type: "vat", wht_rate: { value: -3, confidence: 0.99 } }],
+    });
+    expect(r?.lines[0].wht_rate).toBeNull();
+  });
+});
+
 describe("extractBillData — degrade & error → null", () => {
   const origKey = process.env.OPENAI_API_KEY;
   afterEach(() => {

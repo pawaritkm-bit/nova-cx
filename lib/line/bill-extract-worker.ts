@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { extractBillData } from "@/lib/ai/bill-extract";
+import { extractBillData, type ExtractedLine } from "@/lib/ai/bill-extract";
 import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
+import { suggestWhtRate } from "@/lib/accounting/wht";
 
 /**
  * Bill extract worker — ไล่บิลที่เก็บแล้วแต่ยังไม่มี bill_entries → AI สกัด → สร้าง draft
@@ -70,6 +71,104 @@ function mimeFromPath(path: string): string {
 /** true = ไฟล์ที่ vision อ่านไม่ได้ (PDF/เอกสาร) → สร้าง draft ว่าง */
 function isNonImage(attachmentType: string | null, mime: string): boolean {
   return attachmentType === "file" || mime === "application/pdf" || !mime.startsWith("image/");
+}
+
+/** ปัดทศนิยม 2 ตำแหน่ง (ยอดเงิน) */
+export function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * คำนวณหัก ณ ที่จ่ายต่อบรรทัด (pure — เทสต์ได้) — ★ เป็น "ค่าแนะนำ ไม่ล็อก" นักบัญชีแก้ได้
+ *   - อัตรา (rate): ใช้ค่าที่ AI อ่านจากบิลก่อน (aiRate) · ไม่มี → แนะนำจากประเภทบัญชี suggestWhtRate
+ *   - ยอดหัก (amount): ใช้ค่าที่ AI อ่านก่อน (aiAmount) · ไม่มี → auto-คำนวณ round2(amount*rate/100)
+ *     เฉพาะเมื่อมีทั้งอัตรา (>0) และฐาน amount (>0) — ไม่มีฐาน = 0 (ไม่เดา)
+ */
+export function resolveLineWht(
+  aiRate: number | null | undefined,
+  aiAmount: number | null | undefined,
+  amount: number,
+  accountCode: string | null
+): { wht_rate: number; wht_amount: number } {
+  const rate = aiRate ?? suggestWhtRate(accountCode);
+  let whtAmount: number;
+  if (aiAmount != null) whtAmount = aiAmount;
+  else if (rate > 0 && amount > 0) whtAmount = round2((amount * rate) / 100);
+  else whtAmount = 0;
+  return { wht_rate: rate, wht_amount: whtAmount };
+}
+
+/**
+ * สร้างแถว bill_entry_lines จากผลสกัด (ใช้ร่วมทั้งสกัดใหม่ + re-extract) — ★ ที่เดียวคุม WHT/บัญชี
+ *   - ชื่อบัญชี: ดึงจากผังกลางเสมอ (ไม่เชื่อชื่อจากโมเดล)
+ *   - WHT: AI อ่านได้ใช้เลย · ไม่มี → แนะนำจากบัญชี (resolveLineWht)
+ *   - forceNoVat: เอกสารเขียนมือ/เงินสด/สลิป บังคับ novat
+ *   - aiUsed: true เมื่อสกัดด้วย AI สำเร็จ (ใช้ตั้ง ai_filled — PDF/degrade = false)
+ *   ไม่มี line เลย → สร้าง 1 บรรทัดว่างให้คนคีย์ (ไม่ทิ้งทั้งใบ)
+ */
+export function buildEntryLineRows(
+  lines: ExtractedLine[] | null | undefined,
+  ctx: { entryId: string; tenantId: string; forceNoVat: boolean; aiUsed: boolean }
+): Record<string, unknown>[] {
+  const src: ExtractedLine[] =
+    lines && lines.length > 0
+      ? lines
+      : [
+          {
+            vat_type: "vat",
+            description: null,
+            amount: null,
+            vat_amount: null,
+            account_code: null,
+            wht_rate: null,
+            wht_amount: null,
+          },
+        ];
+  return src.map((l, i) => {
+    const accountCode = l.account_code ?? null;
+    const accountName = accountCode ? CHART_BY_CODE[accountCode]?.name ?? null : null;
+    const amount = l.amount ?? 0;
+    const { wht_rate, wht_amount } = resolveLineWht(l.wht_rate, l.wht_amount, amount, accountCode);
+    const aiFilled = ctx.aiUsed && (l.amount !== null || l.vat_amount !== null || accountCode !== null);
+    return {
+      entry_id: ctx.entryId,
+      tenant_id: ctx.tenantId,
+      line_no: i + 1,
+      vat_type: ctx.forceNoVat ? ("novat" as const) : l.vat_type,
+      description: l.description,
+      account_code: accountCode,
+      account_name: accountName,
+      amount,
+      vat_amount: l.vat_amount ?? 0,
+      wht_rate,
+      wht_amount,
+      ai_filled: aiFilled,
+    };
+  });
+}
+
+/** บรรทัดขั้นต่ำที่ใช้ตัดสิน "ว่าง/ไม่ครบจริง" (สำหรับ re-extract) */
+export type ReextractableLine = {
+  amount: number | null;
+  vat_amount: number | null;
+  account_code: string | null;
+  description: string | null;
+};
+
+/**
+ * entry นี้ "ว่าง/ไม่ครบจริง" (ยังไม่มีใครคีย์) ไหม? (pure — เทสต์ได้)
+ *   ว่างจริง = ไม่มี line เลย หรือ "ทุก" line ไม่มีข้อมูลเลย
+ *     (amount=0 และ vat_amount=0 และ account_code null และ description ว่าง)
+ *   ★ มี line ใดมีข้อมูลแม้ช่องเดียว = "คนอาจคีย์แล้ว" → false (ห้ามแตะ/สกัดทับ)
+ */
+export function isEmptyReextractable(lines: ReextractableLine[]): boolean {
+  return lines.every(
+    (l) =>
+      (l.amount ?? 0) === 0 &&
+      (l.vat_amount ?? 0) === 0 &&
+      l.account_code == null &&
+      (l.description == null || String(l.description).trim() === "")
+  );
 }
 
 export type EntryType = "purchase" | "sale" | "unspecified";
@@ -433,28 +532,11 @@ export async function processBillExtraction(
     // ★ เอกสารเขียนมือ/เงินสด/สลิป = ไม่ใช่ใบกำกับภาษี → บังคับ novat แน่นอน (ไม่ต้องเดา)
     //   เฉพาะ purchase/sale (ใบกำกับ) ค่อยใช้ vat_type ที่ AI ตัดสิน
     const forceNoVat = NONVAT_DOC_KINDS.has((row.doc_kind ?? "").trim().toLowerCase());
-    const lines = bill?.lines ?? [
-      { vat_type: "vat" as const, description: null, amount: null, vat_amount: null, account_code: null },
-    ];
-    const lineRows = lines.map((l, i) => {
-      // ★ บัญชีที่ AI แนะนำ: ชื่อดึงจากผังกลางเสมอ (ไม่เชื่อชื่อจากโมเดล)
-      const accountCode = l.account_code ?? null;
-      const accountName = accountCode ? CHART_BY_CODE[accountCode]?.name ?? null : null;
-      const aiFilled = !!bill && (l.amount !== null || l.vat_amount !== null || accountCode !== null);
-      return {
-        entry_id: entryId,
-        tenant_id: row.tenant_id,
-        line_no: i + 1,
-        vat_type: forceNoVat ? ("novat" as const) : l.vat_type,
-        description: l.description,
-        account_code: accountCode,
-        account_name: accountName,
-        amount: l.amount ?? 0,
-        vat_amount: l.vat_amount ?? 0,
-        wht_rate: 0,
-        wht_amount: 0,
-        ai_filled: aiFilled,
-      };
+    const lineRows = buildEntryLineRows(bill?.lines, {
+      entryId,
+      tenantId: row.tenant_id,
+      forceNoVat,
+      aiUsed: !!bill,
     });
     const { error: lineErr } = await db.from("bill_entry_lines").insert(lineRows);
     if (lineErr) {
@@ -469,7 +551,7 @@ export async function processBillExtraction(
         !!bill.doc_date ||
         !!bill.seller_name ||
         !!bill.buyer_name ||
-        lineRows.some((l) => l.amount > 0));
+        lineRows.some((l) => Number(l.amount) > 0));
     if (gotSomething) extracted++;
     else blank++;
   }
@@ -706,4 +788,210 @@ export async function backfillEntryAccounts(
     `[bill-extract-worker] backfill accounts scanned=${scanned} entriesFilled=${entriesFilled} linesFilled=${linesFilled}`
   );
   return { scanned, entriesFilled, linesFilled };
+}
+
+export type ReExtractResult = {
+  /** จำนวน entry "ว่างจริง + มีไฟล์รูป" ที่ยิง AI สกัดใหม่ในรอบนี้ */
+  scanned: number;
+  /** จำนวน entry ที่สกัดใหม่แล้วอัปเดตในที่เดิมสำเร็จ (ได้ข้อมูลอย่างน้อย 1) */
+  updated: number;
+  /** จำนวน entry ที่สกัดแล้วยังว่าง (AI อ่านไม่ออก) — อัปเดตในที่เดิมแต่ยังไม่มีข้อมูล */
+  stillEmpty: number;
+};
+
+/** entry ที่รอสกัดใหม่ (ว่าง/ไม่ครบ) */
+type ReExtractEntryRow = {
+  id: string;
+  tenant_id: string;
+  attachment_id: string | null;
+  customer_id: string | null;
+};
+
+/**
+ * ไล่สกัดใหม่ให้บิล "ว่าง/ไม่ครบจริง" ที่ AI สร้างไว้ (draft) โดย "ไม่ทับงานคน"
+ *   ★ เลือกเฉพาะ entry ปลอดภัย: source='ai' + status='draft' + ยังไม่ลบ + มีไฟล์รูป
+ *     และ "ว่างจริง" (isEmptyReextractable: ทุก line ไม่มีข้อมูล / ไม่มี line เลย)
+ *   ★ กันชนรอบทับ: ก่อนแตะ re-read line ปัจจุบันของ entry แล้วเช็คว่ายังว่างอยู่จริง
+ *     (คนอาจเพิ่งคีย์ระหว่างรอบ) — ไม่ว่างแล้ว = ข้าม ไม่แตะ
+ *   ★ อัปเดต "ในที่เดิม": update หัว entry (doc/seller/buyer + re-decide side) +
+ *     ลบ line ว่างเก่า → insert line ใหม่ (พร้อมบัญชี/WHT ตามงาน A + บังคับ novat ถ้า doc_kind ไม่ใช่ใบกำกับ)
+ *   ★ ยิง AI แพง → limit = จำนวน entry ที่สกัดจริงต่อรอบ (แยก cron mode=reextract)
+ *   ★ PDPA: log แค่ตัวเลขสรุป ไม่มี path/ชื่อ/เลขภาษี
+ */
+export async function reExtractIncompleteEntries(
+  db: SupabaseClient,
+  opts: { limit?: number } = {}
+): Promise<ReExtractResult> {
+  const limit = opts.limit ?? 10;
+  const empty: ReExtractResult = { scanned: 0, updated: 0, stillEmpty: 0 };
+
+  // 1) entry ai draft ที่ยังไม่ลบ + มีไฟล์แนบ (ดึงเผื่อ — บางใบไม่ว่าง/เป็น PDF)
+  const { data: entryData, error: entryErr } = await db
+    .from("bill_entries")
+    .select("id, tenant_id, attachment_id, customer_id")
+    .eq("source", "ai")
+    .eq("status", "draft")
+    .is("deleted_at", null)
+    .not("attachment_id", "is", null)
+    .order("created_at", { ascending: true })
+    .limit(limit * 10);
+  if (entryErr) {
+    console.warn(`[bill-extract-worker] reextract select entries error code=${(entryErr as { code?: string }).code ?? "?"}`);
+    return empty;
+  }
+  const entries = (entryData ?? []) as ReExtractEntryRow[];
+  if (entries.length === 0) return empty;
+
+  // 2) โหลด line ของ entry เหล่านี้ → คัดเฉพาะ "ว่างจริง" (ไม่มีใครคีย์)
+  const entryIds = entries.map((e) => e.id);
+  const { data: lineData } = await db
+    .from("bill_entry_lines")
+    .select("entry_id, amount, vat_amount, account_code, description")
+    .in("entry_id", entryIds);
+  const linesByEntry = new Map<string, ReextractableLine[]>();
+  for (const l of (lineData ?? []) as (ReextractableLine & { entry_id: string })[]) {
+    const arr = linesByEntry.get(l.entry_id) ?? [];
+    arr.push({ amount: l.amount, vat_amount: l.vat_amount, account_code: l.account_code, description: l.description });
+    linesByEntry.set(l.entry_id, arr);
+  }
+  const emptyEntries = entries.filter((e) => isEmptyReextractable(linesByEntry.get(e.id) ?? []));
+  if (emptyEntries.length === 0) return empty;
+
+  // 3) object path + doc_kind ของไฟล์บิล (ต้องมีรูป + ใช้ doc_kind บังคับ novat)
+  const attIds = [...new Set(emptyEntries.map((e) => e.attachment_id).filter((x): x is string => !!x))];
+  const attById = new Map<string, { path: string | null; docKind: string | null }>();
+  if (attIds.length > 0) {
+    const { data: attData } = await db
+      .from("message_attachments")
+      .select("id, drive_file_id, doc_kind")
+      .in("id", attIds);
+    for (const a of (attData ?? []) as { id: string; drive_file_id: string | null; doc_kind: string | null }[]) {
+      attById.set(a.id, { path: a.drive_file_id, docKind: a.doc_kind });
+    }
+  }
+
+  // 4) ตัวตนลูกค้า (เพื่อ re-decide ฝั่งซื้อ/ขาย) — โหลดครั้งเดียว
+  const custIds = [...new Set(emptyEntries.map((e) => e.customer_id).filter((x): x is string => !!x))];
+  const custById = new Map<string, CustomerIdentity>();
+  if (custIds.length > 0) {
+    const { data: custData } = await db
+      .from("customers")
+      .select("id, name, business_name, tax_id")
+      .in("id", custIds);
+    for (const c of (custData ?? []) as {
+      id: string;
+      name: string | null;
+      business_name: string | null;
+      tax_id: string | null;
+    }[]) {
+      custById.set(c.id, { name: c.name, businessName: c.business_name, taxId: c.tax_id });
+    }
+  }
+
+  let scanned = 0;
+  let updated = 0;
+  let stillEmpty = 0;
+
+  for (const e of emptyEntries) {
+    if (scanned >= limit) break; // คุมจำนวน AI call ต่อรอบ
+    const att = e.attachment_id ? attById.get(e.attachment_id) : null;
+    const objectPath = att?.path ?? null;
+    if (!objectPath) continue;
+    const mime = mimeFromPath(objectPath);
+    if (isNonImage(null, mime)) continue; // PDF/เอกสาร — vision อ่านไม่ได้ ข้าม
+
+    scanned++;
+
+    // ดาวน์โหลด + สกัดใหม่
+    let buf: Buffer;
+    try {
+      const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(objectPath);
+      if (dlErr || !blob) continue;
+      buf = Buffer.from(await blob.arrayBuffer());
+    } catch {
+      continue;
+    }
+    const bill = await extractBillData(buf, mime);
+    if (!bill) continue; // สกัดไม่ได้ → คงว่างไว้ ไม่แตะ
+
+    // ★ กันชนรอบทับ: re-read line ปัจจุบัน ตรวจว่ายัง "ว่างจริง" อยู่ (คนอาจเพิ่งคีย์)
+    const { data: freshData } = await db
+      .from("bill_entry_lines")
+      .select("id, amount, vat_amount, account_code, description")
+      .eq("entry_id", e.id);
+    const fresh = (freshData ?? []) as (ReextractableLine & { id: string })[];
+    if (!isEmptyReextractable(fresh)) continue; // มีคนคีย์แล้ว → ไม่แตะ
+
+    // re-decide ฝั่งซื้อ/ขายจากตัวตนลูกค้า + ชื่อ/เลขที่ AI อ่านใหม่
+    const customer = (e.customer_id ? custById.get(e.customer_id) : null) ?? {
+      name: null,
+      businessName: null,
+      taxId: null,
+    };
+    const seller: BillParty = { name: bill.seller_name, taxId: bill.seller_tax_id };
+    const buyer: BillParty = { name: bill.buyer_name, taxId: bill.buyer_tax_id };
+    const decision = decideEntrySide(customer, seller, buyer);
+
+    // อัปเดตหัว entry ในที่เดิม (guard: ยังเป็น ai draft — กัน race กับการยืนยัน/ลบ)
+    const { data: updData, error: updErr } = await db
+      .from("bill_entries")
+      .update({
+        entry_type: decision.entryType,
+        doc_date: bill.doc_date,
+        doc_no: bill.doc_no,
+        counterparty_name: decision.counterpartyName,
+        counterparty_tax_id: decision.counterpartyTaxId,
+        seller_name: seller.name,
+        seller_tax_id: seller.taxId,
+        buyer_name: buyer.name,
+        buyer_tax_id: buyer.taxId,
+        ai_confidence: bill.overall_confidence,
+      })
+      .eq("id", e.id)
+      .eq("source", "ai")
+      .eq("status", "draft")
+      .is("deleted_at", null)
+      .select("id")
+      .maybeSingle();
+    if (updErr) {
+      console.warn(`[bill-extract-worker] reextract update entry error code=${(updErr as { code?: string }).code ?? "?"}`);
+      continue;
+    }
+    if (!updData) continue; // entry เปลี่ยนสถานะไปแล้ว (ยืนยัน/ลบ) → ไม่แตะต่อ
+
+    // ลบ line ว่างเก่า (เฉพาะ id ที่ re-check แล้วว่าว่าง) แล้ว insert line ใหม่
+    const oldIds = fresh.map((l) => l.id);
+    if (oldIds.length > 0) {
+      const { error: delErr } = await db.from("bill_entry_lines").delete().in("id", oldIds);
+      if (delErr) {
+        console.warn(`[bill-extract-worker] reextract delete lines error code=${(delErr as { code?: string }).code ?? "?"}`);
+        continue; // ลบไม่ได้ → ไม่ insert (กันบรรทัดซ้อน)
+      }
+    }
+    const forceNoVat = NONVAT_DOC_KINDS.has((att?.docKind ?? "").trim().toLowerCase());
+    const lineRows = buildEntryLineRows(bill.lines, {
+      entryId: e.id,
+      tenantId: e.tenant_id,
+      forceNoVat,
+      aiUsed: true,
+    });
+    const { error: insErr } = await db.from("bill_entry_lines").insert(lineRows);
+    if (insErr) {
+      console.warn(`[bill-extract-worker] reextract insert lines error code=${(insErr as { code?: string }).code ?? "?"}`);
+    }
+
+    const got =
+      !!bill.doc_no ||
+      !!bill.doc_date ||
+      !!bill.seller_name ||
+      !!bill.buyer_name ||
+      lineRows.some((l) => Number(l.amount) > 0);
+    if (got) updated++;
+    else stillEmpty++;
+  }
+
+  console.log(
+    `[bill-extract-worker] reextract scanned=${scanned} updated=${updated} stillEmpty=${stillEmpty}`
+  );
+  return { scanned, updated, stillEmpty };
 }

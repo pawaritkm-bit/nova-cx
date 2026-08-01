@@ -32,11 +32,15 @@
     },
     {
       "path": "/api/cron/extract-bills",
-      "schedule": "*/15 * * * *"
+      "schedule": "*/3 * * * *"
     },
     {
       "path": "/api/cron/backfill-accounts",
       "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/reextract-bills",
+      "schedule": "*/3 * * * *"
     }
   ],
   "functions": {
