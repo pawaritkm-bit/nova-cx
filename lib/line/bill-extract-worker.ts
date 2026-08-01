@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { extractBillData, type ExtractedLine } from "@/lib/ai/bill-extract";
 import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
 import { suggestWhtRate } from "@/lib/accounting/wht";
+import { calcVat } from "@/lib/accounting/calc";
 
 /**
  * Bill extract worker — ไล่บิลที่เก็บแล้วแต่ยังไม่มี bill_entries → AI สกัด → สร้าง draft
@@ -128,18 +129,22 @@ export function buildEntryLineRows(
     const accountCode = l.account_code ?? null;
     const accountName = accountCode ? CHART_BY_CODE[accountCode]?.name ?? null : null;
     const amount = l.amount ?? 0;
+    const vatType = ctx.forceNoVat ? ("novat" as const) : l.vat_type;
+    // ★ VAT: AI อ่านได้ใช้เลย · ไม่มี → auto-คำนวณจากยอด×7% "เฉพาะ line ที่เป็น VAT"
+    //   (calcVat: novat=0 เสมอ → บิลไม่มี VAT ยังเป็น 0) — เป็นค่าคำนวณ ไม่ล็อก นักบัญชีแก้ได้
+    const vatAmount = l.vat_amount ?? calcVat(amount, vatType);
     const { wht_rate, wht_amount } = resolveLineWht(l.wht_rate, l.wht_amount, amount, accountCode);
     const aiFilled = ctx.aiUsed && (l.amount !== null || l.vat_amount !== null || accountCode !== null);
     return {
       entry_id: ctx.entryId,
       tenant_id: ctx.tenantId,
       line_no: i + 1,
-      vat_type: ctx.forceNoVat ? ("novat" as const) : l.vat_type,
+      vat_type: vatType,
       description: l.description,
       account_code: accountCode,
       account_name: accountName,
       amount,
-      vat_amount: l.vat_amount ?? 0,
+      vat_amount: vatAmount,
       wht_rate,
       wht_amount,
       ai_filled: aiFilled,
