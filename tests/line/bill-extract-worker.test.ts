@@ -20,6 +20,7 @@ import {
   redecideExistingEntries,
   backfillEntryAccounts,
   reExtractIncompleteEntries,
+  collectTargetEntries,
   isEmptyReextractable,
   resolveLineWht,
   buildEntryLineRows,
@@ -727,5 +728,293 @@ describe("backfillEntryAccounts — เติมบัญชีบิลเด�
     const { db } = makeBackfillDb({ entries: [], nullLines: [], attachments: [] });
     const res = await backfillEntryAccounts(db, { limit: 10 });
     expect(res).toEqual({ scanned: 0, entriesFilled: 0, linesFilled: 0 });
+  });
+});
+
+// ---- collectTargetEntries: ไล่หน้า cursor pagination (core ของ fix คิวค้าง) ----
+
+/** fake fetchPage บน array (เรียง created_at asc) — ใช้ cursor .gt("created_at") จำลอง */
+function pagedFetch(all: { id: string; created_at: string }[]) {
+  const sorted = [...all].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const cursors: (string | null)[] = [];
+  return {
+    cursors,
+    fetchPage: async (cursor: string | null, pageSize: number) => {
+      cursors.push(cursor);
+      const rows = cursor == null ? sorted : sorted.filter((r) => r.created_at > cursor);
+      return rows.slice(0, pageSize);
+    },
+  };
+}
+
+describe("collectTargetEntries — ไล่หน้าจนได้เป้าหมายครบ limit (bounded)", () => {
+  it("★ เป้าหมายอยู่หน้า 2 (ไม่ใช่หน้าแรก) → ต้องไล่ไปเจอ (ไม่ค้าง 0)", async () => {
+    // 4 ใบ, หน้าละ 2 → เป้าหมาย id="X" อยู่ใบที่ 4 (หน้า 2)
+    const all = [
+      { id: "a", created_at: "001" },
+      { id: "b", created_at: "002" },
+      { id: "c", created_at: "003" },
+      { id: "X", created_at: "004" },
+    ];
+    const { fetchPage, cursors } = pagedFetch(all);
+    const targets = await collectTargetEntries({
+      limit: 10,
+      pageSize: 2,
+      fetchPage,
+      filterTargets: async (page) => page.filter((e) => e.id === "X"),
+    });
+    expect(targets.map((t) => t.id)).toEqual(["X"]);
+    // ต้องไล่ถึงหน้า 2 (cursor = created_at ใบสุดท้ายหน้าแรก = "002")
+    expect(cursors[0]).toBeNull();
+    expect(cursors[1]).toBe("002");
+  });
+
+  it("หยุดเมื่อได้ครบ limit (ไม่ไล่ต่อ)", async () => {
+    const all = Array.from({ length: 6 }, (_, i) => ({ id: `e${i}`, created_at: String(i).padStart(3, "0") }));
+    const { fetchPage, cursors } = pagedFetch(all);
+    const targets = await collectTargetEntries({
+      limit: 2,
+      pageSize: 5,
+      fetchPage,
+      filterTargets: async (page) => page, // ทุกใบเป็นเป้าหมาย
+    });
+    expect(targets.length).toBe(2); // ตัดที่ limit
+    expect(cursors).toEqual([null]); // เจอครบในหน้าแรก ไม่ดึงหน้า 2
+  });
+
+  it("หยุดเมื่อหมดกอง (หน้าไม่เต็ม) → คืนเท่าที่เจอ", async () => {
+    const all = [
+      { id: "a", created_at: "001" },
+      { id: "b", created_at: "002" },
+    ];
+    const { fetchPage } = pagedFetch(all);
+    const targets = await collectTargetEntries({
+      limit: 10,
+      pageSize: 5, // หน้าเดียวไม่เต็ม
+      fetchPage,
+      filterTargets: async (page) => page.filter((e) => e.id === "b"),
+    });
+    expect(targets.map((t) => t.id)).toEqual(["b"]);
+  });
+
+  it("★ maxPages จำกัดจำนวนหน้า (bounded กันวนไม่จบ)", async () => {
+    // 100 ใบ ไม่มีเป้าหมายเลย, หน้าละ 10 → maxPages=3 = ดึงแค่ 3 หน้า แล้วเลิก
+    const all = Array.from({ length: 100 }, (_, i) => ({ id: `e${i}`, created_at: String(i).padStart(3, "0") }));
+    const { fetchPage, cursors } = pagedFetch(all);
+    const targets = await collectTargetEntries({
+      limit: 10,
+      pageSize: 10,
+      maxPages: 3,
+      fetchPage,
+      filterTargets: async () => [],
+    });
+    expect(targets).toEqual([]);
+    expect(cursors.length).toBe(3); // ไม่เกิน maxPages
+  });
+});
+
+// ---- pagination จริงผ่าน db mock: เป้าหมายอยู่หน้า 2 (>PAGE_SIZE 200) ต้องเจอ ----
+
+type Rec = Record<string, unknown>;
+
+/** mock db รองรับ .gt("created_at") + .limit() (paginate bill_entries) สำหรับ reextract/backfill */
+function makePaginatedDb(opts: {
+  entries: Rec[]; // {id,tenant_id,attachment_id,customer_id?,created_at}
+  linesByEntry: Record<string, (Rec & { id: string })[]>; // line เต็มของแต่ละ entry
+  attachments: Record<string, { drive_file_id: string | null; doc_kind?: string | null }>;
+  customers?: Record<string, { name: string | null; business_name: string | null; tax_id: string | null }>;
+  downloadOk?: boolean;
+}): { db: SupabaseClient; inserts: Captured[]; updates: Rec[]; deletes: { ids: unknown }[] } {
+  const inserts: Captured[] = [];
+  const updates: Rec[] = [];
+  const deletes: { ids: unknown }[] = [];
+  const sorted = [...opts.entries].sort((a, b) =>
+    String(a.created_at).localeCompare(String(b.created_at))
+  );
+
+  function qb(table: string) {
+    let gtVal: string | null = null;
+    let limitVal = Infinity;
+    let inCol: string | null = null;
+    let inVals: unknown[] = [];
+    const eqFilters: Rec = {};
+    const isNullCols: string[] = [];
+    let mode: "select" | "update" | "insert" | "delete" = "select";
+    let payload: Rec = {};
+    const api: Rec = {};
+    api.select = () => api;
+    api.eq = (c: string, v: unknown) => {
+      eqFilters[c] = v;
+      return api;
+    };
+    api.gt = (_c: string, v: string) => {
+      gtVal = v;
+      return api;
+    };
+    api.in = (c: string, v: unknown[]) => {
+      inCol = c;
+      inVals = v;
+      return api;
+    };
+    api.is = (c: string) => {
+      isNullCols.push(c);
+      return api;
+    };
+    api.not = () => api;
+    api.order = () => api;
+    api.limit = (n: number) => {
+      limitVal = n;
+      return api;
+    };
+    api.update = (p: Rec) => {
+      mode = "update";
+      payload = p;
+      return api;
+    };
+    api.insert = (rows: Rec | Rec[]) => {
+      mode = "insert";
+      const arr = Array.isArray(rows) ? rows : [rows];
+      inserts.push({ table, rows: arr });
+      return api;
+    };
+    api.delete = () => {
+      mode = "delete";
+      return api;
+    };
+    api.maybeSingle = () => Promise.resolve(resolveSingle());
+    api.then = (onF: (v: { data: unknown; error: unknown }) => unknown) =>
+      Promise.resolve(resolveList()).then(onF);
+
+    function currentEntries(): Rec[] {
+      const rows = gtVal == null ? sorted : sorted.filter((r) => String(r.created_at) > gtVal!);
+      return rows.slice(0, limitVal);
+    }
+    function resolveSingle(): { data: unknown; error: unknown } {
+      if (mode === "update") {
+        updates.push({ table, payload, filters: { ...eqFilters } });
+        return { data: { id: eqFilters.id ?? "row" }, error: null }; // guarded update สำเร็จ
+      }
+      return { data: null, error: null };
+    }
+    function resolveList(): { data: unknown; error: unknown } {
+      if (mode === "update") {
+        updates.push({ table, payload, filters: { ...eqFilters } });
+        return { data: null, error: null };
+      }
+      if (mode === "delete") {
+        deletes.push({ ids: inVals });
+        return { data: null, error: null };
+      }
+      if (table === "bill_entries") return { data: currentEntries(), error: null };
+      if (table === "bill_entry_lines") {
+        const ids =
+          inCol === "entry_id" ? (inVals as string[]) : eqFilters.entry_id != null ? [eqFilters.entry_id as string] : [];
+        let rows: Rec[] = [];
+        for (const id of ids) for (const l of opts.linesByEntry[id] ?? []) rows.push({ entry_id: id, ...l });
+        if (isNullCols.includes("account_code")) rows = rows.filter((r) => r.account_code == null);
+        return { data: rows, error: null };
+      }
+      if (table === "message_attachments") {
+        const ids = inCol === "id" ? (inVals as string[]) : [];
+        return {
+          data: ids.map((id) => {
+            const a = opts.attachments[id];
+            return { id, drive_file_id: a?.drive_file_id ?? null, doc_kind: a?.doc_kind ?? null };
+          }),
+          error: null,
+        };
+      }
+      if (table === "customers") {
+        const ids = inCol === "id" ? (inVals as string[]) : [];
+        return {
+          data: ids.filter((id) => opts.customers?.[id]).map((id) => ({ id, ...opts.customers![id] })),
+          error: null,
+        };
+      }
+      return { data: [], error: null };
+    }
+    return api;
+  }
+
+  const db = {
+    from: (t: string) => qb(t),
+    storage: {
+      from: () => ({
+        download: async () =>
+          opts.downloadOk === false
+            ? { data: null, error: { message: "nope" } }
+            : { data: { arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }, error: null },
+      }),
+    },
+  };
+  return { db: db as unknown as SupabaseClient, inserts, updates, deletes };
+}
+
+/** สร้าง entry เติมกอง (non-target) ให้ล้น 1 หน้า (PAGE_SIZE=200) */
+function filler(n: number, mk: (i: number) => Rec): Rec[] {
+  return Array.from({ length: n }, (_, i) => mk(i));
+}
+
+describe("backfillEntryAccounts — เจอเป้าหมายที่อยู่หน้า 2 (>200 ใบ) ไม่ค้าง", () => {
+  it("★ target มีบรรทัด account_code ว่าง อยู่ใบที่ 210 → เติมได้ (ไล่ข้ามหน้าแรกที่เติมหมดแล้ว)", async () => {
+    extractMock.mockResolvedValue({
+      doc_date: null, doc_no: null, seller_name: null, seller_tax_id: null, buyer_name: null, buyer_tax_id: null,
+      lines: [{ vat_type: "vat", description: null, amount: 100, vat_amount: 7, account_code: "5340" }],
+      overall_confidence: 0.9,
+    });
+    // 210 ใบแรก = "เติมแล้ว" (ไม่มีบรรทัด account_code ว่าง), ใบที่ 210 = target
+    const entries: Rec[] = filler(210, (i) => ({
+      id: `done-${i}`, tenant_id: "t1", attachment_id: `att-${i}`, created_at: String(i).padStart(4, "0"),
+    }));
+    entries.push({ id: "target", tenant_id: "t1", attachment_id: "att-target", created_at: "9999" });
+    const linesByEntry: Record<string, (Rec & { id: string })[]> = {
+      target: [{ id: "L1", line_no: 1, amount: 0, vat_amount: 0, account_code: null, description: null }],
+    };
+    const attachments = { "att-target": { drive_file_id: "t1/bill.jpg", doc_kind: "purchase" } };
+    const { db, updates } = makePaginatedDb({ entries, linesByEntry, attachments });
+
+    const res = await backfillEntryAccounts(db, { limit: 5 });
+    expect(res.scanned).toBe(1); // เจอ target หน้า 2 แล้วยิง AI 1 ใบ
+    expect(res.linesFilled).toBe(1);
+    const upd = updates.find((u) => (u.filters as Rec).id === "L1")!;
+    expect(upd).toBeTruthy();
+    expect((upd.payload as Rec).account_code).toBe("5340");
+  });
+});
+
+describe("reExtractIncompleteEntries — เจอ entry ว่างที่อยู่หน้า 2 (>200 ใบ) ไม่ค้าง", () => {
+  it("★ entry ว่างจริงอยู่ใบที่ 210 → สกัดใหม่ + อัปเดตในที่เดิม (ไล่ข้ามใบที่เติมแล้ว)", async () => {
+    extractMock.mockResolvedValue({
+      doc_date: "2026-07-20", doc_no: "INV-9", seller_name: "ร้าน ก", seller_tax_id: null,
+      buyer_name: "ลูกค้าเรา", buyer_tax_id: null,
+      lines: [{ vat_type: "vat", description: "ของ", amount: 300, vat_amount: 21, account_code: null }],
+      overall_confidence: 0.8,
+    });
+    // 210 ใบแรก "มีข้อมูลแล้ว" (ไม่ว่าง), ใบที่ 210 = ว่างจริง
+    const entries: Rec[] = filler(210, (i) => ({
+      id: `filled-${i}`, tenant_id: "t1", attachment_id: `att-${i}`, customer_id: null, created_at: String(i).padStart(4, "0"),
+    }));
+    entries.push({ id: "empty1", tenant_id: "t1", attachment_id: "att-empty", customer_id: null, created_at: "9999" });
+    const emptyLine = { id: "EL1", line_no: 1, amount: 0, vat_amount: 0, account_code: null, description: null };
+    const linesByEntry: Record<string, (Rec & { id: string })[]> = {
+      // ใบเติมแล้ว: มี amount → isEmptyReextractable=false
+      ...Object.fromEntries(
+        Array.from({ length: 210 }, (_, i) => [
+          `filled-${i}`,
+          [{ id: `f${i}`, line_no: 1, amount: 100, vat_amount: 7, account_code: "5340", description: "x" }],
+        ])
+      ),
+      empty1: [emptyLine], // ว่างจริง (ทั้ง fresh re-read ด้วย)
+    };
+    const attachments = { "att-empty": { drive_file_id: "t1/bill.jpg", doc_kind: "purchase" } };
+    const { db, updates, inserts, deletes } = makePaginatedDb({ entries, linesByEntry, attachments });
+
+    const res = await reExtractIncompleteEntries(db, { limit: 5 });
+    expect(res.scanned).toBe(1);
+    expect(res.updated).toBe(1); // สกัดได้ข้อมูล → updated
+    // อัปเดตหัว entry ในที่เดิม (guard source/status) + ลบ line ว่างเก่า + insert line ใหม่
+    expect(updates.find((u) => (u.filters as Rec).id === "empty1")).toBeTruthy();
+    expect(deletes.some((d) => Array.isArray(d.ids) && (d.ids as unknown[]).includes("EL1"))).toBe(true);
+    expect(inserts.some((i) => i.table === "bill_entry_lines")).toBe(true);
   });
 });

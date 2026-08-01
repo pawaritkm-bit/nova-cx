@@ -393,6 +393,50 @@ const CANDIDATE_SCAN_LIMIT = 2000;
 const DONE_SCAN_LIMIT = 50000;
 
 /**
+ * ★ pagination สำหรับ reextract/backfill — entry เป้าหมาย (ว่าง/ไม่ครบ) กระจายทั่วกอง
+ *   ไม่ได้อยู่แค่ N ใบเก่าสุด → ต้องไล่เป็นหน้าจนเจอครบ limit (ไม่พึ่งชุดแรกชุดเดียว)
+ */
+/** entry ต่อหน้า — โหลด line ≤ 200 ids/หน้า (กัน .in() ยาวชน URL limit ของ PostgREST) */
+const REEXTRACT_PAGE_SIZE = 200;
+/** เพดานจำนวนหน้า/รอบ (30×200 = 6000 entry) — bounded กันวนไม่จบ */
+const REEXTRACT_MAX_PAGES = 30;
+
+/**
+ * ไล่ entry เป็นหน้า (cursor pagination บน created_at asc) จนสะสม "เป้าหมาย" ครบ limit — bounded/เทสต์ได้
+ *   ★ ทำไม cursor: entry ที่ต้องทำกระจายทั่วกอง — ถ้าดึงแค่ N ใบเก่าสุดแล้วกรอง อาจเจอ 0 (คิวค้าง)
+ *   - fetchPage(cursor,pageSize): ดึง entry หน้าถัดไป (created_at > cursor) เรียง asc — ต้อง select created_at
+ *   - filterTargets(page): โหลด line ของหน้านี้ (≤pageSize ids) + กรองเฉพาะเป้าหมาย → คืน targets
+ *   หยุดเมื่อ: ครบ limit / หน้าว่างหรือไม่เต็ม (หมดกอง) / ครบ maxPages
+ *   ★ cursor เดินตาม "ทุก entry ในหน้า" (ไม่ใช่เฉพาะเป้าหมาย) → เดินข้ามใบที่เติมแล้วไปเรื่อย ๆ
+ */
+export async function collectTargetEntries<T extends { created_at: string | null }>(args: {
+  limit: number;
+  fetchPage: (cursor: string | null, pageSize: number) => Promise<T[]>;
+  filterTargets: (page: T[]) => Promise<T[]>;
+  pageSize?: number;
+  maxPages?: number;
+}): Promise<T[]> {
+  const pageSize = args.pageSize ?? REEXTRACT_PAGE_SIZE;
+  const maxPages = args.maxPages ?? REEXTRACT_MAX_PAGES;
+  const targets: T[] = [];
+  let cursor: string | null = null;
+  for (let p = 0; p < maxPages; p += 1) {
+    const page = await args.fetchPage(cursor, pageSize);
+    if (page.length === 0) break; // ไม่มี entry เหลือ
+    const hits = await args.filterTargets(page);
+    for (const h of hits) {
+      targets.push(h);
+      if (targets.length >= args.limit) return targets; // ครบ limit → พอ
+    }
+    if (page.length < pageSize) break; // หน้าไม่เต็ม = ใบสุดท้ายของกองแล้ว
+    const last = page[page.length - 1].created_at;
+    if (last == null) break; // created_at ว่าง → เลื่อน cursor ต่อไม่ได้ (กันวนไม่จบ)
+    cursor = last;
+  }
+  return targets;
+}
+
+/**
  * เลือกบิลที่ยังไม่มี entry (subtract-done + เรียงเก่า→ใหม่) — แยกออกมาให้เทสต์ได้
  *   1) done set = attachment_id ที่มี bill_entries (ยังไม่ลบ) ทั้งหมด
  *   2) eligible = message_attachments (stored + เอกสารการเงิน + มีไฟล์) เรียง created_at asc
@@ -699,50 +743,74 @@ export async function backfillEntryAccounts(
   const limit = opts.limit ?? 10;
   const empty: BackfillAccountsResult = { scanned: 0, entriesFilled: 0, linesFilled: 0 };
 
-  // 1) หา entry (ai draft, ยังไม่ลบ, มีไฟล์แนบ) — ดึงเผื่อ (บางใบไม่มีบรรทัดว่าง/เป็น PDF)
-  const { data: entryData, error: entryErr } = await db
-    .from("bill_entries")
-    .select("id, tenant_id, attachment_id")
-    .eq("source", "ai")
-    .eq("status", "draft")
-    .is("deleted_at", null)
-    .not("attachment_id", "is", null)
-    .order("created_at", { ascending: true })
-    .limit(limit * 5);
-  if (entryErr) {
-    console.warn(`[bill-extract-worker] backfill select entries error code=${(entryErr as { code?: string }).code ?? "?"}`);
-    return empty;
-  }
-  const entries = (entryData ?? []) as { id: string; tenant_id: string; attachment_id: string | null }[];
-  if (entries.length === 0) return empty;
-
-  // 2) บรรทัดที่ account_code ยังว่าง ของ entry เหล่านี้ (เรียง line_no เพื่อจับคู่ตามลำดับ)
-  const entryIds = entries.map((e) => e.id);
-  const { data: lineData } = await db
-    .from("bill_entry_lines")
-    .select("id, entry_id, line_no, account_code")
-    .in("entry_id", entryIds)
-    .is("account_code", null)
-    .order("line_no", { ascending: true });
+  // ★ ไล่หา entry เป้าหมาย "ทั่วทั้งกอง" (cursor pagination) — เดิมดึงแค่ limit*5 ใบเก่าสุด
+  //   แล้วกรอง → ถ้าใบเก่าถูกเติมหมด = เจอ 0 (คิวค้าง ไม่ลด). เป้าหมาย = ai draft + มีไฟล์รูป +
+  //   "มีบรรทัด account_code ว่าง" (กระจายทั่วกอง). สะสม nullLines/path ระหว่างไล่ ใช้ต่อในลูป
   const nullLinesByEntry = new Map<string, { id: string; lineNo: number }[]>();
-  for (const l of (lineData ?? []) as { id: string; entry_id: string; line_no: number }[]) {
-    const arr = nullLinesByEntry.get(l.entry_id) ?? [];
-    arr.push({ id: l.id, lineNo: l.line_no });
-    nullLinesByEntry.set(l.entry_id, arr);
-  }
-
-  // 3) object path ของไฟล์บิล (message_attachments.drive_file_id)
-  const attIds = [...new Set(entries.map((e) => e.attachment_id).filter((x): x is string => !!x))];
   const pathByAtt = new Map<string, string | null>();
-  if (attIds.length > 0) {
-    const { data: attData } = await db
-      .from("message_attachments")
-      .select("id, drive_file_id")
-      .in("id", attIds);
-    for (const a of (attData ?? []) as { id: string; drive_file_id: string | null }[]) {
-      pathByAtt.set(a.id, a.drive_file_id);
-    }
-  }
+  type BackfillEntry = { id: string; tenant_id: string; attachment_id: string | null; created_at: string | null };
+
+  const entries = await collectTargetEntries<BackfillEntry>({
+    limit,
+    fetchPage: async (cursor, pageSize) => {
+      let q = db
+        .from("bill_entries")
+        .select("id, tenant_id, attachment_id, created_at")
+        .eq("source", "ai")
+        .eq("status", "draft")
+        .is("deleted_at", null)
+        .not("attachment_id", "is", null);
+      if (cursor) q = q.gt("created_at", cursor); // ★ gt ต้องอยู่ก่อน order/limit (filter builder)
+      const { data, error } = await q.order("created_at", { ascending: true }).limit(pageSize);
+      if (error) {
+        console.warn(`[bill-extract-worker] backfill select entries error code=${(error as { code?: string }).code ?? "?"}`);
+        return [];
+      }
+      return (data ?? []) as BackfillEntry[];
+    },
+    filterTargets: async (page) => {
+      // บรรทัด account_code ว่าง ของ entry ในหน้านี้ (≤ pageSize ids)
+      const ids = page.map((e) => e.id);
+      const { data: lineData } = await db
+        .from("bill_entry_lines")
+        .select("id, entry_id, line_no, account_code")
+        .in("entry_id", ids)
+        .is("account_code", null)
+        .order("line_no", { ascending: true });
+      const pageNull = new Map<string, { id: string; lineNo: number }[]>();
+      for (const l of (lineData ?? []) as { id: string; entry_id: string; line_no: number }[]) {
+        const arr = pageNull.get(l.entry_id) ?? [];
+        arr.push({ id: l.id, lineNo: l.line_no });
+        pageNull.set(l.entry_id, arr);
+      }
+      const candidates = page.filter((e) => (pageNull.get(e.id)?.length ?? 0) > 0);
+      if (candidates.length === 0) return [];
+
+      // ต้องมีไฟล์ "รูป" (PDF ข้าม vision) — ★ กัน PDF ว่างค้างหัวกอง วนเจอทุกรอบ = ไม่ลด
+      const attIds = [...new Set(candidates.map((e) => e.attachment_id).filter((x): x is string => !!x))];
+      const localPath = new Map<string, string | null>();
+      if (attIds.length > 0) {
+        const { data: attData } = await db
+          .from("message_attachments")
+          .select("id, drive_file_id")
+          .in("id", attIds);
+        for (const a of (attData ?? []) as { id: string; drive_file_id: string | null }[]) {
+          localPath.set(a.id, a.drive_file_id);
+        }
+      }
+      const hits = candidates.filter((e) => {
+        const p = e.attachment_id ? localPath.get(e.attachment_id) ?? null : null;
+        return !!p && !isNonImage(null, mimeFromPath(p));
+      });
+      // เก็บ nullLines/path ของเป้าหมายที่ผ่านลง map ถาวร (ใช้ต่อในลูปประมวลผล — ไม่ query ซ้ำ)
+      for (const e of hits) {
+        nullLinesByEntry.set(e.id, pageNull.get(e.id) ?? []);
+        if (e.attachment_id) pathByAtt.set(e.attachment_id, localPath.get(e.attachment_id) ?? null);
+      }
+      return hits;
+    },
+  });
+  if (entries.length === 0) return empty;
 
   let scanned = 0;
   let entriesFilled = 0;
@@ -804,12 +872,13 @@ export type ReExtractResult = {
   stillEmpty: number;
 };
 
-/** entry ที่รอสกัดใหม่ (ว่าง/ไม่ครบ) */
+/** entry ที่รอสกัดใหม่ (ว่าง/ไม่ครบ) — created_at ใช้เป็น cursor ไล่หน้า */
 type ReExtractEntryRow = {
   id: string;
   tenant_id: string;
   attachment_id: string | null;
   customer_id: string | null;
+  created_at: string | null;
 };
 
 /**
@@ -830,52 +899,64 @@ export async function reExtractIncompleteEntries(
   const limit = opts.limit ?? 10;
   const empty: ReExtractResult = { scanned: 0, updated: 0, stillEmpty: 0 };
 
-  // 1) entry ai draft ที่ยังไม่ลบ + มีไฟล์แนบ (ดึงเผื่อ — บางใบไม่ว่าง/เป็น PDF)
-  const { data: entryData, error: entryErr } = await db
-    .from("bill_entries")
-    .select("id, tenant_id, attachment_id, customer_id")
-    .eq("source", "ai")
-    .eq("status", "draft")
-    .is("deleted_at", null)
-    .not("attachment_id", "is", null)
-    .order("created_at", { ascending: true })
-    .limit(limit * 10);
-  if (entryErr) {
-    console.warn(`[bill-extract-worker] reextract select entries error code=${(entryErr as { code?: string }).code ?? "?"}`);
-    return empty;
-  }
-  const entries = (entryData ?? []) as ReExtractEntryRow[];
-  if (entries.length === 0) return empty;
+  // 1) ★ ไล่หา entry "ว่างจริง + มีไฟล์รูป" ทั่วทั้งกอง (cursor pagination) — เดิมดึงแค่ limit*10
+  //    ใบเก่าสุดแล้วกรอง → ถ้าใบเก่าถูกเติมหมด = เจอ 0 (คิว 281 ใบว่างไม่ลด). เป้าหมายกระจายทั่วกอง
+  //    เก็บ att (path/doc_kind) ของเป้าหมายระหว่างไล่ ใช้ต่อในลูปประมวลผล (ไม่ query ซ้ำ)
+  const attById = new Map<string, { path: string | null; docKind: string | null }>();
+  const emptyEntries = await collectTargetEntries<ReExtractEntryRow>({
+    limit,
+    fetchPage: async (cursor, pageSize) => {
+      let q = db
+        .from("bill_entries")
+        .select("id, tenant_id, attachment_id, customer_id, created_at")
+        .eq("source", "ai")
+        .eq("status", "draft")
+        .is("deleted_at", null)
+        .not("attachment_id", "is", null);
+      if (cursor) q = q.gt("created_at", cursor); // ★ gt ต้องอยู่ก่อน order/limit (filter builder)
+      const { data, error } = await q.order("created_at", { ascending: true }).limit(pageSize);
+      if (error) {
+        console.warn(`[bill-extract-worker] reextract select entries error code=${(error as { code?: string }).code ?? "?"}`);
+        return [];
+      }
+      return (data ?? []) as ReExtractEntryRow[];
+    },
+    filterTargets: async (page) => {
+      // โหลด line ของหน้านี้ (≤ pageSize ids) → คัด "ว่างจริง" (ไม่มีใครคีย์)
+      const ids = page.map((e) => e.id);
+      const { data: lineData } = await db
+        .from("bill_entry_lines")
+        .select("entry_id, amount, vat_amount, account_code, description")
+        .in("entry_id", ids);
+      const linesByEntry = new Map<string, ReextractableLine[]>();
+      for (const l of (lineData ?? []) as (ReextractableLine & { entry_id: string })[]) {
+        const arr = linesByEntry.get(l.entry_id) ?? [];
+        arr.push({ amount: l.amount, vat_amount: l.vat_amount, account_code: l.account_code, description: l.description });
+        linesByEntry.set(l.entry_id, arr);
+      }
+      const candidates = page.filter((e) => isEmptyReextractable(linesByEntry.get(e.id) ?? []));
+      if (candidates.length === 0) return [];
 
-  // 2) โหลด line ของ entry เหล่านี้ → คัดเฉพาะ "ว่างจริง" (ไม่มีใครคีย์)
-  const entryIds = entries.map((e) => e.id);
-  const { data: lineData } = await db
-    .from("bill_entry_lines")
-    .select("entry_id, amount, vat_amount, account_code, description")
-    .in("entry_id", entryIds);
-  const linesByEntry = new Map<string, ReextractableLine[]>();
-  for (const l of (lineData ?? []) as (ReextractableLine & { entry_id: string })[]) {
-    const arr = linesByEntry.get(l.entry_id) ?? [];
-    arr.push({ amount: l.amount, vat_amount: l.vat_amount, account_code: l.account_code, description: l.description });
-    linesByEntry.set(l.entry_id, arr);
-  }
-  const emptyEntries = entries.filter((e) => isEmptyReextractable(linesByEntry.get(e.id) ?? []));
+      // ต้องมีไฟล์ "รูป" (PDF ข้าม vision) — ★ กัน PDF ว่างค้างหัวกอง วนเจอทุกรอบ = ไม่ลด
+      const attIds = [...new Set(candidates.map((e) => e.attachment_id).filter((x): x is string => !!x))];
+      if (attIds.length > 0) {
+        const { data: attData } = await db
+          .from("message_attachments")
+          .select("id, drive_file_id, doc_kind")
+          .in("id", attIds);
+        for (const a of (attData ?? []) as { id: string; drive_file_id: string | null; doc_kind: string | null }[]) {
+          attById.set(a.id, { path: a.drive_file_id, docKind: a.doc_kind });
+        }
+      }
+      return candidates.filter((e) => {
+        const p = e.attachment_id ? attById.get(e.attachment_id)?.path ?? null : null;
+        return !!p && !isNonImage(null, mimeFromPath(p));
+      });
+    },
+  });
   if (emptyEntries.length === 0) return empty;
 
-  // 3) object path + doc_kind ของไฟล์บิล (ต้องมีรูป + ใช้ doc_kind บังคับ novat)
-  const attIds = [...new Set(emptyEntries.map((e) => e.attachment_id).filter((x): x is string => !!x))];
-  const attById = new Map<string, { path: string | null; docKind: string | null }>();
-  if (attIds.length > 0) {
-    const { data: attData } = await db
-      .from("message_attachments")
-      .select("id, drive_file_id, doc_kind")
-      .in("id", attIds);
-    for (const a of (attData ?? []) as { id: string; drive_file_id: string | null; doc_kind: string | null }[]) {
-      attById.set(a.id, { path: a.drive_file_id, docKind: a.doc_kind });
-    }
-  }
-
-  // 4) ตัวตนลูกค้า (เพื่อ re-decide ฝั่งซื้อ/ขาย) — โหลดครั้งเดียว
+  // 2) ตัวตนลูกค้า (เพื่อ re-decide ฝั่งซื้อ/ขาย) — โหลดครั้งเดียว
   const custIds = [...new Set(emptyEntries.map((e) => e.customer_id).filter((x): x is string => !!x))];
   const custById = new Map<string, CustomerIdentity>();
   if (custIds.length > 0) {
