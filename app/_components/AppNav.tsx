@@ -168,6 +168,13 @@ const STAFF_NAV_GROUPS: NavGroup[] = [
         label: "ลงบันทึกบัญชี (ของฉัน)",
         canSee: () => true,
       },
+      {
+        // อัลบั้มบิล (ของฉัน) — นักบัญชีเห็นเฉพาะลูกค้าตัวเอง (สโคปบังคับใน page)
+        key: "chat-bills",
+        href: "/chat-audit/bills",
+        label: "อัลบั้มบิล (ของฉัน)",
+        canSee: () => true,
+      },
     ],
   },
 ];
