@@ -60,7 +60,6 @@ export type AppNavActive =
   | "chat-eval"
   | "chat-bills"
   | "chat-accounting"
-  | "chat-share-circles"
   | "chat-admin"
   | "chat-report"
   | "reports"
@@ -111,9 +110,8 @@ const NAV_GROUPS: NavGroup[] = [
       // บิลลูกค้า (รูปบิลที่เก็บจากกลุ่ม LINE) — ข้อมูลการเงินอ่อนไหว เปิดเฉพาะ admin/executive
       { key: "chat-bills", href: "/chat-audit/bills", label: "บิลลูกค้า", canSee: isAdminRole },
       // ลงบันทึกบัญชี ภาษีซื้อ/ขาย (แยกตามลูกค้า) — admin/executive เท่านั้น
+      //   ★ "วงแชร์" ย้ายเป็นแท็บในการ์ดลูกค้า (auto-flag เฉพาะท้าวแชร์) — ไม่มีเมนูแยกแล้ว
       { key: "chat-accounting", href: "/chat-audit/accounting", label: "ลงบันทึกบัญชี", canSee: isAdminRole },
-      // วงแชร์ (ท้าวแชร์วางลิสต์จากไลน์ AI แยกให้) — admin/executive เท่านั้น
-      { key: "chat-share-circles", href: "/chat-audit/share-circles", label: "วงแชร์", canSee: isAdminRole },
     ],
   },
   {
@@ -169,13 +167,6 @@ const STAFF_NAV_GROUPS: NavGroup[] = [
         key: "chat-accounting",
         href: "/chat-audit/accounting",
         label: "ลงบันทึกบัญชี (ของฉัน)",
-        canSee: () => true,
-      },
-      {
-        // วงแชร์ (ของฉัน) — นักบัญชีเห็นเฉพาะลูกค้าตัวเอง (สโคปบังคับใน page/action)
-        key: "chat-share-circles",
-        href: "/chat-audit/share-circles",
-        label: "วงแชร์ (ของฉัน)",
         canSee: () => true,
       },
       {

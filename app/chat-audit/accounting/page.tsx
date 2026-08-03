@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -48,6 +49,14 @@ import EntryDateField from "./EntryDateField";
 import UploadFileButton from "./UploadFileButton";
 import UndoDeleteBar from "./UndoDeleteBar";
 import CustomerTabs from "./CustomerTabs";
+import ShareCirclePanel from "./ShareCirclePanel";
+import ShareCircleToggle from "./ShareCircleToggle";
+import {
+  customerHasShareCircle,
+  getCustomerShareCircleFlag,
+  listShareCircleEntries,
+  type ShareCircleEntry,
+} from "@/lib/share-circles/queries";
 import UploadProcessingBar from "./UploadProcessingBar";
 import EntryEditorPager, { type PagerBill } from "./EntryEditorPager";
 import { extOf } from "@/lib/accounting/upload";
@@ -848,6 +857,43 @@ export default async function AccountingPage({
   const editId = sp.edit ?? "";
   const editEntry = editId ? allEntries.find((e) => e.id === editId) ?? null : null;
 
+  // ---- วงแชร์ (แท็บพิเศษ) : โหลดเฉพาะ "ลูกค้าที่กางอยู่" เท่านั้น ----
+  //   ★ perf: ไม่ยิง query ในหน้า list — เฉพาะตอนกางการ์ดลูกค้า (openGroup)
+  //   ★ เงื่อนไขโผล่แท็บ: สวิตช์ท้าวแชร์ (is_share_circle) OR มีวง ≥1 (customerHasShareCircle)
+  //     → กดสวิตช์แล้วแท็บโผล่ทันที (แม้ยัง 0 วง) เพื่อเริ่มอ่านจากไลน์/เพิ่มวง
+  //   ★ degrade: table/คอลัมน์ยังไม่ apply (0057) → ซ่อนแท็บ+สวิตช์เงียบ ๆ (ไม่ crash)
+  let shareCircleTab: ReactNode | undefined = undefined;
+  let shareCircleCount = 0;
+  let shareIsFlag = false; // สวิตช์ "ลูกค้าเป็นท้าวแชร์"
+  let shareResolved = false; // อ่านสถานะได้ (migration 0057 พร้อม)
+  const shareCustomerId = openGroup?.customerId ?? null;
+  if (shareCustomerId) {
+    shareIsFlag = await getCustomerShareCircleFlag(service, tenantId, shareCustomerId); // degrade→false
+    try {
+      const hasShare = await customerHasShareCircle(service, tenantId, shareCustomerId);
+      shareResolved = true;
+      if (shareIsFlag || hasShare) {
+        const scEntries: ShareCircleEntry[] = await listShareCircleEntries(service, {
+          tenantId,
+          customerId: shareCustomerId,
+        });
+        shareCircleCount = scEntries.length;
+        shareCircleTab = (
+          <ShareCirclePanel
+            customerId={shareCustomerId}
+            entries={scEntries}
+            exportHref={`/chat-audit/accounting/share-circle-export?customerId=${shareCustomerId}`}
+          />
+        );
+      }
+    } catch {
+      // table ยังไม่มี / schema cache → ไม่โชว์แท็บ/สวิตช์ (หน้าไม่ล้ม)
+      shareResolved = false;
+    }
+  }
+  // สวิตช์ท้าวแชร์ — เฉพาะ admin + migration พร้อม (คอลัมน์ is_share_circle apply แล้ว)
+  const showShareToggle = access.mode === "admin" && shareResolved && !!shareCustomerId;
+
   // ---- sign thumbnail ของลูกค้าที่เปิด (ทุกแท็บ) + บิลที่แก้ ----
   //   ★ perf: thumbnail = batch sign (1 call, ไม่บล็อก render) + lazy-load ในเบราว์เซอร์
   //     รูปในหน้าตรวจ/เลื่อนบิล = ย่อขนาด (เล็ก เลื่อนเร็ว)
@@ -911,6 +957,14 @@ export default async function AccountingPage({
    */
   const renderCustomerBody = (g: CustomerEntryGroup, key: string, code: string | null) => (
     <div className="cust-body">
+      {/* สวิตช์ "ลูกค้าเป็นท้าวแชร์" (admin) — เปิดครั้งเดียวให้แท็บวงแชร์โผล่ */}
+      {showShareToggle && g.customerId && g.customerId === shareCustomerId ? (
+        <div className="acc-scopebar" style={{ marginBottom: 10 }}>
+          <span className="acc-scope-label">วงแชร์</span>
+          <ShareCircleToggle customerId={g.customerId} initialOn={shareIsFlag} />
+        </div>
+      ) : null}
+
       {/* เลขภาษีของลูกค้า (loop เก็บเลขภาษี) — กรอก/แก้ได้ เฉพาะลูกค้าที่จับคู่แล้ว */}
       {g.customerId ? (
         <CustomerTaxIdField
@@ -940,6 +994,9 @@ export default async function AccountingPage({
         }
         openingHref={g.customerId ? `/chat-audit/accounting/opening?customerId=${g.customerId}` : undefined}
         reportsHref={g.customerId ? `/chat-audit/accounting/reports?customerId=${g.customerId}` : undefined}
+        // แท็บวงแชร์ — เฉพาะลูกค้าที่กำลังกาง + เป็นท้าวแชร์ (โหลดไว้ด้านบน)
+        shareCircle={g.customerId && g.customerId === shareCustomerId ? shareCircleTab : undefined}
+        shareCircleCount={shareCircleCount}
         tables={{
           purchase: (
             <EntryTable

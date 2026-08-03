@@ -1,14 +1,14 @@
 /**
- * Share-circle extractor — สกัด "วงแชร์" จากลิสต์ที่ท้าวแชร์ส่งเข้ากลุ่มไลน์ (ข้อความ/รูป)
- *   สำหรับหน้า /chat-audit/share-circles — สร้างตารางร่างให้นักบัญชีตรวจ/แก้ก่อนบันทึกเป็นวง + มือ
+ * Share-circle extractor — สกัด "ตารางวงแชร์รายเดือน" จากลิสต์ที่ท้าวแชร์ส่งเข้ากลุ่มไลน์
+ *   (รูป + คำพิม) → คืน entry ระดับ "วง/เดือน" ให้นักบัญชีตรวจ/แก้ก่อนลงบัญชี
  *
- * รูปแบบมือทั่วไป: "ลำดับ.ยอดส่ง🌸ดอก ❤️ชื่อ" (บางวงมีแค่ "ลำดับ.ดอก🔥ชื่อ")
- *   มือ 1 มักเป็น "ท้าว" (เจ้าของวง)
+ * ★ ตรงกับ model ใหม่ (share_circle_entries): 1 วง = 1 object มีคอลัมน์ G/H/I/J/K
+ *   ไม่มีรายชื่อสมาชิก/มือรายคน (ไฟล์จริงเก็บแค่ "จำนวนสมาชิก" เป็นตัวเลข)
  *
- * ★ มิเรอร์ extractBillsData ใน lib/ai/bill-extract.ts — ใช้ gpt-5-mini (reasoning):
- *     max_completion_tokens (ไม่ใช่ max_tokens) + ไม่ส่ง temperature
- * ★ degrade ปลอดภัย: ไม่มี OPENAI_API_KEY / parse ไม่ได้ → คืน null (ให้คนคีย์เอง)
- * ★ PDPA: ไม่ log เนื้อวง/ชื่อสมาชิก/ตัวเลข — log แค่ error สั้น ๆ
+ * ★ มิเรอร์ config ของ bill-extract.ts — ใช้ OPENAI_EXTRACT_MODEL || 'gpt-5-mini' (reasoning):
+ *     max_completion_tokens (ไม่ใช่ temperature) + timeout + repairJsonNumbers + extractJson
+ * ★ degrade ปลอดภัย: ไม่มี OPENAI_API_KEY / ไม่มี input / parse ไม่ได้ → คืน [] (ให้คนคีย์เอง)
+ * ★ PDPA: ไม่ log เนื้อวง/ชื่อ/ตัวเลข — log แค่ error สั้น ๆ
  */
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
@@ -33,10 +33,7 @@ type ChatCompletionResponse = {
 // helper: ดึง JSON + ซ่อมลูกน้ำหลักพัน (copy จาก bill-extract.ts — duplicate โดยตั้งใจ)
 // ---------------------------------------------------------------------
 
-/**
- * ซ่อม JSON ที่โมเดลชอบพลาด: ลูกน้ำคั่นหลักพันในตัวเลข (เช่น 5,000 → 5000)
- *   ตัดเฉพาะ comma ที่ "มีเลขประกบทั้งสองข้าง" — comma โครงสร้าง JSON ไม่โดนแตะ
- */
+/** ซ่อม JSON: ตัดลูกน้ำคั่นหลักพันในตัวเลข (5,000 → 5000) — เฉพาะ comma ที่มีเลขประกบสองข้าง */
 function repairJsonNumbers(s: string): string {
   return s.replace(/(?<=\d),(?=\d)/g, "");
 }
@@ -55,14 +52,12 @@ function extractJson(text: string): Record<string, unknown> | null {
   const start = text.indexOf("{");
   if (start < 0) return null;
 
-  // (1) วิธีเร็ว: { แรก → } สุดท้าย
   const lastEnd = text.lastIndexOf("}");
   if (lastEnd > start) {
     const p = tryParse(text.slice(start, lastEnd + 1));
     if (p) return p;
   }
 
-  // (2) brace-matching — คืน object แรกที่ปิดสมดุล (ข้าม string/escape)
   let depth = 0;
   let inStr = false;
   let esc = false;
@@ -84,48 +79,37 @@ function extractJson(text: string): Record<string, unknown> | null {
   return null;
 }
 
-/**
- * ตัวกันพลาดวันที่ (deterministic): ปี พ.ศ. (≥ 2500) → ลบ 543 เป็น ค.ศ.
- *   เช่น 2569-04-15 → 2026-04-15 · ปีที่เป็น ค.ศ. อยู่แล้วไม่แตะ · รูปแบบอื่นคืนตามเดิม
- */
-function fixBuddhistYear(d: string | null): string | null {
-  if (!d) return d;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
-  if (!m) return d;
-  const y = parseInt(m[1], 10);
-  return y >= 2500 ? `${y - 543}-${m[2]}-${m[3]}` : d;
-}
-
 // ---------------------------------------------------------------------
 // types
 // ---------------------------------------------------------------------
 
-/** 1 มือ (สมาชิก) ในวง — ช่องไม่ชัด = null */
-export type ParsedHand = {
-  hand_no: number;
-  member_name: string;
-  /** ยอดส่ง/งวด (เลขก่อน 🌸) · null = ไม่ชัด */
-  send_amount: number | null;
-  /** ดอก/เปีย (เลขหลัง 🌸 หรือหลังลำดับ) · null = ไม่ชัด */
-  bid_amount: number | null;
-  /** true = เป็นท้าว (เจ้าของวง) — มักเป็นมือ 1 */
-  is_organizer: boolean;
+/** ผลสกัด 1 วง (ระดับวง/เดือน) — ช่องไม่ชัด = null */
+export type ParsedShareCircleEntry = {
+  circle_name: string;
+  /** รอบเปีย (รายเดือน / ราย 10 วัน / ราย 15 วัน) */
+  round_note: string | null;
+  member_count: number | null;
+  principal_per_head: number | null;
+  /** (G) รายได้ท้าว */
+  tao_income: number | null;
+  /** (H) ค่าบริหารจัดการ */
+  mgmt_fee: number | null;
+  /** (I) ค่าดำเนินการ/วง */
+  operation_fee: number | null;
+  /** (J) ดอกเบี้ยรับ */
+  interest_income: number | null;
+  /** (K) ค่าใช้จ่าย/ต้นทุน */
+  expense: number | null;
 };
 
-/** ผลสกัดวงแชร์ 1 วง (หัววง + มือทั้งหมด) */
-export type ParsedShareCircle = {
-  name: string;
-  /** ต้น (เงินต้น/มือ) · null = ไม่ระบุ */
-  principal: number | null;
-  /** จำนวนมือ · null = ไม่ระบุ */
-  num_hands: number | null;
-  /** ค่าดูแล/มือ · null = ไม่ระบุ */
-  fee_per_hand: number | null;
-  /** รอบ (ข้อความ เช่น "รายเดือน ทุกวันที่ 15") · null = ไม่ระบุ */
-  period_note: string | null;
-  /** วันเริ่มวง YYYY-MM-DD (ค.ศ.) · null = ไม่ระบุ */
-  start_date: string | null;
-  hands: ParsedHand[];
+/** รูปภาพ 1 รูป (base64 ล้วน ไม่มี prefix data:) */
+export type ShareCircleImage = { base64: string; mime: string };
+
+export type ShareCircleExtractInput = {
+  /** ข้อความลิสต์วงแชร์ (จากไลน์) */
+  text?: string;
+  /** รูปลิสต์ (หลายรูปได้) */
+  images?: ShareCircleImage[];
 };
 
 // ---------------------------------------------------------------------
@@ -153,57 +137,57 @@ function asStrOrNull(v: unknown, max = 200): string | null {
   return t.length > 0 ? t.slice(0, max) : null;
 }
 
-/** date YYYY-MM-DD (ผิดรูป → null) */
-function asDateOrNull(v: unknown): string | null {
-  if (typeof v !== "string") return null;
-  const s = v.trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
-}
-
-/** normalize 1 มือดิบ → ParsedHand (คืน null ถ้าไม่มี hand_no ที่ใช้ได้) */
-function normalizeHand(raw: unknown): ParsedHand | null {
+/** normalize 1 วงดิบ → ParsedShareCircleEntry (คืน null ถ้าไม่มีเนื้อหาจริง) */
+export function normalizeCircle(raw: unknown): ParsedShareCircleEntry | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
-  const handNo = asIntOrNull(o.hand_no);
-  if (handNo === null || handNo <= 0) return null; // มือที่ไม่มีลำดับ = ทิ้ง
+  const name = asStrOrNull(o.circle_name, 200);
+
+  const tao = asNumOrNull(o.tao_income);
+  const mgmt = asNumOrNull(o.mgmt_fee);
+  const oper = asNumOrNull(o.operation_fee);
+  const interest = asNumOrNull(o.interest_income);
+  const expense = asNumOrNull(o.expense);
+  const member = asIntOrNull(o.member_count);
+  const principal = asNumOrNull(o.principal_per_head);
+
+  // ไม่มีชื่อวง + ไม่มีตัวเลขใดเลย = ไม่มีเนื้อหาจริง → ทิ้ง (ให้คนคีย์เอง)
+  if (
+    !name &&
+    tao === null &&
+    mgmt === null &&
+    oper === null &&
+    interest === null &&
+    expense === null &&
+    member === null &&
+    principal === null
+  ) {
+    return null;
+  }
+
   return {
-    hand_no: handNo,
-    member_name: asStrOrNull(o.member_name) ?? "",
-    send_amount: asNumOrNull(o.send_amount),
-    bid_amount: asNumOrNull(o.bid_amount),
-    is_organizer: o.is_organizer === true,
+    circle_name: name ?? "วงแชร์ (ไม่ระบุชื่อ)",
+    round_note: asStrOrNull(o.round_note, 200),
+    member_count: member,
+    principal_per_head: principal,
+    tao_income: tao,
+    mgmt_fee: mgmt,
+    operation_fee: oper,
+    interest_income: interest,
+    expense,
   };
 }
 
-/**
- * แปลงผลดิบจากโมเดล → ParsedShareCircle
- *   คืน null เมื่อ parse ไม่ได้ / ไม่มีชื่อวงและไม่มีมือเลย (ให้คนคีย์เอง)
- */
-export function normalizeShareCircle(
+/** แปลงผลดิบจากโมเดล → รายการวง (กรองวงว่าง + cap กันเยอะผิดปกติ) */
+export function normalizeShareCircles(
   raw: Record<string, unknown> | null
-): ParsedShareCircle | null {
-  if (!raw) return null;
-
-  const handsRaw = Array.isArray(raw.hands) ? raw.hands : [];
-  const hands = handsRaw
-    .map(normalizeHand)
-    .filter((h): h is ParsedHand => h !== null)
-    .sort((a, b) => a.hand_no - b.hand_no)
-    .slice(0, 500); // cap กันวงใหญ่ผิดปกติ
-
-  const name = asStrOrNull(raw.name, 200);
-  // ไม่มีชื่อวง + ไม่มีมือ = ไม่มีเนื้อหาจริง → ให้คนคีย์เอง
-  if (!name && hands.length === 0) return null;
-
-  return {
-    name: name ?? "วงแชร์ (ไม่ระบุชื่อ)",
-    principal: asNumOrNull(raw.principal),
-    num_hands: asIntOrNull(raw.num_hands),
-    fee_per_hand: asNumOrNull(raw.fee_per_hand),
-    period_note: asStrOrNull(raw.period_note, 300),
-    start_date: fixBuddhistYear(asDateOrNull(raw.start_date)),
-    hands,
-  };
+): ParsedShareCircleEntry[] {
+  if (!raw) return [];
+  const arr = Array.isArray(raw.circles) ? raw.circles : [];
+  return arr
+    .map(normalizeCircle)
+    .filter((c): c is ParsedShareCircleEntry => c !== null)
+    .slice(0, 200);
 }
 
 // ---------------------------------------------------------------------
@@ -211,74 +195,60 @@ export function normalizeShareCircle(
 // ---------------------------------------------------------------------
 
 const SYSTEM_PROMPT =
-  "คุณเป็นผู้ช่วยที่อ่าน 'ลิสต์วงแชร์' ที่ท้าวแชร์ (เจ้ามือ) ส่งเข้ากลุ่มไลน์ แล้วสกัดเป็นตารางเพื่อให้นักบัญชีตรวจ. " +
+  "คุณเป็นผู้ช่วยบัญชีที่อ่าน 'ลิสต์วงแชร์' ที่ท้าวแชร์ (เจ้ามือ) ส่งเข้ากลุ่มไลน์ (รูป/คำพิม) " +
+  "แล้วสกัดเป็นตาราง 'ระดับวง' เพื่อให้นักบัญชีเอาไปคิดภาษี (ภาษีธุรกิจเฉพาะ ภธ.40 รายเดือน + ภงด.90 ปลายปี). " +
+  "บริบท: ท้าวแชร์คือคนจัดวงแชร์ — แต่ละวงมีสมาชิกลงเงินหมุนเวียนกัน ท้าวได้รายได้จากการจัดวง " +
+  "(เช่น เงินก้อนที่ท้าวเปียได้ / ค่าบริหาร / ดอกเบี้ย). " +
   "ตอบเป็น JSON เท่านั้น ตามรูปแบบที่กำหนด ห้ามมีข้อความอื่นนอก JSON. " +
   "รูปแบบผลลัพธ์: " +
-  '{"name":str, "principal":num|null, "num_hands":int|null, "fee_per_hand":num|null, ' +
-  '"period_note":str|null, "start_date":"YYYY-MM-DD"|null, ' +
-  '"hands":[{"hand_no":int, "member_name":str, "send_amount":num|null, "bid_amount":num|null, "is_organizer":bool}]}. ' +
-  "ความหมายของแต่ละช่อง: " +
-  "name = ชื่อวง (เช่น 'วงโปรเจค'), " +
-  "principal = ต้น/เงินต้นของวง (เช่น 100000), " +
-  "num_hands = จำนวนมือทั้งหมด (เช่นข้อความ 'ถึงมือ 21' → 21), " +
-  "fee_per_hand = ค่าดูแลต่อมือ (เช่น 'ดูแล 500/มือ' → 500), " +
-  "period_note = ข้อความรอบการส่ง (เช่น 'รายเดือน ทุกวันที่ 15'), " +
-  "start_date = วันเริ่มวง/วันของมือแรก แปลงเป็น ค.ศ. รูปแบบ YYYY-MM-DD. " +
-  "★ การแปลงปีให้เป็น ค.ศ.: (1) ปี 2 หลัก (เช่น 69) = พ.ศ. ย่อ → 2500+เลข แล้วลบ 543 (69→2569→2026). " +
-  "(2) ปี 4 หลัก ≥ 2500 (เช่น 2569) = พ.ศ. → ลบ 543 (2569→2026). " +
-  "(3) ปี 4 หลัก < 2500 (เช่น 2026) = ค.ศ. อยู่แล้ว ★ห้ามลบ 543★. " +
-  "hands = รายชื่อมือทุกบรรทัด. รูปแบบมือทั่วไป: 'ลำดับ.ยอดส่ง🌸ดอก ❤️ชื่อ' " +
-  "(บางวงมีแค่ 'ลำดับ.ดอก🔥ชื่อ' หรือ 'ลำดับ.ยอดส่ง❤️ชื่อ'). แต่ละมือ: " +
-  "hand_no = เลขลำดับหน้าจุด, " +
-  "member_name = ชื่อสมาชิก (ตัดอิโมจิ/สัญลักษณ์นำหน้าออก เอาเฉพาะชื่อ), " +
-  "send_amount = ยอดส่ง (เลขที่อยู่ 'ก่อน' สัญลักษณ์ 🌸 — ถ้าไม่มี 🌸 ให้ใช้เลขแรกที่เป็นยอดส่ง), " +
-  "bid_amount = ดอก/เปีย (เลขที่อยู่ 'หลัง' 🌸 หรือหลังลำดับในวงแบบดอกอย่างเดียว), " +
-  "is_organizer = true ถ้ามือนั้นเป็น 'ท้าว' (มีคำว่า ท้าว/เจ้ามือ — มักเป็นมือ 1). " +
-  "ช่องไหนไม่ชัด/ไม่มีในลิสต์ ให้ใส่ null (อย่าเดามั่ว โดยเฉพาะตัวเลข). " +
-  "★ ตัวเลขทุกช่องเป็นตัวเลขล้วน ห้ามมีลูกน้ำคั่นหลักพัน (เช่น 5000 ไม่ใช่ 5,000).";
+  '{"circles":[{"circle_name":str, "round_note":str|null, "member_count":int|null, ' +
+  '"principal_per_head":num|null, "tao_income":num|null, "mgmt_fee":num|null, ' +
+  '"operation_fee":num|null, "interest_income":num|null, "expense":num|null}]}. ' +
+  "ความหมายของแต่ละช่อง (1 วง = 1 object ในอาเรย์ circles): " +
+  "circle_name = ชื่อวง (เช่น 'วงบิท', 'วงคริสต์มาส'), " +
+  "round_note = รอบเปีย/รอบการส่ง เป็นข้อความ (เช่น 'รายเดือน', 'ราย 10 วัน', 'ราย 15 วัน'), " +
+  "member_count = จำนวนสมาชิกในวง เป็นจำนวนเต็ม (เช่น 21) — ★ ไม่ต้องแยกรายชื่อสมาชิก เอาแค่จำนวน, " +
+  "principal_per_head = เงินต้นแชร์ต่อคน (เช่น 100000), " +
+  "tao_income = รายได้ท้าว = เงินก้อนที่ท้าวเปีย/ได้จากวงนี้ (คอลัมน์ G), " +
+  "mgmt_fee = ค่าบริหารจัดการของท้าวแชร์ (คอลัมน์ H), " +
+  "operation_fee = ค่าดำเนินการ/ค่าดูแลของวง (คอลัมน์ I — ส่วนมากเป็น 'ฟรีค่าดูแล' = 0), " +
+  "interest_income = ดอกเบี้ยรับ (คอลัมน์ J), " +
+  "expense = ค่าใช้จ่าย/ต้นทุนของวง (คอลัมน์ K). " +
+  "★ ถ้าลิสต์มีหลายวง ให้แยกเป็นหลาย object ใน circles. " +
+  "★ ช่องไหนไม่มี/ไม่ชัดในลิสต์ ให้ใส่ null (อย่าเดามั่ว โดยเฉพาะตัวเลข — เว้นว่างดีกว่าใส่ผิด). " +
+  "★ ตัวเลขทุกช่องเป็นตัวเลขล้วน ห้ามมีลูกน้ำคั่นหลักพัน (เช่น 100000 ไม่ใช่ 100,000).";
 
 const USER_PROMPT =
-  "อ่านลิสต์วงแชร์ต่อไปนี้แล้วสกัดเป็น JSON ตามรูปแบบ. เก็บมือให้ครบทุกบรรทัดตามลำดับ. " +
-  "จำไว้: ช่องไหนไม่ชัดให้ null, ตัวเลขห้ามมีลูกน้ำหลักพัน.";
+  "อ่านลิสต์วงแชร์ต่อไปนี้ (ข้อความและ/หรือรูป) แล้วสกัดเป็น JSON ตามรูปแบบ. " +
+  "แยกให้ครบทุกวง. จำไว้: ช่องไหนไม่ชัดให้ null, ตัวเลขห้ามมีลูกน้ำหลักพัน.";
 
 // ---------------------------------------------------------------------
 // สกัดจริง
 // ---------------------------------------------------------------------
 
-export type ShareCircleInput = {
-  /** ข้อความลิสต์วงแชร์ (วางจากไลน์) */
-  text?: string;
-  /** รูปภาพลิสต์ (base64 ล้วน ไม่มี prefix data:) */
-  imageBase64?: string;
-  /** MIME ของรูป (เช่น image/jpeg, application/pdf) */
-  mime?: string;
-};
-
 /**
- * สกัดวงแชร์จากข้อความ และ/หรือ รูป → ParsedShareCircle
- *   ★ รับ text อย่างเดียว, รูปอย่างเดียว, หรือทั้งคู่ก็ได้
- *   ★ degrade: ไม่มี key / ไม่มี input / อ่านไม่ได้ → null
+ * สกัดวงแชร์จากข้อความ และ/หรือ รูป (หลายรูปได้) → รายการวง
+ *   ★ degrade: ไม่มี key / ไม่มี input / อ่านไม่ได้ → [] (ให้คนคีย์เอง)
  */
-export async function parseShareCircle(
-  input: ShareCircleInput
-): Promise<ParsedShareCircle | null> {
+export async function extractShareCircles(
+  input: ShareCircleExtractInput
+): Promise<ParsedShareCircleEntry[]> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return null; // degrade: ไม่มี key → ข้ามการสกัด
+  if (!apiKey) return []; // degrade: ไม่มี key → ข้ามการสกัด
 
   const text = typeof input.text === "string" ? input.text.trim() : "";
-  const imageBase64 = typeof input.imageBase64 === "string" ? input.imageBase64 : "";
-  if (!text && !imageBase64) return null; // ไม่มี input ให้อ่าน
+  const images = Array.isArray(input.images) ? input.images.filter((i) => i && i.base64) : [];
+  if (!text && images.length === 0) return []; // ไม่มี input ให้อ่าน
 
-  // ประกอบ content ของ user message: prompt + (ข้อความ) + (รูป/ไฟล์)
+  // ประกอบ content ของ user message: prompt + (ข้อความ) + (รูปทั้งหมด)
   const userContent: Record<string, unknown>[] = [{ type: "text", text: USER_PROMPT }];
   if (text) {
-    userContent.push({ type: "text", text: `ลิสต์วงแชร์:\n${text}` });
+    userContent.push({ type: "text", text: `ลิสต์วงแชร์ (ข้อความ):\n${text}` });
   }
-  if (imageBase64) {
-    const mime = input.mime || "image/jpeg";
-    const dataUrl = `data:${mime};base64,${imageBase64}`;
+  for (const img of images) {
+    const mime = img.mime || "image/jpeg";
+    const dataUrl = `data:${mime};base64,${img.base64}`;
     const isPdf = mime.toLowerCase().includes("pdf");
-    // รูป → image_url (detail=high อ่านเลขชัด) · PDF → file input
     userContent.push(
       isPdf
         ? { type: "file", file: { filename: "share-circle.pdf", file_data: dataUrl } }
@@ -295,7 +265,7 @@ export async function parseShareCircle(
     ],
   };
   if (reasoning) {
-    reqBody.max_completion_tokens = 16000; // เผื่อ reasoning tokens + มือเยอะ
+    reqBody.max_completion_tokens = 16000; // เผื่อ reasoning tokens + หลายวง
   } else {
     reqBody.temperature = 0;
     reqBody.max_tokens = 8000;
@@ -312,15 +282,15 @@ export async function parseShareCircle(
     });
     if (!res.ok) {
       console.warn(`[share-circle] openai http ${res.status}`);
-      return null;
+      return [];
     }
     const body = (await res.json()) as ChatCompletionResponse;
     const content = body.choices?.[0]?.message?.content;
-    if (!content) return null;
-    return normalizeShareCircle(extractJson(content));
+    if (!content) return [];
+    return normalizeShareCircles(extractJson(content));
   } catch {
     console.warn("[share-circle] extract error");
-    return null;
+    return [];
   } finally {
     clearTimeout(timer);
   }

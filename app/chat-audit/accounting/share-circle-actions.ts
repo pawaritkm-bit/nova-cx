@@ -1,0 +1,327 @@
+"use server";
+
+/**
+ * Server actions ของแท็บ "วงแชร์" ในหน้าลงบันทึกบัญชี (/chat-audit/accounting)
+ *
+ * flow ความปลอดภัย (ยึดมาตรฐานเดียวกับ share-circle-actions/หน้าบัญชี — ห้ามเชื่อ client):
+ *   1) requireAccountingAccess (สิทธิ์เดียวกับหน้าลงบัญชี) + tenantId จาก session
+ *   2) validate อินพุตทุกตัว (uuid / month / ตัวเลข) ก่อนเขียน
+ *   3) เขียนผ่าน service-role client + tenantId จาก session
+ *   4) guard สโคปลูกค้า (customerInScope) ก่อน insert/update/soft-delete ทุกครั้ง
+ *   5) revalidatePath('/chat-audit/accounting')
+ *
+ * ★ นักบัญชีต้องแก้/เพิ่ม/ลบเองได้ (เผื่อ AI ดึงผิด/ไม่หมด) — create/update/softDelete/restore
+ * ★ PDPA: ไม่ log ชื่อวง/ตัวเลข
+ */
+import { revalidatePath } from "next/cache";
+import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
+import {
+  requireAccountingAccess,
+  customerInScope,
+  AccountingAuthError,
+} from "@/lib/accounting/access";
+import { normalizePeriodMonth } from "@/lib/share-circles/queries";
+
+const PATH = "/chat-audit/accounting";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+function isUuid(v: unknown): v is string {
+  return typeof v === "string" && UUID_RE.test(v);
+}
+
+/** ตัด/trim ข้อความ — คืน null ถ้าว่าง */
+function clampText(v: unknown, max: number): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  return s.slice(0, max);
+}
+
+/** ตัวเลข ≥ 0 หรือ null (จำกัดช่วงกันค่าเวอร์) */
+function asNumberOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(String(v).replace(/,/g, "")) : NaN;
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.min(n, 1_000_000_000);
+}
+
+/** จำนวนเต็ม ≥ 0 หรือ null */
+function asIntOrNull(v: unknown): number | null {
+  const n = asNumberOrNull(v);
+  return n === null ? null : Math.round(n);
+}
+
+export type ActionResult = {
+  ok: boolean;
+  message: string;
+  id?: string;
+};
+
+/**
+ * ยืนยันว่าลูกค้าอยู่ใน tenant นี้จริง (defense-in-depth)
+ *   ★ admin มี allowedCustomerIds===null → customerInScope ผ่านทุก uuid
+ *     จึงต้องกันไม่ให้ส่ง customerId ของ tenant อื่นมาสร้าง/ตั้งค่าข้ามเทแนนต์
+ */
+async function customerBelongsToTenant(
+  service: ReturnType<typeof createServiceRoleClient>,
+  tenantId: string,
+  customerId: string
+): Promise<boolean> {
+  const { data } = await service
+    .from("customers")
+    .select("id")
+    .eq("id", customerId)
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  return !!data;
+}
+
+/** ช่องข้อมูลวงที่รับจาก client (ใช้ทั้ง create + update) */
+export type ShareCircleFields = {
+  periodMonth: string;
+  circleName: string;
+  roundNote?: string | null;
+  memberCount?: number | string | null;
+  principalPerHead?: number | string | null;
+  taoIncome?: number | string | null;
+  mgmtFee?: number | string | null;
+  operationFee?: number | string | null;
+  interestIncome?: number | string | null;
+  expense?: number | string | null;
+};
+
+/** map fields (validate) → object สำหรับ insert/update (ไม่รวม tenant/customer) */
+function normalizeFields(f: ShareCircleFields): { ok: true; row: Record<string, unknown> } | { ok: false; message: string } {
+  // ★ บังคับ ค.ศ. YYYY-MM เสมอ (ผู้ใช้อาจเผลอส่ง พ.ศ.) แล้วค่อย validate รูปแบบ
+  const periodMonth = normalizePeriodMonth((f.periodMonth ?? "").trim());
+  if (!MONTH_RE.test(periodMonth)) {
+    return { ok: false, message: "กรุณาเลือกเดือน (รูปแบบ ปี-เดือน)" };
+  }
+  const name = clampText(f.circleName, 200);
+  if (!name) return { ok: false, message: "กรุณาระบุชื่อวง" };
+  return {
+    ok: true,
+    row: {
+      period_month: periodMonth,
+      circle_name: name,
+      round_note: clampText(f.roundNote, 200),
+      member_count: asIntOrNull(f.memberCount),
+      principal_per_head: asNumberOrNull(f.principalPerHead),
+      tao_income: asNumberOrNull(f.taoIncome),
+      mgmt_fee: asNumberOrNull(f.mgmtFee),
+      operation_fee: asNumberOrNull(f.operationFee),
+      interest_income: asNumberOrNull(f.interestIncome),
+      expense: asNumberOrNull(f.expense),
+    },
+  };
+}
+
+/**
+ * (0) สวิตช์ "ลูกค้าเป็นท้าวแชร์" (เปิด/ปิด) — set customers.is_share_circle
+ *   ★ เปิดครั้งเดียวเพื่อให้แท็บ "วงแชร์" โผล่ (แม้ยัง 0 วง) → เริ่มอ่านจากไลน์/คีย์เองได้
+ *   ★ guard admin + service-role + สโคปลูกค้า (เหมือน action อื่น)
+ *   ★ degrade: คอลัมน์ยังไม่ apply (schema cache) → คืน error สุภาพ ไม่ throw
+ */
+export async function setCustomerShareCircleAction(
+  customerId: string,
+  on: boolean
+): Promise<ActionResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    if (!isUuid(customerId)) return { ok: false, message: "ไม่พบลูกค้า" };
+    if (!customerInScope(ctx, customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+    if (!(await customerBelongsToTenant(service, ctx.tenantId, customerId))) {
+      return { ok: false, message: "ไม่พบลูกค้าในสำนักงานนี้" };
+    }
+
+    const { error } = await service
+      .from("customers")
+      .update({ is_share_circle: on === true })
+      .eq("id", customerId)
+      .eq("tenant_id", ctx.tenantId);
+    if (error) {
+      // คอลัมน์ยังไม่ apply migration 0057 → แจ้งสุภาพ (ไม่ crash)
+      return { ok: false, message: "ตั้งค่าไม่สำเร็จ (อาจยังไม่ได้ apply migration 0057)" };
+    }
+
+    revalidatePath(PATH);
+    return { ok: true, message: on ? "ตั้งเป็นลูกค้าท้าวแชร์แล้ว" : "ยกเลิกท้าวแชร์แล้ว", id: customerId };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ตั้งค่าไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * (a) เพิ่มวงเอง (นักบัญชีคีย์เอง กรณี AI ดึงไม่หมด) — source='manual'
+ */
+export async function createShareCircleEntryAction(
+  customerId: string,
+  fields: ShareCircleFields
+): Promise<ActionResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    if (!isUuid(customerId)) return { ok: false, message: "ไม่พบลูกค้า" };
+    if (!customerInScope(ctx, customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+    if (!(await customerBelongsToTenant(service, ctx.tenantId, customerId))) {
+      return { ok: false, message: "ไม่พบลูกค้าในสำนักงานนี้" };
+    }
+    const norm = normalizeFields(fields);
+    if (!norm.ok) return { ok: false, message: norm.message };
+
+    const { data, error } = await service
+      .from("share_circle_entries")
+      .insert({
+        tenant_id: ctx.tenantId,
+        customer_id: customerId,
+        ...norm.row,
+        source: "manual",
+        status: "active",
+      })
+      .select("id")
+      .maybeSingle();
+    if (error || !data) return { ok: false, message: "เพิ่มวงไม่สำเร็จ กรุณาลองใหม่" };
+
+    revalidatePath(PATH);
+    return { ok: true, message: "เพิ่มวงแล้ว", id: (data as { id: string }).id };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "เพิ่มวงไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/** อ่าน customer_id ของ entry (scope tenant) เพื่อตรวจสโคปก่อนแก้/ลบ */
+async function loadEntryCustomerId(
+  service: ReturnType<typeof createServiceRoleClient>,
+  tenantId: string,
+  id: string
+): Promise<string | null | undefined> {
+  const { data } = await service
+    .from("share_circle_entries")
+    .select("customer_id")
+    .eq("id", id)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!data) return undefined;
+  return (data as { customer_id: string | null }).customer_id;
+}
+
+/**
+ * (b) แก้ไขทุกช่องของวง — บันทึกผ่าน update (สรุปภาษีคิดใหม่หลัง refresh)
+ */
+export async function updateShareCircleEntryAction(
+  id: string,
+  fields: ShareCircleFields
+): Promise<ActionResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    if (!isUuid(id)) return { ok: false, message: "ไม่พบวงที่เลือก" };
+    const custId = await loadEntryCustomerId(service, ctx.tenantId, id);
+    if (custId === undefined) return { ok: false, message: "ไม่พบวง (อาจถูกลบไปแล้ว)" };
+    if (!customerInScope(ctx, custId)) {
+      return { ok: false, message: "วงของลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+    const norm = normalizeFields(fields);
+    if (!norm.ok) return { ok: false, message: norm.message };
+
+    const { error } = await service
+      .from("share_circle_entries")
+      .update(norm.row)
+      .eq("id", id)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null);
+    if (error) return { ok: false, message: "บันทึกไม่สำเร็จ กรุณาลองใหม่" };
+
+    revalidatePath(PATH);
+    return { ok: true, message: "บันทึกแล้ว", id };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "บันทึกไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * (c) ลบวง (soft-delete) — คืนค่าให้ client โชว์ปุ่ม "เลิกทำ" (undo)
+ */
+export async function softDeleteShareCircleEntryAction(id: string): Promise<ActionResult> {
+  if (!isUuid(id)) return { ok: false, message: "ไม่พบวงที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    const custId = await loadEntryCustomerId(service, ctx.tenantId, id);
+    if (custId === undefined) return { ok: false, message: "ไม่พบวง (อาจถูกลบไปแล้ว)" };
+    if (!customerInScope(ctx, custId)) {
+      return { ok: false, message: "วงของลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+
+    const { error } = await service
+      .from("share_circle_entries")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null);
+    if (error) return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
+
+    revalidatePath(PATH);
+    return { ok: true, message: "ลบวงแล้ว", id };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * (d) เลิกทำการลบ (undo) — กู้ entry ที่เพิ่ง soft-delete กลับมา (เคลียร์ deleted_at)
+ */
+export async function restoreShareCircleEntryAction(id: string): Promise<ActionResult> {
+  if (!isUuid(id)) return { ok: false, message: "ไม่พบวงที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    // อ่าน customer_id ของ entry (ไม่กรอง deleted_at เพราะกำลังกู้)
+    const { data } = await service
+      .from("share_circle_entries")
+      .select("customer_id")
+      .eq("id", id)
+      .eq("tenant_id", ctx.tenantId)
+      .maybeSingle();
+    if (!data) return { ok: false, message: "ไม่พบวง" };
+    if (!customerInScope(ctx, (data as { customer_id: string | null }).customer_id)) {
+      return { ok: false, message: "วงของลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+
+    const { error } = await service
+      .from("share_circle_entries")
+      .update({ deleted_at: null })
+      .eq("id", id)
+      .eq("tenant_id", ctx.tenantId)
+      .not("deleted_at", "is", null);
+    if (error) return { ok: false, message: "กู้คืนไม่สำเร็จ" };
+
+    revalidatePath(PATH);
+    return { ok: true, message: "กู้คืนวงแล้ว", id };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "กู้คืนไม่สำเร็จ" };
+  }
+}

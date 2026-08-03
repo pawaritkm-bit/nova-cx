@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createEntryAction } from "./actions";
 import UploadFileButton from "./UploadFileButton";
 import type { EntryType } from "@/lib/accounting/queries";
@@ -17,6 +17,9 @@ const TABS: { type: EntryType; label: string }[] = [
   { type: "unspecified", label: "รอระบุประเภท" },
 ];
 
+/** ประเภทแท็บที่เลือกได้ (รวมแท็บพิเศษ "วงแชร์") */
+type TabKey = EntryType | "share";
+
 export default function CustomerTabs({
   initialType,
   counts,
@@ -27,6 +30,8 @@ export default function CustomerTabs({
   openingHref,
   reportsHref,
   tables,
+  shareCircle,
+  shareCircleCount,
 }: {
   initialType: EntryType;
   counts: Record<EntryType, number>;
@@ -37,8 +42,18 @@ export default function CustomerTabs({
   openingHref?: string;
   reportsHref?: string;
   tables: Record<EntryType, ReactNode>;
+  /** เนื้อในแท็บ "วงแชร์" — undefined = ลูกค้ารายนี้ไม่ใช่ท้าวแชร์ (ไม่โชว์แท็บ) */
+  shareCircle?: ReactNode;
+  /** จำนวนวงแชร์ (badge) */
+  shareCircleCount?: number;
 }) {
-  const [type, setType] = useState<EntryType>(initialType);
+  const [type, setType] = useState<TabKey>(initialType);
+
+  // แท็บวงแชร์หายไป (ลบวงสุดท้าย/ยกเลิกท้าวแชร์ → shareCircle=undefined) ขณะค้างอยู่แท็บนั้น
+  //   → เด้งกลับ 'purchase' กันจอว่าง (แท็บที่ถูกซ่อนแล้วไม่มีเนื้อหาให้โชว์)
+  useEffect(() => {
+    if (type === "share" && shareCircle === undefined) setType("purchase");
+  }, [type, shareCircle]);
 
   return (
     <>
@@ -59,31 +74,48 @@ export default function CustomerTabs({
           );
         })}
 
+        {/* แท็บ "วงแชร์" — โผล่เฉพาะลูกค้าที่เป็นท้าวแชร์ (auto-flag จาก server) */}
+        {shareCircle !== undefined ? (
+          <button
+            type="button"
+            onClick={() => setType("share")}
+            className={`acc-subtab${type === "share" ? " active" : ""}`}
+            aria-current={type === "share" ? "page" : undefined}
+          >
+            วงแชร์ <span className="acc-subtab-n">{shareCircleCount ?? 0}</span>
+          </button>
+        ) : null}
+
         <span className="acc-toolbar-spacer" />
-        {/* เพิ่มรายการเอง (ประเภท = แท็บที่เลือก) */}
-        <form action={createEntryAction} className="acc-inline">
-          {customerId ? <input type="hidden" name="customerId" value={customerId} /> : null}
-          <input type="hidden" name="entryType" value={type} />
-          {accountant ? <input type="hidden" name="accountant" value={accountant} /> : null}
-          <button type="submit" className="btn">+ เพิ่มรายการ</button>
-        </form>
-        {/* อัปโหลดไฟล์เอง (key=type → รับ defaultEntryType ใหม่ตามแท็บ) */}
-        <UploadFileButton
-          key={type}
-          lockedCustomerId={customerId}
-          lockedCustomerLabel={customerLabel}
-          defaultEntryType={type}
-          label="อัปไฟล์"
-          accountant={accountant}
-        />
-        {reviewHref ? (
-          <a href={reviewHref} className="btn btn-ghost">ตรวจทาน / ออก Excel</a>
-        ) : null}
-        {openingHref ? (
-          <a href={openingHref} className="btn btn-ghost">ยอดยกมา</a>
-        ) : null}
-        {reportsHref ? (
-          <a href={reportsHref} className="btn btn-ghost">งบการเงิน</a>
+        {/* toolbar ซื้อ/ขาย/รอระบุ — ซ่อนเมื่ออยู่แท็บวงแชร์ (แท็บวงแชร์มี toolbar ของตัวเอง) */}
+        {type !== "share" ? (
+          <>
+            {/* เพิ่มรายการเอง (ประเภท = แท็บที่เลือก) */}
+            <form action={createEntryAction} className="acc-inline">
+              {customerId ? <input type="hidden" name="customerId" value={customerId} /> : null}
+              <input type="hidden" name="entryType" value={type} />
+              {accountant ? <input type="hidden" name="accountant" value={accountant} /> : null}
+              <button type="submit" className="btn">+ เพิ่มรายการ</button>
+            </form>
+            {/* อัปโหลดไฟล์เอง (key=type → รับ defaultEntryType ใหม่ตามแท็บ) */}
+            <UploadFileButton
+              key={type}
+              lockedCustomerId={customerId}
+              lockedCustomerLabel={customerLabel}
+              defaultEntryType={type}
+              label="อัปไฟล์"
+              accountant={accountant}
+            />
+            {reviewHref ? (
+              <a href={reviewHref} className="btn btn-ghost">ตรวจทาน / ออก Excel</a>
+            ) : null}
+            {openingHref ? (
+              <a href={openingHref} className="btn btn-ghost">ยอดยกมา</a>
+            ) : null}
+            {reportsHref ? (
+              <a href={reportsHref} className="btn btn-ghost">งบการเงิน</a>
+            ) : null}
+          </>
         ) : null}
       </div>
 
@@ -91,6 +123,10 @@ export default function CustomerTabs({
       <div style={{ display: type === "purchase" ? undefined : "none" }}>{tables.purchase}</div>
       <div style={{ display: type === "sale" ? undefined : "none" }}>{tables.sale}</div>
       <div style={{ display: type === "unspecified" ? undefined : "none" }}>{tables.unspecified}</div>
+      {/* แท็บวงแชร์ */}
+      {shareCircle !== undefined ? (
+        <div style={{ display: type === "share" ? undefined : "none" }}>{shareCircle}</div>
+      ) : null}
     </>
   );
 }
