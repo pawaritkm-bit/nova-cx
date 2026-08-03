@@ -49,6 +49,7 @@ import UploadFileButton from "./UploadFileButton";
 import UndoDeleteBar from "./UndoDeleteBar";
 import CustomerTabs from "./CustomerTabs";
 import UploadProcessingBar from "./UploadProcessingBar";
+import EntryEditorPager, { type PagerBill } from "./EntryEditorPager";
 import { extOf } from "@/lib/accounting/upload";
 import "../chat-admin.css";
 import "../bills/bills.css";
@@ -864,6 +865,25 @@ export default async function AccountingPage({
     if (resized) editViewUrl = resized;
   }
 
+  // ★ nav bills ของหน้าตรวจ (แท็บปัจจุบัน) — sign รูปย่อทุกใบ (parallel) ให้ pager เลื่อนแบบ client + preload
+  //   ทำครั้งเดียวตอน "เปิดบิล" · prev/next หลังจากนั้นเป็น client instant (ไม่โหลดหน้าใหม่ · รูป preload แล้ว)
+  const editInNav = !!editEntry && navOrderIds.includes(editEntry.id);
+  let pagerBills: PagerBill[] = [];
+  if (editInNav) {
+    pagerBills = await Promise.all(
+      shownEntries.map(async (e) => {
+        const p = entryObjectPath(e);
+        const isImg = entryIsImage(e);
+        let url: string | null = p ? signed.get(p) ?? null : null;
+        if (p && isImg) {
+          const rz = await signResizedImage(service, p);
+          if (rz) url = rz;
+        }
+        return { id: e.id, entry: e, viewUrl: url, viewIsImage: isImg, fileName: e.uploadName };
+      })
+    );
+  }
+
   const hasAnyFilter = !!(q || selectedMonth || undatedMode);
   // export: ส่ง accountant เฉพาะกรณีเลือกนักบัญชีคนหนึ่ง (ไม่ใช่ "ทั้งสำนักงาน")
   //   นักบัญชี (staff) ไม่ต้องส่ง — export route สโคปจาก session ให้เอง
@@ -1168,25 +1188,46 @@ export default async function AccountingPage({
 
       {/* ---- หน้าต่างตรวจ/แก้ (verify panel) ---- */}
       {editEntry ? (
-        <EntryEditor
-          key={editEntry.id}
-          entry={editEntry}
-          viewUrl={editViewUrl}
-          viewIsImage={editIsImage}
-          fileName={editEntry.uploadName}
-          orderIds={navOrderIds}
-          customerLabel={customerLabel(
-            editEntry.customerId ? codeById.get(editEntry.customerId) ?? null : null,
-            editEntry.customerName
-          )}
-          closeHref={`/chat-audit/accounting${buildQuery({
-            accountant: accParam,
-            q,
-            month: monthParam,
-            open: sp.open && sp.open !== "" ? sp.open : undefined,
-            type: selectedType,
-          })}`}
-        />
+        editInNav && pagerBills.length > 0 ? (
+          /* ★ เลื่อนบิลแบบ client (instant · รูป preload) — กด ก่อนหน้า/ถัดไป ไม่โหลดหน้าใหม่ */
+          <EntryEditorPager
+            bills={pagerBills}
+            initialId={editEntry.id}
+            customerLabel={customerLabel(
+              editEntry.customerId ? codeById.get(editEntry.customerId) ?? null : null,
+              editEntry.customerName
+            )}
+            orderIds={navOrderIds}
+            closeHref={`/chat-audit/accounting${buildQuery({
+              accountant: accParam,
+              q,
+              month: monthParam,
+              open: sp.open && sp.open !== "" ? sp.open : undefined,
+              type: selectedType,
+            })}`}
+          />
+        ) : (
+          /* fallback: บิลไม่อยู่ใน nav ของแท็บที่เปิด (แก้ข้ามบริบท) — ตัวเดียว navigate ตามเดิม */
+          <EntryEditor
+            key={editEntry.id}
+            entry={editEntry}
+            viewUrl={editViewUrl}
+            viewIsImage={editIsImage}
+            fileName={editEntry.uploadName}
+            orderIds={navOrderIds}
+            customerLabel={customerLabel(
+              editEntry.customerId ? codeById.get(editEntry.customerId) ?? null : null,
+              editEntry.customerName
+            )}
+            closeHref={`/chat-audit/accounting${buildQuery({
+              accountant: accParam,
+              q,
+              month: monthParam,
+              open: sp.open && sp.open !== "" ? sp.open : undefined,
+              type: selectedType,
+            })}`}
+          />
+        )
       ) : null}
 
       {/* แถบ "เลิกทำ" หลังลบบิล (undo) — กู้บิลที่ลบผิดกลับได้ทันที */}

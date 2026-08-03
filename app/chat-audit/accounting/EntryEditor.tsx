@@ -107,6 +107,7 @@ export default function EntryEditor({
   customerLabel,
   closeHref,
   orderIds = [],
+  onNavigate,
 }: {
   entry: BillEntry;
   viewUrl: string | null;
@@ -121,6 +122,8 @@ export default function EntryEditor({
    *   — page.tsx (server) เป็นผู้ส่งมา เพื่อทำปุ่ม "ก่อนหน้า/ถัดไป" (กรอกต่อเนื่อง)
    */
   orderIds?: string[];
+  /** ★ ถ้าส่งมา (จาก pager) → prev/next เลื่อนแบบ client (ไม่โหลดหน้าใหม่ · รูป preload ไว้) แทน navigate */
+  onNavigate?: (id: string) => void;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -299,21 +302,29 @@ export default function EntryEditor({
   // บันทึกร่างใบปัจจุบันอัตโนมัติก่อน แล้วเด้งไปบิลที่ href (ใช้กับ ก่อนหน้า/ถัดไป)
   //   - ยืนยันแล้ว (readOnly): แก้ไม่ได้ → ไปเลยไม่ต้องบันทึก
   //   - บันทึกไม่ผ่าน (validate ฯลฯ): ค้างที่ใบเดิม โชว์ error ให้แก้ก่อน
-  function saveThenGo(href: string) {
+  function saveThenGo(id: string) {
+    // ★ เลื่อนไปบิล id: ถ้ามี onNavigate (pager) → เลื่อนแบบ client (instant · รูป preload ไว้)
+    //   ไม่มี → navigate ตามเดิม (SSR)
+    const go = () => {
+      if (onNavigate) {
+        onNavigate(id);
+      } else {
+        router.push(editHrefFor(id));
+        router.refresh();
+      }
+    };
     // ยืนยันแล้ว (อ่านอย่างเดียว) หรือ "ยังไม่ได้แก้อะไร" → เลื่อนเลย ไม่ต้อง save (เร็วขึ้น)
     const unchanged =
       initialInputRef.current !== null && initialInputRef.current === JSON.stringify(buildInput(false));
     if (readOnly || unchanged) {
-      router.push(href);
-      router.refresh();
+      go();
       return;
     }
     setMsg(null);
     startTransition(async () => {
       const res = await saveEntryAction(buildInput(false));
       if (res.ok) {
-        router.push(href);
-        router.refresh();
+        go();
       } else {
         setMsg({ ok: false, text: res.message });
         router.refresh();
@@ -355,7 +366,7 @@ export default function EntryEditor({
               <button
                 type="button"
                 className="btn btn-ghost acc-nav-btn"
-                onClick={() => nav.prevId && saveThenGo(editHrefFor(nav.prevId))}
+                onClick={() => nav.prevId && saveThenGo(nav.prevId)}
                 disabled={pending || !nav.prevId}
                 aria-label="บิลก่อนหน้า"
                 title="บันทึกร่างแล้วไปบิลก่อนหน้า"
@@ -368,7 +379,7 @@ export default function EntryEditor({
               <button
                 type="button"
                 className="btn btn-ghost acc-nav-btn"
-                onClick={() => nav.nextId && saveThenGo(editHrefFor(nav.nextId))}
+                onClick={() => nav.nextId && saveThenGo(nav.nextId)}
                 disabled={pending || !nav.nextId}
                 aria-label="บิลถัดไป"
                 title="บันทึกร่างแล้วไปบิลถัดไป"
