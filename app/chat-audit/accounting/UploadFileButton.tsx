@@ -142,7 +142,7 @@ export default function UploadFileButton({
             <div className="acc-modal-head">
               <div>
                 <div className="acc-modal-title">อัปโหลดไฟล์เข้าบัญชี</div>
-                <div className="acc-modal-sub">แนบเอกสารที่ไม่ได้มาทางไลน์ (รูป / PDF / Excel / CSV ≤ 15MB)</div>
+                <div className="acc-modal-sub">แนบเอกสารที่ไม่ได้มาทางไลน์ (รูป / PDF / Excel / CSV ≤ 50MB)</div>
               </div>
               <button type="button" className="acc-modal-close" onClick={close} aria-label="ปิด">✕</button>
             </div>
@@ -187,7 +187,7 @@ export default function UploadFileButton({
                     const f = e.target.files?.[0];
                     setErr(null);
                     if (f && f.size > MAX_UPLOAD_BYTES) {
-                      setErr("ไฟล์ใหญ่เกิน 15MB");
+                      setErr("ไฟล์ใหญ่เกิน 50MB");
                       setFileName("");
                     } else {
                       setFileName(f?.name ?? "");
