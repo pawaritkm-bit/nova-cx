@@ -423,8 +423,9 @@ function EntryTable({
                   <td>
                     {viewUrl && isImg ? (
                       <Link href={editHref} className="acc-thumb" aria-label="เปิดตรวจ/แก้บิล" scroll={false}>
+                        {/* eager + async: preload รูปทุกแท็บตั้งแต่เปิดลูกค้า → กดสลับแท็บแล้วรูปพร้อมทันที (perf #1) */}
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={viewUrl} alt="บิล" loading="lazy" />
+                        <img src={viewUrl} alt="บิล" loading="eager" decoding="async" />
                       </Link>
                     ) : objectPath ? (
                       <Link href={editHref} className="acc-thumb acc-thumb-file" aria-label="เปิดตรวจ/แก้ไฟล์" scroll={false}>
