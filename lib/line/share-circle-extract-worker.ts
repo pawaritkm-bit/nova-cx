@@ -35,15 +35,21 @@ export type ShareCircleExtractResult = {
   count: number;
 };
 
-/** คำนวณช่วงเวลา [start, end) ของเดือน 'YYYY-MM' (UTC) */
+/**
+ * คำนวณช่วงเวลา [start, end) ของเดือน 'YYYY-MM' — ★ ตัดตาม "เวลาไทย" (Asia/Bangkok, UTC+7)
+ *   sent_at เก็บเป็น UTC → ขอบเดือนไทย 00:00 = 17:00 UTC ของวันก่อนหน้า
+ *   (กันโพสต์เที่ยงคืน–ตี7 ของวันที่ 1 หลุดไปนับเป็นเดือนก่อนหน้า — สำคัญเพราะเป็นเดือนภาษี)
+ */
+const TH_OFFSET_MS = 7 * 60 * 60 * 1000;
 function monthRange(month: string): { start: string; end: string } | null {
   const m = /^(\d{4})-(\d{2})$/.exec(month);
   if (!m) return null;
   const y = parseInt(m[1], 10);
   const mo = parseInt(m[2], 10);
   if (mo < 1 || mo > 12) return null;
-  const start = new Date(Date.UTC(y, mo - 1, 1));
-  const end = new Date(Date.UTC(y, mo, 1));
+  // instant UTC ที่ตรงกับ 00:00 น. เวลาไทย ของวันที่ 1 เดือนนั้น / เดือนถัดไป
+  const start = new Date(Date.UTC(y, mo - 1, 1) - TH_OFFSET_MS);
+  const end = new Date(Date.UTC(y, mo, 1) - TH_OFFSET_MS);
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
