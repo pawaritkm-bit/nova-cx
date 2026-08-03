@@ -135,30 +135,30 @@ export default function UploadFileButton({
         return;
       }
 
-      // 4) ★ AI อ่านบิลลงบัญชีให้ (รูป/PDF) — best-effort: ล้ม/ข้ามก็เข้าหน้าแก้ให้คีย์เองได้
+      // 4) ★ AI อ่านบิล "เบื้องหลัง" (async · ไม่รอ!) — keepalive ให้ request วิ่งต่อแม้เปลี่ยนหน้า
+      //    → เข้าหน้าทันที ไม่ต้องนั่งรอ ~90 วิ · extraction เสร็จเบื้องหลัง แล้วข้อมูลเด้งเข้ามาเอง
       if (res.id) {
-        setPhase("reading");
         try {
-          await fetch("/api/accounting/extract-upload", {
+          void fetch("/api/accounting/extract-upload", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ entryId: res.id }),
-          });
+            keepalive: true,
+          }).catch(() => {});
         } catch {
-          // เงียบ — ยังเข้าหน้าแก้ได้ (นักบัญชีคีย์/กด reextract เองภายหลังได้)
+          // เงียบ — ยังเข้าหน้าได้ (คีย์เอง/สกัดใหม่ภายหลังได้)
         }
       }
 
-      // 5) เข้า "หน้ารายการบิลของลูกค้า" (เห็นทุกใบที่ AI อ่านได้ — คลิกใบไหนก็เข้าตรวจได้)
-      //    ★ คง accountant เดิมไว้ด้วย — ไม่งั้น admin/lead จะเด้งกลับหน้า "เลือกนักบัญชี"
-      //    ★ ไม่ใส่ edit — ให้ลงที่ลิสต์ (ไฟล์เดียวอาจได้หลายบิล) แทนกระโดดเข้าแก้ใบแรก
+      // 5) เข้า "หน้ารายการบิลของลูกค้า" ทันที (ไม่รอ AI)
+      //    ★ คง accountant + ?uploaded=<id> → โชว์แถบ "AI กำลังอ่าน…" + รีเฟรชเองเมื่อเสร็จ
       const openKey = customerId || "unassigned";
       const sp = new URLSearchParams();
-      // prop (จาก server — ชัวร์) ก่อน แล้ว fallback client searchParams
       const acct = accountant || searchParams.get("accountant");
       if (acct) sp.set("accountant", acct);
       sp.set("open", openKey);
       sp.set("type", entryType);
+      if (res.id) sp.set("uploaded", res.id);
       setOpen(false);
       reset();
       router.push(`/chat-audit/accounting?${sp.toString()}`);
@@ -253,11 +253,7 @@ export default function UploadFileButton({
 
               <div className="acc-modal-actions">
                 <button type="button" className="btn" onClick={submit} disabled={pending}>
-                  {pending
-                    ? phase === "reading"
-                      ? "AI กำลังอ่านบิล…"
-                      : "กำลังอัปโหลด…"
-                    : "อัปโหลด"}
+                  {pending ? "กำลังอัปโหลด…" : "อัปโหลด"}
                 </button>
                 <span className="acc-toolbar-spacer" />
                 <button type="button" className="btn btn-ghost" onClick={close} disabled={pending}>ยกเลิก</button>
