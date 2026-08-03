@@ -196,6 +196,24 @@ export default function EntryEditor({
     patchLine(l.key, { vatType, vatAmount: numToInput(calcVat(amt, vatType)) });
   };
 
+  /**
+   * เลือกชนิด VAT จากดรอปดาวน์ 3 ตัวเลือก:
+   *   'vat'    = VAT นอก (ยอด=ฐานก่อน VAT · VAT = ยอด×7% บวกเพิ่ม)
+   *   'vat_in' = VAT ใน (บิลรวม VAT แล้ว) → ★ ถอด VAT: ยอดปัจจุบัน=รวม VAT → ฐาน + VAT
+   *              แล้วตั้ง vat_type='vat' (เก็บเป็น "ฐาน+VAT" เหมือนกัน · ตัวเลือกนี้เป็น "การกระทำ")
+   *   'novat'  = ไม่มี VAT
+   */
+  const onVatSelect = (l: LineRow, val: string) => {
+    if (val === "vat_in") {
+      const incl = parseAmountInput(l.amount);
+      const base = incl > 0 ? Math.round((incl / 1.07) * 100) / 100 : 0;
+      const vat = incl > 0 ? Math.round((incl - base) * 100) / 100 : 0;
+      patchLine(l.key, { vatType: "vat", amount: numToInput(base), vatAmount: numToInput(vat) });
+      return;
+    }
+    onVatTypeChange(l, val === "novat" ? "novat" : "vat");
+  };
+
   // wht_rate เปลี่ยน → คำนวณ wht_amount ใหม่
   const onWhtRateChange = (l: LineRow, raw: string) => {
     const amt = parseAmountInput(l.amount);
@@ -533,12 +551,14 @@ export default function EntryEditor({
                       ) : null}
                       <select
                         value={l.vatType}
-                        onChange={(e) => onVatTypeChange(l, e.target.value as VatType)}
+                        onChange={(e) => onVatSelect(l, e.target.value)}
                         disabled={readOnly}
                         aria-label="ประเภท VAT"
+                        title="VAT นอก = บวก 7% เพิ่ม · VAT ใน = บิลรวม VAT แล้ว (เลือกเพื่อถอด VAT ออกจากยอด)"
                         className="acc-vat-sel"
                       >
-                        <option value="vat">VAT</option>
+                        <option value="vat">VAT นอก</option>
+                        <option value="vat_in">VAT ใน (ถอด)</option>
                         <option value="novat">ไม่ VAT</option>
                       </select>
                       <AccountCell
