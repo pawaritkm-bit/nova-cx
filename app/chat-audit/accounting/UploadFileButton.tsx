@@ -36,6 +36,8 @@ export default function UploadFileButton({
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [err, setErr] = useState<string | null>(null);
+  // "" ยังไม่ทำ · uploading กำลังอัปไฟล์ · reading AI กำลังอ่านบิล (โชว์บนปุ่ม)
+  const [phase, setPhase] = useState<"" | "uploading" | "reading">("");
   const [fileName, setFileName] = useState<string>("");
   const [customerId, setCustomerId] = useState<string>(lockedCustomerId ?? "");
   const [entryType, setEntryType] = useState<EntryType>(defaultEntryType);
@@ -45,6 +47,7 @@ export default function UploadFileButton({
 
   function reset() {
     setErr(null);
+    setPhase("");
     setFileName("");
     setEntryType(defaultEntryType);
     if (!locked) setCustomerId("");
@@ -71,9 +74,11 @@ export default function UploadFileButton({
     setErr(null);
 
     // อัปตรงเข้า Supabase Storage (ไม่ผ่าน body ของ server action → ไม่ชนเพดาน Vercel 4.5MB)
-    //   1) ขอ signed upload URL (server คุม path) → 2) browser อัปไฟล์ตรง → 3) finalize สร้าง entry
+    //   1) ขอ signed upload URL → 2) browser อัปไฟล์ตรง → 3) finalize สร้าง entry
+    //   → 4) AI อ่านบิลลงบัญชีให้ (best-effort) → 5) เข้าหน้าตรวจ/แก้
     startTransition(async () => {
       const cid = customerId || null;
+      setPhase("uploading");
 
       // 1) ขอ signed upload URL
       const prep = await createBillUploadUrlAction({
@@ -85,6 +90,7 @@ export default function UploadFileButton({
       });
       if (!prep.ok) {
         setErr(prep.message);
+        setPhase("");
         return;
       }
 
@@ -98,14 +104,16 @@ export default function UploadFileButton({
           });
         if (upErr) {
           setErr(`อัปโหลดไฟล์ไม่สำเร็จ: ${upErr.message || "กรุณาลองใหม่"}`);
+          setPhase("");
           return;
         }
       } catch {
         setErr("อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่");
+        setPhase("");
         return;
       }
 
-      // 3) finalize → สร้าง entry (manual/draft) แล้วพาไปหน้าตรวจ/แก้
+      // 3) finalize → สร้าง entry (draft)
       const res = await finalizeBillUploadAction({
         customerId: cid,
         entryType,
@@ -113,19 +121,36 @@ export default function UploadFileButton({
         name: file.name,
         mime: file.type,
       });
-      if (res.ok) {
-        const openKey = customerId || "unassigned";
-        const sp = new URLSearchParams();
-        sp.set("open", openKey);
-        sp.set("type", entryType);
-        if (res.id) sp.set("edit", res.id);
-        setOpen(false);
-        reset();
-        router.push(`/chat-audit/accounting?${sp.toString()}`);
-        router.refresh();
-      } else {
+      if (!res.ok) {
         setErr(res.message);
+        setPhase("");
+        return;
       }
+
+      // 4) ★ AI อ่านบิลลงบัญชีให้ (รูป/PDF) — best-effort: ล้ม/ข้ามก็เข้าหน้าแก้ให้คีย์เองได้
+      if (res.id) {
+        setPhase("reading");
+        try {
+          await fetch("/api/accounting/extract-upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ entryId: res.id }),
+          });
+        } catch {
+          // เงียบ — ยังเข้าหน้าแก้ได้ (นักบัญชีคีย์/กด reextract เองภายหลังได้)
+        }
+      }
+
+      // 5) เข้าหน้าตรวจ/แก้บิล (ข้อมูลที่ AI ลงจะโชว์ให้ตรวจ)
+      const openKey = customerId || "unassigned";
+      const sp = new URLSearchParams();
+      sp.set("open", openKey);
+      sp.set("type", entryType);
+      if (res.id) sp.set("edit", res.id);
+      setOpen(false);
+      reset();
+      router.push(`/chat-audit/accounting?${sp.toString()}`);
+      router.refresh();
     });
   }
 
@@ -201,7 +226,11 @@ export default function UploadFileButton({
 
               <div className="acc-modal-actions">
                 <button type="button" className="btn" onClick={submit} disabled={pending}>
-                  {pending ? "กำลังอัปโหลด…" : "อัปโหลด"}
+                  {pending
+                    ? phase === "reading"
+                      ? "AI กำลังอ่านบิล…"
+                      : "กำลังอัปโหลด…"
+                    : "อัปโหลด"}
                 </button>
                 <span className="acc-toolbar-spacer" />
                 <button type="button" className="btn btn-ghost" onClick={close} disabled={pending}>ยกเลิก</button>

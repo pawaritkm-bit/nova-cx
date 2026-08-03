@@ -149,19 +149,63 @@ const SYSTEM_PROMPT =
   "ผังบัญชี (รหัส=ชื่อ): " + CHART_PROMPT_LIST + ".";
 
 const USER_PROMPT =
-  "อ่านบิลในรูปนี้แล้วสกัดข้อมูลเป็น JSON ตามรูปแบบ. จำไว้: ช่องไหนไม่มั่นใจโดยเฉพาะตัวเลข ให้ value=null ห้ามเดา.";
+  "อ่านบิลในเอกสารนี้แล้วสกัดข้อมูลเป็น JSON ตามรูปแบบ. จำไว้: ช่องไหนไม่มั่นใจโดยเฉพาะตัวเลข ให้ value=null ห้ามเดา. ★ ตัวเลขทุกช่องเป็นตัวเลขล้วน ห้ามมีลูกน้ำคั่นหลักพัน (เช่น 2500.00 ไม่ใช่ 2,500.00). ถ้าเอกสารมีหลายบิล ให้สกัด 'บิลแรก' เท่านั้น.";
 
-/** ดึง JSON object ก้อนแรกจากข้อความ (เผื่อโมเดลห่อ ```json หรือมีข้อความปน) */
-function extractJson(text: string): Record<string, unknown> | null {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
+/**
+ * ดึง JSON object ก้อนแรกจากข้อความ (เผื่อโมเดลห่อ ```json, มีข้อความปน,
+ *   หรือคืน "หลายก้อน" — เช่น PDF ที่มีหลายบิล → เอาก้อนแรกที่สมดุล)
+ *   1) ลองเร็ว: { แรก → } สุดท้าย (พอสำหรับก้อนเดียว)
+ *   2) ถ้าพัง (หลายก้อน/ข้อความห้อยท้าย) → นับวงเล็บหา "object แรกที่สมดุล" (ข้าม string/escape)
+ */
+/**
+ * ซ่อม JSON ที่โมเดลชอบพลาด: ลูกน้ำคั่นหลักพันในตัวเลข (เช่น 2,500.00 → 2500.00)
+ *   ★ ตัดเฉพาะ comma ที่ "มีเลขประกบทั้งสองข้าง" — comma โครงสร้าง JSON (value ตามด้วย ,\n / },{
+ *     / ],[) มีช่องว่าง/วงเล็บประกบ ไม่โดนแตะ · เลขในสตริง "1,000" อาจโดน (ยอมรับได้ ไม่ critical)
+ */
+function repairJsonNumbers(s: string): string {
+  return s.replace(/(?<=\d),(?=\d)/g, "");
+}
+
+function tryParse(slice: string): Record<string, unknown> | null {
   try {
-    const parsed = JSON.parse(text.slice(start, end + 1));
+    const parsed = JSON.parse(repairJsonNumbers(slice));
     return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;
   }
+}
+
+function extractJson(text: string): Record<string, unknown> | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+
+  // (1) วิธีเร็ว: { แรก → } สุดท้าย
+  const lastEnd = text.lastIndexOf("}");
+  if (lastEnd > start) {
+    const p = tryParse(text.slice(start, lastEnd + 1));
+    if (p) return p;
+  }
+
+  // (2) brace-matching — คืน object แรกที่ปิดสมดุล (กันหลาย object/ข้อความปน/ตัดท้าย)
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return tryParse(text.slice(start, i + 1));
+    }
+  }
+  return null;
 }
 
 /** clamp confidence เป็นช่วง 0..1 (ค่าเพี้ยน/ไม่ใช่เลข = 0) */
@@ -330,7 +374,13 @@ export async function extractBillData(
   if (!apiKey) return null; // degrade: ไม่มี key → ข้ามการสกัด
 
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const isPdf = (mime || "").toLowerCase().includes("pdf");
   const dataUrl = `data:${mime || "image/jpeg"};base64,${imageData.toString("base64")}`;
+
+  // รูป → image_url (detail=high อ่านเลขชัด) · PDF → file input (OpenAI อ่าน PDF ได้ผ่าน type:file)
+  const filePart = isPdf
+    ? { type: "file", file: { filename: "bill.pdf", file_data: dataUrl } }
+    : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -344,16 +394,14 @@ export async function extractBillData(
       body: JSON.stringify({
         model,
         temperature: 0,
-        max_tokens: 1500,
+        // บิลหลายบรรทัด (โดยเฉพาะ PDF) + schema ต่อ field มี confidence → output ยาว
+        //   ตั้งเพดานสูงพอกัน JSON โดนตัดกลางคัน (billed ตาม output จริง — cap ไม่เพิ่มค่าใช้จ่าย)
+        max_tokens: 4000,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           {
             role: "user",
-            content: [
-              { type: "text", text: USER_PROMPT },
-              // detail=high — ต้องอ่านตัวเลขให้ชัด (ต่างจาก classify ที่ใช้ low)
-              { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
-            ],
+            content: [{ type: "text", text: USER_PROMPT }, filePart],
           },
         ],
       }),
