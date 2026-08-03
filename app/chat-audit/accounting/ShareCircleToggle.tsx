@@ -21,9 +21,11 @@ export default function ShareCircleToggle({
   const [on, setOn] = useState(initialOn);
   const [pending, startTransition] = useTransition();
   const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
 
   function toggle(next: boolean) {
     setErr(null);
+    setMsg(null);
     startTransition(async () => {
       const res = await setCustomerShareCircleAction(customerId, next);
       if (!res.ok) {
@@ -31,6 +33,8 @@ export default function ShareCircleToggle({
         return;
       }
       setOn(next);
+      // feedback: เปิดธงแล้วย้ายบิลออกกี่รายการ (ข้อความมาจาก action)
+      setMsg(res.message);
       router.refresh();
     });
   }
@@ -61,6 +65,11 @@ export default function ShareCircleToggle({
         </button>
       )}
       {err ? <span className="action-msg err">{err}</span> : null}
+      {msg && !err ? (
+        <span className="action-msg" style={{ color: "#166534" }}>
+          {msg}
+        </span>
+      ) : null}
     </span>
   );
 }

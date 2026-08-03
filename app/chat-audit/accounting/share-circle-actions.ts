@@ -151,8 +151,33 @@ export async function setCustomerShareCircleAction(
       return { ok: false, message: "ตั้งค่าไม่สำเร็จ (อาจยังไม่ได้ apply migration 0057)" };
     }
 
+    // ★ ย้อนหลังอัตโนมัติ: เปิดธง → soft-delete "บิลร่างที่เป็นรูปวงแชร์" ของลูกค้าคนนี้
+    //   เงื่อนไข: unspecified (รอระบุ) + ยังไม่ยืนยัน + มาจากรูปในไลน์ (attachment_id ≠ null) + ยังไม่ลบ
+    //   ★ ไม่แตะ: บิล confirmed / บิลที่คีย์เอง-อัปเอง (attachment_id = null) / บิลซื้อ-ขายที่ตัดสินฝั่งแล้ว
+    //   ★ soft-delete → กู้คืนได้ (ลบผิดยังกลับมาได้)
+    let movedCount = 0;
+    if (on === true) {
+      const { data: moved, error: delErr } = await service
+        .from("bill_entries")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("tenant_id", ctx.tenantId)
+        .eq("customer_id", customerId)
+        .eq("entry_type", "unspecified")
+        .neq("status", "confirmed")
+        .not("attachment_id", "is", null)
+        .is("deleted_at", null)
+        .select("id");
+      if (!delErr) movedCount = (moved ?? []).length;
+      // delErr = best-effort (ธงเปิดสำเร็จแล้ว) — ไม่ทำให้ทั้ง action ล้ม
+    }
+
     revalidatePath(PATH);
-    return { ok: true, message: on ? "ตั้งเป็นลูกค้าท้าวแชร์แล้ว" : "ยกเลิกท้าวแชร์แล้ว", id: customerId };
+    if (!on) return { ok: true, message: "ยกเลิกท้าวแชร์แล้ว", id: customerId };
+    const movedMsg =
+      movedCount > 0
+        ? ` · ย้ายรูปวงแชร์ ${movedCount.toLocaleString("th-TH")} รายการออกจากบิลแล้ว`
+        : "";
+    return { ok: true, message: `ตั้งเป็นลูกค้าท้าวแชร์แล้ว${movedMsg}`, id: customerId };
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "ตั้งค่าไม่สำเร็จ กรุณาลองใหม่" };

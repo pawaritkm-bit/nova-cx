@@ -4,6 +4,7 @@ import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
 import { suggestWhtRate } from "@/lib/accounting/wht";
 import { calcVat } from "@/lib/accounting/calc";
 import { suggestPaymentMethod } from "@/lib/accounting/payment";
+import { getCustomerShareCircleFlag } from "@/lib/share-circles/queries";
 
 /**
  * Bill extract worker — ไล่บิลที่เก็บแล้วแต่ยังไม่มี bill_entries → AI สกัด → สร้าง draft
@@ -523,7 +524,23 @@ export async function processBillExtraction(
     const mime = mimeFromPath(objectPath);
     const nonImage = isNonImage(row.attachment_type, mime);
 
-    // 3) รูป → ดาวน์โหลด + สกัด · PDF/เอกสาร → ข้ามการสกัด (draft ว่าง)
+    // 3) จับคู่ลูกค้าเราจาก chat_group (best-effort) — ทำก่อนดาวน์โหลด/AI เพื่อเช็คธงท้าวแชร์
+    const customer = await resolveCustomer(db, row.chat_message_id);
+
+    // ★ กันอนาคต: ลูกค้าท้าวแชร์ (is_share_circle=true) → ไม่สร้าง bill_entry จากรูปในไลน์
+    //   (รูปยังอยู่ใน message_attachments ให้โมดูลวงแชร์อ่าน — แค่ไม่ไปโผล่เป็นบิล/รอระบุ)
+    //   มาร์ก doc_kind='share_circle' ให้ออกจาก eligible (กัน cron วนหยิบมาสร้างบิลรอบถัดไป/starve คิว)
+    //   ★ degrade: คอลัมน์ is_share_circle ยังไม่ apply → flag=false → ทำงานเหมือนเดิมทุกอย่าง
+    if (customer.id && (await getCustomerShareCircleFlag(db, row.tenant_id, customer.id))) {
+      await db
+        .from("message_attachments")
+        .update({ doc_kind: "share_circle" })
+        .eq("id", row.id)
+        .eq("tenant_id", row.tenant_id);
+      continue; // ไม่สร้างบิล
+    }
+
+    // 4) รูป → ดาวน์โหลด + สกัด · PDF/เอกสาร → ข้ามการสกัด (draft ว่าง)
     let bill = null as Awaited<ReturnType<typeof extractBillData>> | null;
     if (!nonImage) {
       let buf: Buffer | null = null;
@@ -543,13 +560,12 @@ export async function processBillExtraction(
       bill = await extractBillData(buf, mime);
     }
 
-    // 4) จับคู่ลูกค้าเราจาก chat_group (best-effort) + ตัดสินฝั่งซื้อ/ขาย
-    const customer = await resolveCustomer(db, row.chat_message_id);
+    // 5) ตัดสินฝั่งซื้อ/ขาย จากลูกค้าเรา (resolve แล้วด้านบน)
     const seller: BillParty = { name: bill?.seller_name ?? null, taxId: bill?.seller_tax_id ?? null };
     const buyer: BillParty = { name: bill?.buyer_name ?? null, taxId: bill?.buyer_tax_id ?? null };
     const decision = decideEntrySide(customer, seller, buyer);
 
-    // 5) สร้าง bill_entries (draft) — attachment_id unique กันซ้ำ (ถ้าชนก็ข้าม)
+    // 6) สร้าง bill_entries (draft) — attachment_id unique กันซ้ำ (ถ้าชนก็ข้าม)
     const { data: entryIns, error: entryErr } = await db
       .from("bill_entries")
       .insert({
@@ -585,7 +601,7 @@ export async function processBillExtraction(
     const entryId = (entryIns as { id?: string } | null)?.id;
     if (!entryId) continue;
 
-    // 6) สร้าง bill_entry_lines — ช่องที่ AI เว้น null = ไม่เติม (ค่า 0 ตาม default DB)
+    // 7) สร้าง bill_entry_lines — ช่องที่ AI เว้น null = ไม่เติม (ค่า 0 ตาม default DB)
     //    ai_filled=true เฉพาะ line ที่ AI เติม amount/vat/บัญชี จริง (รู้ที่มา)
     // ★ เอกสารเขียนมือ/เงินสด/สลิป = ไม่ใช่ใบกำกับภาษี → บังคับ novat แน่นอน (ไม่ต้องเดา)
     //   เฉพาะ purchase/sale (ใบกำกับ) ค่อยใช้ vat_type ที่ AI ตัดสิน
