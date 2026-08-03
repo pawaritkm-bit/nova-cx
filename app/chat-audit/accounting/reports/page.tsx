@@ -9,6 +9,7 @@ import { listEntries } from "@/lib/accounting/queries";
 import { listOpeningBalances } from "@/lib/accounting/opening-balance";
 import { buildStatements } from "@/lib/accounting/statements";
 import { filterEntriesForReport, periodLabel, validMonth } from "@/lib/accounting/report-filter";
+import { buildPndReport, buildPp30Report } from "@/lib/accounting/rd-export";
 import { formatMoney } from "@/lib/accounting/calc";
 import { monthKeyOf, thaiMonthLabel } from "@/lib/accounting/monthly";
 import type { Statements } from "@/lib/accounting/statements";
@@ -386,6 +387,16 @@ export default async function AccountingReportsPage({
   let monthOptions: string[] = [];
   let draftCount = 0;
   let loadError = false;
+  // สรุปจำนวน record + เตือน สำหรับกลุ่มปุ่ม "ยื่นสรรพากร (RD Prep)"
+  let rdSummary: {
+    pnd3: number;
+    pnd53: number;
+    pp30Sale: number;
+    pp30Purchase: number;
+    whtUnspecified: number; // มี wht แต่ยังไม่ระบุแบบ (pnd3/53)
+    whtMissingTaxId: number; // แบบตรงแต่ไม่มีเลขภาษี → ยื่นไม่ได้
+    pp30MissingTaxId: number; // ใบกำกับในรายงาน VAT ที่ยังไม่มีเลขภาษี
+  } | null = null;
   if (customerId) {
     try {
       const { entries } = await listEntries(service, access.tenantId, { customerId });
@@ -396,6 +407,21 @@ export default async function AccountingReportsPage({
       draftCount = filtered.filter((e) => e.status !== "confirmed").length;
       const opening = await listOpeningBalances(service, access.tenantId, customerId);
       statements = buildStatements(filtered, opening);
+
+      const pnd3 = buildPndReport(filtered, "pnd3");
+      const pnd53 = buildPndReport(filtered, "pnd53");
+      const pp30Sale = buildPp30Report(filtered, "sale");
+      const pp30Purchase = buildPp30Report(filtered, "purchase");
+      rdSummary = {
+        pnd3: pnd3.totals.count,
+        pnd53: pnd53.totals.count,
+        pp30Sale: pp30Sale.totals.count,
+        pp30Purchase: pp30Purchase.totals.count,
+        // unspecifiedForm เหมือนกันทั้ง pnd3/pnd53 (คำนวณจาก wht_form=null) — เอาชุดเดียว
+        whtUnspecified: pnd3.issues.unspecifiedForm.length,
+        whtMissingTaxId: pnd3.issues.missingTaxId.length + pnd53.issues.missingTaxId.length,
+        pp30MissingTaxId: pp30Sale.warnings.missingTaxId + pp30Purchase.warnings.missingTaxId,
+      };
     } catch {
       loadError = true;
     }
@@ -411,6 +437,27 @@ export default async function AccountingReportsPage({
     if (!includeDraft) q.set("draft", "0");
     return `${exportBase}?${q.toString()}`;
   };
+
+  // ยื่นสรรพากร (RD Prep): เลือกแบบ + รูปแบบไฟล์ (txt/xlsx)
+  const rdExportBase = "/chat-audit/accounting/reports/rd-export";
+  const rdQuery = (rdForm: string, fmt: "txt" | "xlsx") => {
+    const q = new URLSearchParams();
+    q.set("customerId", customerId);
+    q.set("form", rdForm);
+    q.set("fmt", fmt);
+    if (from) q.set("from", from);
+    if (to) q.set("to", to);
+    if (!includeDraft) q.set("draft", "0");
+    return `${rdExportBase}?${q.toString()}`;
+  };
+  const RD_ITEMS: { form: string; label: string; count: number }[] = rdSummary
+    ? [
+        { form: "pnd3", label: "ภ.ง.ด.3", count: rdSummary.pnd3 },
+        { form: "pnd53", label: "ภ.ง.ด.53", count: rdSummary.pnd53 },
+        { form: "pp30-sale", label: "ภ.พ.30 ภาษีขาย", count: rdSummary.pp30Sale },
+        { form: "pp30-purchase", label: "ภ.พ.30 ภาษีซื้อ", count: rdSummary.pp30Purchase },
+      ]
+    : [];
 
   return (
     <ChatAuditFrame
@@ -552,6 +599,84 @@ export default async function AccountingReportsPage({
               {tab === "trial" ? <TrialView s={statements} /> : null}
               {tab === "income" ? <IncomeView s={statements} /> : null}
               {tab === "balance" ? <BalanceView s={statements} /> : null}
+            </div>
+
+            {/* ---- ยื่นสรรพากร (RD Prep) ---- */}
+            <div className="card">
+              <div className="strong" style={{ fontSize: 15, marginBottom: 4 }}>
+                ยื่นสรรพากร (RD Prep)
+              </div>
+              <p className="muted" style={{ marginTop: 0, marginBottom: 12 }}>
+                ไฟล์สำหรับนำเข้าโปรแกรม RD Prep — .txt (มาตรฐาน คั่นด้วย |) และ Excel
+                (ไว้ตรวจ). ★ layout เป็นมาตรฐานที่พบบ่อย ถ้า import แล้วไม่ตรง แจ้งเพื่อปรับได้
+              </p>
+
+              <div className="table-wrap">
+                <table className="dlv-table acc-table">
+                  <thead>
+                    <tr>
+                      <th>แบบ</th>
+                      <th className="num">จำนวน record</th>
+                      <th>ดาวน์โหลด</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {RD_ITEMS.map((it) => (
+                      <tr key={it.form}>
+                        <td className="strong">{it.label}</td>
+                        <td className="num">{it.count.toLocaleString("th-TH")}</td>
+                        <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <a
+                            href={rdQuery(it.form, "txt")}
+                            className={`btn btn-sm${it.count === 0 ? " btn-ghost" : ""}`}
+                          >
+                            ⬇ .txt
+                          </a>
+                          <a
+                            href={rdQuery(it.form, "xlsx")}
+                            className={`btn btn-sm btn-ghost`}
+                          >
+                            ⬇ Excel
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* เตือนบิลที่ยื่นไม่ได้/ต้องแก้ก่อน */}
+              {rdSummary &&
+              (rdSummary.whtUnspecified > 0 ||
+                rdSummary.whtMissingTaxId > 0 ||
+                rdSummary.pp30MissingTaxId > 0) ? (
+                <div className="card acc-review-warn" style={{ marginTop: 12 }}>
+                  <span className="acc-review-warn-icon" aria-hidden="true">⚠️</span>
+                  <div className="acc-review-warn-body">
+                    <div className="acc-review-warn-title">ตรวจก่อนยื่น</div>
+                    <ul className="acc-review-warn-list">
+                      {rdSummary.whtUnspecified > 0 ? (
+                        <li>
+                          มี <strong>{rdSummary.whtUnspecified.toLocaleString("th-TH")}</strong> บิลหัก ณ ที่จ่ายที่
+                          <strong>ยังไม่ระบุแบบ</strong> (ภ.ง.ด.3 หรือ 53) — ระบุก่อนถึงจะเข้าไฟล์ยื่น
+                        </li>
+                      ) : null}
+                      {rdSummary.whtMissingTaxId > 0 ? (
+                        <li>
+                          มี <strong>{rdSummary.whtMissingTaxId.toLocaleString("th-TH")}</strong> บิลหัก ณ ที่จ่ายที่
+                          <strong>ไม่มีเลขผู้เสียภาษี</strong> — ยื่นไม่ได้ (ตัดออกจากไฟล์) ต้องเติมเลขภาษีก่อน
+                        </li>
+                      ) : null}
+                      {rdSummary.pp30MissingTaxId > 0 ? (
+                        <li>
+                          รายงานภาษีขาย/ซื้อมี <strong>{rdSummary.pp30MissingTaxId.toLocaleString("th-TH")}</strong> ใบกำกับที่
+                          <strong>ยังไม่มีเลขผู้เสียภาษี</strong> (ยังอยู่ในไฟล์ แต่ควรเติมก่อนยื่น)
+                        </li>
+                      ) : null}
+                    </ul>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </>
         ) : null}

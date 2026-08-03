@@ -46,7 +46,7 @@ describe("statements-excel — สร้างไฟล์จริง", () => {
 
     // อ่านกลับด้วย exceljs ตรวจชื่อชีท
     const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(buf);
+    await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
     const names = wb.worksheets.map((w) => w.name);
     expect(names).toContain("สมุดรายวัน");
     expect(names).toContain("บัญชีแยกประเภท");
@@ -60,7 +60,7 @@ describe("statements-excel — สร้างไฟล์จริง", () => {
     const s = buildStatements(entries, opening);
     const buf = await buildStatementsWorkbook(s, { entityLabel: "x", periodLabel: "y" }, "income");
     const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(buf);
+    await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
     expect(wb.worksheets.map((w) => w.name)).toEqual(["งบกำไรขาดทุน"]);
   });
 });
