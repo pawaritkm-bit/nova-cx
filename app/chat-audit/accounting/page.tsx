@@ -281,13 +281,17 @@ async function fetchCustomerCodes(
 ): Promise<Map<string, string | null>> {
   const map = new Map<string, string | null>();
   if (ids.length === 0) return map;
-  const { data } = await service
-    .from("customers")
-    .select("id, customer_code")
-    .eq("tenant_id", tenantId)
-    .in("id", ids);
-  for (const c of (data ?? []) as { id: string; customer_code: string | null }[]) {
-    map.set(c.id, c.customer_code);
+  try {
+    const { data } = await service
+      .from("customers")
+      .select("id, customer_code")
+      .eq("tenant_id", tenantId)
+      .in("id", ids);
+    for (const c of (data ?? []) as { id: string; customer_code: string | null }[]) {
+      map.set(c.id, c.customer_code);
+    }
+  } catch {
+    // backend blip ชั่วคราว → คืน map ว่าง (หน้ายังขึ้น แค่ไม่มีรหัสลูกค้าให้แสดงชั่วคราว)
   }
   return map;
 }
@@ -300,13 +304,17 @@ async function fetchCustomerTaxIds(
 ): Promise<Map<string, string | null>> {
   const map = new Map<string, string | null>();
   if (ids.length === 0) return map;
-  const { data } = await service
-    .from("customers")
-    .select("id, tax_id")
-    .eq("tenant_id", tenantId)
-    .in("id", ids);
-  for (const c of (data ?? []) as { id: string; tax_id: string | null }[]) {
-    map.set(c.id, c.tax_id);
+  try {
+    const { data } = await service
+      .from("customers")
+      .select("id, tax_id")
+      .eq("tenant_id", tenantId)
+      .in("id", ids);
+    for (const c of (data ?? []) as { id: string; tax_id: string | null }[]) {
+      map.set(c.id, c.tax_id);
+    }
+  } catch {
+    // backend blip ชั่วคราว → คืน map ว่าง (ช่องเลขภาษีเริ่มว่าง กรอกใหม่ได้)
   }
   return map;
 }
@@ -319,15 +327,20 @@ async function fetchCustomerSelectOptions(
   service: SupabaseClient,
   tenantId: string
 ): Promise<{ id: string; label: string }[]> {
-  const { data } = await service
-    .from("customers")
-    .select("id, customer_code, name")
-    .eq("tenant_id", tenantId)
-    .is("deleted_at", null)
-    .order("customer_code", { ascending: true, nullsFirst: false })
-    .limit(5000);
-  const rows = (data ?? []) as { id: string; customer_code: string | null; name: string | null }[];
-  return rows.map((c) => ({ id: c.id, label: customerLabel(c.customer_code, c.name) }));
+  try {
+    const { data } = await service
+      .from("customers")
+      .select("id, customer_code, name")
+      .eq("tenant_id", tenantId)
+      .is("deleted_at", null)
+      .order("customer_code", { ascending: true, nullsFirst: false })
+      .limit(5000);
+    const rows = (data ?? []) as { id: string; customer_code: string | null; name: string | null }[];
+    return rows.map((c) => ({ id: c.id, label: customerLabel(c.customer_code, c.name) }));
+  } catch {
+    // backend blip ชั่วคราว → dropdown เลือกลูกค้าตอนอัปไฟล์ว่างชั่วคราว (หน้ายังใช้ได้)
+    return [];
+  }
 }
 
 /** สร้าง signed URL (batch) ให้ object path ที่ต้องโชว์เท่านั้น (PDPA/perf) */
@@ -338,9 +351,13 @@ async function signPaths(
   const out = new Map<string, string>();
   const uniq = [...new Set(paths.filter((p): p is string => !!p))];
   if (uniq.length === 0) return out;
-  const { data } = await service.storage.from(BILLS_BUCKET).createSignedUrls(uniq, SIGNED_URL_TTL_SEC);
-  for (const e of data ?? []) {
-    if (e.signedUrl && e.path) out.set(e.path, e.signedUrl);
+  try {
+    const { data } = await service.storage.from(BILLS_BUCKET).createSignedUrls(uniq, SIGNED_URL_TTL_SEC);
+    for (const e of data ?? []) {
+      if (e.signedUrl && e.path) out.set(e.path, e.signedUrl);
+    }
+  } catch {
+    // storage blip ชั่วคราว → คืน map ว่าง (บิลโชว์เป็น "ไม่มีรูป" ชั่วคราว แต่หน้าไม่ crash)
   }
   return out;
 }
