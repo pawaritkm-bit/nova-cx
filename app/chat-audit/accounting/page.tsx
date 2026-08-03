@@ -926,6 +926,7 @@ export default async function AccountingPage({
         <form action={createEntryAction} className="acc-inline">
           {g.customerId ? <input type="hidden" name="customerId" value={g.customerId} /> : null}
           <input type="hidden" name="entryType" value={selectedType} />
+          {accParam ? <input type="hidden" name="accountant" value={accParam} /> : null}
           <button type="submit" className="btn">+ เพิ่มรายการ</button>
         </form>
         {/* อัปโหลดไฟล์เองให้ลูกค้ารายนี้ (ผูกลูกค้า) */}
@@ -1029,6 +1030,7 @@ export default async function AccountingPage({
             {/* เพิ่มรายการเอง (ไม่ผูกลูกค้า) */}
             <form action={createEntryAction} className="acc-inline">
               <input type="hidden" name="entryType" value="purchase" />
+              {accParam ? <input type="hidden" name="accountant" value={accParam} /> : null}
               <button type="submit" className="btn">+ เพิ่มรายการเอง</button>
             </form>
             {/* อัปโหลดไฟล์เอง (เลือกลูกค้าได้) */}

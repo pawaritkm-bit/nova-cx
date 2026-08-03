@@ -151,6 +151,14 @@ const SYSTEM_PROMPT =
 const USER_PROMPT =
   "อ่านบิลในเอกสารนี้แล้วสกัดข้อมูลเป็น JSON ตามรูปแบบ. จำไว้: ช่องไหนไม่มั่นใจโดยเฉพาะตัวเลข ให้ value=null ห้ามเดา. ★ ตัวเลขทุกช่องเป็นตัวเลขล้วน ห้ามมีลูกน้ำคั่นหลักพัน (เช่น 2500.00 ไม่ใช่ 2,500.00). ถ้าเอกสารมีหลายบิล ให้สกัด 'บิลแรก' เท่านั้น.";
 
+/** prompt สำหรับเอกสารที่ "อาจมีหลายบิล" (ไฟล์อัปเอง/PDF รวมหลายใบ) — คืน {bills:[...]} */
+const MULTI_USER_PROMPT =
+  "เอกสารนี้อาจมี 'หลายบิล/หลายใบ' ในไฟล์เดียว. สกัด 'ทุกบิล' เป็น JSON รูปแบบ {\"bills\":[ <bill1>, <bill2>, ... ]} " +
+  "โดยแต่ละ <bill> มี field ครบตามที่ระบุ (doc_date, doc_no, seller_name, seller_tax_id, buyer_name, buyer_tax_id, lines[], overall_confidence) " +
+  "แต่ละ field เป็น {value, confidence}. ถ้ามีบิลเดียวก็ใส่ bills 1 element. " +
+  "แต่ละบิลเป็นเอกสารแยกกัน (คนละเลขที่/คนละยอด) — อย่ารวมยอดข้ามบิล. " +
+  "จำไว้: ช่องไหนไม่มั่นใจโดยเฉพาะตัวเลข value=null ห้ามเดา. ★ ตัวเลขห้ามมีลูกน้ำคั่นหลักพัน (2500.00 ไม่ใช่ 2,500.00).";
+
 /**
  * ดึง JSON object ก้อนแรกจากข้อความ (เผื่อโมเดลห่อ ```json, มีข้อความปน,
  *   หรือคืน "หลายก้อน" — เช่น PDF ที่มีหลายบิล → เอาก้อนแรกที่สมดุล)
@@ -421,6 +429,77 @@ export async function extractBillData(
   } catch {
     console.warn("[bill-extract] extract error");
     return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** บิลนี้ "มีเนื้อหาจริง" ไหม (กันสร้าง entry เปล่าจาก element ขยะ) */
+function billHasContent(b: ExtractedBill): boolean {
+  return (
+    !!b.doc_no ||
+    !!b.doc_date ||
+    !!b.seller_name ||
+    !!b.buyer_name ||
+    b.lines.some((l) => (l.amount ?? 0) > 0 || (l.vat_amount ?? 0) > 0)
+  );
+}
+
+/**
+ * สกัด "ทุกบิล" จากเอกสาร (ไฟล์อัปเอง/PDF ที่รวมหลายใบ) → คืน ExtractedBill[]
+ *   ★ รองรับ PDF (file input) เหมือน extractBillData
+ *   ★ โมเดลคืน {bills:[...]}; ถ้าคืน object เดี่ยว (บิลเดียว) ก็ห่อเป็น 1 element
+ *   ★ กรอง element ที่ว่างจริง (ไม่มีเลข/ชื่อ/เลขที่) ออก · cap 30 บิล/ไฟล์
+ *   ★ degrade: ไม่มี key / อ่านไม่ได้ → คืน []
+ */
+export async function extractBillsData(imageData: Buffer, mime: string): Promise<ExtractedBill[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return [];
+
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const isPdf = (mime || "").toLowerCase().includes("pdf");
+  const dataUrl = `data:${mime || "image/jpeg"};base64,${imageData.toString("base64")}`;
+  const filePart = isPdf
+    ? { type: "file", file: { filename: "bill.pdf", file_data: dataUrl } }
+    : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(OPENAI_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: 8000, // หลายบิล → output ยาว
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: [{ type: "text", text: MULTI_USER_PROMPT }, filePart] },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.warn(`[bill-extract] multi openai http ${res.status}`);
+      return [];
+    }
+    const body = (await res.json()) as ChatCompletionResponse;
+    const content = body.choices?.[0]?.message?.content;
+    if (!content) return [];
+
+    const obj = extractJson(content);
+    if (!obj) return [];
+    const rawBills = Array.isArray((obj as { bills?: unknown }).bills)
+      ? ((obj as { bills: unknown[] }).bills)
+      : [obj]; // เผื่อโมเดลคืน object เดี่ยว
+    return rawBills
+      .map((b) => normalizeExtraction(b as Record<string, unknown>))
+      .filter((b): b is ExtractedBill => b !== null && billHasContent(b))
+      .slice(0, 30);
+  } catch {
+    console.warn("[bill-extract] multi extract error");
+    return [];
   } finally {
     clearTimeout(timer);
   }

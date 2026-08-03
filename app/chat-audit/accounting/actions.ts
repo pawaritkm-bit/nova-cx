@@ -449,18 +449,31 @@ export async function createEntryAction(formData: FormData): Promise<void> {
   // แท็บ unspecified → เริ่มเป็น purchase (คีย์เองรู้ฝั่งอยู่แล้ว, ให้ยืนยันได้ทันที)
   const rawType = asEntryType(formData.get("entryType"));
   const entryType: EntryType = rawType === "unspecified" ? "purchase" : rawType;
+  // ★ คง accountant เดิม (admin/lead) — ไม่งั้น redirect จะเด้งกลับหน้า "เลือกนักบัญชี"
+  const rawAccountant = formData.get("accountant");
+  const accountant =
+    typeof rawAccountant === "string" && (rawAccountant === "all" || isUuid(rawAccountant))
+      ? rawAccountant
+      : null;
+  const withAccountant = (sp: URLSearchParams) => {
+    if (accountant) sp.set("accountant", accountant);
+    return sp;
+  };
 
   // ★ สโคปนักบัญชี: สร้างได้เฉพาะลูกค้าที่ตัวเองดูแล (ห้ามสร้างแบบไม่ผูกลูกค้า/ลูกค้าคนอื่น)
   //   นอกสโคป → ไม่สร้าง กลับหน้าเดิม (ไม่ throw เพื่อไม่ให้ crash flow redirect)
   if (!customerInScope(ctx, customerId)) {
-    redirect(customerId ? `${PATH}?open=${customerId}` : PATH);
+    const sp = withAccountant(new URLSearchParams());
+    if (customerId) sp.set("open", customerId);
+    const qs = sp.toString();
+    redirect(qs ? `${PATH}?${qs}` : PATH);
   }
 
   const res = await upsertEntry(service, ctx.tenantId, { entryType, customerId });
   revalidatePath(PATH);
 
-  // สร้างสำเร็จ → เปิดหน้าแก้ของ entry ใหม่ (คงบริบทลูกค้า/แท็บ)
-  const sp = new URLSearchParams();
+  // สร้างสำเร็จ → เปิดหน้าแก้ของ entry ใหม่ (คงบริบทนักบัญชี/ลูกค้า/แท็บ)
+  const sp = withAccountant(new URLSearchParams());
   if (customerId) sp.set("open", customerId);
   sp.set("type", entryType);
   if (res.ok) sp.set("edit", res.data.id);

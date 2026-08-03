@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createBillUploadUrlAction, finalizeBillUploadAction } from "./actions";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { UPLOAD_ACCEPT, MAX_UPLOAD_BYTES, validateUpload } from "@/lib/accounting/upload";
@@ -33,6 +33,7 @@ export default function UploadFileButton({
   label?: string;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [err, setErr] = useState<string | null>(null);
@@ -142,8 +143,11 @@ export default function UploadFileButton({
       }
 
       // 5) เข้าหน้าตรวจ/แก้บิล (ข้อมูลที่ AI ลงจะโชว์ให้ตรวจ)
+      //    ★ คง accountant เดิมไว้ด้วย — ไม่งั้น admin/lead จะเด้งกลับหน้า "เลือกนักบัญชี"
       const openKey = customerId || "unassigned";
       const sp = new URLSearchParams();
+      const accountant = searchParams.get("accountant");
+      if (accountant) sp.set("accountant", accountant);
       sp.set("open", openKey);
       sp.set("type", entryType);
       if (res.id) sp.set("edit", res.id);

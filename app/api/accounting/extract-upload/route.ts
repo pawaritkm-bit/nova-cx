@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
     }
 
     const r = await extractUploadedEntry(service, access.tenantId, entryId);
-    return NextResponse.json({ ok: true, extracted: r.extracted });
+    return NextResponse.json({ ok: true, extracted: r.extracted, count: r.count });
   } catch {
     // ไม่ให้ล้มทั้ง flow อัปไฟล์ — คืน 200 extracted:false (หน้าแก้ยังเปิดให้คีย์เองได้)
     return NextResponse.json({ ok: true, extracted: false }, { status: 200 });

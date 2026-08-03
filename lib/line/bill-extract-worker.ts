@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { extractBillData, type ExtractedLine } from "@/lib/ai/bill-extract";
+import { extractBillData, extractBillsData, type ExtractedBill, type ExtractedLine } from "@/lib/ai/bill-extract";
 import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
 import { suggestWhtRate } from "@/lib/accounting/wht";
 import { calcVat } from "@/lib/accounting/calc";
@@ -629,33 +629,57 @@ export async function processBillExtraction(
  * ★ degrade: ไม่มี key / ดาวน์โหลดพลาด / อ่านไม่ได้ → extracted:false (คง draft ว่างให้คีย์เอง)
  * ★ PDPA: ไม่ log path/เนื้อบิล/ตัวเลข
  */
+/** สร้าง object หัวเอกสารจากบิลที่สกัดได้ · counterparty ตามฝั่งที่ผู้ใช้เลือก (ซื้อ→ผู้ขาย, ขาย→ผู้ซื้อ) */
+function billHeadFields(bill: ExtractedBill, entryType: string | null): Record<string, unknown> {
+  const seller = { name: bill.seller_name ?? null, taxId: bill.seller_tax_id ?? null };
+  const buyer = { name: bill.buyer_name ?? null, taxId: bill.buyer_tax_id ?? null };
+  const counterparty =
+    entryType === "sale" ? buyer : entryType === "purchase" ? seller : { name: null, taxId: null };
+  return {
+    doc_date: bill.doc_date ?? null,
+    doc_no: bill.doc_no ?? null,
+    counterparty_name: counterparty.name,
+    counterparty_tax_id: counterparty.taxId,
+    seller_name: seller.name,
+    seller_tax_id: seller.taxId,
+    buyer_name: buyer.name,
+    buyer_tax_id: buyer.taxId,
+    source: "ai",
+    ai_confidence: bill.overall_confidence ?? null,
+  };
+}
+
 export async function extractUploadedEntry(
   db: SupabaseClient,
   tenantId: string,
   entryId: string
-): Promise<{ extracted: boolean }> {
+): Promise<{ extracted: boolean; count: number }> {
+  const NONE = { extracted: false, count: 0 };
+
   // 1) โหลดหัว entry (scope tenant)
   const { data: e } = await db
     .from("bill_entries")
-    .select("id, entry_type, status, upload_path, upload_mime")
+    .select("entry_type, status, customer_id, upload_path, upload_name, upload_mime")
     .eq("id", entryId)
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
     .maybeSingle();
-  if (!e) return { extracted: false };
+  if (!e) return NONE;
   const entry = e as {
     entry_type: string | null;
     status: string | null;
+    customer_id: string | null;
     upload_path: string | null;
+    upload_name: string | null;
     upload_mime: string | null;
   };
-  if (entry.status === "confirmed" || !entry.upload_path) return { extracted: false };
+  if (entry.status === "confirmed" || !entry.upload_path) return NONE;
 
   // 2) อ่านได้เฉพาะรูป + PDF
   const mime = (entry.upload_mime || mimeFromPath(entry.upload_path)).toLowerCase();
   const isImage = mime.startsWith("image/");
   const isPdf = mime.includes("pdf");
-  if (!isImage && !isPdf) return { extracted: false };
+  if (!isImage && !isPdf) return NONE;
 
   // 3) กันทับงานคน — สกัดเฉพาะ entry ที่ยัง "ว่างจริง"
   const { data: curLines } = await db
@@ -664,54 +688,53 @@ export async function extractUploadedEntry(
     .eq("entry_id", entryId)
     .eq("tenant_id", tenantId);
   const existing = (curLines ?? []) as ReextractableLine[];
-  if (existing.length > 0 && !isEmptyReextractable(existing)) return { extracted: false };
+  if (existing.length > 0 && !isEmptyReextractable(existing)) return NONE;
 
-  // 4) ดาวน์โหลดไฟล์ + สกัดด้วย AI
+  // 4) ดาวน์โหลดไฟล์ + สกัด "ทุกบิล" (เอกสารอาจรวมหลายใบ)
   let buf: Buffer;
   try {
     const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(entry.upload_path);
-    if (dlErr || !blob) return { extracted: false };
+    if (dlErr || !blob) return NONE;
     buf = Buffer.from(await blob.arrayBuffer());
   } catch {
-    return { extracted: false };
+    return NONE;
   }
-  const bill = await extractBillData(buf, mime);
-  if (!bill) return { extracted: false };
+  const bills = await extractBillsData(buf, mime);
+  if (bills.length === 0) return NONE;
 
-  // 5) ฝั่งซื้อ/ขาย = ตามที่ผู้ใช้เลือกตอนอัป · counterparty ตามฝั่ง (ซื้อ→ผู้ขาย, ขาย→ผู้ซื้อ)
-  const seller = { name: bill.seller_name ?? null, taxId: bill.seller_tax_id ?? null };
-  const buyer = { name: bill.buyer_name ?? null, taxId: bill.buyer_tax_id ?? null };
-  const counterparty =
-    entry.entry_type === "sale"
-      ? buyer
-      : entry.entry_type === "purchase"
-        ? seller
-        : { name: null, taxId: null };
+  const entryType = entry.entry_type;
 
-  // 6) อัปเดตหัว entry → source='ai' (โชว์ป้ายช่วยตรวจ 🟢/🟡 + "AI ลง นักบัญชีตรวจ")
-  await db
-    .from("bill_entries")
-    .update({
-      doc_date: bill.doc_date ?? null,
-      doc_no: bill.doc_no ?? null,
-      counterparty_name: counterparty.name,
-      counterparty_tax_id: counterparty.taxId,
-      seller_name: seller.name,
-      seller_tax_id: seller.taxId,
-      buyer_name: buyer.name,
-      buyer_tax_id: buyer.taxId,
-      source: "ai",
-      ai_confidence: bill.overall_confidence ?? null,
-    })
-    .eq("id", entryId)
-    .eq("tenant_id", tenantId);
-
-  // 7) แทนบรรทัด: ลบของเดิม (ว่าง) → ใส่บรรทัดที่ AI สกัด
+  // 5) บิลแรก → เติมลง entry เดิม (แทนบรรทัดว่าง)
+  await db.from("bill_entries").update(billHeadFields(bills[0], entryType)).eq("id", entryId).eq("tenant_id", tenantId);
   await db.from("bill_entry_lines").delete().eq("entry_id", entryId).eq("tenant_id", tenantId);
-  const lineRows = buildEntryLineRows(bill.lines, { entryId, tenantId, forceNoVat: false, aiUsed: true });
-  await db.from("bill_entry_lines").insert(lineRows);
+  await db
+    .from("bill_entry_lines")
+    .insert(buildEntryLineRows(bills[0].lines, { entryId, tenantId, forceNoVat: false, aiUsed: true }));
 
-  return { extracted: true };
+  // 6) บิลที่ 2..N → สร้าง entry ใหม่ (ลูกค้า/ประเภท/ไฟล์เดียวกัน) ให้นักบัญชีตรวจแยกใบ
+  for (let i = 1; i < bills.length; i++) {
+    const { data: ins } = await db
+      .from("bill_entries")
+      .insert({
+        tenant_id: tenantId,
+        customer_id: entry.customer_id,
+        entry_type: entryType,
+        status: "draft",
+        upload_path: entry.upload_path,
+        upload_name: entry.upload_name,
+        upload_mime: entry.upload_mime,
+        ...billHeadFields(bills[i], entryType),
+      })
+      .select("id")
+      .maybeSingle();
+    const newId = (ins as { id?: string } | null)?.id;
+    if (!newId) continue;
+    await db
+      .from("bill_entry_lines")
+      .insert(buildEntryLineRows(bills[i].lines, { entryId: newId, tenantId, forceNoVat: false, aiUsed: true }));
+  }
+
+  return { extracted: true, count: bills.length };
 }
 
 export type RedecideResult = {
