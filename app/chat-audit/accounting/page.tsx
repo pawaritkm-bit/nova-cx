@@ -935,6 +935,7 @@ export default async function AccountingPage({
           lockedCustomerLabel={customerLabel(code, g.name)}
           defaultEntryType={selectedType}
           label="อัปไฟล์"
+          accountant={accParam}
         />
         {/* ตรวจทาน + Excel ของลูกค้ารายนี้ */}
         {g.customerId ? (
@@ -1034,7 +1035,7 @@ export default async function AccountingPage({
               <button type="submit" className="btn">+ เพิ่มรายการเอง</button>
             </form>
             {/* อัปโหลดไฟล์เอง (เลือกลูกค้าได้) */}
-            <UploadFileButton customers={customerSelectOptions} />
+            <UploadFileButton customers={customerSelectOptions} accountant={accParam} />
             {/* ตรวจทานทุกบรรทัดก่อนออก Excel รวม */}
             <a href={reviewAllHref} className="btn btn-ghost">ตรวจทาน / ออก Excel (รวม)</a>
           </form>

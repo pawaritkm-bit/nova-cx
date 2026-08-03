@@ -23,6 +23,7 @@ export default function UploadFileButton({
   lockedCustomerLabel,
   defaultEntryType = "purchase",
   label = "อัปโหลดไฟล์เอง",
+  accountant = null,
 }: {
   /** ตัวเลือกลูกค้า (โหมด toolbar — ไม่ผูกลูกค้า) */
   customers?: { id: string; label: string }[];
@@ -31,6 +32,8 @@ export default function UploadFileButton({
   lockedCustomerLabel?: string;
   defaultEntryType?: EntryType;
   label?: string;
+  /** ★ accountant param ปัจจุบัน (admin/lead) — server ส่งมาเพื่อคงบริบทตอนเด้งเข้าหน้าแก้ */
+  accountant?: string | null;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -142,15 +145,16 @@ export default function UploadFileButton({
         }
       }
 
-      // 5) เข้าหน้าตรวจ/แก้บิล (ข้อมูลที่ AI ลงจะโชว์ให้ตรวจ)
+      // 5) เข้า "หน้ารายการบิลของลูกค้า" (เห็นทุกใบที่ AI อ่านได้ — คลิกใบไหนก็เข้าตรวจได้)
       //    ★ คง accountant เดิมไว้ด้วย — ไม่งั้น admin/lead จะเด้งกลับหน้า "เลือกนักบัญชี"
+      //    ★ ไม่ใส่ edit — ให้ลงที่ลิสต์ (ไฟล์เดียวอาจได้หลายบิล) แทนกระโดดเข้าแก้ใบแรก
       const openKey = customerId || "unassigned";
       const sp = new URLSearchParams();
-      const accountant = searchParams.get("accountant");
-      if (accountant) sp.set("accountant", accountant);
+      // prop (จาก server — ชัวร์) ก่อน แล้ว fallback client searchParams
+      const acct = accountant || searchParams.get("accountant");
+      if (acct) sp.set("accountant", acct);
       sp.set("open", openKey);
       sp.set("type", entryType);
-      if (res.id) sp.set("edit", res.id);
       setOpen(false);
       reset();
       router.push(`/chat-audit/accounting?${sp.toString()}`);
