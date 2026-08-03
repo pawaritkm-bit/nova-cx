@@ -46,6 +46,8 @@ type LineRow = {
   whtAmount: string;
   /** AI เติมค่าบรรทัดนี้ไหม (จากผลสกัด) — ใช้ทำป้าย 🟢/🟡 ช่วยตรวจ · บรรทัดที่คนเพิ่ม = false */
   aiFilled: boolean;
+  /** AI "เดาเติม" ช่องเสี่ยง (conf ต่ำ) — แยกป้าย "AI เดา — ตรวจ" (🟡) ออกจาก "มั่นใจ" (🟢) */
+  aiLowConfidence: boolean;
 };
 
 let keySeq = 0;
@@ -62,7 +64,7 @@ function numToInput(n: number): string {
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
     return [
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ];
   }
   return entry.lines.map((l) => ({
@@ -77,6 +79,7 @@ function initLines(entry: BillEntry): LineRow[] {
     whtRate: numToInput(l.whtRate),
     whtAmount: numToInput(l.whtAmount),
     aiFilled: l.aiFilled,
+    aiLowConfidence: l.aiLowConfidence,
   }));
 }
 
@@ -177,7 +180,7 @@ export default function EntryEditor({
   const addLine = () => {
     setLines((prev) => [
       ...prev,
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ]);
   };
 
@@ -459,22 +462,30 @@ export default function EntryEditor({
                 const vat = parseAmountInput(l.vatAmount);
                 const wht = parseAmountInput(l.whtAmount);
                 const net = calcNet(amt, vat, wht);
-                // ป้ายช่วยตรวจ (เฉพาะบิล AI ที่ยังแก้ได้): 🟢 AI เติมครบ · 🟡 ยังมีช่องว่าง
+                // ป้ายช่วยตรวจ 3 สถานะ (เฉพาะบิล AI ที่ยังแก้ได้):
+                //   🟢 มั่นใจ (confident) · 🟡 AI เดา—ตรวจ (guess) · 🟡 โปรดตรวจ/เติม (check)
                 const badge = !readOnly
-                  ? lineBadge({ accountCode: l.accountCode, amount: amt, aiFilled: l.aiFilled }, entry.source)
+                  ? lineBadge(
+                      { accountCode: l.accountCode, amount: amt, aiFilled: l.aiFilled, aiLowConfidence: l.aiLowConfidence },
+                      entry.source
+                    )
                   : null;
                 return (
                   <div className="acc-line" key={l.key}>
                     <div className="acc-line-desc">
                       {badge ? (
                         <span
-                          className={`acc-line-flag ${badge === "confident" ? "ok" : "warn"}`}
+                          className={`acc-line-flag ${badge === "confident" ? "ok" : badge === "guess" ? "guess" : "warn"}`}
                           title={
                             badge === "confident"
-                              ? "AI เติมครบ (บัญชี + ยอด) — ช่วยตรวจให้ถูก"
-                              : "โปรดตรวจ: ยังมีช่องสำคัญว่าง (ยอด/บัญชี)"
+                              ? "AI เติมครบ (บัญชี + ยอด) มั่นใจสูง — ช่วยตรวจให้ถูก"
+                              : badge === "guess"
+                                ? "AI เดา (ความมั่นใจต่ำ) — โปรดตรวจให้ถูกก่อนยืนยัน"
+                                : "โปรดตรวจ: ยังมีช่องสำคัญว่าง (ยอด/บัญชี)"
                           }
-                          aria-label={badge === "confident" ? "AI มั่นใจ" : "โปรดตรวจ"}
+                          aria-label={
+                            badge === "confident" ? "AI มั่นใจ" : badge === "guess" ? "AI เดา ตรวจ" : "โปรดตรวจ"
+                          }
                         >
                           {badge === "confident" ? "🟢" : "🟡"}
                         </span>

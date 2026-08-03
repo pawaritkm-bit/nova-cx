@@ -39,6 +39,8 @@ export type BillEntryLine = {
   whtRate: number;
   whtAmount: number;
   aiFilled: boolean;
+  /** ★ true = AI "เดาเติม" ช่องเสี่ยง (ยอด/VAT/บัญชี conf ต่ำ) → ป้าย "AI เดา — ตรวจ" */
+  aiLowConfidence: boolean;
 };
 
 /** หัวเอกสาร + lines + ข้อมูลประกอบ (ลูกค้า/ไฟล์แนบ) ที่หน้าใช้ */
@@ -186,6 +188,7 @@ type RawLine = {
   wht_rate: number | string | null;
   wht_amount: number | string | null;
   ai_filled: boolean;
+  ai_low_confidence: boolean;
 };
 
 type RawEntry = {
@@ -235,6 +238,7 @@ function mapLine(r: RawLine): BillEntryLine {
     whtRate: num(r.wht_rate),
     whtAmount: num(r.wht_amount),
     aiFilled: !!r.ai_filled,
+    aiLowConfidence: !!r.ai_low_confidence,
   };
 }
 
@@ -301,7 +305,7 @@ export async function listEntries(
   // lines ของ entry เหล่านี้
   const { data: lineData } = await db
     .from("bill_entry_lines")
-    .select("id, entry_id, line_no, vat_type, description, account_code, account_name, amount, vat_amount, wht_rate, wht_amount, ai_filled")
+    .select("id, entry_id, line_no, vat_type, description, account_code, account_name, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence")
     .eq("tenant_id", tenantId)
     .in("entry_id", entryIds)
     .order("line_no", { ascending: true });

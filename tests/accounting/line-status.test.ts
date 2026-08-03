@@ -19,29 +19,34 @@ const line = (p: Partial<BillEntryLine>): BillEntryLine => ({
   whtRate: 0,
   whtAmount: 0,
   aiFilled: p.aiFilled ?? false,
+  aiLowConfidence: p.aiLowConfidence ?? false,
 });
 
-describe("lineBadge", () => {
-  it("🟢 confident = ai_filled + มี account_code + amount>0", () => {
-    expect(lineBadge({ accountCode: "5340", amount: 100, aiFilled: true }, "ai")).toBe("confident");
+describe("lineBadge — 3 สถานะ (มั่นใจ / เดา / ว่าง)", () => {
+  it("🟢 confident = ai_filled + มี account_code + amount>0 + ไม่เดา", () => {
+    expect(lineBadge({ accountCode: "5340", amount: 100, aiFilled: true, aiLowConfidence: false }, "ai")).toBe("confident");
   });
 
-  it("🟡 check = account_code ว่าง (แม้มียอด)", () => {
-    expect(lineBadge({ accountCode: null, amount: 100, aiFilled: true }, "ai")).toBe("check");
-    expect(lineBadge({ accountCode: "  ", amount: 100, aiFilled: true }, "ai")).toBe("check");
+  it("🟡 guess = เติมครบ แต่ AI เดา (ai_low_confidence)", () => {
+    expect(lineBadge({ accountCode: "5340", amount: 100, aiFilled: true, aiLowConfidence: true }, "ai")).toBe("guess");
+  });
+
+  it("🟡 check = account_code ว่าง (แม้มียอด) — ว่างสำคัญกว่าเดา", () => {
+    expect(lineBadge({ accountCode: null, amount: 100, aiFilled: true, aiLowConfidence: true }, "ai")).toBe("check");
+    expect(lineBadge({ accountCode: "  ", amount: 100, aiFilled: true, aiLowConfidence: false }, "ai")).toBe("check");
   });
 
   it("🟡 check = amount<=0 (แม้มีบัญชี)", () => {
-    expect(lineBadge({ accountCode: "5340", amount: 0, aiFilled: true }, "ai")).toBe("check");
+    expect(lineBadge({ accountCode: "5340", amount: 0, aiFilled: true, aiLowConfidence: false }, "ai")).toBe("check");
   });
 
   it("🟡 check = ai_filled=false (AI ไม่ได้เติมบรรทัดนี้)", () => {
-    expect(lineBadge({ accountCode: "5340", amount: 100, aiFilled: false }, "ai")).toBe("check");
+    expect(lineBadge({ accountCode: "5340", amount: 100, aiFilled: false, aiLowConfidence: false }, "ai")).toBe("check");
   });
 
   it("บิลคีย์เอง (manual) → null (ไม่มีป้าย AI)", () => {
-    expect(lineBadge({ accountCode: "5340", amount: 100, aiFilled: true }, "manual")).toBeNull();
-    expect(lineBadge({ accountCode: null, amount: 0, aiFilled: false }, "manual")).toBeNull();
+    expect(lineBadge({ accountCode: "5340", amount: 100, aiFilled: true, aiLowConfidence: false }, "manual")).toBeNull();
+    expect(lineBadge({ accountCode: null, amount: 0, aiFilled: false, aiLowConfidence: false }, "manual")).toBeNull();
   });
 });
 
@@ -85,6 +90,11 @@ describe("entryNeedsReview / countNeedsReview", () => {
   it("บิล AI ร่าง + ทุกบรรทัด 🟢 → ไม่รอตรวจ", () => {
     const e = entry({ source: "ai", status: "draft", lines: [line({ accountCode: "5340", amount: 100, aiFilled: true })] });
     expect(entryNeedsReview(e)).toBe(false);
+  });
+
+  it("บิล AI ร่าง + มีบรรทัด 🟡 guess (AI เดา) → รอตรวจ", () => {
+    const e = entry({ source: "ai", status: "draft", lines: [line({ accountCode: "5340", amount: 100, aiFilled: true, aiLowConfidence: true })] });
+    expect(entryNeedsReview(e)).toBe(true);
   });
 
   it("บิล AI ร่าง + ไม่มีบรรทัดเลย → รอตรวจ (ต้องคีย์)", () => {

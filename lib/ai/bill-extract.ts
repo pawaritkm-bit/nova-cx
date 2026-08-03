@@ -18,8 +18,15 @@ import { CHART_BY_CODE, searchChartNonBank } from "@/lib/accounting/chart-of-acc
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 60_000;
 
-/** เกณฑ์ความมั่นใจขั้นต่ำต่อ field — ต่ำกว่านี้ = เว้น null ให้คนคีย์ */
+/** เกณฑ์ความมั่นใจ "สูง" ต่อ field — >= นี้ = มั่นใจ (ไม่ mark เดา) */
 const FIELD_THRESHOLD = 0.8;
+
+/**
+ * ★ เกณฑ์ขั้นต่ำที่จะ "เดาเติม" (proactive fill) — โหมดเติมเชิงรุก
+ *   confidence อยู่ในช่วง [GUESS_THRESHOLD, FIELD_THRESHOLD) = เติมค่า แต่ mark ว่า "เดา" (low-confidence)
+ *   ต่ำกว่า GUESS_THRESHOLD = ยังเว้น null (ต่ำเกินจะเดา) · ค่าผิดปกติ (ติดลบ/ไม่ใช่เลข) = null เสมอ
+ */
+const GUESS_THRESHOLD = 0.3;
 
 /**
  * เกณฑ์ความมั่นใจขั้นต่ำของ "บัญชีที่ AI แนะนำ" (account_code)
@@ -68,6 +75,11 @@ export type ExtractedLine = {
    *   ★ null = ให้ worker auto-คำนวณจาก amount*rate แทน (ถ้ามีฐาน)
    */
   wht_amount: number | null;
+  /**
+   * ★ true = บรรทัดนี้มีช่อง "เดาเติม" (amount/vat_amount/account_code ที่เติมแบบ confidence < high-threshold)
+   *   → ให้ UI ติดป้าย "AI เดา — ตรวจ" ก่อนยืนยัน · false = เติมด้วยความมั่นใจสูง หรือไม่ได้เติมช่องเสี่ยง
+   */
+  low_confidence: boolean;
 };
 
 /**
@@ -164,10 +176,11 @@ function clampConfidence(raw: unknown): number {
 /**
  * gate string field: คืน value ก็ต่อเมื่อ confidence >= threshold และ value เป็น string ไม่ว่าง
  *   ต่ำกว่าเกณฑ์/ว่าง/ไม่ใช่ string → null (ให้คนคีย์)
+ *   ★ threshold ปรับได้: date/tax_id คงเกณฑ์สูง (FIELD_THRESHOLD), doc_no/ชื่อ/คำอธิบายเติมเชิงรุก (GUESS_THRESHOLD)
  */
-function gateString(field: ConfField | undefined): string | null {
+function gateString(field: ConfField | undefined, threshold = FIELD_THRESHOLD): string | null {
   if (!field || typeof field !== "object") return null;
-  if (clampConfidence(field.confidence) < FIELD_THRESHOLD) return null;
+  if (clampConfidence(field.confidence) < threshold) return null;
   const v = field.value;
   if (typeof v !== "string") return null;
   const t = v.trim();
@@ -175,8 +188,8 @@ function gateString(field: ConfField | undefined): string | null {
 }
 
 /**
- * gate number field: คืน value ก็ต่อเมื่อ confidence >= threshold และ value เป็นเลขจำกัด >= 0
- *   ★ ตัวเลขคือหัวใจ: ไม่มั่นใจ = null เสมอ (เว้นว่างให้คนคีย์)
+ * gate number field (โหมดเดิม, เกณฑ์สูง): คืน value เฉพาะ confidence >= FIELD_THRESHOLD และเลข >= 0
+ *   ใช้กับ WHT (หัก ณ ที่จ่าย) — ไม่ชัด = null (ให้ worker แนะนำจากบัญชีแทน) · ไม่เดาเติม
  */
 function gateNumber(field: ConfField | undefined): number | null {
   if (!field || typeof field !== "object") return null;
@@ -188,26 +201,45 @@ function gateNumber(field: ConfField | undefined): number | null {
 }
 
 /**
- * gate account_code ที่ AI แนะนำ: คืน code เฉพาะเมื่อ
- *   - confidence >= ACCOUNT_THRESHOLD (ไม่มั่นใจ = null ให้คนเลือก)
- *   - code อยู่ในผังกลาง "non-bank" จริง (กันรหัสมั่ว/นอกผัง/หมวดเงินฝากธนาคาร)
- *   รองรับทั้งรูป {value, confidence} และ string ตรง ๆ (เผื่อโมเดลตอบต่างรูป)
+ * ★ gate number แบบ "เดาเติม" (proactive): คืน { value, low }
+ *   - ค่าผิดปกติ (ไม่ใช่เลข/ติดลบ) → { null, false } เสมอ (ไม่เติมค่ามั่ว)
+ *   - confidence < GUESS_THRESHOLD → { null, false } (ต่ำเกินจะเดา — เว้นว่าง)
+ *   - confidence อยู่ [GUESS_THRESHOLD, FIELD_THRESHOLD) → เติมค่า + low=true (เดา ต้องตรวจ)
+ *   - confidence >= FIELD_THRESHOLD → เติมค่า + low=false (มั่นใจ)
  */
-function gateAccountCode(raw: unknown): string | null {
+function gateNumberGuess(field: ConfField | undefined): { value: number | null; low: boolean } {
+  if (!field || typeof field !== "object") return { value: null, low: false };
+  const conf = clampConfidence(field.confidence);
+  const v = field.value;
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v.replace(/,/g, "")) : NaN;
+  if (!Number.isFinite(n) || n < 0) return { value: null, low: false }; // ค่าผิดปกติ = ทิ้งเสมอ
+  if (conf < GUESS_THRESHOLD) return { value: null, low: false }; // ต่ำเกินจะเดา
+  return { value: n, low: conf < FIELD_THRESHOLD };
+}
+
+/**
+ * ★ gate account_code แบบ "เดาเติม" (proactive): คืน { value, low }
+ *   - code ต้องอยู่ในผังกลาง "non-bank" จริง (นอกผัง/หมวดเงินฝากธนาคาร = ทิ้งเสมอ)
+ *   - confidence < GUESS_THRESHOLD → ทิ้ง (ให้คนเลือก)
+ *   - [GUESS_THRESHOLD, ACCOUNT_THRESHOLD) → เติม + low=true (เดา ต้องตรวจ)
+ *   - >= ACCOUNT_THRESHOLD → เติม + low=false (มั่นใจ)
+ *   รองรับทั้งรูป {value, confidence} และ string ตรง ๆ (string = ถือว่ามั่นใจ)
+ */
+function gateAccountCodeGuess(raw: unknown): { value: string | null; low: boolean } {
   let value: unknown = raw;
   let conf = 1; // string ตรง ๆ (ไม่มี confidence) → ถือว่ามั่นใจ แล้วค่อย validate ด้วยผัง
   if (raw && typeof raw === "object") {
     value = (raw as ConfField).value;
     conf = clampConfidence((raw as ConfField).confidence);
   }
-  if (conf < ACCOUNT_THRESHOLD) return null;
-  if (typeof value !== "string") return null;
+  if (conf < GUESS_THRESHOLD) return { value: null, low: false };
+  if (typeof value !== "string") return { value: null, low: false };
   const code = value.trim();
-  if (!code) return null;
+  if (!code) return { value: null, low: false };
   const acct = CHART_BY_CODE[code];
   // ต้องมีในผัง + ไม่ใช่หมวดเงินฝากธนาคาร (bank = บัญชีต่อลูกค้า ห้าม AI เลือก)
-  if (!acct || acct.bank) return null;
-  return code;
+  if (!acct || acct.bank) return { value: null, low: false };
+  return { value: code, low: conf < ACCOUNT_THRESHOLD };
 }
 
 /** normalize 1 line ดิบ → ExtractedLine พร้อม gate ตัวเลขทุกช่อง */
@@ -232,15 +264,24 @@ function normalizeLine(raw: unknown): ExtractedLine | null {
     vatType = vtNorm as "vat" | "novat";
   }
 
+  // ★ โหมดเติมเชิงรุก: amount/vat/account เติมแม้ conf ต่ำ (>= GUESS_THRESHOLD) แต่ mark "เดา"
+  const amount = gateNumberGuess(o.amount as ConfField);
+  const vatAmount = gateNumberGuess(o.vat_amount as ConfField);
+  const account = gateAccountCodeGuess(o.account_code);
+  // low_confidence ของบรรทัด = มีช่องเสี่ยง (amount/vat/บัญชี) ที่เติมแบบ "เดา" อย่างน้อย 1 ช่อง
+  const lowConfidence = amount.low || vatAmount.low || account.low;
+
   return {
     vat_type: vatType,
-    description: gateString(o.description as ConfField),
-    amount: gateNumber(o.amount as ConfField),
-    vat_amount: gateNumber(o.vat_amount as ConfField),
-    account_code: gateAccountCode(o.account_code),
-    // ★ WHT: gate ด้วย FIELD_THRESHOLD เหมือนตัวเลขอื่น — ไม่ชัด = null (ให้ worker แนะนำจากบัญชี)
+    // string เสี่ยงน้อยกว่าตัวเลข → เติมเชิงรุก (GUESS_THRESHOLD) แต่ไม่ mark เดา
+    description: gateString(o.description as ConfField, GUESS_THRESHOLD),
+    amount: amount.value,
+    vat_amount: vatAmount.value,
+    account_code: account.value,
+    // ★ WHT: คงเกณฑ์สูง (FIELD_THRESHOLD) — ไม่ชัด = null (ให้ worker แนะนำจากบัญชี) ไม่เดาเติม
     wht_rate: gateNumber(o.wht_rate as ConfField),
     wht_amount: gateNumber(o.wht_amount as ConfField),
+    low_confidence: lowConfidence,
   };
 }
 
@@ -260,16 +301,18 @@ export function normalizeExtraction(raw: Record<string, unknown> | null): Extrac
 
   // ถ้าไม่มี line ใด ๆ ให้สร้าง 1 line ว่าง (vat) ไว้ให้คนคีย์ — ไม่ทิ้งทั้งใบ
   if (lines.length === 0) {
-    lines.push({ vat_type: "vat", description: null, amount: null, vat_amount: null, account_code: null, wht_rate: null, wht_amount: null });
+    lines.push({ vat_type: "vat", description: null, amount: null, vat_amount: null, account_code: null, wht_rate: null, wht_amount: null, low_confidence: false });
   }
 
   return {
+    // ★ doc_date / tax_id (13 หลัก): คงเกณฑ์สูง — วันที่/เลขภาษีผิด = ยุ่ง (ไม่เดาเติม)
     doc_date: gateString(r.doc_date),
-    doc_no: gateString(r.doc_no),
-    seller_name: gateString(r.seller_name),
     seller_tax_id: gateString(r.seller_tax_id),
-    buyer_name: gateString(r.buyer_name),
     buyer_tax_id: gateString(r.buyer_tax_id),
+    // ★ doc_no / ชื่อผู้ขาย-ผู้ซื้อ: เติมเชิงรุก (GUESS_THRESHOLD) — string เสี่ยงน้อยกว่าตัวเลข
+    doc_no: gateString(r.doc_no, GUESS_THRESHOLD),
+    seller_name: gateString(r.seller_name, GUESS_THRESHOLD),
+    buyer_name: gateString(r.buyer_name, GUESS_THRESHOLD),
     lines,
     overall_confidence: clampConfidence(r.overall_confidence),
   };

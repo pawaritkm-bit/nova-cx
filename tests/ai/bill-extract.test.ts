@@ -25,32 +25,64 @@ describe("normalizeExtraction — high-confidence gating", () => {
     expect(r?.buyer_name).toBe("บริษัท ข");
     expect(r?.lines[0].amount).toBe(100);
     expect(r?.lines[0].vat_amount).toBe(7);
+    // เติมด้วยความมั่นใจสูง → ไม่ mark เดา
+    expect(r?.lines[0].low_confidence).toBe(false);
   });
 
-  it("★ ตัวเลข confidence ต่ำ (<0.8) → null (เว้นว่าง ห้ามเดา)", () => {
+  it("★ ตัวเลข conf ปานกลาง (>=0.3, <0.8) → เติมค่า + mark low_confidence (เดา)", () => {
     const r = normalizeExtraction({
       lines: [
         {
           vat_type: "vat",
           amount: { value: 999, confidence: 0.5 },
-          vat_amount: { value: 70, confidence: 0.79 },
+          vat_amount: { value: 70, confidence: 0.5 },
         },
       ],
       overall_confidence: 0.6,
     });
-    expect(r?.lines[0].amount).toBeNull();
-    expect(r?.lines[0].vat_amount).toBeNull();
+    expect(r?.lines[0].amount).toBe(999);
+    expect(r?.lines[0].vat_amount).toBe(70);
+    expect(r?.lines[0].low_confidence).toBe(true);
   });
 
-  it("string field confidence ต่ำ → null", () => {
+  it("★ ตัวเลข conf ต่ำมาก (<0.3) → null (ต่ำเกินจะเดา, ไม่ mark)", () => {
     const r = normalizeExtraction({
-      doc_no: { value: "เดามา", confidence: 0.3 },
-      seller_name: { value: "ชื่อเบลอ", confidence: 0.7 },
+      lines: [
+        {
+          vat_type: "vat",
+          amount: { value: 999, confidence: 0.2 },
+          vat_amount: { value: 70, confidence: 0.1 },
+        },
+      ],
+      overall_confidence: 0.2,
+    });
+    expect(r?.lines[0].amount).toBeNull();
+    expect(r?.lines[0].vat_amount).toBeNull();
+    expect(r?.lines[0].low_confidence).toBe(false);
+  });
+
+  it("string: doc_no/ชื่อ เติมเชิงรุก (>=0.3) · doc_date/tax_id คงเกณฑ์สูง", () => {
+    const r = normalizeExtraction({
+      doc_no: { value: "R-1", confidence: 0.4 }, // >=0.3 → เก็บ
+      seller_name: { value: "ผู้ขาย", confidence: 0.5 }, // >=0.3 → เก็บ
+      doc_date: { value: "2026-07-15", confidence: 0.5 }, // <0.8 → null (วันที่ผิด=ยุ่ง)
+      seller_tax_id: { value: "0105500000001", confidence: 0.5 }, // <0.8 → null (เลขภาษี)
       lines: [],
       overall_confidence: 0.4,
     });
+    expect(r?.doc_no).toBe("R-1");
+    expect(r?.seller_name).toBe("ผู้ขาย");
+    expect(r?.doc_date).toBeNull();
+    expect(r?.seller_tax_id).toBeNull();
+  });
+
+  it("string conf ต่ำมาก (<0.3) → null (ต่ำเกินจะเดา)", () => {
+    const r = normalizeExtraction({
+      doc_no: { value: "เดามา", confidence: 0.2 },
+      lines: [],
+      overall_confidence: 0.2,
+    });
     expect(r?.doc_no).toBeNull();
-    expect(r?.seller_name).toBeNull();
   });
 
   it("ไม่มี line เลย → สร้าง 1 line ว่าง (vat, ค่า null) ไม่ทิ้งทั้งใบ", () => {
@@ -58,6 +90,7 @@ describe("normalizeExtraction — high-confidence gating", () => {
     expect(r?.lines.length).toBe(1);
     expect(r?.lines[0].vat_type).toBe("vat");
     expect(r?.lines[0].amount).toBeNull();
+    expect(r?.lines[0].low_confidence).toBe(false);
   });
 
   it("vat_type: AI ติ๊กเฉพาะที่มั่นใจ · ไม่ชัด/ค่าแปลก → default novat (ไม่เคลม VAT มั่ว)", () => {
@@ -104,11 +137,12 @@ describe("normalizeExtraction — high-confidence gating", () => {
 });
 
 describe("normalizeExtraction — account_code (บัญชีที่ AI แนะนำ)", () => {
-  it("code non-bank ในผัง + confidence สูง → เก็บ (เช่น 5340 ค่าน้ำมัน)", () => {
+  it("code non-bank ในผัง + confidence สูง → เก็บ (เช่น 5340 ค่าน้ำมัน) + ไม่ mark เดา", () => {
     const r = normalizeExtraction({
       lines: [{ vat_type: "vat", amount: { value: 100, confidence: 0.9 }, account_code: { value: "5340", confidence: 0.9 } }],
     });
     expect(r?.lines[0].account_code).toBe("5340");
+    expect(r?.lines[0].low_confidence).toBe(false);
   });
 
   it("★ code หมวดเงินฝากธนาคาร (bank:true เช่น 1020) → null (ห้าม AI เลือก)", () => {
@@ -125,11 +159,20 @@ describe("normalizeExtraction — account_code (บัญชีที่ AI แ�
     expect(r?.lines[0].account_code).toBeNull();
   });
 
-  it("confidence ต่ำ (<0.7) → null (ไม่มั่นใจ ให้คนเลือก)", () => {
+  it("★ conf ปานกลาง (>=0.3, <0.7) → เติมบัญชี + mark low_confidence (เดา)", () => {
     const r = normalizeExtraction({
       lines: [{ vat_type: "vat", account_code: { value: "5340", confidence: 0.5 } }],
     });
+    expect(r?.lines[0].account_code).toBe("5340");
+    expect(r?.lines[0].low_confidence).toBe(true);
+  });
+
+  it("conf ต่ำมาก (<0.3) → null (ต่ำเกินจะเดา ให้คนเลือก)", () => {
+    const r = normalizeExtraction({
+      lines: [{ vat_type: "vat", account_code: { value: "5340", confidence: 0.2 } }],
+    });
     expect(r?.lines[0].account_code).toBeNull();
+    expect(r?.lines[0].low_confidence).toBe(false);
   });
 
   it("value=null → null", () => {
@@ -242,6 +285,8 @@ describe("extractBillData — degrade & error → null", () => {
     expect(r?.doc_no).toBe("R-99");
     expect(r?.seller_name).toBe("ผู้ขาย");
     expect(r?.lines[0].amount).toBe(200);
-    expect(r?.lines[0].vat_amount).toBeNull(); // confidence 0.4 < 0.8 → เว้นว่าง
+    // ★ โหมดเติมเชิงรุก: vat conf 0.4 (>=0.3) → เดาเติม 14 + mark low_confidence
+    expect(r?.lines[0].vat_amount).toBe(14);
+    expect(r?.lines[0].low_confidence).toBe(true);
   });
 });

@@ -21,7 +21,7 @@ function mkLine(p: Partial<BillEntryLine> = {}): BillEntryLine {
     id: `l${seq}`, entryId: p.entryId ?? "e", lineNo: 1, vatType: "vat",
     description: null, accountCode: p.accountCode ?? null, accountName: null,
     amount: p.amount ?? 0, vatAmount: p.vatAmount ?? 0, whtRate: 0,
-    whtAmount: p.whtAmount ?? 0, aiFilled: false,
+    whtAmount: p.whtAmount ?? 0, aiFilled: false, aiLowConfidence: p.aiLowConfidence ?? false,
   };
 }
 function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {

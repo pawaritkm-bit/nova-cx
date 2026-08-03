@@ -33,6 +33,7 @@ function mkLine(p: Partial<BillEntryLine> = {}): BillEntryLine {
     whtRate: p.whtRate ?? 0,
     whtAmount: p.whtAmount ?? 0,
     aiFilled: p.aiFilled ?? false,
+    aiLowConfidence: p.aiLowConfidence ?? false,
   };
 }
 

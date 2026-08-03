@@ -124,6 +124,7 @@ export function buildEntryLineRows(
             account_code: null,
             wht_rate: null,
             wht_amount: null,
+            low_confidence: false,
           },
         ];
   return src.map((l, i) => {
@@ -136,6 +137,8 @@ export function buildEntryLineRows(
     const vatAmount = l.vat_amount ?? calcVat(amount, vatType);
     const { wht_rate, wht_amount } = resolveLineWht(l.wht_rate, l.wht_amount, amount, accountCode);
     const aiFilled = ctx.aiUsed && (l.amount !== null || l.vat_amount !== null || accountCode !== null);
+    // ★ true เมื่อ AI "เดาเติม" ช่องเสี่ยง (amount/vat/บัญชี conf ต่ำ) → UI ติดป้าย "AI เดา — ตรวจ"
+    const aiLowConfidence = ctx.aiUsed && !!l.low_confidence;
     return {
       entry_id: ctx.entryId,
       tenant_id: ctx.tenantId,
@@ -149,6 +152,7 @@ export function buildEntryLineRows(
       wht_rate,
       wht_amount,
       ai_filled: aiFilled,
+      ai_low_confidence: aiLowConfidence,
     };
   });
 }
