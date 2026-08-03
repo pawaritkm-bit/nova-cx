@@ -3,6 +3,7 @@ import {
   suggestPaymentMethod,
   contraAccountFor,
   asPaymentMethod,
+  paymentMethodLabel,
   PAYMENT_METHOD_LABELS,
 } from "@/lib/accounting/payment";
 
@@ -43,16 +44,28 @@ describe("payment — contraAccountFor (บัญชีคู่เครดิ�
     expect(contraAccountFor("cash", "sale")).toEqual({ code: "1010", name: "เงินสด" });
   });
 
-  it("โอน + เลือกบัญชีธนาคาร → รหัสบัญชีธนาคารนั้น", () => {
-    const r = contraAccountFor("transfer", "purchase", "1020");
-    expect(r?.code).toBe("1020");
+  it("เช็ค + ขาย → 1155 เช็ครับล่วงหน้า", () => {
+    expect(contraAccountFor("cheque", "sale")).toEqual({ code: "1155", name: "เช็ครับล่วงหน้า" });
+  });
+
+  it("เช็ค + ซื้อ → 2220 เช็คสั่งจ่ายล่วงหน้า", () => {
+    expect(contraAccountFor("cheque", "purchase")).toEqual({ code: "2220", name: "เช็คสั่งจ่ายล่วงหน้า" });
+  });
+
+  it("เช็ค + รอระบุ → null (ยังตัดสินฝั่งไม่ได้)", () => {
+    expect(contraAccountFor("cheque", "unspecified")).toBeNull();
+  });
+
+  it("โอน + ผูกบัญชีธนาคารเดิม → รหัสบัญชีนั้น", () => {
+    const r = contraAccountFor("transfer", "purchase", "1025");
+    expect(r?.code).toBe("1025");
     expect(r?.name).toContain("เงินฝากธนาคาร");
   });
 
-  it("โอน + ยังไม่เลือกบัญชี → code ว่าง (รอเลือก)", () => {
+  it("โอน + ไม่มีบัญชีผูก → default 1020 เงินฝากธนาคาร", () => {
     const r = contraAccountFor("transfer", "sale", null);
-    expect(r?.code).toBe("");
-    expect(r?.name).toContain("ยังไม่เลือก");
+    expect(r?.code).toBe("1020");
+    expect(r?.name).toContain("เงินฝากธนาคาร");
   });
 
   it("เชื่อ + ซื้อ → 2010 เจ้าหนี้การค้า", () => {
@@ -73,8 +86,9 @@ describe("payment — contraAccountFor (บัญชีคู่เครดิ�
 });
 
 describe("payment — asPaymentMethod (validate จาก client)", () => {
-  it("รับเฉพาะค่าที่ถูกต้อง", () => {
+  it("รับเฉพาะค่าที่ถูกต้อง (รวม cheque)", () => {
     expect(asPaymentMethod("cash")).toBe("cash");
+    expect(asPaymentMethod("cheque")).toBe("cheque");
     expect(asPaymentMethod("transfer")).toBe("transfer");
     expect(asPaymentMethod("credit")).toBe("credit");
     expect(asPaymentMethod("evil")).toBeNull();
@@ -83,9 +97,24 @@ describe("payment — asPaymentMethod (validate จาก client)", () => {
     expect(asPaymentMethod(123)).toBeNull();
   });
 
-  it("มีป้ายไทยครบทุกวิธี", () => {
+  it("มีป้ายไทยกลาง ๆ ครบทุกวิธี", () => {
     expect(PAYMENT_METHOD_LABELS.cash).toBe("เงินสด");
-    expect(PAYMENT_METHOD_LABELS.transfer).toBe("โอน");
-    expect(PAYMENT_METHOD_LABELS.credit).toBe("เชื่อ");
+    expect(PAYMENT_METHOD_LABELS.cheque).toBe("เช็ค");
+    expect(PAYMENT_METHOD_LABELS.transfer).toBe("เงินโอน");
+    expect(PAYMENT_METHOD_LABELS.credit).toBe("ลูกหนี้/เจ้าหนี้");
+  });
+});
+
+describe("payment — paymentMethodLabel (ป้ายตามฝั่งบิล)", () => {
+  it("cash/cheque/transfer คงที่ทุกฝั่ง", () => {
+    expect(paymentMethodLabel("cash", "sale")).toBe("เงินสด");
+    expect(paymentMethodLabel("cheque", "purchase")).toBe("เช็ค");
+    expect(paymentMethodLabel("transfer", "sale")).toBe("เงินโอน");
+  });
+
+  it("credit → ขาย=ลูกหนี้ · ซื้อ=เจ้าหนี้ · รอระบุ=ลูกหนี้/เจ้าหนี้", () => {
+    expect(paymentMethodLabel("credit", "sale")).toBe("ลูกหนี้");
+    expect(paymentMethodLabel("credit", "purchase")).toBe("เจ้าหนี้");
+    expect(paymentMethodLabel("credit", "unspecified")).toBe("ลูกหนี้/เจ้าหนี้");
   });
 });

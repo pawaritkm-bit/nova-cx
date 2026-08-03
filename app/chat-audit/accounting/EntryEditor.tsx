@@ -3,17 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveEntryAction, deleteEntryAction, type SaveEntryInput } from "./actions";
-import {
-  searchChartNonBankGrouped,
-  BANK_ACCOUNTS,
-} from "@/lib/accounting/chart-of-accounts";
+import { searchChartNonBankGrouped } from "@/lib/accounting/chart-of-accounts";
 import { lineBadge } from "@/lib/accounting/line-status";
-import {
-  type CustomerBankAccount,
-  bankAccountDisplayName,
-  filterBankAccounts,
-} from "@/lib/accounting/bank-accounts";
-import BankAccountsPanel from "./BankAccountsPanel";
 import {
   parseAmountInput,
   calcVat,
@@ -23,7 +14,7 @@ import {
 } from "@/lib/accounting/calc";
 import type { BillEntry, EntryType, VatType, WhtForm, PaymentMethod } from "@/lib/accounting/queries";
 import { resolveEntryNav } from "@/lib/accounting/entry-nav";
-import { contraAccountFor } from "@/lib/accounting/payment";
+import { contraAccountFor, paymentMethodLabel } from "@/lib/accounting/payment";
 
 /**
  * EntryEditor — หน้าต่างตรวจ/แก้บิล (verify panel)
@@ -97,7 +88,6 @@ export default function EntryEditor({
   customerLabel,
   closeHref,
   orderIds = [],
-  bankAccounts = [],
 }: {
   entry: BillEntry;
   viewUrl: string | null;
@@ -112,11 +102,6 @@ export default function EntryEditor({
    *   — page.tsx (server) เป็นผู้ส่งมา เพื่อทำปุ่ม "ก่อนหน้า/ถัดไป" (กรอกต่อเนื่อง)
    */
   orderIds?: string[];
-  /**
-   * บัญชีเงินฝากธนาคารของ "ลูกค้าเจ้าของบิล" (page.tsx โหลดมาจาก customer_bank_accounts)
-   *   — ใช้แทนหมวดเงินฝาก generic ในผังกลาง (กันหลุดข้ามบริษัท). ว่าง = ยังไม่ตั้งค่า
-   */
-  bankAccounts?: CustomerBankAccount[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -139,9 +124,10 @@ export default function EntryEditor({
   const [partyName, setPartyName] = useState<string>(entry.counterpartyName ?? "");
   const [partyTaxId, setPartyTaxId] = useState<string>(entry.counterpartyTaxId ?? "");
   const [whtForm, setWhtForm] = useState<WhtForm | "">(entry.whtForm ?? "");
-  // วิธีจ่าย/รับเงิน (บัญชีคู่ฝั่งเครดิต) + บัญชีธนาคารที่ใช้ (เฉพาะโอน)
+  // วิธีจ่าย/รับเงิน (บัญชีคู่ฝั่งเครดิต)
+  //   ★ บัญชีเงินฝาก (transfer) ใช้ default 1020 — เลิก UI เลือกบัญชีธนาคารต่อลูกค้าแล้ว
+  //     แต่คง entry.paymentBankAccountId เดิมไว้ตอนบันทึก (กันข้อมูลเดิมหาย)
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | "">(entry.paymentMethod ?? "");
-  const [paymentBankId, setPaymentBankId] = useState<string>(entry.paymentBankAccountId ?? "");
 
   // ---- lines state ----
   const [lines, setLines] = useState<LineRow[]>(() => initLines(entry));
@@ -149,8 +135,6 @@ export default function EntryEditor({
   const [zoom, setZoom] = useState(false);
   const [rotation, setRotation] = useState(0); // องศาหมุนรูปบิล (0/90/180/270) — บิลถ่ายตะแคง
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  // แผงจัดการบัญชีเงินฝากของลูกค้า (เปิดจากปุ่ม ⚙️ บนหัว modal)
-  const [bankPanelOpen, setBankPanelOpen] = useState(false);
 
   const close = useCallback(() => {
     router.push(closeHref);
@@ -215,22 +199,11 @@ export default function EntryEditor({
     return { amount, vat, wht, net: calcNet(amount, vat, wht) };
   }, [lines]);
 
-  // บัญชีเงินฝากที่เลือก (สำหรับ hint บัญชีคู่ตอนโอน) + ข้อความ hint
-  const selectedBank = useMemo(
-    () => bankAccounts.find((b) => b.id === paymentBankId) ?? null,
-    [bankAccounts, paymentBankId]
-  );
+  // hint บัญชีคู่ (เครดิต) — transfer ใช้บัญชีเงินฝากเดิมถ้าผูกไว้ (paymentBankAccountCode) มิฉะนั้น default 1020
   const contraHint = useMemo(() => {
     if (!paymentMethod) return null;
-    const contra = contraAccountFor(paymentMethod, entryType, selectedBank?.accountCode ?? null);
-    if (!contra) return null;
-    // โอน + เลือกบัญชีแล้ว → โชว์ชื่อธนาคารจริงของลูกค้าแทนชื่อ generic
-    const name =
-      paymentMethod === "transfer" && selectedBank
-        ? bankAccountDisplayName(selectedBank)
-        : contra.name;
-    return { code: contra.code, name };
-  }, [paymentMethod, entryType, selectedBank]);
+    return contraAccountFor(paymentMethod, entryType, entry.paymentBankAccountCode);
+  }, [paymentMethod, entryType, entry.paymentBankAccountCode]);
 
   function buildInput(confirm: boolean): SaveEntryInput {
     return {
@@ -244,8 +217,8 @@ export default function EntryEditor({
       counterpartyTaxId: partyTaxId || null,
       whtForm: whtForm || null,
       paymentMethod: paymentMethod || null,
-      // ส่ง bank id เฉพาะเมื่อเลือก "โอน" (ไม่ใช่โอน → server ล้างให้เอง)
-      paymentBankAccountId: paymentMethod === "transfer" ? paymentBankId || null : null,
+      // คงบัญชีเงินฝากที่ผูกไว้เดิม (ถ้ามี) — เลิก UI เลือกแล้ว แต่ไม่ล้างข้อมูลเดิม
+      paymentBankAccountId: entry.paymentBankAccountId ?? null,
       lines: lines.map((l) => ({
         id: l.id,
         vatType: l.vatType,
@@ -350,18 +323,6 @@ export default function EntryEditor({
             </div>
           ) : null}
 
-          {/* ⚙️ จัดการบัญชีเงินฝากของลูกค้า (แยกเลขบัญชีต่อลูกค้า) — เฉพาะบิลที่จับคู่ลูกค้าแล้ว */}
-          {entry.customerId ? (
-            <button
-              type="button"
-              className="acc-modal-gear"
-              onClick={() => setBankPanelOpen(true)}
-              title="ตั้งค่าบัญชีธนาคารของลูกค้ารายนี้"
-            >
-              ⚙️ บัญชีธนาคาร
-            </button>
-          ) : null}
-
           <button type="button" className="acc-modal-close" onClick={close} aria-label="ปิด">✕</button>
         </div>
 
@@ -447,51 +408,25 @@ export default function EntryEditor({
                 </select>
               </label>
 
-              {/* วิธีจ่าย/รับเงิน → บัญชีคู่ (เครดิต) สำหรับ double-entry */}
+              {/* วิธีจ่าย/รับเงิน → บัญชีคู่ (เครดิต) สำหรับ double-entry
+                  ★ 4 ตัวเลือก · label ตามฝั่งบิล (credit = ลูกหนี้ เมื่อขาย / เจ้าหนี้ เมื่อซื้อ) */}
               <label className="acc-field">
                 <span>วิธีจ่าย/รับเงิน</span>
                 <select
                   value={paymentMethod}
-                  onChange={(e) => {
-                    const v = e.target.value as PaymentMethod | "";
-                    setPaymentMethod(v);
-                    if (v !== "transfer") setPaymentBankId(""); // ไม่ใช่โอน → ล้างบัญชีธนาคาร
-                  }}
+                  onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod | "")}
                   disabled={readOnly}
                 >
                   <option value="">— ยังไม่ระบุ —</option>
-                  <option value="cash">เงินสด</option>
-                  <option value="transfer">โอน</option>
-                  <option value="credit">เชื่อ</option>
+                  <option value="cash">{paymentMethodLabel("cash", entryType)}</option>
+                  <option value="cheque">{paymentMethodLabel("cheque", entryType)}</option>
+                  <option value="transfer">{paymentMethodLabel("transfer", entryType)}</option>
+                  <option value="credit">{paymentMethodLabel("credit", entryType)}</option>
                 </select>
               </label>
 
-              {/* เลือก "โอน" → เลือกบัญชีเงินฝากธนาคารของลูกค้ารายนี้ */}
-              {paymentMethod === "transfer" ? (
-                <label className="acc-field">
-                  <span>บัญชีธนาคารที่ใช้</span>
-                  {bankAccounts.length > 0 ? (
-                    <select
-                      value={paymentBankId}
-                      onChange={(e) => setPaymentBankId(e.target.value)}
-                      disabled={readOnly}
-                    >
-                      <option value="">— เลือกบัญชี —</option>
-                      {bankAccounts.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.accountCode} · {bankAccountDisplayName(b)}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span className="acc-bank-empty">
-                      ยังไม่มีบัญชีธนาคาร — กด “⚙️ บัญชีธนาคาร” ด้านบนเพื่อเพิ่ม
-                    </span>
-                  )}
-                </label>
-              ) : null}
-
-              {/* hint บัญชีคู่ที่จะเป็นเครดิต (ช่วยตรวจ — ยังไม่ลงจริง แค่บอกให้เห็น) */}
+              {/* hint บัญชีคู่ที่จะเป็นเครดิต (ช่วยตรวจ — ยังไม่ลงจริง แค่บอกให้เห็น)
+                  เงินโอน → บัญชีคู่ = เงินฝากธนาคาร (default 1020) */}
               {contraHint ? (
                 <div className="acc-field acc-field-wide acc-contra-hint">
                   บัญชีคู่ (เครดิต): {contraHint.code ? <b>{contraHint.code}</b> : null} {contraHint.name}
@@ -557,8 +492,6 @@ export default function EntryEditor({
                       <AccountCell
                         line={l}
                         readOnly={readOnly}
-                        bankAccounts={bankAccounts}
-                        onAddBank={() => setBankPanelOpen(true)}
                         onSelect={(code, name) => patchLine(l.key, { accountCode: code, accountName: name })}
                         onNameChange={(name) => patchLine(l.key, { accountName: name })}
                         onClear={() => patchLine(l.key, { accountCode: "", accountName: "" })}
@@ -615,19 +548,6 @@ export default function EntryEditor({
           </div>
         </div>
       </div>
-
-      {/* แผงจัดการบัญชีเงินฝากของลูกค้า (ซ้อนบน modal) — เปิดจากปุ่ม ⚙️ หรือ "＋ เพิ่มบัญชี" ใน picker */}
-      {bankPanelOpen && entry.customerId ? (
-        <BankAccountsPanel
-          customerId={entry.customerId}
-          customerLabel={customerLabel}
-          initial={bankAccounts}
-          onClose={() => {
-            setBankPanelOpen(false);
-            router.refresh(); // ให้ picker เห็นบัญชีที่เพิ่ง เพิ่ม/แก้ (page.tsx โหลด bankAccounts ใหม่)
-          }}
-        />
-      ) : null}
     </div>
   );
 }
@@ -653,18 +573,12 @@ function AiTag() {
 function AccountCell({
   line,
   readOnly,
-  bankAccounts,
-  onAddBank,
   onSelect,
   onNameChange,
   onClear,
 }: {
   line: LineRow;
   readOnly: boolean;
-  /** บัญชีเงินฝากของลูกค้าเจ้าของบิล (แทนหมวดเงินฝาก generic ในผังกลาง) */
-  bankAccounts: CustomerBankAccount[];
-  /** เปิดแผงจัดการบัญชีธนาคารของลูกค้า (＋ เพิ่มบัญชี) */
-  onAddBank: () => void;
   onSelect: (code: string, name: string) => void;
   onNameChange: (name: string) => void;
   onClear: () => void;
@@ -672,22 +586,9 @@ function AccountCell({
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const boxRef = useRef<HTMLDivElement>(null);
-  // กลุ่มบน = บัญชีเงินฝากของลูกค้ารายนี้ (กรองตาม q)
-  const bankResults = useMemo(() => filterBankAccounts(bankAccounts, q), [bankAccounts, q]);
-  // ผังกลาง "ตัดหมวดเงินฝาก (bank:true) ออก" จัดกลุ่มตามหมวด
+  // ผังกลางจัดกลุ่มตามหมวด (รวมบัญชีเงินฝากธนาคารในหมวด 1 แล้ว)
   //   ★ พิมพ์เลข 1–6 = เด้งทั้งหมวดนั้นมาให้เลื่อนเลือก · อย่างอื่น = ค้น substring ตามเดิม
   const chartGroups = useMemo(() => searchChartNonBankGrouped(q), [q]);
-  // ลูกค้ายังไม่มีบัญชีของตัวเอง → โชว์ generic bank:true (กรองตาม q) ไว้ให้เห็นหมวด
-  const genericBank = useMemo(
-    () =>
-      bankAccounts.length === 0
-        ? BANK_ACCOUNTS.filter((a) => {
-            const s = q.trim().toLowerCase();
-            return !s || a.code.includes(s) || a.name.toLowerCase().includes(s);
-          })
-        : [],
-    [bankAccounts.length, q]
-  );
   const selected = !!line.accountCode;
 
   // ปิด dropdown เมื่อคลิกนอกกล่อง
@@ -755,12 +656,7 @@ function AccountCell({
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
-            // ลำดับเลือกด้วย Enter: บัญชีเงินฝากของลูกค้าก่อน แล้วผังกลาง
-            const firstBank = bankResults[0];
-            if (firstBank) {
-              pick(firstBank.accountCode, bankAccountDisplayName(firstBank));
-              return;
-            }
+            // เลือกรายการแรกในผลค้นด้วย Enter
             const firstChart = chartGroups[0]?.accounts[0];
             if (firstChart) pick(firstChart.code, firstChart.name);
           } else if (e.key === "Escape") {
@@ -772,53 +668,7 @@ function AccountCell({
       />
       {open ? (
         <div className="acc-acct-list" role="listbox">
-          {/* ---- กลุ่ม 1: เงินฝากธนาคาร ของลูกค้ารายนี้ ---- */}
-          <div className="acc-acct-group">🏦 เงินฝากธนาคาร — ของลูกค้านี้</div>
-          {bankResults.map((b) => (
-            <button
-              key={`bank-${b.id}`}
-              type="button"
-              role="option"
-              aria-selected={false}
-              className="acc-acct-opt"
-              onClick={() => pick(b.accountCode, bankAccountDisplayName(b))}
-            >
-              <span className="acc-acct-opt-code">{b.accountCode}</span>
-              <span className="acc-acct-opt-name">{bankAccountDisplayName(b)}</span>
-            </button>
-          ))}
-          {/* ลูกค้ายังไม่มีบัญชี → โชว์ generic bank ให้เห็นหมวด (เลือกได้ แต่ควรตั้งค่าเลขบัญชีจริง) */}
-          {genericBank.map((a) => (
-            <button
-              key={`gbank-${a.code}`}
-              type="button"
-              role="option"
-              aria-selected={false}
-              className="acc-acct-opt acc-acct-opt-generic"
-              onClick={() => pick(a.code, a.name)}
-              title="ยังไม่ได้ตั้งเลขบัญชีของลูกค้ารายนี้ — กด ＋ เพื่อเพิ่ม"
-            >
-              <span className="acc-acct-opt-code">{a.code}</span>
-              <span className="acc-acct-opt-name">{a.name}</span>
-            </button>
-          ))}
-          {bankResults.length === 0 && genericBank.length === 0 ? (
-            <div className="acc-acct-empty">ไม่พบบัญชีเงินฝากที่ค้น</div>
-          ) : null}
-          {/* ＋ เพิ่มบัญชีธนาคารของลูกค้านี้ (เปิดแผงจัดการ) */}
-          <button
-            type="button"
-            className="acc-acct-add"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              setOpen(false);
-              onAddBank();
-            }}
-          >
-            ＋ เพิ่มบัญชีธนาคารของลูกค้านี้
-          </button>
-
-          {/* ---- กลุ่ม 2: ผังบัญชีกลาง จัดตามหมวด (พิมพ์เลข 1–6 = เด้งทั้งหมวด) ---- */}
+          {/* ผังบัญชีกลาง จัดตามหมวด (พิมพ์เลข 1–6 = เด้งทั้งหมวด) — เงินฝากธนาคารอยู่ในหมวด 1 */}
           {chartGroups.length === 0 ? (
             <>
               <div className="acc-acct-group">ผังบัญชี</div>

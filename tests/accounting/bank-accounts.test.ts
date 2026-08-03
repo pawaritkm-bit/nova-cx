@@ -3,7 +3,6 @@ import {
   BANK_ACCOUNT_CODES,
   isBankAccountCode,
   searchChartNonBank,
-  BANK_ACCOUNTS,
   CHART_OF_ACCOUNTS,
 } from "@/lib/accounting/chart-of-accounts";
 import {
@@ -47,19 +46,19 @@ describe("chart-of-accounts — genericize หมวดเงินฝาก (ba
     expect(isBankAccountCode("9999")).toBe(false);
   });
 
-  it("searchChartNonBank: ตัดหมวดเงินฝาก (bank:true) ออกทั้งหมด", () => {
+  it("★ searchChartNonBank: รวมบัญชีเงินฝาก (bank:true) เข้าตัวเลือกปกติแล้ว", () => {
     const all = searchChartNonBank("");
-    expect(all.some((a) => a.bank)).toBe(false);
-    // 1010 เงินสด ยังอยู่ · 1020 เงินฝาก ต้องหาย
+    expect(all.some((a) => a.bank)).toBe(true);
+    // 1010 เงินสด และ 1020 เงินฝาก อยู่ครบ (เลือกได้เหมือนบัญชีอื่น)
     expect(all.some((a) => a.code === "1010")).toBe(true);
-    expect(all.some((a) => a.code === "1020")).toBe(false);
-    expect(all.length).toBe(CHART_OF_ACCOUNTS.length - BANK_ACCOUNTS.length);
+    expect(all.some((a) => a.code === "1020")).toBe(true);
+    expect(all.length).toBe(CHART_OF_ACCOUNTS.length);
   });
 
-  it("searchChartNonBank: ค้น 'เงินฝาก' ไม่คืน generic bank (ตัดออกแล้ว)", () => {
+  it("searchChartNonBank: ค้น 'เงินฝาก' คืน generic bank ด้วย (รวมเข้าหมวด 1 แล้ว)", () => {
     const r = searchChartNonBank("เงินฝากธนาคาร");
-    expect(r.some((a) => a.bank)).toBe(false);
-    // ยังเจอ 4210 ดอกเบี้ยเงินฝากธนาคาร (ไม่ใช่ bank)
+    expect(r.some((a) => a.bank)).toBe(true);
+    // เจอทั้งเงินฝากธนาคาร (bank) และ 4210 ดอกเบี้ยเงินฝากธนาคาร (ไม่ใช่ bank)
     expect(r.some((a) => a.code === "4210")).toBe(true);
   });
 });

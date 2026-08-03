@@ -33,10 +33,6 @@ import {
 import { formatMoney } from "@/lib/accounting/calc";
 import { countNeedsReview } from "@/lib/accounting/line-status";
 import {
-  listCustomerBankAccounts,
-  type CustomerBankAccount,
-} from "@/lib/accounting/bank-accounts";
-import {
   monthKeyOf,
   summarizeMonth,
   customerColumnRows,
@@ -846,13 +842,6 @@ export default async function AccountingPage({
   const editViewUrl = editObjectPath ? signed.get(editObjectPath) ?? null : null;
   const editIsImage = editEntry ? entryIsImage(editEntry) : false;
 
-  // บัญชีเงินฝากธนาคารของลูกค้าเจ้าของบิลที่กำลังแก้ (แยกเลขบัญชีต่อลูกค้า)
-  //   โหลดเฉพาะตอนเปิด editor + บิลจับคู่ลูกค้าแล้ว (scope tenant + customer) — ส่งให้ picker/แผงจัดการ
-  let editBankAccounts: CustomerBankAccount[] = [];
-  if (editEntry?.customerId) {
-    editBankAccounts = await listCustomerBankAccounts(service, tenantId, editEntry.customerId);
-  }
-
   const hasAnyFilter = !!(q || selectedMonth || undatedMode);
   // export: ส่ง accountant เฉพาะกรณีเลือกนักบัญชีคนหนึ่ง (ไม่ใช่ "ทั้งสำนักงาน")
   //   นักบัญชี (staff) ไม่ต้องส่ง — export route สโคปจาก session ให้เอง
@@ -1197,7 +1186,6 @@ export default async function AccountingPage({
           viewIsImage={editIsImage}
           fileName={editEntry.uploadName}
           orderIds={navOrderIds}
-          bankAccounts={editBankAccounts}
           customerLabel={customerLabel(
             editEntry.customerId ? codeById.get(editEntry.customerId) ?? null : null,
             editEntry.customerName

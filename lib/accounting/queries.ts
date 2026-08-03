@@ -20,8 +20,8 @@ export type EntryStatus = "draft" | "confirmed";
 export type EntrySource = "ai" | "manual";
 export type VatType = "vat" | "novat";
 export type WhtForm = "pnd3" | "pnd53";
-/** วิธีจ่าย/รับเงิน (บัญชีคู่ฝั่งเครดิต) — เงินสด/โอน/เชื่อ */
-export type PaymentMethod = "cash" | "transfer" | "credit";
+/** วิธีจ่าย/รับเงิน (บัญชีคู่ฝั่งเครดิต) — เงินสด/เช็ค/เงินโอน/ลูกหนี้-เจ้าหนี้ */
+export type PaymentMethod = "cash" | "cheque" | "transfer" | "credit";
 
 /** บรรทัดรายการ (ตรงกับ bill_entry_lines) */
 export type BillEntryLine = {
@@ -218,7 +218,7 @@ type RawEntry = {
 
 /** cast string ดิบจาก DB → PaymentMethod | null */
 function asPaymentMethodDb(v: string | null): PaymentMethod | null {
-  return v === "cash" || v === "transfer" || v === "credit" ? v : null;
+  return v === "cash" || v === "cheque" || v === "transfer" || v === "credit" ? v : null;
 }
 
 function mapLine(r: RawLine): BillEntryLine {

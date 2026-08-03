@@ -167,7 +167,7 @@ describe("journal — บิลที่ตกหล่น (skipped) พร้�
     expect(r.skipped[0].reason).toContain("ยังไม่เลือกบัญชี");
   });
 
-  it("โอนแต่ยังไม่เลือกบัญชีธนาคาร → ตกหล่น", () => {
+  it("★ โอนแต่ไม่ผูกบัญชีธนาคาร → ใช้ default 1020 (ไม่ตกหล่น)", () => {
     const r = buildJournalEntries([
       mkEntry({
         id: "b",
@@ -177,8 +177,9 @@ describe("journal — บิลที่ตกหล่น (skipped) พร้�
         lines: [mkLine({ accountCode: "5010", amount: 500, vatAmount: 35 })],
       }),
     ]);
-    expect(r.lines).toHaveLength(0);
-    expect(r.skipped[0].reason).toContain("ธนาคาร");
+    expect(r.skipped).toHaveLength(0);
+    // Cr เข้าเงินฝากธนาคาร default 1020 = 500 + 35 = 535
+    expect(r.lines.find((l) => l.accountCode === "1020")?.credit).toBe(535);
   });
 
   it("ไม่ระบุวิธีจ่าย → ตกหล่น", () => {

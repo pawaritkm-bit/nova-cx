@@ -62,12 +62,13 @@ describe("searchChartNonBankGrouped — จัดกลุ่มตามหม�
     expect(groups[0].accounts.some((a) => a.code === "5340")).toBe(true);
   });
 
-  it("พิมพ์เลข 1 → หมวดสินทรัพย์ และไม่มีบัญชีเงินฝากธนาคาร (bank) หลุดมา", () => {
+  it("★ พิมพ์เลข 1 → หมวดสินทรัพย์ และมีบัญชีเงินฝากธนาคาร (bank) รวมอยู่ด้วย", () => {
     const groups = searchChartNonBankGrouped("1");
     expect(groups.length).toBe(1);
     expect(groups[0].digit).toBe("1");
+    // เงินฝากธนาคาร (bank:true) เป็นตัวเลือกปกติในหมวด 1 แล้ว
     for (const code of BANK_ACCOUNT_CODES) {
-      expect(groups[0].accounts.some((a) => a.code === code)).toBe(false);
+      expect(groups[0].accounts.some((a) => a.code === code)).toBe(true);
     }
   });
 
@@ -86,13 +87,13 @@ describe("searchChartNonBankGrouped — จัดกลุ่มตามหม�
     expect(all.some((a) => a.code === "5340")).toBe(true);
   });
 
-  it("ว่าง → คืนทุกหมวดที่มีบัญชี (non-bank)", () => {
+  it("ว่าง → คืนทุกหมวดที่มีบัญชี (รวมบัญชีเงินฝากธนาคารในหมวด 1)", () => {
     const groups = searchChartNonBankGrouped("");
     expect(groups.length).toBeGreaterThanOrEqual(5);
-    // รวมแล้วต้องไม่มี bank code
+    // รวมแล้วต้องมี bank code (เงินฝากธนาคารเป็นตัวเลือกปกติ)
     const all = groups.flatMap((g) => g.accounts);
     for (const code of BANK_ACCOUNT_CODES) {
-      expect(all.some((a) => a.code === code)).toBe(false);
+      expect(all.some((a) => a.code === code)).toBe(true);
     }
   });
 

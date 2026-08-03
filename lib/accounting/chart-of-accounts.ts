@@ -124,9 +124,13 @@ export function isBankAccountCode(code: string): boolean {
   return BANK_ACCOUNT_CODES.includes(code);
 }
 
-/** ผังกลาง "ตัดหมวดเงินฝาก (bank:true) ออก" — ใช้ใน picker (แทนด้วยบัญชีของลูกค้าแทน) */
+/**
+ * ผังกลางสำหรับ picker — ★ รวมบัญชีเงินฝาก (bank:true = 1020/1025/1030) เข้าหมวด 1 ปกติ
+ *   (เลิกตัดออก) เพื่อให้นักบัญชีเลือกเงินฝากธนาคารได้เหมือนบัญชีอื่น · ชื่อ generic แก้ต่อบรรทัดได้
+ *   หมายเหตุ: ชื่อฟังก์ชันคง "NonBank" ไว้เพื่อความเข้ากันได้กับที่เรียกใช้เดิม
+ */
 export function searchChartNonBank(q: string): ChartAccount[] {
-  return searchChart(q).filter((a) => !a.bank);
+  return searchChart(q);
 }
 
 /**
@@ -170,8 +174,9 @@ export type ChartGroup = { digit: string; category: string; accounts: ChartAccou
 export function searchChartNonBankGrouped(q: string): ChartGroup[] {
   const s = (q ?? "").trim();
   const singleDigit = /^[1-6]$/.test(s);
+  // ★ รวมบัญชีเงินฝาก (bank:true) ด้วย — เงินฝากธนาคารเป็นตัวเลือกปกติในหมวด 1
   const matched = singleDigit
-    ? CHART_OF_ACCOUNTS.filter((a) => !a.bank && a.code.startsWith(s))
+    ? CHART_OF_ACCOUNTS.filter((a) => a.code.startsWith(s))
     : searchChartNonBank(s);
 
   // จัดกลุ่มตามหมวด (เลขหลักแรก) แล้วเรียง 1→6 (คงลำดับเดิมภายในหมวด)

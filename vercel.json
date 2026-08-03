@@ -33,10 +33,6 @@
     {
       "path": "/api/cron/extract-bills",
       "schedule": "*/15 * * * *"
-    },
-    {
-      "path": "/api/cron/reextract-bills",
-      "schedule": "*/15 * * * *"
     }
   ],
   "functions": {

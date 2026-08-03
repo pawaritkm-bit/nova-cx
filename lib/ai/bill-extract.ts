@@ -33,8 +33,12 @@ const ACCOUNT_THRESHOLD = 0.7;
  */
 const VAT_TYPE_THRESHOLD = 0.6;
 
-/** รายการบัญชี non-bank (รหัส=ชื่อ) ใส่ใน prompt ให้โมเดลเลือก — สร้างครั้งเดียวตอนโหลด */
+/**
+ * รายการบัญชี (รหัส=ชื่อ) ใส่ใน prompt ให้โมเดลเลือก — สร้างครั้งเดียวตอนโหลด
+ *   ★ ตัดบัญชีเงินฝาก (bank:true) ออกจาก prompt — AI ไม่ควรเดาเงินฝากธนาคาร (ให้นักบัญชีเลือกเอง)
+ */
 const CHART_PROMPT_LIST = searchChartNonBank("")
+  .filter((a) => !a.bank)
   .map((a) => `${a.code}=${a.name}`)
   .join(", ");
 
