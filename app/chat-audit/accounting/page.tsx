@@ -46,6 +46,7 @@ import RowActions from "./RowActions";
 import CustomerTaxIdField from "./CustomerTaxIdField";
 import EntryDateField from "./EntryDateField";
 import UploadFileButton from "./UploadFileButton";
+import UndoDeleteBar from "./UndoDeleteBar";
 import { extOf } from "@/lib/accounting/upload";
 import "../chat-admin.css";
 import "../bills/bills.css";
@@ -699,6 +700,7 @@ export default async function AccountingPage({
     open?: string;
     type?: string;
     edit?: string;
+    undo?: string;
   }>;
 }) {
   const sp = await searchParams;
@@ -1208,6 +1210,20 @@ export default async function AccountingPage({
             editEntry.customerName
           )}
           closeHref={`/chat-audit/accounting${buildQuery({
+            accountant: accParam,
+            q,
+            month: monthParam,
+            open: sp.open && sp.open !== "" ? sp.open : undefined,
+            type: selectedType,
+          })}`}
+        />
+      ) : null}
+
+      {/* แถบ "เลิกทำ" หลังลบบิล (undo) — กู้บิลที่ลบผิดกลับได้ทันที */}
+      {sp.undo && UUID_RE.test(sp.undo) ? (
+        <UndoDeleteBar
+          entryId={sp.undo}
+          backHref={`/chat-audit/accounting${buildQuery({
             accountant: accParam,
             q,
             month: monthParam,

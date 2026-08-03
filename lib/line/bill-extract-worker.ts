@@ -452,10 +452,12 @@ export async function selectExtractionCandidates(
   limit: number
 ): Promise<QueueRow[]> {
   // 1) done set (ทุก tenant — cron เป็น service-role สแกนรวม)
+  //    ★ นับรวม entry ที่ถูกลบ (soft-delete) ด้วย — ไม่กรอง deleted_at
+  //      บิลที่นักบัญชีลบทิ้ง = "ทำแล้ว" ไม่ต้องสกัดซ้ำ (กัน cron ปลุกบิลที่ลบกลับมา)
+  //      → ทำให้ "ลบ" กู้คืนได้จริง (soft-delete เฉย ๆ ไม่ต้องทำลายไฟล์/มาร์ค attachment)
   const { data: doneData, error: doneErr } = await db
     .from("bill_entries")
     .select("attachment_id")
-    .is("deleted_at", null)
     .not("attachment_id", "is", null)
     .limit(DONE_SCAN_LIMIT);
   if (doneErr) {

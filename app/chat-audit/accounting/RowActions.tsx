@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { moveEntryTypeAction, deleteEntryAction } from "./actions";
 import type { EntryType, EntryStatus } from "@/lib/accounting/queries";
 
@@ -26,6 +26,8 @@ export default function RowActions({
   editHref: string;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -41,12 +43,19 @@ export default function RowActions({
   }
 
   function remove() {
-    if (!window.confirm("ลบบิลนี้ถาวร? (ไม่ใช่บิล — จะลบรูปออกด้วย)")) return;
+    if (!window.confirm("ลบบิลนี้? (กดผิดกู้คืนได้ด้วยปุ่ม “เลิกทำ”)")) return;
     setMsg(null);
     startTransition(async () => {
       const res = await deleteEntryAction(entryId);
-      setMsg({ ok: res.ok, text: res.message });
-      if (res.ok) router.refresh();
+      if (res.ok) {
+        // คงตัวกรองเดิม + เพิ่ม ?undo=<id> → โชว์แถบ "เลิกทำ" ให้กู้คืนทันที
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("undo", entryId);
+        router.push(`${pathname}?${params.toString()}`);
+        router.refresh();
+      } else {
+        setMsg({ ok: res.ok, text: res.message });
+      }
     });
   }
 

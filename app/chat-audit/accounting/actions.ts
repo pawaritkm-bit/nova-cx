@@ -354,17 +354,13 @@ export async function moveEntryTypeAction(
 }
 
 /**
- * ลบ entry (กรณี AI ดึงรูปที่ "ไม่ใช่บิล" มาสร้าง) — admin เท่านั้น
+ * ลบ entry — ★ soft-delete เท่านั้น (กู้คืนได้ด้วย restoreEntryAction/ปุ่ม "เลิกทำ")
  *
- * ทำ 2 อย่างพร้อมกัน (กัน cron extract-bills สร้าง entry ใหม่มาอีก):
- *   1) soft-delete bill_entries (deleteEntry จาก actions-lib)
- *   2) ถ้า entry มี attachment_id → "มาร์คต้นทางว่าไม่ใช่บิล" + ลบไฟล์จริง:
- *        - ลบไฟล์จาก bucket `bills` (ถ้ามี drive_file_id)
- *        - update message_attachments: doc_kind='other', fetch_status='skipped',
- *          fetch_error='not_a_bill', drive_url=null, drive_file_id=null
- *      → หายจากหน้าบัญชี + หน้าบิล + extract-bills ไม่ดึงมาอีก
- *        (worker เลือกเฉพาะ fetch_status='stored' + doc_kind∈บิล — สองเงื่อนไขถูกตัดพร้อมกัน)
- *   - entry ที่คีย์เอง (attachment_id=null) → ข้ามขั้น 2 (ลบแค่ entry)
+ *   เดิมลบแบบทำลาย (ลบไฟล์จาก storage + มาร์ค attachment ว่าไม่ใช่บิล) → กู้ไม่ได้
+ *   ตอนนี้: soft-delete เฉย ๆ (deleted_at) — คงไฟล์บิล + attachment ต้นทางไว้ครบ
+ *     → กดผิดก็กู้กลับได้ · หายจากหน้าบัญชี/หน้าบิลทันที (query กรอง deleted_at)
+ *     → cron extract-bills ไม่ปลุกกลับ เพราะ done-set นับ soft-deleted entry แล้ว
+ *       (selectExtractionCandidates — attachment ที่มี entry ถูกลบ = ทำแล้ว ไม่สกัดซ้ำ)
  */
 export async function deleteEntryAction(entryId: string): Promise<SaveResult> {
   if (!isUuid(entryId)) return { ok: false, message: "ไม่พบรายการที่เลือก" };
@@ -373,10 +369,10 @@ export async function deleteEntryAction(entryId: string): Promise<SaveResult> {
     const service = createServiceRoleClient();
     const ctx = await requireAccountingAccess(authed, service);
 
-    // อ่าน attachment ต้นทาง + ไฟล์อัปเอง + ลูกค้า ก่อนลบ (scope tenant)
+    // อ่านลูกค้า ก่อนลบ (scope tenant) — ตรวจสโคปนักบัญชี
     const { data: entryRow } = await service
       .from("bill_entries")
-      .select("attachment_id, upload_path, customer_id")
+      .select("customer_id")
       .eq("id", entryId)
       .eq("tenant_id", ctx.tenantId)
       .is("deleted_at", null)
@@ -384,53 +380,57 @@ export async function deleteEntryAction(entryId: string): Promise<SaveResult> {
     if (!entryRow) return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
     // ★ สโคปนักบัญชี: ลบได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
     assertCustomerInScope(ctx, (entryRow as { customer_id: string | null }).customer_id);
-    const attachmentId = (entryRow as { attachment_id: string | null }).attachment_id ?? null;
-    const uploadPath = (entryRow as { upload_path: string | null }).upload_path ?? null;
 
-    // 1) soft-delete entry
+    // soft-delete (กู้คืนได้) — คงไฟล์/attachment ไว้
     const res = await deleteEntry(service, ctx.tenantId, entryId);
     if (!res.ok) return { ok: false, message: friendlyError(res.error) };
 
-    // 1.5) entry ที่อัปไฟล์เอง → ลบไฟล์จริงออกจาก bucket ด้วย (best-effort)
-    if (uploadPath) {
-      await service.storage.from(BILLS_BUCKET).remove([uploadPath]);
-    }
-
-    // 2) มาร์ค attachment ต้นทางว่าไม่ใช่บิล + ลบไฟล์ (ถ้ามี)
-    if (attachmentId) {
-      const { data: attRow } = await service
-        .from("message_attachments")
-        .select("drive_file_id")
-        .eq("id", attachmentId)
-        .eq("tenant_id", ctx.tenantId)
-        .maybeSingle();
-      const objectPath = (attRow as { drive_file_id: string | null } | null)?.drive_file_id ?? null;
-
-      // ลบไฟล์จริงจาก bucket (best-effort — ไฟล์หายแล้วก็ mark ต่อ)
-      if (objectPath) {
-        await service.storage.from(BILLS_BUCKET).remove([objectPath]);
-      }
-      // ตัดออกจาก query ของ extract-bills (doc_kind='other' + fetch_status='skipped')
-      await service
-        .from("message_attachments")
-        .update({
-          doc_kind: "other",
-          fetch_status: "skipped",
-          fetch_error: "not_a_bill",
-          drive_url: null,
-          drive_file_id: null,
-          doc_checked: true,
-        })
-        .eq("id", attachmentId)
-        .eq("tenant_id", ctx.tenantId);
-    }
-
     revalidatePath(PATH);
     revalidatePath("/chat-audit/bills");
-    return { ok: true, message: "ลบรายการแล้ว" };
+    return { ok: true, message: "ลบรายการแล้ว", id: entryId };
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * กู้คืนบิลที่เพิ่งลบ (undo) — ยกเลิก soft-delete (deleted_at → null)
+ *   ★ guard สิทธิ์ + สโคปลูกค้า · กู้ได้เฉพาะบิลที่ "กำลังถูกลบอยู่"
+ */
+export async function restoreEntryAction(entryId: string): Promise<SaveResult> {
+  if (!isUuid(entryId)) return { ok: false, message: "ไม่พบรายการที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    // อ่านลูกค้าของบิลที่ถูกลบ (ตรวจสโคปก่อนกู้)
+    const { data: row } = await service
+      .from("bill_entries")
+      .select("customer_id")
+      .eq("id", entryId)
+      .eq("tenant_id", ctx.tenantId)
+      .not("deleted_at", "is", null)
+      .maybeSingle();
+    if (!row) return { ok: false, message: "ไม่พบบิลที่ลบ (อาจกู้คืนไปแล้ว)" };
+    // ★ สโคปนักบัญชี: กู้ได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
+    assertCustomerInScope(ctx, (row as { customer_id: string | null }).customer_id);
+
+    const { error } = await service
+      .from("bill_entries")
+      .update({ deleted_at: null })
+      .eq("id", entryId)
+      .eq("tenant_id", ctx.tenantId)
+      .not("deleted_at", "is", null);
+    if (error) return { ok: false, message: "กู้คืนไม่สำเร็จ กรุณาลองใหม่" };
+
+    revalidatePath(PATH);
+    revalidatePath("/chat-audit/bills");
+    return { ok: true, message: "กู้คืนบิลแล้ว", id: entryId };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "กู้คืนไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
 
