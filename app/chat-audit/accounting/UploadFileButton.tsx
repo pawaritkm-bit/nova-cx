@@ -130,8 +130,8 @@ export default function UploadFileButton({
               <label className="acc-field">
                 <span>ประเภท</span>
                 <select value={entryType} onChange={(e) => setEntryType(e.target.value as EntryType)}>
-                  <option value="purchase">ภาษีซื้อ</option>
-                  <option value="sale">ภาษีขาย</option>
+                  <option value="purchase">บิลซื้อ</option>
+                  <option value="sale">บิลขาย</option>
                   <option value="unspecified">รอระบุ</option>
                 </select>
               </label>

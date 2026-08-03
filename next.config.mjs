@@ -24,6 +24,14 @@ const nextConfig = {
   eslint: {
     dirs: ["app", "lib"],
   },
+  // ★ Server Action body cap: ดีฟอลต์ Next = 1MB → อัปไฟล์เอง (PDF/รูป/Excel) ที่เกิน 1MB
+  //   จะโดนตัดก่อนถึงโค้ด (client validate ผ่านเพราะเช็คแค่ 15MB). ตั้งให้ครอบเพดานอัป 15MB
+  //   + เผื่อ overhead ของ multipart form (ชื่อฟิลด์/boundary) = 20mb
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "20mb",
+    },
+  },
   async headers() {
     return [
       // ★ X-Frame-Options เฉพาะ path ที่ "ไม่ใช่ /liff"
