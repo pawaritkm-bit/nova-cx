@@ -20,7 +20,17 @@ import {
   customerInScope,
   AccountingAuthError,
 } from "@/lib/accounting/access";
+import { createHash } from "node:crypto";
 import { normalizePeriodMonth } from "@/lib/share-circles/queries";
+import { extractShareCircles, type ShareCircleImage } from "@/lib/ai/share-circle";
+import { insertParsedCirclesDedup, sourceRefAlreadyUsed } from "@/lib/share-circles/insert";
+import { mimeFromPath } from "@/lib/line/bill-extract-worker";
+
+/** bucket รูป (ตรงกับ actions.ts / storage) */
+const BILLS_BUCKET = "bills";
+/** เพดานรูป/ครั้ง + ข้อความ (กัน payload ใหญ่/ช้า) */
+const MAX_IMAGES = 12;
+const MAX_TEXT_CHARS = 20_000;
 
 const PATH = "/chat-audit/accounting";
 
@@ -224,6 +234,153 @@ export async function createShareCircleEntryAction(
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "เพิ่มวงไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+// ---------------------------------------------------------------------
+// กรอกเอง: วางข้อความ / อัปรูป → AI แยก → insert entries (source='ai')
+// ---------------------------------------------------------------------
+
+/** sha256 (8 ตัวแรก) ของข้อความ/บัฟเฟอร์ — ใช้ทำ source_ref กัน input ซ้ำเป๊ะ */
+function sha8(input: string | Buffer): string {
+  return createHash("sha256").update(input).digest("hex").slice(0, 8);
+}
+
+/** สรุปข้อความผลลัพธ์ dedup (added/skipped) */
+function dedupResultMsg(added: number, skipped: number): string {
+  const a = added.toLocaleString("th-TH");
+  if (skipped === 0) return `AI แยกได้ ${a} วง — ตรวจ/แก้ได้ในตาราง`;
+  const s = skipped.toLocaleString("th-TH");
+  return `⚠️ พบซ้ำ ${s} วง (ข้ามให้แล้ว) · เพิ่มใหม่ ${a} วง`;
+}
+
+/** guard ร่วม (admin + scope + tenant) + normalize month — คืน ctx/month หรือ error */
+async function guardExtractInput(
+  customerId: string,
+  monthInput: string
+): Promise<
+  | { ok: true; service: ReturnType<typeof createServiceRoleClient>; tenantId: string; month: string }
+  | { ok: false; message: string }
+> {
+  const authed = await createClient();
+  const service = createServiceRoleClient();
+  const ctx = await requireAccountingAccess(authed, service);
+  if (!isUuid(customerId)) return { ok: false, message: "ไม่พบลูกค้า" };
+  if (!customerInScope(ctx, customerId)) {
+    return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+  }
+  if (!(await customerBelongsToTenant(service, ctx.tenantId, customerId))) {
+    return { ok: false, message: "ไม่พบลูกค้าในสำนักงานนี้" };
+  }
+  const month = normalizePeriodMonth((monthInput ?? "").trim());
+  if (!MONTH_RE.test(month)) return { ok: false, message: "กรุณาเลือกเดือนก่อน" };
+  return { ok: true, service, tenantId: ctx.tenantId, month };
+}
+
+/**
+ * (a1) วางข้อความวงแชร์เอง → AI แยก → insert เข้าเดือนที่เลือก (source='ai')
+ *   ★ guard admin + scope + tenant · เรียก extractShareCircles({ text }) (prompt เดียวกับอ่านจากไลน์)
+ */
+export async function extractShareCircleFromTextAction(
+  customerId: string,
+  month: string,
+  text: string,
+  opts?: { force?: boolean }
+): Promise<ActionResult> {
+  try {
+    const g = await guardExtractInput(customerId, month);
+    if (!g.ok) return { ok: false, message: g.message };
+
+    const t = typeof text === "string" ? text.trim().slice(0, MAX_TEXT_CHARS) : "";
+    if (!t) return { ok: false, message: "กรุณาวางข้อความลิสต์วงแชร์ก่อน" };
+
+    // ระดับ 2: กัน "วางข้อความซ้ำเป๊ะ" — hash ข้อความ (normalize whitespace) → source_ref
+    const norm = t.replace(/\s+/g, " ").trim();
+    const sourceRef = `paste:${sha8(norm)}`;
+    if (!opts?.force && (await sourceRefAlreadyUsed(g.service, g.tenantId, customerId, g.month, sourceRef))) {
+      return { ok: false, message: "ข้อความนี้เคยวางในเดือนนี้แล้ว (กัน 'ซ้ำ') — ถ้าตั้งใจเพิ่มซ้ำ กด 'วางซ้ำอยู่ดี'" };
+    }
+
+    const circles = await extractShareCircles({ text: t });
+    if (circles.length === 0) {
+      return {
+        ok: false,
+        message: "AI ไม่พบวงแชร์ในข้อความ (หรือยังไม่ได้ตั้งค่า OPENAI_API_KEY) — ลองเพิ่มวงเอง",
+      };
+    }
+    const { added, skipped } = await insertParsedCirclesDedup(
+      g.service, g.tenantId, customerId, g.month, circles, sourceRef
+    );
+    if (added === 0 && skipped === 0) return { ok: false, message: "บันทึกวงไม่สำเร็จ กรุณาลองใหม่" };
+    if (added === 0) return { ok: false, message: `⚠️ วงทั้งหมด (${skipped.toLocaleString("th-TH")}) ซ้ำกับที่มีอยู่แล้ว — ไม่เพิ่มซ้ำ` };
+
+    revalidatePath(PATH);
+    return { ok: true, message: dedupResultMsg(added, skipped) };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "แยกวงไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * (a2) อัปรูปวงแชร์เอง (อัปตรงเข้า storage แล้ว) → อ่านรูปจาก path → AI แยก → insert
+ *   ★ paths มาจาก createBillUploadUrlAction (อยู่ใต้ {tenant}/manual/) — re-verify prefix กันชี้ข้าม
+ *   ★ อ่านรูปเป็น base64 (in-memory) → extractShareCircles({ images })
+ */
+export async function extractShareCircleFromImagesAction(
+  customerId: string,
+  month: string,
+  paths: string[],
+  opts?: { force?: boolean }
+): Promise<ActionResult> {
+  try {
+    const g = await guardExtractInput(customerId, month);
+    if (!g.ok) return { ok: false, message: g.message };
+
+    const list = Array.isArray(paths) ? paths.filter((p) => typeof p === "string").slice(0, MAX_IMAGES) : [];
+    if (list.length === 0) return { ok: false, message: "กรุณาเลือกรูปวงแชร์ก่อน" };
+
+    const images: ShareCircleImage[] = [];
+    const hashes: string[] = [];
+    for (const path of list) {
+      // ★ path ต้องอยู่ใต้ {tenant}/manual/ ของ tenant นี้ (กันชี้ไฟล์ข้าม tenant)
+      if (!path.startsWith(`${g.tenantId}/manual/`)) continue;
+      try {
+        const { data: blob, error } = await g.service.storage.from(BILLS_BUCKET).download(path);
+        if (error || !blob) continue;
+        const buf = Buffer.from(await blob.arrayBuffer());
+        images.push({ base64: buf.toString("base64"), mime: mimeFromPath(path) });
+        hashes.push(createHash("sha256").update(buf).digest("hex")); // hash bytes กันรูปซ้ำ
+      } catch {
+        // อ่านรูปพลาด → ข้ามรูปนั้น
+      }
+    }
+    if (images.length === 0) return { ok: false, message: "อ่านรูปไม่สำเร็จ กรุณาลองใหม่" };
+
+    // ระดับ 2: กัน "อัปรูปชุดเดิมซ้ำเป๊ะ" — hash รวมของทุกรูป (เรียง) → source_ref
+    const sourceRef = `img:${sha8(hashes.sort().join(","))}`;
+    if (!opts?.force && (await sourceRefAlreadyUsed(g.service, g.tenantId, customerId, g.month, sourceRef))) {
+      return { ok: false, message: "รูปชุดนี้เคยอัปในเดือนนี้แล้ว (กัน 'ซ้ำ') — ถ้าตั้งใจเพิ่มซ้ำ กด 'อัปซ้ำอยู่ดี'" };
+    }
+
+    const circles = await extractShareCircles({ images });
+    if (circles.length === 0) {
+      return {
+        ok: false,
+        message: "AI ไม่พบวงแชร์ในรูป (หรือยังไม่ได้ตั้งค่า OPENAI_API_KEY) — ลองเพิ่มวงเอง",
+      };
+    }
+    const { added, skipped } = await insertParsedCirclesDedup(
+      g.service, g.tenantId, customerId, g.month, circles, sourceRef
+    );
+    if (added === 0 && skipped === 0) return { ok: false, message: "บันทึกวงไม่สำเร็จ กรุณาลองใหม่" };
+    if (added === 0) return { ok: false, message: `⚠️ วงทั้งหมด (${skipped.toLocaleString("th-TH")}) ซ้ำกับที่มีอยู่แล้ว — ไม่เพิ่มซ้ำ` };
+
+    revalidatePath(PATH);
+    return { ok: true, message: dedupResultMsg(added, skipped) };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "แยกวงจากรูปไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
 

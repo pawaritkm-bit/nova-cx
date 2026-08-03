@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { extractShareCircles, type ShareCircleImage } from "@/lib/ai/share-circle";
 import { normalizePeriodMonth } from "@/lib/share-circles/queries";
+import { insertParsedCirclesDedup } from "@/lib/share-circles/insert";
 import { decryptField, hasEncKey } from "@/lib/crypto/field";
 import { mimeFromPath } from "@/lib/line/bill-extract-worker";
 
@@ -153,52 +154,10 @@ export async function extractShareCirclesFromLine(
   const circles = await extractShareCircles({ text: text || undefined, images });
   if (circles.length === 0) return NONE;
 
-  // 6) idempotent (insert ก่อน delete ทีหลัง) — กัน "ข้อมูลหาย" ถ้า insert ล้มหลัง delete
-  //    ★ จับ cutoff = เวลาก่อน insert → insert วงใหม่ → ค่อย soft-delete วง 'ai' เก่า
-  //      ที่ created_at < cutoff (ผลรอบก่อน) เท่านั้น · ไม่แตะ manual + ไม่แตะวงที่เพิ่ง insert
-  //    ถ้า insert ล้ม = ของเก่ายังอยู่ครบ (ไม่ลบ) · ถ้า delete ล้ม = มีวงซ้ำชั่วคราว (นักบัญชีลบเองได้)
-  const cutoff = new Date().toISOString();
+  // 6) เขียนผลแบบ dedup ระดับ "วง" (idempotent โดยธรรมชาติ)
+  //    ★ อ่านซ้ำเดือนเดิม = วงเหมือนเดิม → ซ้ำทั้งหมด → ข้ามให้ (added=0) ไม่มีวงซ้ำ/ไม่มีข้อมูลหาย
+  //    ★ dedup เทียบทั้ง manual + ai เดิม (สูตรเดียวกับวางคำ/อัปรูป) — กันบันทึกรายได้/ภาษีซ้ำ
+  const { added } = await insertParsedCirclesDedup(db, tenantId, customerId, month, circles, `line:${month}`);
 
-  // 7) เขียนผลลง share_circle_entries (source='ai')
-  const rows = circles.map((c) => ({
-    tenant_id: tenantId,
-    customer_id: customerId,
-    period_month: month,
-    circle_name: c.circle_name,
-    round_note: c.round_note,
-    member_count: c.member_count,
-    principal_per_head: c.principal_per_head,
-    tao_income: c.tao_income,
-    mgmt_fee: c.mgmt_fee,
-    operation_fee: c.operation_fee,
-    interest_income: c.interest_income,
-    expense: c.expense,
-    source: "ai",
-    source_ref: `line:${month}`,
-    // ★ PDPA: เก็บแค่ชื่อวง (สรุปย่อ) ไม่ใช่เนื้อแชตดิบ
-    source_text: c.circle_name,
-    status: "active",
-  }));
-  const { error: insErr } = await db.from("share_circle_entries").insert(rows);
-  if (insErr) {
-    console.warn(`[share-circle-worker] insert error code=${(insErr as { code?: string }).code ?? "?"}`);
-    return NONE; // insert ล้ม → ของเก่ายังอยู่ (ยังไม่ได้ลบ) ปลอดภัย
-  }
-
-  // 8) soft-delete ผล AI รอบก่อน (created_at < cutoff) — วงใหม่รอบนี้ created_at ≥ cutoff จึงไม่โดน
-  const { error: delErr } = await db
-    .from("share_circle_entries")
-    .update({ deleted_at: cutoff })
-    .eq("tenant_id", tenantId)
-    .eq("customer_id", customerId)
-    .eq("period_month", month)
-    .eq("source", "ai")
-    .lt("created_at", cutoff)
-    .is("deleted_at", null);
-  if (delErr) {
-    // ลบผลเก่าไม่สำเร็จ → มีวงซ้ำชั่วคราว (ไม่ critical — นักบัญชีลบเองได้) log สั้น ๆ
-    console.warn(`[share-circle-worker] cleanup error code=${(delErr as { code?: string }).code ?? "?"}`);
-  }
-
-  return { extracted: true, count: rows.length };
+  return { extracted: added > 0, count: added };
 }

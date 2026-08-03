@@ -46,6 +46,24 @@ describe("normalizeCircle — สกัด 1 วง (ระดับวง/เ�
     expect(normalizeCircle(null)).toBeNull();
     expect(normalizeCircle("x")).toBeNull();
   });
+
+  // ★ บั๊ก P718: AI อ่าน "โปรไฟล์/เลขบัตร/วันเกิด" มาเป็นวง (ชื่อเป็นเลข + G/H/I/J/K ว่าง)
+  it("garbage: ชื่อวงเป็นเลขบัตร 13 หลัก + ไม่มีเงินเลย → null (ทิ้ง)", () => {
+    expect(normalizeCircle({ circle_name: "1103700623477" })).toBeNull();
+  });
+  it("garbage: ชื่อวงเป็นวันเกิด/รหัส (เลขล้วน ≥9 หลัก) + ไม่มีเงิน → null", () => {
+    expect(normalizeCircle({ circle_name: "02112534" + "9" })).toBeNull(); // 9 หลัก
+    expect(normalizeCircle({ circle_name: "021-119-9100" })).toBeNull(); // เบอร์ (strip ตัวคั่น)
+  });
+  it("เลขบัตรเป็นชื่อ แต่มีตัวเลขเงินจริง → คงไว้ (ไม่ทิ้ง เผื่อชื่อวงแปลก)", () => {
+    const c = normalizeCircle({ circle_name: "1103700623477", tao_income: 5000 });
+    expect(c).not.toBeNull();
+    expect(c!.tao_income).toBe(5000);
+  });
+  it("วันเกิดสั้น (8 หลัก) ไม่เข้าเกณฑ์ garbage (≥9) → คงไว้", () => {
+    // ปล่อยผ่าน (เกณฑ์ garbage คือ ≥9 หลัก) — ชื่อวงจริงบางวงอาจเป็นตัวเลขสั้น
+    expect(normalizeCircle({ circle_name: "02112534" })).not.toBeNull();
+  });
 });
 
 describe("normalizeShareCircles — จาก object ดิบของโมเดล", () => {
@@ -70,5 +88,27 @@ describe("normalizeShareCircles — จาก object ดิบของโมเ
   it("cap 200 วง (กันผิดปกติ)", () => {
     const many = Array.from({ length: 250 }, (_, i) => ({ circle_name: `วง${i}`, tao_income: 1 }));
     expect(normalizeShareCircles({ circles: many })).toHaveLength(200);
+  });
+
+  // ★ บั๊ก P718: AI คืนวงที่เป็นเลขบัตร/โปรไฟล์ทั้งหมด → ต้องกรองทิ้ง = []
+  it("circles เป็นเลขบัตร/วันเกิดล้วน (garbage) → [] (ไม่สร้างวงมั่ว)", () => {
+    const rows = normalizeShareCircles({
+      circles: [
+        { circle_name: "1103700623477" },
+        { circle_name: "021123499" },
+        { circle_name: "021119910" },
+      ],
+    });
+    expect(rows).toEqual([]);
+  });
+  it("garbage ปนวงจริง → เก็บเฉพาะวงจริง", () => {
+    const rows = normalizeShareCircles({
+      circles: [
+        { circle_name: "1103700623477" }, // garbage
+        { circle_name: "วงบิท", tao_income: 50000 }, // จริง
+      ],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].circle_name).toBe("วงบิท");
   });
 });

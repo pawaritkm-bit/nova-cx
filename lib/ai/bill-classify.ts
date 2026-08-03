@@ -87,6 +87,105 @@ export function normalizeClassification(raw: Record<string, unknown> | null): Bi
   return { keep, kind: "other", confidence };
 }
 
+// =====================================================================
+// แยก "ลิสต์วงแชร์" ออกจาก "บิลจริง" — ใช้เฉพาะลูกค้า is_share_circle (ท้าวแชร์)
+//   กลุ่มท้าวแชร์อาจส่งทั้ง "ลิสต์วงแชร์" (ให้โมดูลวงแชร์อ่าน) และ "บิลจริง" ปนกัน
+//   → ต้องแยกด้วยเนื้อหา ไม่ใช่ข้ามทุกใบ (บิลจริงต้องไม่หาย)
+//   ★ keep-if-unsure (ขั้วกลับ): tag เป็น share_list=true เฉพาะเมื่อมั่นใจสูงว่าเป็นลิสต์วง
+//     ไม่ชัด/ก้ำกึ่ง/เป็นบิลจริง/error/ไม่มี key → false (ปล่อยให้สร้างบิลตามปกติ = บิลไม่หาย)
+// =====================================================================
+
+/** เกณฑ์มั่นใจขั้นต่ำที่จะ "กล้าตัดสินว่าเป็นลิสต์วงแชร์" (ต่ำกว่านี้ = ถือเป็นบิล) */
+const SHARE_LIST_THRESHOLD = 0.7;
+
+export type ShareCircleClassifyResult = {
+  /** true = เป็น "ลิสต์วงแชร์" (ไม่ใช่บิล) · false = เป็นบิลจริง/ไม่ชัด (ให้สร้างบิลตามปกติ) */
+  isShareList: boolean;
+  /** ความมั่นใจ 0..1 */
+  confidence: number;
+};
+
+const SHARE_SYSTEM_PROMPT =
+  "คุณเป็นตัวช่วยแยกประเภทรูปในกลุ่มไลน์ของ 'ท้าวแชร์' (คนจัดวงแชร์เล่นแชร์). " +
+  "ดูรูปแล้วบอกว่าเป็น 'ลิสต์วงแชร์' หรือ 'เอกสารการเงิน/บิลจริง'. " +
+  "ลิสต์วงแชร์ (share_list=true): เป็นรายการวง/มือของวงแชร์ เช่น ชื่อวง + ลำดับมือ (1. 2. 3.) + " +
+  "ยอดส่ง/ดอก (เปีย) + ชื่อสมาชิก มักมีอิโมจิ 🌸❤️🔥 คั่นตัวเลข/ชื่อ " +
+  "— ★ ไม่มีเลขประจำตัวผู้เสียภาษี ไม่ใช่ใบกำกับภาษี/ใบเสร็จ/สลิปโอนเงิน. " +
+  "เอกสารการเงิน/บิลจริง (share_list=false): ใบกำกับภาษี/ใบเสร็จ/บิลซื้อขาย/สลิปโอนเงิน/" +
+  "บิลค่าใช้จ่าย (มีชื่อร้าน/ยอดเงินรวม/เลขที่เอกสาร/วันที่ บางทีมีเลขผู้เสียภาษี 13 หลัก). " +
+  "★ สำคัญมาก (keep-if-unsure): ถ้าไม่แน่ใจ ก้ำกึ่ง หรือดูเป็นบิลจริง ให้ตอบ share_list=false เสมอ " +
+  "— ยอมให้เป็นบิลดีกว่าทำบิลจริงหาย. ตอบ share_list=true เฉพาะเมื่อมั่นใจสูงว่าเป็นลิสต์วงแชร์. " +
+  'ตอบเป็น JSON เท่านั้น: {"share_list": <true|false>, "confidence": <0..1>}.';
+
+/**
+ * แปลงผลดิบ → ShareCircleClassifyResult พร้อมบังคับ keep-if-unsure (แยกให้เทสต์ได้)
+ *   isShareList=true เฉพาะเมื่อ share_list===true และ confidence >= เกณฑ์ · นอกนั้น false
+ */
+export function normalizeShareCircleClassification(
+  raw: Record<string, unknown> | null
+): ShareCircleClassifyResult {
+  if (!raw) return { isShareList: false, confidence: 0 };
+  let confidence = typeof raw.confidence === "number" ? raw.confidence : NaN;
+  if (!Number.isFinite(confidence)) confidence = 0;
+  if (confidence < 0) confidence = 0;
+  if (confidence > 1) confidence = 1;
+  const isShareList = raw.share_list === true && confidence >= SHARE_LIST_THRESHOLD;
+  return { isShareList, confidence };
+}
+
+/**
+ * จำแนกรูปว่าเป็น "ลิสต์วงแชร์" หรือ "บิลจริง" (OpenAI vision) — ใช้เฉพาะลูกค้าท้าวแชร์
+ *   @returns ผล · null เมื่อ error/timeout/ไม่มี key (caller ถือว่าเป็นบิล = ไม่ข้าม)
+ */
+export async function classifyShareCircleImage(
+  data: Buffer,
+  mime: string
+): Promise<ShareCircleClassifyResult | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null; // degrade: ไม่มี key → caller ถือว่าเป็นบิล (ไม่ข้าม)
+
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const dataUrl = `data:${mime || "image/jpeg"};base64,${data.toString("base64")}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(OPENAI_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: 100,
+        messages: [
+          { role: "system", content: SHARE_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "รูปนี้เป็น 'ลิสต์วงแชร์' หรือ 'บิลจริง'? ตอบ JSON ตามรูปแบบ" },
+              { type: "image_url", image_url: { url: dataUrl, detail: "low" } },
+            ],
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.warn(`[bill-classify] share openai http ${res.status}`);
+      return null; // error → caller ถือว่าเป็นบิล (ไม่ข้าม → บิลไม่หาย)
+    }
+    const body = (await res.json()) as ChatCompletionResponse;
+    const content = body.choices?.[0]?.message?.content;
+    if (!content) return null;
+    return normalizeShareCircleClassification(extractJson(content));
+  } catch {
+    console.warn("[bill-classify] share classify error");
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * จำแนกรูปว่าเป็นเอกสารการเงินหรือไม่ (OpenAI vision)
  *   @returns ผลการคัด · null เมื่อ error/timeout/ไม่มี key (caller ถือว่า keep)

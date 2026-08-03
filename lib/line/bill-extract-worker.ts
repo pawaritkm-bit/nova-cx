@@ -5,6 +5,7 @@ import { suggestWhtRate } from "@/lib/accounting/wht";
 import { calcVat } from "@/lib/accounting/calc";
 import { suggestPaymentMethod } from "@/lib/accounting/payment";
 import { getCustomerShareCircleFlag } from "@/lib/share-circles/queries";
+import { classifyShareCircleImage } from "@/lib/ai/bill-classify";
 
 /**
  * Bill extract worker — ไล่บิลที่เก็บแล้วแต่ยังไม่มี bill_entries → AI สกัด → สร้าง draft
@@ -527,35 +528,57 @@ export async function processBillExtraction(
     // 3) จับคู่ลูกค้าเราจาก chat_group (best-effort) — ทำก่อนดาวน์โหลด/AI เพื่อเช็คธงท้าวแชร์
     const customer = await resolveCustomer(db, row.chat_message_id);
 
-    // ★ กันอนาคต: ลูกค้าท้าวแชร์ (is_share_circle=true) → ไม่สร้าง bill_entry จากรูปในไลน์
-    //   (รูปยังอยู่ใน message_attachments ให้โมดูลวงแชร์อ่าน — แค่ไม่ไปโผล่เป็นบิล/รอระบุ)
-    //   มาร์ก doc_kind='share_circle' ให้ออกจาก eligible (กัน cron วนหยิบมาสร้างบิลรอบถัดไป/starve คิว)
-    //   ★ degrade: คอลัมน์ is_share_circle ยังไม่ apply → flag=false → ทำงานเหมือนเดิมทุกอย่าง
-    if (customer.id && (await getCustomerShareCircleFlag(db, row.tenant_id, customer.id))) {
-      await db
-        .from("message_attachments")
-        .update({ doc_kind: "share_circle" })
-        .eq("id", row.id)
-        .eq("tenant_id", row.tenant_id);
-      continue; // ไม่สร้างบิล
+    // ★ ลูกค้าท้าวแชร์ (is_share_circle=true): "แยกเนื้อหา" ไม่ใช่ข้ามทุกใบ
+    //   กลุ่มท้าวแชร์ส่งทั้ง "ลิสต์วงแชร์" และ "บิลจริง" ปนกัน → ใช้ AI แยก:
+    //     - เป็นลิสต์วงแชร์ (มั่นใจ) → มาร์ก doc_kind='share_circle' ไม่สร้างบิล (โมดูลวงแชร์อ่าน)
+    //     - เป็นบิลจริง/ไม่ชัด/PDF/degrade → สร้างบิลตามปกติ (บิลจริงไม่หาย)
+    //   ★ gate false-positive: ทำเฉพาะลูกค้า is_share_circle เท่านั้น (flag=false → ข้ามทั้งบล็อกนี้
+    //     ลูกค้าปกติ flow เดิม 100%) · คอลัมน์ยังไม่ apply → flag=false → เหมือนเดิม
+    //   คืน buf ที่ดาวน์โหลดแล้ว (ถ้าเป็นบิล) ให้ extract ใช้ต่อ — ไม่ดาวน์โหลดซ้ำ
+    let preBuf: Buffer | null = null;
+    if (customer.id && !nonImage && (await getCustomerShareCircleFlag(db, row.tenant_id, customer.id))) {
+      try {
+        const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(objectPath);
+        if (dlErr || !blob) {
+          console.warn("[bill-extract-worker] share download failed");
+          continue; // ดาวน์โหลดไม่ได้ → ข้ามรอบนี้ (ยังไม่สร้างบิล ลองใหม่รอบหน้า)
+        }
+        preBuf = Buffer.from(await blob.arrayBuffer());
+      } catch {
+        console.warn("[bill-extract-worker] share download error");
+        continue;
+      }
+      const sc = await classifyShareCircleImage(preBuf, mime);
+      if (sc && sc.isShareList) {
+        // ★ ลิสต์วงแชร์ (มั่นใจ) → ไม่สร้างบิล · มาร์ก doc_kind ให้ออกจาก eligible (กันวนสแกน/starve คิว)
+        await db
+          .from("message_attachments")
+          .update({ doc_kind: "share_circle" })
+          .eq("id", row.id)
+          .eq("tenant_id", row.tenant_id);
+        continue;
+      }
+      // ไม่ใช่ลิสต์วง (หรือ classify ไม่ได้/ไม่มั่นใจ) → สร้างบิลตามปกติ (keep-if-unsure: บิลจริงไม่หาย)
     }
 
     // 4) รูป → ดาวน์โหลด + สกัด · PDF/เอกสาร → ข้ามการสกัด (draft ว่าง)
     let bill = null as Awaited<ReturnType<typeof extractBillData>> | null;
     if (!nonImage) {
-      let buf: Buffer | null = null;
-      try {
-        const { data: blob, error: dlErr } = await db.storage
-          .from(BILLS_BUCKET)
-          .download(objectPath);
-        if (dlErr || !blob) {
-          console.warn("[bill-extract-worker] download failed");
-          continue; // ดาวน์โหลดไม่ได้ → ข้าม (รอบหน้าลองใหม่ ไม่สร้าง entry)
+      let buf: Buffer | null = preBuf; // ★ reuse ถ้าดาวน์โหลดไปแล้ว (share-circle branch)
+      if (!buf) {
+        try {
+          const { data: blob, error: dlErr } = await db.storage
+            .from(BILLS_BUCKET)
+            .download(objectPath);
+          if (dlErr || !blob) {
+            console.warn("[bill-extract-worker] download failed");
+            continue; // ดาวน์โหลดไม่ได้ → ข้าม (รอบหน้าลองใหม่ ไม่สร้าง entry)
+          }
+          buf = Buffer.from(await blob.arrayBuffer());
+        } catch {
+          console.warn("[bill-extract-worker] download error");
+          continue;
         }
-        buf = Buffer.from(await blob.arrayBuffer());
-      } catch {
-        console.warn("[bill-extract-worker] download error");
-        continue;
       }
       bill = await extractBillData(buf, mime);
     }

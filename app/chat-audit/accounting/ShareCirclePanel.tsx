@@ -1,19 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   createShareCircleEntryAction,
   updateShareCircleEntryAction,
   softDeleteShareCircleEntryAction,
   restoreShareCircleEntryAction,
+  extractShareCircleFromTextAction,
+  extractShareCircleFromImagesAction,
   type ShareCircleFields,
 } from "./share-circle-actions";
+import { createBillUploadUrlAction } from "./actions";
+import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
+import { validateUpload } from "@/lib/accounting/upload";
 import {
   computeSbtMonthly,
   computeYearSummary,
   type ShareCircleEntry,
 } from "@/lib/share-circles/queries";
+
+/** bucket รูป (ตรงกับ actions.ts / storage) */
+const BILLS_BUCKET = "bills";
 
 /**
  * แท็บ "วงแชร์" (client) ในการ์ดลูกค้าของหน้าลงบันทึกบัญชี
@@ -307,7 +315,110 @@ export default function ShareCirclePanel({
     })();
   }
 
-  const busy = pending || reading;
+  // ---- กรอกเอง: วางข้อความ ----
+  const [pasteText, setPasteText] = useState("");
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const [pasteForce, setPasteForce] = useState(false); // โชว์ปุ่ม "วางซ้ำอยู่ดี"
+
+  function runPasteExtract(force: boolean) {
+    if (!pasteText.trim()) {
+      setErr("กรุณาวางข้อความลิสต์วงแชร์ก่อน");
+      return;
+    }
+    setErr(null);
+    setMsg(null);
+    setPasteBusy(true);
+    startTransition(async () => {
+      const res = await extractShareCircleFromTextAction(customerId, readMonth, pasteText, { force });
+      setPasteBusy(false);
+      if (!res.ok) {
+        setErr(res.message);
+        // ข้อความซ้ำ → เปิดปุ่มยืนยันเพิ่มซ้ำ
+        setPasteForce(res.message.includes("เคยวาง"));
+        return;
+      }
+      setPasteForce(false);
+      setPasteText("");
+      setMsg(res.message);
+      router.refresh();
+    });
+  }
+
+  // ---- กรอกเอง: อัปรูป ----
+  const [imgBusy, setImgBusy] = useState(false);
+  const imgRef = useRef<HTMLInputElement>(null);
+  // เก็บ path ที่อัปแล้ว เผื่อกด "อัปซ้ำอยู่ดี" (ไม่ต้องอัปใหม่)
+  const [uploadedPaths, setUploadedPaths] = useState<string[] | null>(null);
+  const [imgForce, setImgForce] = useState(false);
+
+  /** เรียก action ด้วย paths ที่อัปแล้ว */
+  function extractFromPaths(paths: string[], force: boolean) {
+    startTransition(async () => {
+      const res = await extractShareCircleFromImagesAction(customerId, readMonth, paths, { force });
+      setImgBusy(false);
+      if (!res.ok) {
+        setErr(res.message);
+        setImgForce(res.message.includes("เคยอัป"));
+        return;
+      }
+      setImgForce(false);
+      setUploadedPaths(null);
+      setMsg(res.message);
+      router.refresh();
+    });
+  }
+
+  async function runImageUpload() {
+    const files = Array.from(imgRef.current?.files ?? []);
+    if (files.length === 0) {
+      setErr("กรุณาเลือกรูปวงแชร์ก่อน");
+      return;
+    }
+    setErr(null);
+    setMsg(null);
+    setImgBusy(true);
+    try {
+      const supabase = createBrowserSupabase();
+      const paths: string[] = [];
+      for (const file of files.slice(0, 12)) {
+        const v = validateUpload({ mime: file.type, name: file.name, size: file.size });
+        if (!v.ok) {
+          setErr(v.error);
+          setImgBusy(false);
+          return;
+        }
+        const prep = await createBillUploadUrlAction({
+          customerId,
+          entryType: "unspecified",
+          fileName: file.name,
+          mime: file.type,
+          size: file.size,
+        });
+        if (!prep.ok) {
+          setErr(prep.message);
+          setImgBusy(false);
+          return;
+        }
+        const { error: upErr } = await supabase.storage
+          .from(BILLS_BUCKET)
+          .uploadToSignedUrl(prep.path, prep.token, file, { contentType: file.type || undefined });
+        if (upErr) {
+          setErr(`อัปโหลดรูปไม่สำเร็จ: ${upErr.message || "กรุณาลองใหม่"}`);
+          setImgBusy(false);
+          return;
+        }
+        paths.push(prep.path);
+      }
+      if (imgRef.current) imgRef.current.value = "";
+      setUploadedPaths(paths);
+      extractFromPaths(paths, false);
+    } catch {
+      setErr("อัปโหลดรูปไม่สำเร็จ กรุณาลองใหม่");
+      setImgBusy(false);
+    }
+  }
+
+  const busy = pending || reading || pasteBusy || imgBusy;
 
   return (
     <div className="acc-sharecircle">
@@ -331,6 +442,82 @@ export default function ShareCirclePanel({
         <a href={exportHref} className="btn btn-ghost">
           ⬇ ภธ.40 (Excel)
         </a>
+      </div>
+
+      {/* ---- กรอกเอง: วางข้อความ / อัปรูป (ยึดเดือนที่เลือกด้านบน) ---- */}
+      <div className="card" style={{ marginBottom: 12, padding: 12 }}>
+        <div className="section-title" style={{ marginBottom: 8 }}>
+          <span>กรอกเอง (เดือน {monthLabel(readMonth)})</span>
+          <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>
+            วางคำ/อัปรูปเอง → AI แยกเข้าเดือนที่เลือก · กันบันทึกซ้ำอัตโนมัติ
+          </span>
+        </div>
+
+        {/* วางข้อความ */}
+        <label className="acc-field acc-field-wide" style={{ display: "block" }}>
+          <span>วางคำจากไลน์วงแชร์ (วางหลายวงรวดเดียวได้)</span>
+          <textarea
+            value={pasteText}
+            onChange={(e) => {
+              setPasteText(e.target.value);
+              setPasteForce(false);
+            }}
+            rows={5}
+            placeholder={"วงบิท รายเดือน 21 มือ ต้น 100,000\nรายได้ท้าว 50,000 ค่าดูแล 0 ดอกเบี้ย 1,500\n\nวงคริสต์มาส ..."}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              border: "1px solid var(--line, #d9dee6)",
+              borderRadius: 10,
+              fontSize: 14,
+              fontFamily: "inherit",
+              resize: "vertical",
+            }}
+          />
+        </label>
+        <div className="acc-subtabs" style={{ marginTop: 8 }}>
+          <button type="button" className="btn" onClick={() => runPasteExtract(false)} disabled={busy}>
+            {pasteBusy ? "🤖 AI กำลังแยก…" : "🤖 แยกด้วย AI"}
+          </button>
+          {pasteForce ? (
+            <button type="button" className="btn btn-ghost" onClick={() => runPasteExtract(true)} disabled={busy}>
+              วางซ้ำอยู่ดี
+            </button>
+          ) : null}
+
+          <span className="acc-toolbar-spacer" />
+
+          {/* อัปรูป (หลายรูป) */}
+          <label className="btn btn-ghost" style={{ cursor: busy ? "default" : "pointer", margin: 0 }}>
+            ＋ เพิ่มรูปวงแชร์
+            <input
+              ref={imgRef}
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display: "none" }}
+              disabled={busy}
+              onChange={() => {
+                setImgForce(false);
+                runImageUpload();
+              }}
+            />
+          </label>
+          {imgBusy ? <span className="muted" style={{ fontSize: 13 }}>กำลังอัป/แยกรูป…</span> : null}
+          {imgForce && uploadedPaths ? (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setImgBusy(true);
+                extractFromPaths(uploadedPaths, true);
+              }}
+              disabled={busy}
+            >
+              อัปซ้ำอยู่ดี
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {err ? <div className="action-msg err">{err}</div> : null}

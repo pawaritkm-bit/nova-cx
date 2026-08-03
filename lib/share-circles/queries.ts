@@ -182,6 +182,66 @@ export async function customerHasShareCircle(
   return (count ?? (data ? (data as unknown[]).length : 0)) > 0;
 }
 
+// ---------------------------------------------------------------------
+// dedup ระดับ "วง" (กันบันทึกรายได้/ภาษีซ้ำ) — pure/เทสต์ได้
+// ---------------------------------------------------------------------
+
+/** normalize ชื่อวงให้ยืดหยุ่น: lower + ตัดอิโมจิ/สัญลักษณ์/ช่องว่าง/ตัวคั่น */
+export function normalizeCircleName(name: string | null | undefined): string {
+  if (!name) return "";
+  return name
+    .toLowerCase()
+    // ตัดอิโมจิ/สัญลักษณ์ (emoji blocks + dingbats + arrows + variation selector)
+    .replace(
+      /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu,
+      ""
+    )
+    .replace(/[\s.,\-_()（）"'`]/g, "")
+    .trim();
+}
+
+/**
+ * คีย์ dedup ของ 1 วง = ชื่อ(normalize) + ยอดหลักรวม (G+H+I+J+ต้น/คน)
+ *   ★ วงที่ชื่อตรง (ยืดหยุ่น) และยอดหลักตรง = ถือว่าวงเดียวกัน (period_month เดียวกัน)
+ */
+export function shareCircleDedupKey(fields: {
+  circleName: string | null | undefined;
+  taoIncome: number | null;
+  mgmtFee: number | null;
+  operationFee: number | null;
+  interestIncome: number | null;
+  principalPerHead: number | null;
+}): string {
+  const amt = [
+    fields.taoIncome,
+    fields.mgmtFee,
+    fields.operationFee,
+    fields.interestIncome,
+    fields.principalPerHead,
+  ]
+    .map((n) => (n === null || n === undefined ? "" : String(round2(n))))
+    .join("|");
+  return `${normalizeCircleName(fields.circleName)}#${amt}`;
+}
+
+/** สร้าง set ของคีย์ dedup จาก entries เดิม (ที่ยังไม่ลบ ของเดือนเดียวกัน) */
+export function buildDedupKeySet(entries: ShareCircleEntry[]): Set<string> {
+  const s = new Set<string>();
+  for (const e of entries) {
+    s.add(
+      shareCircleDedupKey({
+        circleName: e.circleName,
+        taoIncome: e.taoIncome,
+        mgmtFee: e.mgmtFee,
+        operationFee: e.operationFee,
+        interestIncome: e.interestIncome,
+        principalPerHead: e.principalPerHead,
+      })
+    );
+  }
+  return s;
+}
+
 /**
  * อ่าน flag customers.is_share_circle (สวิตช์ "ลูกค้าเป็นท้าวแชร์")
  *   ★ degrade: คอลัมน์ยังไม่ apply (schema cache) / query พัง → false เงียบ ๆ (ไม่ throw)

@@ -3,6 +3,9 @@ import {
   computeSbtMonthly,
   computeYearSummary,
   normalizePeriodMonth,
+  normalizeCircleName,
+  shareCircleDedupKey,
+  buildDedupKeySet,
   round2,
   type ShareCircleEntry,
 } from "@/lib/share-circles/queries";
@@ -113,5 +116,52 @@ describe("computeYearSummary — ภงด.90 (ดอกเบี้ย J ไม
   it("period_month รูปแบบผิด → ข้าม (ไม่ crash)", () => {
     const rows = computeYearSummary([entry({ periodMonth: "bad", taoIncome: 999 })]);
     expect(rows).toEqual([]);
+  });
+});
+
+describe("dedup ระดับวง — normalizeCircleName / shareCircleDedupKey", () => {
+  it("normalizeCircleName: ตัดอิโมจิ/ช่องว่าง/ตัวคั่น → ยืดหยุ่น", () => {
+    expect(normalizeCircleName("วงบิท 🌸")).toBe(normalizeCircleName("วงบิท"));
+    expect(normalizeCircleName(" วง-บิท ")).toBe(normalizeCircleName("วงบิท"));
+    expect(normalizeCircleName(" วงบิท❤️ ")).toBe("วงบิท");
+    expect(normalizeCircleName(null)).toBe("");
+  });
+
+  it("คีย์ตรงกัน: ชื่อ(ยืดหยุ่น)+ยอดหลักตรง → key เดียวกัน", () => {
+    const a = shareCircleDedupKey({
+      circleName: "วงบิท 🌸",
+      taoIncome: 50000, mgmtFee: 2000, operationFee: 0, interestIncome: 1500, principalPerHead: 100000,
+    });
+    const b = shareCircleDedupKey({
+      circleName: "วงบิท",
+      taoIncome: 50000, mgmtFee: 2000, operationFee: 0, interestIncome: 1500, principalPerHead: 100000,
+    });
+    expect(a).toBe(b);
+  });
+
+  it("ยอดต่าง → key ต่าง (ไม่ถือว่าซ้ำ)", () => {
+    const a = shareCircleDedupKey({ circleName: "วงบิท", taoIncome: 50000, mgmtFee: null, operationFee: null, interestIncome: null, principalPerHead: null });
+    const b = shareCircleDedupKey({ circleName: "วงบิท", taoIncome: 60000, mgmtFee: null, operationFee: null, interestIncome: null, principalPerHead: null });
+    expect(a).not.toBe(b);
+  });
+
+  it("null vs 0 ต่างกัน (คนละความหมาย)", () => {
+    const withNull = shareCircleDedupKey({ circleName: "วง", taoIncome: null, mgmtFee: null, operationFee: null, interestIncome: null, principalPerHead: null });
+    const withZero = shareCircleDedupKey({ circleName: "วง", taoIncome: 0, mgmtFee: null, operationFee: null, interestIncome: null, principalPerHead: null });
+    expect(withNull).not.toBe(withZero);
+  });
+
+  it("buildDedupKeySet: สร้างเซตจาก entries เดิม + ใช้เช็คซ้ำได้", () => {
+    const e: ShareCircleEntry = {
+      id: "1", tenantId: "t", customerId: "c", periodMonth: "2026-04", entryDate: null,
+      circleName: "วงบิท 🌸", roundNote: null, memberCount: null, principalPerHead: 100000,
+      taoIncome: 50000, mgmtFee: 2000, operationFee: 0, interestIncome: 1500, expense: null,
+      source: "ai", status: "active", createdAt: "2026-04-01T00:00:00Z",
+    };
+    const set = buildDedupKeySet([e]);
+    const incoming = shareCircleDedupKey({
+      circleName: "วงบิท", taoIncome: 50000, mgmtFee: 2000, operationFee: 0, interestIncome: 1500, principalPerHead: 100000,
+    });
+    expect(set.has(incoming)).toBe(true); // วางซ้ำ → ตรวจเจอ
   });
 });
