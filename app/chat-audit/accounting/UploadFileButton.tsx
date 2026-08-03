@@ -2,7 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createBillUploadUrlAction, finalizeBillUploadAction } from "./actions";
+import { createBillUploadUrlAction, finalizeBillUploadAction, listCustomerOptionsAction } from "./actions";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { UPLOAD_ACCEPT, MAX_UPLOAD_BYTES, validateUpload } from "@/lib/accounting/upload";
 import type { EntryType } from "@/lib/accounting/queries";
@@ -46,6 +46,10 @@ export default function UploadFileButton({
   const [customerId, setCustomerId] = useState<string>(lockedCustomerId ?? "");
   const [entryType, setEntryType] = useState<EntryType>(defaultEntryType);
   const fileRef = useRef<HTMLInputElement>(null);
+  // ★ perf: โหลดรายชื่อลูกค้าตอนเปิดกล่อง (ไม่ดึงทุกคลิกที่หน้า) — ใช้ prop ก่อน แล้ว fallback fetch
+  const [fetchedCustomers, setFetchedCustomers] = useState<{ id: string; label: string }[] | null>(null);
+  const [loadingCust, setLoadingCust] = useState(false);
+  const custOptions = customers ?? fetchedCustomers ?? [];
 
   const locked = lockedCustomerId != null;
 
@@ -164,7 +168,20 @@ export default function UploadFileButton({
 
   return (
     <>
-      <button type="button" className="btn" onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className="btn"
+        onClick={() => {
+          setOpen(true);
+          // โหลดรายชื่อลูกค้าครั้งแรกที่เปิด (เฉพาะโหมด toolbar ที่ไม่ผูกลูกค้า + ยังไม่มี prop)
+          if (!locked && !customers && fetchedCustomers === null && !loadingCust) {
+            setLoadingCust(true);
+            listCustomerOptionsAction()
+              .then((r) => setFetchedCustomers(r))
+              .finally(() => setLoadingCust(false));
+          }
+        }}
+      >
         + {label}
       </button>
 
@@ -191,8 +208,10 @@ export default function UploadFileButton({
                 <label className="acc-field acc-field-wide">
                   <span>ลูกค้า</span>
                   <select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-                    <option value="">— ไม่ระบุลูกค้า (ยังไม่จับคู่) —</option>
-                    {(customers ?? []).map((c) => (
+                    <option value="">
+                      {loadingCust ? "— กำลังโหลดรายชื่อลูกค้า… —" : "— ไม่ระบุลูกค้า (ยังไม่จับคู่) —"}
+                    </option>
+                    {custOptions.map((c) => (
                       <option key={c.id} value={c.id}>{c.label}</option>
                     ))}
                   </select>

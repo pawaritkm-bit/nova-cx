@@ -320,30 +320,6 @@ async function fetchCustomerTaxIds(
   return map;
 }
 
-/**
- * ดึงรายชื่อลูกค้าทั้งหมดของ tenant (id + label) — สำหรับ dropdown เลือกลูกค้าตอนอัปไฟล์เอง
- *   เรียงตามรหัสลูกค้า (natural) · cap กันดึงเยอะเกิน · ไม่ log ชื่อลูกค้า
- */
-async function fetchCustomerSelectOptions(
-  service: SupabaseClient,
-  tenantId: string
-): Promise<{ id: string; label: string }[]> {
-  try {
-    const { data } = await service
-      .from("customers")
-      .select("id, customer_code, name")
-      .eq("tenant_id", tenantId)
-      .is("deleted_at", null)
-      .order("customer_code", { ascending: true, nullsFirst: false })
-      .limit(5000);
-    const rows = (data ?? []) as { id: string; customer_code: string | null; name: string | null }[];
-    return rows.map((c) => ({ id: c.id, label: customerLabel(c.customer_code, c.name) }));
-  } catch {
-    // backend blip ชั่วคราว → dropdown เลือกลูกค้าตอนอัปไฟล์ว่างชั่วคราว (หน้ายังใช้ได้)
-    return [];
-  }
-}
-
 /** สร้าง signed URL (batch) ให้ object path ที่ต้องโชว์เท่านั้น (PDPA/perf) */
 async function signPaths(
   service: SupabaseClient,
@@ -800,12 +776,12 @@ export default async function AccountingPage({
   // param accountant ที่ต้องคงไว้เวลากดสลับลูกค้า/แท็บ (เฉพาะ admin/lead ที่เลือกแล้ว)
   const accParam = access.mode === "accountant" ? undefined : accountantParam || undefined;
 
-  // รหัสลูกค้า (สำหรับ avatar/ชื่อ/ค้นหา/ไฟล์ Excel) + รายชื่อลูกค้าทั้งหมด (dropdown อัปไฟล์)
+  // รหัสลูกค้า (สำหรับ avatar/ชื่อ/ค้นหา/ไฟล์ Excel) เฉพาะที่โชว์
+  //   ★ perf: ไม่ดึงรายชื่อลูกค้า 5,000 รายทุกคลิกแล้ว — dropdown อัปไฟล์โหลดตอนเปิดกล่อง (on-demand)
   const custIds = [...new Set(allEntries.map((e) => e.customerId).filter((x): x is string => !!x))];
-  const [codeById, taxIdById, customerSelectOptions] = await Promise.all([
+  const [codeById, taxIdById] = await Promise.all([
     fetchCustomerCodes(service, tenantId, custIds),
     fetchCustomerTaxIds(service, tenantId, custIds),
-    fetchCustomerSelectOptions(service, tenantId),
   ]);
 
   // ---- ตัวกรอง (validate ก่อนใช้) ----
@@ -1034,8 +1010,8 @@ export default async function AccountingPage({
               {accParam ? <input type="hidden" name="accountant" value={accParam} /> : null}
               <button type="submit" className="btn">+ เพิ่มรายการเอง</button>
             </form>
-            {/* อัปโหลดไฟล์เอง (เลือกลูกค้าได้) */}
-            <UploadFileButton customers={customerSelectOptions} accountant={accParam} />
+            {/* อัปโหลดไฟล์เอง (เลือกลูกค้าได้ — โหลดรายชื่อลูกค้าตอนเปิดกล่อง) */}
+            <UploadFileButton accountant={accParam} />
             {/* ตรวจทานทุกบรรทัดก่อนออก Excel รวม */}
             <a href={reviewAllHref} className="btn btn-ghost">ตรวจทาน / ออก Excel (รวม)</a>
           </form>

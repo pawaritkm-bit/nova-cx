@@ -676,6 +676,46 @@ export async function finalizeBillUploadAction(input: {
 }
 
 /**
+ * รายชื่อลูกค้า (id + label) สำหรับ dropdown "อัปไฟล์เอง" — โหลดตอนเปิดกล่อง (on-demand)
+ *   ★ perf: เดิมดึง 5,000 รายทุกครั้งที่ render หน้า → ย้ายมาโหลดเฉพาะตอนต้องใช้
+ *   ★ สโคปนักบัญชี: คืนเฉพาะลูกค้าที่ตัวเองดูแล (admin/lead = ทั้งหมด)
+ */
+export async function listCustomerOptionsAction(): Promise<{ id: string; label: string }[]> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    let query = service
+      .from("customers")
+      .select("id, customer_code, name")
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null)
+      .order("customer_code", { ascending: true, nullsFirst: false })
+      .limit(5000);
+
+    // นักบัญชี (allowedCustomerIds = Set) → เฉพาะลูกค้าที่ดูแล · admin/lead (null) → ทั้งหมด
+    if (ctx.allowedCustomerIds) {
+      const ids = [...ctx.allowedCustomerIds];
+      if (ids.length === 0) return [];
+      query = query.in("id", ids);
+    }
+
+    const { data } = await query;
+    const rows = (data ?? []) as { id: string; customer_code: string | null; name: string | null }[];
+    return rows.map((c) => ({
+      id: c.id,
+      label:
+        c.customer_code && c.name
+          ? `${c.customer_code} · ${c.name}`
+          : c.customer_code || c.name || "ยังไม่จับคู่ลูกค้า",
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * บันทึกเลขภาษีของลูกค้า (loop เก็บเลขภาษี) — admin เท่านั้น
  *
  * บิลหลายใบไม่มีเลขภาษีให้ AI อ่าน → จับซื้อ/ขายไม่ได้ (กลายเป็น "รอระบุ").
