@@ -98,47 +98,7 @@ export async function GET(request: NextRequest) {
   } catch {
     return loginError(request, "server");
   }
-  if (!employee) {
-    // ★★ ตัวตรวจชั่วคราว (ถอดออกหลัง debug เสร็จ) — บอกสาเหตุ resolve ไม่ผ่าน:
-    //   dbg=notfound → userId ตอน login ไม่มีใน employees เลย = ไอดีคนละ provider กับที่เก็บ
-    //   dbg=found;type=..;active=..;tenant=.. → มี record แต่ถูกกรอง (tenant/type/active ไม่ผ่าน)
-    let dbg = "err";
-    try {
-      const svc = createServiceRoleClient();
-      const { data: row } = await svc
-        .from("employees")
-        .select("tenant_id, employee_type, is_active, deleted_at")
-        .eq("line_user_id", identity.userId)
-        .limit(1)
-        .maybeSingle();
-      if (!row) {
-        dbg = "notfound";
-      } else {
-        const r = row as {
-          tenant_id: string | null;
-          employee_type: string | null;
-          is_active: boolean | null;
-          deleted_at: string | null;
-        };
-        dbg = `found;type=${r.employee_type};active=${r.is_active};del=${r.deleted_at ? 1 : 0};tenant=${(r.tenant_id ?? "").slice(0, 8)}`;
-      }
-    } catch {
-      dbg = "err";
-    }
-    const uidMask =
-      identity.userId.length > 10
-        ? `${identity.userId.slice(0, 6)}..${identity.userId.slice(-4)}`
-        : identity.userId;
-    const res = NextResponse.redirect(
-      new URL(
-        `/login?error=not_staff&uid=${encodeURIComponent(uidMask)}&dbg=${encodeURIComponent(dbg)}`,
-        request.url
-      ),
-      { status: 303 }
-    );
-    res.cookies.set(LINE_STATE_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
-    return res;
-  }
+  if (!employee) return loginError(request, "not_staff");
 
   // (5) ออก session cookie (signed) แล้ว redirect ไปปลายทางภายใน
   const now = Math.floor(Date.now() / 1000);
