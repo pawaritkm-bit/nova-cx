@@ -410,6 +410,9 @@ export default function EntryEditor({
                   <img
                     src={viewUrl}
                     alt="รูปบิล"
+                    // ★ perf: โหลดรูปบิลก่อนสิ่งอื่น (priority สูง) + decode แบบ async — เลื่อนเปลี่ยนบิลเห็นรูปไวขึ้น
+                    fetchPriority="high"
+                    decoding="async"
                     className={`acc-bill-img${zoom ? " zoom" : ""}`}
                     style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
                     onClick={() => setZoom((z) => !z)}

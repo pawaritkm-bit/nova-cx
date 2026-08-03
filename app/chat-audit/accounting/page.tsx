@@ -350,7 +350,7 @@ async function signResizedImage(service: SupabaseClient, path: string): Promise<
   try {
     const { data, error } = await service.storage
       .from(BILLS_BUCKET)
-      .createSignedUrl(path, SIGNED_URL_TTL_SEC, { transform: { width: 1600, quality: 72 } });
+      .createSignedUrl(path, SIGNED_URL_TTL_SEC, { transform: { width: 1300, quality: 66 } });
     if (!error && data?.signedUrl) return data.signedUrl;
   } catch {
     // transform ไม่รองรับ → fallback รูปเต็ม
