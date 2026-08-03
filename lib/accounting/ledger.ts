@@ -22,6 +22,8 @@ export type LedgerTxn = {
   entryId: string;
   date: string | null;
   docNo: string | null;
+  /** คำอธิบาย (ชื่อคู่ค้า) สำหรับพิมพ์บัญชีแยกประเภท */
+  description: string | null;
   debit: number;
   credit: number;
   /** ยอดคงเหลือสะสม (debit-positive) หลังรายการนี้ */
@@ -127,6 +129,7 @@ export function buildLedger(
       entryId: jl.entryId,
       date: jl.date,
       docNo: jl.docNo,
+      description: jl.counterparty ?? null,
       debit: jl.debit,
       credit: jl.credit,
       balance: a.balance,

@@ -50,6 +50,8 @@ export type JournalLine = {
   credit: number;
   side: JournalSide;
   customerId: string | null;
+  /** ชื่อคู่ค้า (ผู้ขาย/ผู้ซื้อ) — ใช้เป็นคำอธิบายในบัญชีแยกประเภท */
+  counterparty: string | null;
 };
 
 /** บิลที่ลงบัญชีไม่ได้ (ตกหล่น) + เหตุผล */
@@ -96,6 +98,7 @@ export function buildJournalEntries(entries: BillEntry[]): JournalResult {
       docNo: e.docNo,
       date: e.docDate,
       customerId: e.customerId,
+      counterparty: e.counterpartyName ?? null,
     };
     const skip = (reason: string) =>
       skipped.push({ ...base, entryType: e.entryType, reason });

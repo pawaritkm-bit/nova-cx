@@ -8,6 +8,7 @@ import { resolveAccountingAccess, customerInScope, type AccountingAccess } from 
 import { listEntries } from "@/lib/accounting/queries";
 import { listOpeningBalances } from "@/lib/accounting/opening-balance";
 import { buildStatements } from "@/lib/accounting/statements";
+import { buildLedgerStatements } from "@/lib/accounting/ledger-statement";
 import { filterEntriesForReport, periodLabel, validMonth } from "@/lib/accounting/report-filter";
 import { buildPndReport, buildPp30Report } from "@/lib/accounting/rd-export";
 import { formatMoney } from "@/lib/accounting/calc";
@@ -51,6 +52,18 @@ function formatDate(iso: string | null): string {
 function balanceLabel(bal: number): string {
   if (Math.abs(bal) < 0.005) return "0.00";
   return `${formatMoney(Math.abs(bal))} ${bal > 0 ? "Dr" : "Cr"}`;
+}
+
+/** วันที่แบบ พ.ศ. dd/mm/yyyy (ตามรูปแบบ statement สำนักงาน) — parse ตรงกัน TZ ไม่เพี้ยน */
+function formatDateBE(iso: string | null): string {
+  if (!iso) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (m) return `${m[3]}/${m[2]}/${Number(m[1]) + 543}`;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear() + 543}`;
 }
 
 /** รายชื่อลูกค้าในสโคป (สำหรับ dropdown) — เหมือนหน้า opening */
@@ -121,47 +134,60 @@ function JournalView({ s }: { s: Statements }) {
   );
 }
 
-/** บัญชีแยกประเภท — 1 บัญชี = 1 ตาราง (ยอดยกมา + รายการ + รวม) */
+/**
+ * บัญชีแยกประเภท — แยก "1 บัญชี = 1 ชุด" ตามรูปแบบมาตรฐานสำนักงาน
+ *   แต่ละบัญชี: หัว(รหัส·ชื่อ) → B/F ยอดยกมา → รายการ(วันที่ พ.ศ. · เลขที่ · คำอธิบาย · เดบิต · เครดิต · คงเหลือ) → C/F ยอดยกไป → รวม Dr/Cr
+ *   บัญชีที่ไม่มีเคลื่อนไหวแต่มียอดยกมา → โชว์แค่ B/F=C/F
+ */
 function LedgerView({ s }: { s: Statements }) {
-  if (s.ledger.accounts.length === 0) return <p className="empty">ยังไม่มีบัญชีที่มีความเคลื่อนไหว</p>;
+  const statements = buildLedgerStatements(s.ledger);
+  if (statements.length === 0) return <p className="empty">ยังไม่มีบัญชีที่มีความเคลื่อนไหว</p>;
   return (
     <div className="acc-ledger">
-      {s.ledger.accounts.map((a) => (
+      {statements.map((a) => (
         <div key={a.code} className="acc-ledger-acct">
           <div className="acc-ledger-head">
             <span className="mono strong">{a.code}</span> {a.name}
             <span className="muted"> · {a.category} · ด้านปกติ {a.normalSide === "debit" ? "เดบิต" : "เครดิต"}</span>
           </div>
           <div className="table-wrap">
-            <table className="dlv-table acc-table">
+            <table className="dlv-table acc-table acc-ledger-table">
               <thead>
                 <tr>
                   <th>วันที่</th>
-                  <th>เลขที่</th>
+                  <th>รายการ</th>
+                  <th>คำอธิบาย</th>
                   <th className="num">เดบิต</th>
                   <th className="num">เครดิต</th>
                   <th className="num">คงเหลือ</th>
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td colSpan={4}>ยอดยกมา</td>
-                  <td className="num">{balanceLabel(a.opening)}</td>
-                </tr>
-                {a.txns.map((t, i) => (
-                  <tr key={`${t.entryId}-${i}`}>
-                    <td>{formatDate(t.date)}</td>
-                    <td>{t.docNo || "—"}</td>
-                    <td className="num">{t.debit ? formatMoney(t.debit) : ""}</td>
-                    <td className="num">{t.credit ? formatMoney(t.credit) : ""}</td>
-                    <td className="num">{balanceLabel(t.balance)}</td>
-                  </tr>
-                ))}
+                {a.rows.map((r, i) =>
+                  r.kind === "txn" ? (
+                    <tr key={`${r.entryId}-${i}`}>
+                      <td>{formatDateBE(r.date)}</td>
+                      <td>{r.docNo || "—"}</td>
+                      <td>{r.description || ""}</td>
+                      <td className="num">{r.debit ? formatMoney(r.debit) : ""}</td>
+                      <td className="num">{r.credit ? formatMoney(r.credit) : ""}</td>
+                      <td className="num">{balanceLabel(r.balance)}</td>
+                    </tr>
+                  ) : (
+                    <tr key={r.kind} className="acc-ledger-bf">
+                      <td className="strong">{r.kind === "bf" ? "B/F" : "C/F"}</td>
+                      <td colSpan={4}>{r.label}</td>
+                      <td className="num strong">{balanceLabel(r.balance)}</td>
+                    </tr>
+                  )
+                )}
                 <tr className="acc-total">
-                  <td colSpan={2} className="strong">รวม</td>
-                  <td className="num strong">{formatMoney(a.totalDebit)}</td>
-                  <td className="num strong">{formatMoney(a.totalCredit)}</td>
-                  <td className="num strong">{balanceLabel(a.balance)}</td>
+                  <td colSpan={3} className="strong">
+                    รวม · Dr = {a.totals.debitCount.toLocaleString("th-TH")} · Cr = {a.totals.creditCount.toLocaleString("th-TH")}
+                  </td>
+                  <td className="num strong">{formatMoney(a.totals.debitAmount)}</td>
+                  <td className="num strong">{formatMoney(a.totals.creditAmount)}</td>
+                  <td className="num strong">{balanceLabel(a.closing)}</td>
                 </tr>
               </tbody>
             </table>

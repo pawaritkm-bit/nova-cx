@@ -1214,3 +1214,16 @@
 }
 .nova-dash .acc-ledger-head .muted { font-weight: 500; font-size: 12px; }
 .nova-dash .v-red { color: #dc2626; }
+
+/* บัญชีแยกประเภทแบบ per-account (B/F ยอดยกมา · C/F ยอดยกไป) */
+.nova-dash .acc-ledger-bf > td { background: #f8fafc; color: #475569; }
+.nova-dash table.acc-ledger-table td.num,
+.nova-dash table.acc-ledger-table th.num { font-variant-numeric: tabular-nums; }
+
+/* ให้พิมพ์ออก PDF สวย: ไม่ตัดกลางบัญชี + เส้นชัด */
+@media print {
+  .nova-dash .acc-ledger-acct { break-inside: avoid; page-break-inside: avoid; margin-bottom: 14px; }
+  .nova-dash table.acc-ledger-table { font-size: 12px; }
+  .nova-dash table.acc-ledger-table th,
+  .nova-dash table.acc-ledger-table td { border-color: #94a3b8; }
+}

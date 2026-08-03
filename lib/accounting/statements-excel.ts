@@ -9,6 +9,15 @@
  */
 import ExcelJS from "exceljs";
 import type { Statements, ReportKey } from "@/lib/accounting/statements";
+import { buildLedgerStatements } from "@/lib/accounting/ledger-statement";
+
+/** วันที่แบบ พ.ศ. dd/mm/yyyy สำหรับชีทบัญชีแยกประเภท (parse ตรง TZ ไม่เพี้ยน) */
+function dateBE(iso: string | null): string {
+  if (!iso) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (m) return `${m[3]}/${m[2]}/${Number(m[1]) + 543}`;
+  return iso;
+}
 
 const NUMBER_FMT = "#,##0.00";
 
@@ -56,21 +65,34 @@ function sheetJournal(wb: ExcelJS.Workbook, s: Statements, h: StatementsHeader):
 function sheetLedger(wb: ExcelJS.Workbook, s: Statements, h: StatementsHeader): void {
   const ws = wb.addWorksheet("บัญชีแยกประเภท");
   writeTitle(ws, "บัญชีแยกประเภท (Ledger)", h);
-  for (const a of s.ledger.accounts) {
+  // แยก 1 บัญชี = 1 ชุด (section): หัว → B/F → รายการ → C/F → รวม Dr/Cr → เว้นบรรทัด
+  for (const a of buildLedgerStatements(s.ledger)) {
     const head = ws.addRow([`${a.code} · ${a.name}`, `หมวด: ${a.category}`]);
     head.font = { bold: true };
-    const cols = ws.addRow(["วันที่", "เลขที่", "เดบิต", "เครดิต", "คงเหลือ"]);
+    const cols = ws.addRow(["วันที่", "รายการ", "คำอธิบาย", "เดบิต", "เครดิต", "คงเหลือ"]);
     styleHeaderRow(cols);
-    ws.addRow(["ยอดยกมา", "", "", "", a.opening]);
-    for (const t of a.txns) {
-      ws.addRow([t.date ?? "", t.docNo ?? "", t.debit || null, t.credit || null, t.balance]);
+    for (const r of a.rows) {
+      if (r.kind === "txn") {
+        ws.addRow([dateBE(r.date), r.docNo ?? "", r.description ?? "", r.debit || null, r.credit || null, r.balance]);
+      } else {
+        // B/F ยอดยกมา · C/F ยอดยกไป
+        const bf = ws.addRow([r.kind === "bf" ? "B/F" : "C/F", r.label, "", null, null, r.balance]);
+        bf.font = { bold: true };
+      }
     }
-    const foot = ws.addRow(["รวม", "", a.totalDebit, a.totalCredit, a.balance]);
+    const foot = ws.addRow([
+      `รวม · Dr = ${a.totals.debitCount} · Cr = ${a.totals.creditCount}`,
+      "",
+      "",
+      a.totals.debitAmount,
+      a.totals.creditAmount,
+      a.closing,
+    ]);
     foot.font = { bold: true };
     ws.addRow([]);
   }
-  ws.columns.forEach((c, i) => (c.width = [16, 14, 16, 16, 16][i] ?? 14));
-  moneyCols(ws, [3, 4, 5]);
+  ws.columns.forEach((c, i) => (c.width = [14, 16, 24, 16, 16, 16][i] ?? 14));
+  moneyCols(ws, [4, 5, 6]);
 }
 
 function sheetTrial(wb: ExcelJS.Workbook, s: Statements, h: StatementsHeader): void {
