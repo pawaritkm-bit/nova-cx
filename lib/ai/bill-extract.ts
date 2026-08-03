@@ -18,6 +18,22 @@ import { CHART_BY_CODE, searchChartNonBank } from "@/lib/accounting/chart-of-acc
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 60_000;
 
+/**
+ * โมเดลสำหรับ "อ่านไฟล์อัปเอง" (extractBillsData — PDF/หลายบิล/ตารางแน่น) — default gpt-4.1
+ *   ทดสอบจริง: gpt-4.1 อ่านยอดเงิน/หลายบิลในตารางแม่น (gpt-4o-mini อ่านคอลัมน์ผิด/มั่ว)
+ *   ★ บิลไลน์ (รูปใบเดียว) ยังใช้ OPENAI_MODEL/gpt-4o-mini (ประหยัด · ปริมาณมาก) — ดู extractBillData
+ *   ★ override ได้ด้วย env OPENAI_EXTRACT_MODEL
+ */
+const EXTRACT_MODEL = process.env.OPENAI_EXTRACT_MODEL || "gpt-5-mini";
+
+/** timeout ของการอ่านไฟล์อัป (reasoning model ช้ากว่า — ให้เวลามากขึ้น) */
+const EXTRACT_TIMEOUT_MS = 110_000;
+
+/** โมเดลตระกูล reasoning (gpt-5 หรือ o-series) — ต้องใช้ max_completion_tokens + ห้ามส่ง temperature */
+function isReasoningModel(model: string): boolean {
+  return /^(gpt-5|o\d)/i.test(model);
+}
+
 /** เกณฑ์ความมั่นใจ "สูง" ต่อ field — >= นี้ = มั่นใจ (ไม่ mark เดา) */
 const FIELD_THRESHOLD = 0.8;
 
@@ -133,9 +149,13 @@ const SYSTEM_PROMPT =
   "seller_name/seller_tax_id = ชื่อและเลขภาษีของ 'ผู้ขาย/ผู้ออกใบกำกับ' (มักอยู่หัวบิล), " +
   "buyer_name/buyer_tax_id = ชื่อและเลขภาษีของ 'ผู้ซื้อ/ลูกค้า' (มักอยู่ช่อง 'ลูกค้า/ผู้ซื้อ'). " +
   "ฝั่งไหนไม่เห็น/ไม่ชัดให้ value=null. " +
-  "doc_date เป็นรูปแบบ YYYY-MM-DD (ค.ศ.). บิลไทยปีเป็น พ.ศ. — แปลงเป็น ค.ศ. โดยลบ 543. " +
-  "★ ถ้าปีเขียน 2 หลัก (เช่น 15/06/69) ให้เติม '25' ข้างหน้าเป็น พ.ศ. ก่อน (69→2569) แล้วลบ 543 = 2026 → '2026-06-15'. " +
-  "ห้ามตีความปี 2 หลักเป็น ค.ศ. (69 ไม่ใช่ 1969/2019). " +
+  "★ doc_no = 'เลขที่เอกสาร/เลขที่ใบกำกับภาษี' (ป้าย No./เลขที่/Invoice No./Tax Invoice No. มักอยู่มุมขวาบนของบิล) " +
+  "— อ่านมาให้ครบทุกตัวอักษร/ตัวเลข/ขีด ห้ามข้าม (แต่ถ้าอ่านไม่ออกจริง ๆ ให้ value=null). " +
+  "doc_date รูปแบบ YYYY-MM-DD (ค.ศ.). ★ ปีในบิลอาจเป็น พ.ศ. หรือ ค.ศ. ให้แปลงเป็น ค.ศ. อย่างถูกต้อง: " +
+  "(1) ปี 4 หลักและ ≥ 2500 (เช่น 2569) = พ.ศ. → ลบ 543 (2569→2026). " +
+  "(2) ปี 4 หลักและ < 2500 (เช่น 2026, 2025) = เป็น ค.ศ. อยู่แล้ว → ใช้เลย ★ห้ามลบ 543★ (2026 = 2026 ไม่ใช่ 2023). " +
+  "(3) ปี 2 หลัก (เช่น 69) = พ.ศ. ย่อ → 2500+เลข แล้วลบ 543 (69→2569→2026). " +
+  "★ ปี ค.ศ. ที่ถูกต้องต้องอยู่ราว 2024-2027 (ยุคปัจจุบัน) — ถ้าแปลงแล้วได้ปีนอกช่วงนี้มาก แสดงว่าพลาด ให้ทบทวนใหม่. " +
   "เลขประจำตัวผู้เสียภาษีเป็นเลข 13 หลัก. " +
   "lines = รายการในบิล แต่ละรายการ {vat_type:{value,confidence}, description:{value,confidence}, amount:{value,confidence}, vat_amount:{value,confidence}, account_code:{value,confidence}, wht_rate:{value,confidence}, wht_amount:{value,confidence}} " +
   "vat_type.value='vat' เฉพาะเมื่อ 'มั่นใจ' ว่าบิลเป็นใบกำกับภาษี/มีบรรทัดภาษีมูลค่าเพิ่ม (VAT) 7% ชัดเจน หรือแยกยอดก่อน+VAT ให้เห็น. " +
@@ -241,6 +261,19 @@ function gateString(field: ConfField | undefined, threshold = FIELD_THRESHOLD): 
   if (typeof v !== "string") return null;
   const t = v.trim();
   return t.length > 0 ? t : null;
+}
+
+/**
+ * ตัวกันพลาดวันที่ (deterministic): ถ้าโมเดลคืนปี พ.ศ. มา (ปี ≥ 2500) → ลบ 543 ให้เป็น ค.ศ.
+ *   เช่น 2569-06-15 → 2026-06-15 · ปีที่เป็น ค.ศ. อยู่แล้ว (เช่น 2026) ไม่แตะ
+ *   คืน null/รูปแบบอื่นตามเดิม (ไม่ยุ่ง)
+ */
+function fixBuddhistYear(d: string | null): string | null {
+  if (!d) return d;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  if (!m) return d;
+  const y = parseInt(m[1], 10);
+  return y >= 2500 ? `${y - 543}-${m[2]}-${m[3]}` : d;
 }
 
 /**
@@ -362,7 +395,7 @@ export function normalizeExtraction(raw: Record<string, unknown> | null): Extrac
 
   return {
     // ★ doc_date / tax_id (13 หลัก): คงเกณฑ์สูง — วันที่/เลขภาษีผิด = ยุ่ง (ไม่เดาเติม)
-    doc_date: gateString(r.doc_date),
+    doc_date: fixBuddhistYear(gateString(r.doc_date)),
     seller_tax_id: gateString(r.seller_tax_id),
     buyer_tax_id: gateString(r.buyer_tax_id),
     // ★ doc_no / ชื่อผู้ขาย-ผู้ซื้อ: เติมเชิงรุก (GUESS_THRESHOLD) — string เสี่ยงน้อยกว่าตัวเลข
@@ -385,6 +418,7 @@ export async function extractBillData(
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null; // degrade: ไม่มี key → ข้ามการสกัด
 
+  // ★ บิลไลน์ (รูปใบเดียว) = ใช้ OPENAI_MODEL/gpt-4o-mini (ประหยัด · มาเยอะทุกวันผ่าน cron)
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const isPdf = (mime || "").toLowerCase().includes("pdf");
   const dataUrl = `data:${mime || "image/jpeg"};base64,${imageData.toString("base64")}`;
@@ -460,28 +494,36 @@ export async function extractBillsData(imageData: Buffer, mime: string): Promise
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return [];
 
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const model = EXTRACT_MODEL;
   const isPdf = (mime || "").toLowerCase().includes("pdf");
   const dataUrl = `data:${mime || "image/jpeg"};base64,${imageData.toString("base64")}`;
   const filePart = isPdf
     ? { type: "file", file: { filename: "bill.pdf", file_data: dataUrl } }
     : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };
 
+  // reasoning model (gpt-5*/o-series) ใช้ max_completion_tokens + ห้ามส่ง temperature
+  const reasoning = isReasoningModel(model);
+  const reqBody: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: [{ type: "text", text: MULTI_USER_PROMPT }, filePart] },
+    ],
+  };
+  if (reasoning) {
+    reqBody.max_completion_tokens = 16000; // เผื่อ reasoning tokens + output หลายบิล
+  } else {
+    reqBody.temperature = 0;
+    reqBody.max_tokens = 8000;
+  }
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), EXTRACT_TIMEOUT_MS);
   try {
     const res = await fetch(OPENAI_API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        max_tokens: 8000, // หลายบิล → output ยาว
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: [{ type: "text", text: MULTI_USER_PROMPT }, filePart] },
-        ],
-      }),
+      body: JSON.stringify(reqBody),
       signal: controller.signal,
     });
     if (!res.ok) {

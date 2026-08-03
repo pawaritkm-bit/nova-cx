@@ -5,8 +5,8 @@ import { extractUploadedEntry } from "@/lib/line/bill-extract-worker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// ★ AI อ่านบิล (โดยเฉพาะ PDF) ใช้เวลา — ให้ headroom 60s (คนละชั้นกับ default ของ server action)
-export const maxDuration = 60;
+// ★ AI อ่านบิล (gpt-5-mini reasoning + PDF หลายบิล) ช้า — ให้ headroom 120s
+export const maxDuration = 120;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

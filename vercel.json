@@ -36,6 +36,9 @@
     }
   ],
   "functions": {
+    "app/api/accounting/extract-upload/route.ts": {
+      "maxDuration": 120
+    },
     "app/api/**/route.ts": {
       "maxDuration": 60
     }

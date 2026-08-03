@@ -61,6 +61,22 @@ function numToInput(n: number): string {
   return n ? String(n) : "";
 }
 
+/** ISO (2026-06-01) → ไทย วว/ดด/ปปปป (01/06/2026) สำหรับแสดง/แก้ */
+function isoToThai(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? "");
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso ?? "";
+}
+
+/** ไทย วว/ดด/ปปปป → ISO (2026-06-01) สำหรับเก็บ · รูปผิด/ยังพิมพ์ไม่ครบ = "" */
+function thaiToIso(s: string): string {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((s ?? "").trim());
+  if (!m) return "";
+  const d = Number(m[1]);
+  const mo = Number(m[2]);
+  if (d < 1 || d > 31 || mo < 1 || mo > 12) return "";
+  return `${m[3]}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
     return [
@@ -122,7 +138,8 @@ export default function EntryEditor({
 
   // ---- header state ----
   const [entryType, setEntryType] = useState<EntryType>(entry.entryType);
-  const [docDate, setDocDate] = useState<string>(entry.docDate ?? "");
+  // ★ เก็บเป็นข้อความ วว/ดด/ปปปป (ไทย) เพื่อแสดง/แก้ตามที่ผู้ใช้ต้องการ — แปลงเป็น ISO ตอนบันทึก
+  const [docDate, setDocDate] = useState<string>(entry.docDate ? isoToThai(entry.docDate) : "");
   const [docNo, setDocNo] = useState<string>(entry.docNo ?? "");
   const [partyName, setPartyName] = useState<string>(entry.counterpartyName ?? "");
   const [partyTaxId, setPartyTaxId] = useState<string>(entry.counterpartyTaxId ?? "");
@@ -138,6 +155,14 @@ export default function EntryEditor({
   const [zoom, setZoom] = useState(false);
   const [rotation, setRotation] = useState(0); // องศาหมุนรูปบิล (0/90/180/270) — บิลถ่ายตะแคง
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // สแนปช็อตค่าเริ่มต้น (ครั้งแรกที่ mount) — ใช้เช็ค "แก้ไขหรือยัง"
+  //   ★ เลื่อนบิล (ก่อนหน้า/ถัดไป) ถ้ายังไม่ได้แก้ → ข้าม auto-save (ไม่ยิง DB) = เลื่อนเร็วขึ้นมาก
+  const initialInputRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (initialInputRef.current === null) initialInputRef.current = JSON.stringify(buildInput(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const close = useCallback(() => {
     router.push(closeHref);
@@ -214,7 +239,7 @@ export default function EntryEditor({
       entryType,
       customerId: entry.customerId,
       attachmentId: entry.attachmentId,
-      docDate: docDate || null,
+      docDate: thaiToIso(docDate) || null,
       docNo: docNo || null,
       counterpartyName: partyName || null,
       counterpartyTaxId: partyTaxId || null,
@@ -257,7 +282,10 @@ export default function EntryEditor({
   //   - ยืนยันแล้ว (readOnly): แก้ไม่ได้ → ไปเลยไม่ต้องบันทึก
   //   - บันทึกไม่ผ่าน (validate ฯลฯ): ค้างที่ใบเดิม โชว์ error ให้แก้ก่อน
   function saveThenGo(href: string) {
-    if (readOnly) {
+    // ยืนยันแล้ว (อ่านอย่างเดียว) หรือ "ยังไม่ได้แก้อะไร" → เลื่อนเลย ไม่ต้อง save (เร็วขึ้น)
+    const unchanged =
+      initialInputRef.current !== null && initialInputRef.current === JSON.stringify(buildInput(false));
+    if (readOnly || unchanged) {
       router.push(href);
       router.refresh();
       return;
@@ -401,11 +429,18 @@ export default function EntryEditor({
                 </select>
               </label>
               <label className="acc-field">
-                <span>วันที่เอกสาร {aiSrc && entry.docDate ? <AiTag /> : null}</span>
-                <input type="date" value={docDate} onChange={(e) => setDocDate(e.target.value)} disabled={readOnly} />
+                <span>วันที่เอกสาร (วว/ดด/ปปปป) {aiSrc && entry.docDate ? <AiTag /> : null}</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={docDate}
+                  onChange={(e) => setDocDate(e.target.value)}
+                  disabled={readOnly}
+                  placeholder="วว/ดด/ปปปป เช่น 01/06/2026"
+                />
               </label>
               <label className="acc-field">
-                <span>เลขที่เอกสาร</span>
+                <span>เลขที่เอกสาร {aiSrc && entry.docNo ? <AiTag /> : null}</span>
                 <input type="text" value={docNo} onChange={(e) => setDocNo(e.target.value)} disabled={readOnly} placeholder="เช่น INV-001" />
               </label>
               <label className="acc-field">
