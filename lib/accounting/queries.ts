@@ -20,6 +20,8 @@ export type EntryStatus = "draft" | "confirmed";
 export type EntrySource = "ai" | "manual";
 export type VatType = "vat" | "novat";
 export type WhtForm = "pnd3" | "pnd53";
+/** วิธีจ่าย/รับเงิน (บัญชีคู่ฝั่งเครดิต) — เงินสด/โอน/เชื่อ */
+export type PaymentMethod = "cash" | "transfer" | "credit";
 
 /** บรรทัดรายการ (ตรงกับ bill_entry_lines) */
 export type BillEntryLine = {
@@ -65,6 +67,12 @@ export type BillEntry = {
   buyerName: string | null;
   buyerTaxId: string | null;
   whtForm: WhtForm | null;
+  /** วิธีจ่าย/รับเงิน → บัญชีคู่ฝั่งเครดิต (null = ยังไม่ระบุ) */
+  paymentMethod: PaymentMethod | null;
+  /** id ของบัญชีเงินฝากที่ใช้ (เฉพาะ transfer) · null = ไม่ระบุ/ไม่ใช่โอน */
+  paymentBankAccountId: string | null;
+  /** รหัสผังบัญชีเงินฝากของบัญชีที่เลือก (1020/1025/1030) — join มาให้ hint บัญชีคู่ · null = ไม่มี */
+  paymentBankAccountCode: string | null;
   status: EntryStatus;
   source: EntrySource;
   aiConfidence: number | null;
@@ -198,6 +206,8 @@ type RawEntry = {
   buyer_name: string | null;
   buyer_tax_id: string | null;
   wht_form: string | null;
+  payment_method: string | null;
+  payment_bank_account_id: string | null;
   status: string;
   source: string;
   ai_confidence: number | null;
@@ -205,6 +215,11 @@ type RawEntry = {
   created_at: string;
   confirmed_at: string | null;
 };
+
+/** cast string ดิบจาก DB → PaymentMethod | null */
+function asPaymentMethodDb(v: string | null): PaymentMethod | null {
+  return v === "cash" || v === "transfer" || v === "credit" ? v : null;
+}
 
 function mapLine(r: RawLine): BillEntryLine {
   return {
@@ -256,7 +271,7 @@ export async function listEntries(
   let q = db
     .from("bill_entries")
     .select(
-      "id, tenant_id, attachment_id, customer_id, upload_path, upload_name, upload_mime, entry_type, doc_date, doc_no, counterparty_name, counterparty_tax_id, seller_name, seller_tax_id, buyer_name, buyer_tax_id, wht_form, status, source, ai_confidence, notes, created_at, confirmed_at"
+      "id, tenant_id, attachment_id, customer_id, upload_path, upload_name, upload_mime, entry_type, doc_date, doc_no, counterparty_name, counterparty_tax_id, seller_name, seller_tax_id, buyer_name, buyer_tax_id, wht_form, payment_method, payment_bank_account_id, status, source, ai_confidence, notes, created_at, confirmed_at"
     )
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
@@ -326,6 +341,22 @@ export async function listEntries(
     }
   }
 
+  // รหัสผังบัญชีเงินฝากของ payment_bank_account_id (ให้ UI ทำ hint บัญชีคู่ตอนโอน)
+  const bankAccountIds = [
+    ...new Set(rawEntries.map((e) => e.payment_bank_account_id).filter((x): x is string => !!x)),
+  ];
+  const codeByBankAccount = new Map<string, string | null>();
+  if (bankAccountIds.length > 0) {
+    const { data: baData } = await db
+      .from("customer_bank_accounts")
+      .select("id, account_code")
+      .eq("tenant_id", tenantId)
+      .in("id", bankAccountIds);
+    for (const b of (baData ?? []) as { id: string; account_code: string | null }[]) {
+      codeByBankAccount.set(b.id, b.account_code);
+    }
+  }
+
   const entries: BillEntry[] = rawEntries.map((e) => ({
     id: e.id,
     tenantId: e.tenant_id,
@@ -346,6 +377,11 @@ export async function listEntries(
     buyerName: e.buyer_name,
     buyerTaxId: e.buyer_tax_id,
     whtForm: e.wht_form === "pnd3" || e.wht_form === "pnd53" ? e.wht_form : null,
+    paymentMethod: asPaymentMethodDb(e.payment_method),
+    paymentBankAccountId: e.payment_bank_account_id,
+    paymentBankAccountCode: e.payment_bank_account_id
+      ? codeByBankAccount.get(e.payment_bank_account_id) ?? null
+      : null,
     status: e.status === "confirmed" ? "confirmed" : "draft",
     source: e.source === "manual" ? "manual" : "ai",
     aiConfidence: e.ai_confidence,

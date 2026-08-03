@@ -35,7 +35,8 @@ import {
   deleteEntry,
   type ActionResult,
 } from "@/lib/accounting/actions-lib";
-import type { EntryType, VatType, WhtForm } from "@/lib/accounting/queries";
+import type { EntryType, VatType, WhtForm, PaymentMethod } from "@/lib/accounting/queries";
+import { asPaymentMethod } from "@/lib/accounting/payment";
 import { normalizeTaxId } from "@/lib/accounting/tax-id";
 import { validateUpload, sanitizeUploadName, extOf } from "@/lib/accounting/upload";
 import { redecideExistingEntries } from "@/lib/line/bill-extract-worker";
@@ -144,6 +145,10 @@ export type SaveEntryInput = {
   counterpartyName?: string | null;
   counterpartyTaxId?: string | null;
   whtForm?: WhtForm | null;
+  /** วิธีจ่าย/รับเงิน → บัญชีคู่ฝั่งเครดิต (เงินสด/โอน/เชื่อ) */
+  paymentMethod?: PaymentMethod | null;
+  /** บัญชีเงินฝากที่ใช้ (เฉพาะ transfer) — id ใน customer_bank_accounts */
+  paymentBankAccountId?: string | null;
   notes?: string | null;
   lines: EditableLineInput[];
   /** id ของ line ที่ผู้ใช้ลบใน editor (ต้องลบใน DB ด้วย) */
@@ -177,6 +182,15 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
     if (input.attachmentId != null && !isUuid(input.attachmentId)) {
       return { ok: false, message: "ไฟล์แนบไม่ถูกต้อง" };
     }
+    const paymentMethod = asPaymentMethod(input.paymentMethod);
+    // บัญชีธนาคาร (เฉพาะโอน): ต้องเป็น uuid + เป็นบัญชีของ "ลูกค้าเจ้าของบิล" ใน tenant นี้
+    let paymentBankAccountId: string | null = null;
+    if (paymentMethod === "transfer" && input.paymentBankAccountId != null) {
+      if (!isUuid(input.paymentBankAccountId)) {
+        return { ok: false, message: "บัญชีธนาคารไม่ถูกต้อง" };
+      }
+      paymentBankAccountId = input.paymentBankAccountId;
+    }
 
     // ★ สโคปนักบัญชี (server-side): แก้ของเดิม → ลูกค้าปัจจุบันของ entry ต้องอยู่ในความดูแล
     //   + ลูกค้าปลายทางที่จะบันทึกก็ต้องอยู่ในความดูแล (admin/lead ผ่านทุกกรณี)
@@ -189,6 +203,19 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
     }
     assertCustomerInScope(ctx, input.customerId ?? null);
 
+    // ★ บัญชีธนาคารที่ใช้ (โอน) ต้องเป็นบัญชีของ "ลูกค้าเจ้าของบิล" ใน tenant นี้ (กันผูกข้ามบริษัท)
+    if (paymentBankAccountId) {
+      const { data: ba } = await service
+        .from("customer_bank_accounts")
+        .select("id")
+        .eq("id", paymentBankAccountId)
+        .eq("tenant_id", ctx.tenantId)
+        .eq("customer_id", input.customerId ?? "")
+        .is("deleted_at", null)
+        .maybeSingle();
+      if (!ba) return { ok: false, message: "บัญชีธนาคารไม่ถูกต้อง (ไม่ใช่บัญชีของลูกค้ารายนี้)" };
+    }
+
     // 1) upsert หัวเอกสาร
     const up = await upsertEntry(service, ctx.tenantId, {
       id: input.id,
@@ -200,6 +227,8 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
       counterpartyName: clampText(input.counterpartyName, 200),
       counterpartyTaxId: clampText(input.counterpartyTaxId, 20),
       whtForm: asWhtForm(input.whtForm),
+      paymentMethod,
+      paymentBankAccountId,
       notes: clampText(input.notes, 500),
     });
     if (!up.ok) return { ok: false, message: friendlyError(up.error) };
@@ -797,5 +826,196 @@ export async function deleteCustomerBankAccountAction(id: string): Promise<SaveR
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "ลบบัญชีธนาคารไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+// ---------------------------------------------------------------------
+// ยอดยกมาต่อบัญชี ต่อลูกค้า (account_opening_balances)
+//   ★ ทุก action guard: requireAccountingAccess + customerInScope(customerId)
+//   ★ เขียนผ่าน service-role + tenantId จาก session (ไม่เชื่อ scope จาก client)
+//   ★ upsert by (customer_id, account_code) — 1 ลูกค้า 1 บัญชี 1 ยอดยกมา
+//   ★ PDPA: ไม่ log ตัวเลข/ชื่อบัญชี/ลูกค้า
+// ---------------------------------------------------------------------
+
+const OPENING_PATH = "/chat-audit/accounting/opening";
+
+/** ตัวเลข "มีเครื่องหมาย" (ยอดยกมาติดลบได้ = ยอดเครดิต) — จำกัดช่วงกันค่าเวอร์ */
+function asSignedNumber(v: unknown): number {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return 0;
+  const clamped = Math.max(-1_000_000_000_000, Math.min(n, 1_000_000_000_000));
+  return Math.round((clamped + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * upsert ยอดยกมา 1 บัญชี ของลูกค้า (by customer_id + account_code)
+ *   - accountCode ต้องไม่ว่าง (รับรหัสอิสระนอกผังกลางได้)
+ *   - openingBalance รับค่าติดลบได้ (ยอดเครดิต)
+ */
+export async function upsertOpeningBalanceAction(input: {
+  customerId: string;
+  accountCode: string;
+  accountName?: string | null;
+  openingBalance: number;
+  note?: string | null;
+}): Promise<SaveResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    if (!isUuid(input.customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    if (!customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+    const accountCode = clampText(input.accountCode, 20);
+    if (!accountCode) return { ok: false, message: "ต้องระบุรหัสบัญชี" };
+    const accountName = clampText(input.accountName, 200);
+    const note = clampText(input.note, 500);
+    const openingBalance = asSignedNumber(input.openingBalance);
+
+    // upsert by (customer_id, account_code) — ต้อง update ของที่ยังไม่ลบก่อน ไม่งั้น insert
+    const { data: cur } = await service
+      .from("account_opening_balances")
+      .select("id")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("customer_id", input.customerId)
+      .eq("account_code", accountCode)
+      .is("deleted_at", null)
+      .maybeSingle();
+
+    if (cur) {
+      const { error } = await service
+        .from("account_opening_balances")
+        .update({ account_name: accountName, opening_balance: openingBalance, note })
+        .eq("id", (cur as { id: string }).id)
+        .eq("tenant_id", ctx.tenantId);
+      if (error) return { ok: false, message: "บันทึกยอดยกมาไม่สำเร็จ กรุณาลองใหม่" };
+    } else {
+      const { error } = await service.from("account_opening_balances").insert({
+        tenant_id: ctx.tenantId,
+        customer_id: input.customerId,
+        account_code: accountCode,
+        account_name: accountName,
+        opening_balance: openingBalance,
+        note,
+      });
+      if (error) return { ok: false, message: "เพิ่มยอดยกมาไม่สำเร็จ กรุณาลองใหม่" };
+    }
+
+    revalidatePath(OPENING_PATH);
+    return { ok: true, message: "บันทึกยอดยกมาแล้ว" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "บันทึกยอดยกมาไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/** ลบยอดยกมา 1 บัญชี (soft-delete) — guard scope ผ่าน customer_id ของ row */
+export async function deleteOpeningBalanceAction(id: string): Promise<SaveResult> {
+  if (!isUuid(id)) return { ok: false, message: "ไม่พบรายการที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    const { data: row } = await service
+      .from("account_opening_balances")
+      .select("customer_id")
+      .eq("id", id)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (!row) return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
+    assertCustomerInScope(ctx, (row as { customer_id: string | null }).customer_id);
+
+    const { error } = await service
+      .from("account_opening_balances")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null);
+    if (error) return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
+
+    revalidatePath(OPENING_PATH);
+    return { ok: true, message: "ลบยอดยกมาแล้ว" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ลบยอดยกมาไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * นำเข้ายอดยกมาหลายบัญชีพร้อมกัน (จากไฟล์ที่ parse แล้วฝั่ง client)
+ *   ★ re-validate ทุกแถวฝั่ง server (ไม่เชื่อ client) + upsert by (customer_id, account_code)
+ *   ★ รหัสซ้ำในชุด → แถวหลังทับแถวก่อน (กัน insert ชน unique)
+ */
+export async function importOpeningBalancesAction(input: {
+  customerId: string;
+  rows: { accountCode: string; accountName?: string | null; openingBalance: number }[];
+}): Promise<SaveResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    if (!isUuid(input.customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    if (!customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+    if (!Array.isArray(input.rows) || input.rows.length === 0) {
+      return { ok: false, message: "ไม่มีรายการให้นำเข้า" };
+    }
+    if (input.rows.length > 1000) {
+      return { ok: false, message: "รายการมากเกินไป (สูงสุด 1000 แถวต่อครั้ง)" };
+    }
+
+    // sanitize + dedup by accountCode (แถวหลังทับก่อน)
+    const byCode = new Map<string, { accountName: string | null; openingBalance: number }>();
+    for (const r of input.rows) {
+      const code = clampText(r.accountCode, 20);
+      if (!code) continue;
+      byCode.set(code, {
+        accountName: clampText(r.accountName, 200),
+        openingBalance: asSignedNumber(r.openingBalance),
+      });
+    }
+    if (byCode.size === 0) return { ok: false, message: "ไม่มีรายการที่ถูกต้องให้นำเข้า" };
+
+    // upsert ทีละบัญชี (ใช้ logic upsert by customer+code เหมือน action เดี่ยว)
+    let imported = 0;
+    for (const [code, v] of byCode) {
+      const { data: cur } = await service
+        .from("account_opening_balances")
+        .select("id")
+        .eq("tenant_id", ctx.tenantId)
+        .eq("customer_id", input.customerId)
+        .eq("account_code", code)
+        .is("deleted_at", null)
+        .maybeSingle();
+      if (cur) {
+        const { error } = await service
+          .from("account_opening_balances")
+          .update({ account_name: v.accountName, opening_balance: v.openingBalance })
+          .eq("id", (cur as { id: string }).id)
+          .eq("tenant_id", ctx.tenantId);
+        if (!error) imported++;
+      } else {
+        const { error } = await service.from("account_opening_balances").insert({
+          tenant_id: ctx.tenantId,
+          customer_id: input.customerId,
+          account_code: code,
+          account_name: v.accountName,
+          opening_balance: v.openingBalance,
+        });
+        if (!error) imported++;
+      }
+    }
+
+    revalidatePath(OPENING_PATH);
+    return { ok: true, message: `นำเข้ายอดยกมา ${imported} บัญชีแล้ว` };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "นำเข้ายอดยกมาไม่สำเร็จ กรุณาลองใหม่" };
   }
 }

@@ -3,6 +3,7 @@ import { extractBillData, type ExtractedLine } from "@/lib/ai/bill-extract";
 import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
 import { suggestWhtRate } from "@/lib/accounting/wht";
 import { calcVat } from "@/lib/accounting/calc";
+import { suggestPaymentMethod } from "@/lib/accounting/payment";
 
 /**
  * Bill extract worker — ไล่บิลที่เก็บแล้วแต่ยังไม่มี bill_entries → AI สกัด → สร้าง draft
@@ -558,6 +559,8 @@ export async function processBillExtraction(
         seller_tax_id: seller.taxId,
         buyer_name: buyer.name,
         buyer_tax_id: buyer.taxId,
+        // ค่าแนะนำวิธีจ่าย/รับเงิน จาก doc_kind (เงินสด/สลิป=โอน/ใบกำกับ=เชื่อ) — นักบัญชีแก้ได้
+        payment_method: suggestPaymentMethod(row.doc_kind, decision.entryType),
         status: "draft",
         source: "ai",
         ai_confidence: bill?.overall_confidence ?? null,
@@ -1059,6 +1062,8 @@ export async function reExtractIncompleteEntries(
         seller_tax_id: seller.taxId,
         buyer_name: buyer.name,
         buyer_tax_id: buyer.taxId,
+        // ค่าแนะนำวิธีจ่าย/รับเงิน จาก doc_kind (re-suggest — entry นี้ยังเป็น draft ว่าง)
+        payment_method: suggestPaymentMethod(att?.docKind, decision.entryType),
         ai_confidence: bill.overall_confidence,
       })
       .eq("id", e.id)

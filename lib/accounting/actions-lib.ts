@@ -7,7 +7,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { round2 } from "@/lib/accounting/queries";
-import type { EntryType, VatType, WhtForm } from "@/lib/accounting/queries";
+import type { EntryType, VatType, WhtForm, PaymentMethod } from "@/lib/accounting/queries";
 
 type DB = SupabaseClient;
 
@@ -22,6 +22,10 @@ export type UpsertEntryInput = {
   counterpartyName?: string | null;
   counterpartyTaxId?: string | null;
   whtForm?: WhtForm | null;
+  /** วิธีจ่าย/รับเงิน → บัญชีคู่ฝั่งเครดิต (null = ล้าง) */
+  paymentMethod?: PaymentMethod | null;
+  /** บัญชีเงินฝากที่ใช้ (เฉพาะ transfer) · null = ล้าง */
+  paymentBankAccountId?: string | null;
   notes?: string | null;
   /**
    * ไฟล์ที่นักบัญชี "อัปเอง" (แนบตอน insert entry ใหม่เท่านั้น)
@@ -91,6 +95,15 @@ export async function upsertEntry(
     wht_form: input.whtForm ?? null,
     notes: input.notes ?? null,
   };
+  // วิธีจ่าย/รับเงิน: ใส่เฉพาะเมื่อส่งค่ามา (undefined = ไม่แตะ — กัน update ทับเป็น null)
+  //   ★ ไม่ใช่ transfer → บังคับล้าง payment_bank_account_id (บัญชีธนาคารใช้เฉพาะโอน)
+  if (input.paymentMethod !== undefined) {
+    payload.payment_method = input.paymentMethod ?? null;
+    payload.payment_bank_account_id =
+      input.paymentMethod === "transfer" ? input.paymentBankAccountId ?? null : null;
+  } else if (input.paymentBankAccountId !== undefined) {
+    payload.payment_bank_account_id = input.paymentBankAccountId ?? null;
+  }
   // ไฟล์อัปเอง: ใส่เฉพาะเมื่อส่งค่ามา (undefined = ไม่แตะ — กัน update ทับไฟล์เดิมเป็น null)
   if (input.uploadPath !== undefined) payload.upload_path = input.uploadPath;
   if (input.uploadName !== undefined) payload.upload_name = input.uploadName;

@@ -1133,3 +1133,70 @@
   .nova-dash .acc-bank-code { grid-column: 1 / -1; }
   .nova-dash .acc-bank-name { grid-column: 1 / -1; }
 }
+
+/* ---- วิธีจ่าย/รับเงิน: hint บัญชีคู่ (เครดิต) ---- */
+.nova-dash .acc-contra-hint {
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  background: #f1f5f9;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  align-self: center;
+}
+.nova-dash .acc-contra-hint b { color: var(--ink, #0f172a); }
+
+/* ---- ยอดยกมาต่อบัญชี (opening balances) ---- */
+.nova-dash .acc-opening { display: flex; flex-direction: column; gap: 12px; }
+.nova-dash .acc-opening-cust { display: flex; align-items: center; gap: 8px; }
+.nova-dash .acc-opening-cust select {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12.5px;
+  background: #fff;
+}
+.nova-dash .acc-opening-cust-label { font-weight: 600; margin-bottom: 10px; }
+.nova-dash .acc-opening-upload { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nova-dash .acc-opening-upload-hint { font-size: 11.5px; color: var(--muted, #64748b); }
+.nova-dash .acc-opening-preview {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #f8fafc;
+}
+.nova-dash .acc-opening-preview-head { font-weight: 600; margin-bottom: 6px; }
+.nova-dash .acc-opening-preview-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow: auto; }
+.nova-dash .acc-opening-preview-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 120px;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 2px 0;
+}
+.nova-dash .acc-opening-preview-more { font-size: 11.5px; color: var(--muted, #64748b); padding-top: 4px; }
+.nova-dash .acc-opening-list { display: flex; flex-direction: column; gap: 6px; }
+.nova-dash .acc-opening-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 130px auto;
+  gap: 8px;
+  align-items: center;
+}
+.nova-dash .acc-opening-head { font-size: 11.5px; color: var(--muted, #64748b); font-weight: 600; }
+.nova-dash .acc-opening-total { padding-top: 6px; border-top: 1px solid var(--line); }
+.nova-dash .acc-opening-row input {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12.5px;
+  background: #fff;
+  min-width: 0;
+}
+.nova-dash .acc-opening-row-actions { display: flex; align-items: center; gap: 6px; }
+
+@media (max-width: 620px) {
+  .nova-dash .acc-opening-row { grid-template-columns: 1fr 1fr; }
+  .nova-dash .acc-opening-preview-row { grid-template-columns: 70px 1fr 90px; }
+}

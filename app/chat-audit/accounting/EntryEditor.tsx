@@ -21,8 +21,9 @@ import {
   calcNet,
   formatMoney,
 } from "@/lib/accounting/calc";
-import type { BillEntry, EntryType, VatType, WhtForm } from "@/lib/accounting/queries";
+import type { BillEntry, EntryType, VatType, WhtForm, PaymentMethod } from "@/lib/accounting/queries";
 import { resolveEntryNav } from "@/lib/accounting/entry-nav";
+import { contraAccountFor } from "@/lib/accounting/payment";
 
 /**
  * EntryEditor — หน้าต่างตรวจ/แก้บิล (verify panel)
@@ -138,6 +139,9 @@ export default function EntryEditor({
   const [partyName, setPartyName] = useState<string>(entry.counterpartyName ?? "");
   const [partyTaxId, setPartyTaxId] = useState<string>(entry.counterpartyTaxId ?? "");
   const [whtForm, setWhtForm] = useState<WhtForm | "">(entry.whtForm ?? "");
+  // วิธีจ่าย/รับเงิน (บัญชีคู่ฝั่งเครดิต) + บัญชีธนาคารที่ใช้ (เฉพาะโอน)
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | "">(entry.paymentMethod ?? "");
+  const [paymentBankId, setPaymentBankId] = useState<string>(entry.paymentBankAccountId ?? "");
 
   // ---- lines state ----
   const [lines, setLines] = useState<LineRow[]>(() => initLines(entry));
@@ -211,6 +215,23 @@ export default function EntryEditor({
     return { amount, vat, wht, net: calcNet(amount, vat, wht) };
   }, [lines]);
 
+  // บัญชีเงินฝากที่เลือก (สำหรับ hint บัญชีคู่ตอนโอน) + ข้อความ hint
+  const selectedBank = useMemo(
+    () => bankAccounts.find((b) => b.id === paymentBankId) ?? null,
+    [bankAccounts, paymentBankId]
+  );
+  const contraHint = useMemo(() => {
+    if (!paymentMethod) return null;
+    const contra = contraAccountFor(paymentMethod, entryType, selectedBank?.accountCode ?? null);
+    if (!contra) return null;
+    // โอน + เลือกบัญชีแล้ว → โชว์ชื่อธนาคารจริงของลูกค้าแทนชื่อ generic
+    const name =
+      paymentMethod === "transfer" && selectedBank
+        ? bankAccountDisplayName(selectedBank)
+        : contra.name;
+    return { code: contra.code, name };
+  }, [paymentMethod, entryType, selectedBank]);
+
   function buildInput(confirm: boolean): SaveEntryInput {
     return {
       id: entry.id,
@@ -222,6 +243,9 @@ export default function EntryEditor({
       counterpartyName: partyName || null,
       counterpartyTaxId: partyTaxId || null,
       whtForm: whtForm || null,
+      paymentMethod: paymentMethod || null,
+      // ส่ง bank id เฉพาะเมื่อเลือก "โอน" (ไม่ใช่โอน → server ล้างให้เอง)
+      paymentBankAccountId: paymentMethod === "transfer" ? paymentBankId || null : null,
       lines: lines.map((l) => ({
         id: l.id,
         vatType: l.vatType,
@@ -422,6 +446,57 @@ export default function EntryEditor({
                   <option value="pnd53">ภ.ง.ด.53</option>
                 </select>
               </label>
+
+              {/* วิธีจ่าย/รับเงิน → บัญชีคู่ (เครดิต) สำหรับ double-entry */}
+              <label className="acc-field">
+                <span>วิธีจ่าย/รับเงิน</span>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => {
+                    const v = e.target.value as PaymentMethod | "";
+                    setPaymentMethod(v);
+                    if (v !== "transfer") setPaymentBankId(""); // ไม่ใช่โอน → ล้างบัญชีธนาคาร
+                  }}
+                  disabled={readOnly}
+                >
+                  <option value="">— ยังไม่ระบุ —</option>
+                  <option value="cash">เงินสด</option>
+                  <option value="transfer">โอน</option>
+                  <option value="credit">เชื่อ</option>
+                </select>
+              </label>
+
+              {/* เลือก "โอน" → เลือกบัญชีเงินฝากธนาคารของลูกค้ารายนี้ */}
+              {paymentMethod === "transfer" ? (
+                <label className="acc-field">
+                  <span>บัญชีธนาคารที่ใช้</span>
+                  {bankAccounts.length > 0 ? (
+                    <select
+                      value={paymentBankId}
+                      onChange={(e) => setPaymentBankId(e.target.value)}
+                      disabled={readOnly}
+                    >
+                      <option value="">— เลือกบัญชี —</option>
+                      {bankAccounts.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.accountCode} · {bankAccountDisplayName(b)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="acc-bank-empty">
+                      ยังไม่มีบัญชีธนาคาร — กด “⚙️ บัญชีธนาคาร” ด้านบนเพื่อเพิ่ม
+                    </span>
+                  )}
+                </label>
+              ) : null}
+
+              {/* hint บัญชีคู่ที่จะเป็นเครดิต (ช่วยตรวจ — ยังไม่ลงจริง แค่บอกให้เห็น) */}
+              {contraHint ? (
+                <div className="acc-field acc-field-wide acc-contra-hint">
+                  บัญชีคู่ (เครดิต): {contraHint.code ? <b>{contraHint.code}</b> : null} {contraHint.name}
+                </div>
+              ) : null}
               <label className="acc-field acc-field-wide">
                 <span>คู่ค้า {aiSrc && entry.counterpartyName ? <AiTag /> : null}</span>
                 <input type="text" value={partyName} onChange={(e) => setPartyName(e.target.value)} disabled={readOnly} placeholder="ชื่อผู้ขาย/ผู้ซื้อ" />

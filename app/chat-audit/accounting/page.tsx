@@ -936,6 +936,15 @@ export default async function AccountingPage({
             ตรวจทาน / ออก Excel
           </a>
         ) : null}
+        {/* ยอดยกมาต่อบัญชีของลูกค้ารายนี้ (เตรียมออกงบการเงิน) */}
+        {g.customerId ? (
+          <a
+            href={`/chat-audit/accounting/opening?customerId=${g.customerId}`}
+            className="btn btn-ghost"
+          >
+            ยอดยกมา
+          </a>
+        ) : null}
       </div>
 
       <EntryTable
