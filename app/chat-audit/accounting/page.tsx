@@ -341,6 +341,23 @@ async function signPaths(
   return out;
 }
 
+/**
+ * sign "รูปบิลแบบย่อขนาด" สำหรับหน้าตรวจ/แก้ (Supabase image transform)
+ *   ★ perf: รูปต้นฉบับหลาย MB → ย่อ ~1600px q72 = เล็กลงมาก โหลดเร็วเวลาเลื่อนเปลี่ยนบิล
+ *   ★ ยังอ่านตัวเลขได้ · degrade: project ไม่เปิด transform → คืน null (ใช้รูปเต็มแทน)
+ */
+async function signResizedImage(service: SupabaseClient, path: string): Promise<string | null> {
+  try {
+    const { data, error } = await service.storage
+      .from(BILLS_BUCKET)
+      .createSignedUrl(path, SIGNED_URL_TTL_SEC, { transform: { width: 1600, quality: 72 } });
+    if (!error && data?.signedUrl) return data.signedUrl;
+  } catch {
+    // transform ไม่รองรับ → fallback รูปเต็ม
+  }
+  return null;
+}
+
 /** KPI 4 ช่องจากสรุป (มูลค่า/VAT/หัก/จ่ายจริง) */
 function KpiRow({ s }: { s: EntrySummary }) {
   return (
@@ -839,8 +856,13 @@ export default async function AccountingPage({
   const editObjectPath = editEntry ? entryObjectPath(editEntry) : null;
   if (editObjectPath) pathsToSign.push(editObjectPath);
   const signed = await signPaths(service, pathsToSign);
-  const editViewUrl = editObjectPath ? signed.get(editObjectPath) ?? null : null;
   const editIsImage = editEntry ? entryIsImage(editEntry) : false;
+  // ★ perf: รูปบิลในหน้าตรวจ/แก้ = ย่อขนาด (เลื่อนเปลี่ยนบิลเร็วขึ้นมาก) · PDF/ไฟล์ = ลิงก์เต็มตามเดิม
+  let editViewUrl = editObjectPath ? signed.get(editObjectPath) ?? null : null;
+  if (editObjectPath && editIsImage) {
+    const resized = await signResizedImage(service, editObjectPath);
+    if (resized) editViewUrl = resized;
+  }
 
   const hasAnyFilter = !!(q || selectedMonth || undatedMode);
   // export: ส่ง accountant เฉพาะกรณีเลือกนักบัญชีคนหนึ่ง (ไม่ใช่ "ทั้งสำนักงาน")
