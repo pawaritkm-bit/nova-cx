@@ -168,8 +168,8 @@ export default function EntryEditor({
   }, []);
 
   const close = useCallback(() => {
+    // ★ perf: force-dynamic → push ดึงข้อมูลสดอยู่แล้ว ไม่ต้อง refresh ซ้ำ (ปิดเร็วขึ้น)
     router.push(closeHref);
-    router.refresh();
   }, [router, closeHref]);
 
   // ปิดด้วย Esc

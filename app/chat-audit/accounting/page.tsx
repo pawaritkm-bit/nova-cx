@@ -323,40 +323,46 @@ async function fetchCustomerTaxIds(
   return map;
 }
 
-/** สร้าง signed URL (batch) ให้ object path ที่ต้องโชว์เท่านั้น (PDPA/perf) */
-async function signPaths(
+/**
+ * sign รูป/ไฟล์ของ entries ที่ "โชว์จริง" (ลูกค้าที่เปิด + บิลที่แก้) — parallel, ครั้งเดียว
+ *   ★ perf: รูป → ย่อขนาด (transform ~1300px q66) เล็กลงมาก → thumbnail/overlay/pager โหลดเร็ว
+ *           ไฟล์/PDF → sign เต็ม (เปิด/ดาวน์โหลด)
+ *   ★ ใช้ signed map ร่วมกันทั้ง thumbnail + overlay + pager (ไม่ sign ซ้ำ)
+ *   ★ degrade: transform ไม่รองรับ/blip → ลอง sign เต็ม (fallback) · PDPA: sign เฉพาะที่โชว์
+ */
+async function signShownImages(
   service: SupabaseClient,
-  paths: string[]
+  entries: BillEntry[]
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  const uniq = [...new Set(paths.filter((p): p is string => !!p))];
-  if (uniq.length === 0) return out;
-  try {
-    const { data } = await service.storage.from(BILLS_BUCKET).createSignedUrls(uniq, SIGNED_URL_TTL_SEC);
-    for (const e of data ?? []) {
-      if (e.signedUrl && e.path) out.set(e.path, e.signedUrl);
-    }
-  } catch {
-    // storage blip ชั่วคราว → คืน map ว่าง (บิลโชว์เป็น "ไม่มีรูป" ชั่วคราว แต่หน้าไม่ crash)
+  const byPath = new Map<string, boolean>(); // path → เป็นรูปไหม (unique)
+  for (const e of entries) {
+    const p = entryObjectPath(e);
+    if (p && !byPath.has(p)) byPath.set(p, entryIsImage(e));
   }
+  await Promise.all(
+    [...byPath.entries()].map(async ([path, isImage]) => {
+      const opts = isImage ? { transform: { width: 1300, quality: 66 } } : undefined;
+      try {
+        const { data } = await service.storage.from(BILLS_BUCKET).createSignedUrl(path, SIGNED_URL_TTL_SEC, opts);
+        if (data?.signedUrl) {
+          out.set(path, data.signedUrl);
+          return;
+        }
+      } catch {
+        // transform ไม่รองรับ/blip → ลองรูปเต็ม
+      }
+      if (isImage) {
+        try {
+          const { data } = await service.storage.from(BILLS_BUCKET).createSignedUrl(path, SIGNED_URL_TTL_SEC);
+          if (data?.signedUrl) out.set(path, data.signedUrl);
+        } catch {
+          // ข้าม (บิลโชว์ "ไม่มีรูป" ชั่วคราว หน้าไม่ crash)
+        }
+      }
+    })
+  );
   return out;
-}
-
-/**
- * sign "รูปบิลแบบย่อขนาด" สำหรับหน้าตรวจ/แก้ (Supabase image transform)
- *   ★ perf: รูปต้นฉบับหลาย MB → ย่อ ~1600px q72 = เล็กลงมาก โหลดเร็วเวลาเลื่อนเปลี่ยนบิล
- *   ★ ยังอ่านตัวเลขได้ · degrade: project ไม่เปิด transform → คืน null (ใช้รูปเต็มแทน)
- */
-async function signResizedImage(service: SupabaseClient, path: string): Promise<string | null> {
-  try {
-    const { data, error } = await service.storage
-      .from(BILLS_BUCKET)
-      .createSignedUrl(path, SIGNED_URL_TTL_SEC, { transform: { width: 1300, quality: 66 } });
-    if (!error && data?.signedUrl) return data.signedUrl;
-  } catch {
-    // transform ไม่รองรับ → fallback รูปเต็ม
-  }
-  return null;
 }
 
 /** KPI 4 ช่องจากสรุป (มูลค่า/VAT/หัก/จ่ายจริง) */
@@ -844,45 +850,32 @@ export default async function AccountingPage({
   const editId = sp.edit ?? "";
   const editEntry = editId ? allEntries.find((e) => e.id === editId) ?? null : null;
 
-  // ---- sign ไฟล์ของลูกค้าที่เปิด "ทุกแท็บ" (ให้สลับแท็บในจอได้ทันที) + entry ที่กำลังแก้ ----
-  //   ★ perf/UX #1: render ทั้ง 3 ตาราง แล้ว client สลับโชว์ → ต้อง sign รูปทุกแท็บของลูกค้ารายนี้
+  // ---- sign รูป/ไฟล์ของลูกค้าที่เปิด (ทุกแท็บ) + บิลที่แก้ ----
+  //   ★ perf: ย่อรูป "ชุดเดียว" ใช้ทั้ง thumbnail + overlay + pager → เปิดลูกค้าเร็ว (thumbnail เล็ก)
+  //     + sign parallel ครั้งเดียว · client สลับแท็บ/เลื่อนบิลใช้รูปที่ preload ไว้ → instant
   const shownEntries = openGroup ? entriesOfType(openGroup, selectedType) : [];
-  // ลำดับบิลของแท็บปัจจุบัน (URL) — ให้ EntryEditor ทำปุ่มก่อนหน้า/ถัดไป (edit overlay ยึด type จาก URL)
   const navOrderIds = shownEntries.map((e) => e.id);
-  const pathsToSign: string[] = [];
-  for (const e of openGroup ? openGroup.entries : []) {
-    const p = entryObjectPath(e);
-    if (p) pathsToSign.push(p);
-  }
+  const entriesToSign: BillEntry[] = openGroup ? [...openGroup.entries] : [];
+  if (editEntry && !entriesToSign.some((e) => e.id === editEntry.id)) entriesToSign.push(editEntry);
+  const signed = await signShownImages(service, entriesToSign);
   const editObjectPath = editEntry ? entryObjectPath(editEntry) : null;
-  if (editObjectPath) pathsToSign.push(editObjectPath);
-  const signed = await signPaths(service, pathsToSign);
   const editIsImage = editEntry ? entryIsImage(editEntry) : false;
-  // ★ perf: รูปบิลในหน้าตรวจ/แก้ = ย่อขนาด (เลื่อนเปลี่ยนบิลเร็วขึ้นมาก) · PDF/ไฟล์ = ลิงก์เต็มตามเดิม
-  let editViewUrl = editObjectPath ? signed.get(editObjectPath) ?? null : null;
-  if (editObjectPath && editIsImage) {
-    const resized = await signResizedImage(service, editObjectPath);
-    if (resized) editViewUrl = resized;
-  }
+  const editViewUrl = editObjectPath ? signed.get(editObjectPath) ?? null : null;
 
-  // ★ nav bills ของหน้าตรวจ (แท็บปัจจุบัน) — sign รูปย่อทุกใบ (parallel) ให้ pager เลื่อนแบบ client + preload
-  //   ทำครั้งเดียวตอน "เปิดบิล" · prev/next หลังจากนั้นเป็น client instant (ไม่โหลดหน้าใหม่ · รูป preload แล้ว)
+  // nav bills (แท็บปัจจุบัน) — ใช้รูปย่อจาก signed map (pager เลื่อน client + preload)
   const editInNav = !!editEntry && navOrderIds.includes(editEntry.id);
-  let pagerBills: PagerBill[] = [];
-  if (editInNav) {
-    pagerBills = await Promise.all(
-      shownEntries.map(async (e) => {
+  const pagerBills: PagerBill[] = editInNav
+    ? shownEntries.map((e) => {
         const p = entryObjectPath(e);
-        const isImg = entryIsImage(e);
-        let url: string | null = p ? signed.get(p) ?? null : null;
-        if (p && isImg) {
-          const rz = await signResizedImage(service, p);
-          if (rz) url = rz;
-        }
-        return { id: e.id, entry: e, viewUrl: url, viewIsImage: isImg, fileName: e.uploadName };
+        return {
+          id: e.id,
+          entry: e,
+          viewUrl: p ? signed.get(p) ?? null : null,
+          viewIsImage: entryIsImage(e),
+          fileName: e.uploadName,
+        };
       })
-    );
-  }
+    : [];
 
   const hasAnyFilter = !!(q || selectedMonth || undatedMode);
   // export: ส่ง accountant เฉพาะกรณีเลือกนักบัญชีคนหนึ่ง (ไม่ใช่ "ทั้งสำนักงาน")
