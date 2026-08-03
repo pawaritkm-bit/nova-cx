@@ -2,9 +2,13 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { uploadAccountingFileAction } from "./actions";
+import { createBillUploadUrlAction, finalizeBillUploadAction } from "./actions";
+import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { UPLOAD_ACCEPT, MAX_UPLOAD_BYTES, validateUpload } from "@/lib/accounting/upload";
 import type { EntryType } from "@/lib/accounting/queries";
+
+/** bucket รูปบิล (ต้องตรงกับ BILLS_BUCKET ใน actions.ts / storage) */
+const BILLS_BUCKET = "bills";
 
 /**
  * ปุ่ม "อัปโหลดไฟล์เอง" (client) — นักบัญชีแนบเอกสาร (Excel/PDF/รูป/CSV) ที่ไม่ได้มาทางไลน์
@@ -66,13 +70,49 @@ export default function UploadFileButton({
     }
     setErr(null);
 
-    const fd = new FormData();
-    fd.set("file", file);
-    fd.set("entryType", entryType);
-    if (customerId) fd.set("customerId", customerId);
-
+    // อัปตรงเข้า Supabase Storage (ไม่ผ่าน body ของ server action → ไม่ชนเพดาน Vercel 4.5MB)
+    //   1) ขอ signed upload URL (server คุม path) → 2) browser อัปไฟล์ตรง → 3) finalize สร้าง entry
     startTransition(async () => {
-      const res = await uploadAccountingFileAction(fd);
+      const cid = customerId || null;
+
+      // 1) ขอ signed upload URL
+      const prep = await createBillUploadUrlAction({
+        customerId: cid,
+        entryType,
+        fileName: file.name,
+        mime: file.type,
+        size: file.size,
+      });
+      if (!prep.ok) {
+        setErr(prep.message);
+        return;
+      }
+
+      // 2) อัปไฟล์ตรงเข้า Storage ด้วย token (ไฟล์ใหญ่ก็ผ่าน — ไม่วิ่งผ่าน serverless)
+      try {
+        const supabase = createBrowserSupabase();
+        const { error: upErr } = await supabase.storage
+          .from(BILLS_BUCKET)
+          .uploadToSignedUrl(prep.path, prep.token, file, {
+            contentType: file.type || undefined,
+          });
+        if (upErr) {
+          setErr(`อัปโหลดไฟล์ไม่สำเร็จ: ${upErr.message || "กรุณาลองใหม่"}`);
+          return;
+        }
+      } catch {
+        setErr("อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่");
+        return;
+      }
+
+      // 3) finalize → สร้าง entry (manual/draft) แล้วพาไปหน้าตรวจ/แก้
+      const res = await finalizeBillUploadAction({
+        customerId: cid,
+        entryType,
+        path: prep.path,
+        name: file.name,
+        mime: file.type,
+      });
       if (res.ok) {
         const openKey = customerId || "unassigned";
         const sp = new URLSearchParams();

@@ -529,85 +529,127 @@ function sanitizePathPart(raw: string): string {
 }
 
 /**
- * "อัปโหลดไฟล์เอง" เข้าบัญชี — นักบัญชีแนบเอกสาร (Excel/PDF/รูป/CSV) ที่ไม่ได้มาทางไลน์
- *   flow ความปลอดภัย (เหมือน write path อื่น):
- *     1) guard admin/executive + tenant จาก session (ไม่เชื่อ client)
- *     2) validate ไฟล์ (ชนิด image/pdf/excel/csv + ขนาด ≤ 15MB)
- *     3) resolve customer_code (ถ้าเลือกลูกค้า) → ชื่อโฟลเดอร์ (ASCII)
- *     4) อัปเข้า bucket `bills` path manual/{code|unassigned}/{YYYY-MM}/{stamp}_{ชื่อ sanitize}
- *        (service role · upsert:false — ไม่ทับไฟล์เดิม)
- *     5) สร้าง bill_entries ใหม่ (source='manual', status='draft') + set upload_path/name/mime
- *        + สร้าง 1 line ว่างให้คีย์
- *     6) revalidatePath — คืน { ok, message, id } (ให้ client พาไปหน้าแก้)
- *   ★ PDPA: ไม่ log ชื่อไฟล์/ลูกค้า/URL/path (ไม่มี console.* ที่นี่)
+ * resolve customer_code → ชื่อโฟลเดอร์เก็บไฟล์ (ASCII)
+ *   คืน "unassigned" เมื่อไม่ผูกลูกค้า · null เมื่อระบุ customerId แต่ไม่พบ (caller ปฏิเสธ)
+ *   ★ PDPA: ใช้รหัสลูกค้า (ASCII) ไม่ใช่ชื่อ
  */
-export async function uploadAccountingFileAction(formData: FormData): Promise<SaveResult> {
+async function resolveUploadFolderCode(
+  service: ReturnType<typeof createServiceRoleClient>,
+  tenantId: string,
+  customerId: string | null
+): Promise<string | null> {
+  if (!customerId) return "unassigned";
+  const { data: cust } = await service
+    .from("customers")
+    .select("customer_code")
+    .eq("id", customerId)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!cust) return null;
+  const code = (cust as { customer_code: string | null }).customer_code?.trim();
+  return code ? sanitizePathPart(code) : `unassigned-${customerId.slice(0, 8)}`;
+}
+
+/**
+ * "อัปโหลดไฟล์เอง" ขั้นที่ 1 — ออก signed upload URL ให้ client อัปตรงเข้า Supabase Storage
+ *
+ * ทำไมไม่ส่งไฟล์ผ่าน server action: Vercel มีเพดาน request body ~4.5MB (แก้ด้วย config ไม่ได้)
+ *   ไฟล์บิลใหญ่กว่านั้นเลยส่งผ่าน action ไม่ได้ → ให้ client อัปตรงเข้า Storage ด้วย signed URL แทน
+ *
+ * ความปลอดภัย:
+ *   1) guard admin/นักบัญชี + tenant จาก session (ไม่เชื่อ client) + สโคปลูกค้า
+ *   2) validate ชนิด/ขนาดไฟล์ จาก metadata (re-validate ตอน finalize อีกชั้น)
+ *   3) ★ server เป็นเจ้าของ objectPath (client เลือกเองไม่ได้) — token อัปได้เฉพาะ path นี้
+ *      กันยัด path ข้ามบริษัท/ทับไฟล์คนอื่น
+ *   ★ PDPA: path ใช้ customer_code (ASCII) ไม่ใช่ชื่อ · ไม่ log ชื่อไฟล์/ลูกค้า
+ */
+export async function createBillUploadUrlAction(input: {
+  customerId?: string | null;
+  entryType: EntryType;
+  fileName: string;
+  mime: string;
+  size: number;
+}): Promise<{ ok: true; path: string; token: string } | { ok: false; message: string }> {
   try {
     const authed = await createClient();
     const service = createServiceRoleClient();
     const ctx = await requireAccountingAccess(authed, service);
 
-    // 1) validate อินพุตควบคุม (ลูกค้า/ประเภท)
-    const rawCustomer = formData.get("customerId");
-    const customerId = isUuid(rawCustomer) ? rawCustomer : null;
-    // ถ้าส่ง customerId มาแต่รูปแบบผิด (ไม่ใช่ uuid และไม่ว่าง) = ปฏิเสธ กันผูกผิด
-    if (rawCustomer != null && rawCustomer !== "" && !customerId) {
+    const customerId = isUuid(input.customerId) ? input.customerId : null;
+    if (input.customerId != null && input.customerId !== "" && !customerId) {
       return { ok: false, message: "ลูกค้าไม่ถูกต้อง" };
     }
-    // ★ สโคปนักบัญชี: อัปไฟล์เข้าได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
     if (!customerInScope(ctx, customerId)) {
       return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
     }
-    const entryType = asEntryType(formData.get("entryType"));
 
-    // 2) validate ไฟล์
-    const file = formData.get("file");
-    if (!(file instanceof File)) return { ok: false, message: "ไม่พบไฟล์ที่เลือก" };
-    const v = validateUpload({ mime: file.type, name: file.name, size: file.size });
+    const v = validateUpload({ mime: input.mime, name: input.fileName, size: input.size });
     if (!v.ok) return { ok: false, message: v.error };
 
-    // 3) resolve customer_code เป็นชื่อโฟลเดอร์ (ASCII) — ต้องมีลูกค้าจริงถ้าเลือกมา
-    let folderCode = "unassigned";
-    if (customerId) {
-      const { data: cust } = await service
-        .from("customers")
-        .select("customer_code")
-        .eq("id", customerId)
-        .eq("tenant_id", ctx.tenantId)
-        .is("deleted_at", null)
-        .maybeSingle();
-      if (!cust) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
-      const code = (cust as { customer_code: string | null }).customer_code?.trim();
-      folderCode = code ? sanitizePathPart(code) : `unassigned-${customerId.slice(0, 8)}`;
+    const folderCode = await resolveUploadFolderCode(service, ctx.tenantId, customerId);
+    if (folderCode === null) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+
+    const safeName = sanitizeUploadName(input.fileName) || `file.${extOf(input.fileName) || "bin"}`;
+    const objectPath = [ctx.tenantId, "manual", folderCode, monthFolder(), `${safeStamp()}_${safeName}`].join("/");
+
+    const { data, error } = await service.storage.from(BILLS_BUCKET).createSignedUploadUrl(objectPath);
+    if (error || !data) return { ok: false, message: "เตรียมอัปโหลดไม่สำเร็จ กรุณาลองใหม่" };
+    return { ok: true, path: data.path, token: data.token };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "เตรียมอัปโหลดไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * "อัปโหลดไฟล์เอง" ขั้นที่ 2 — client อัปไฟล์ตรงเข้า Storage เสร็จแล้ว → สร้าง entry (manual/draft)
+ *   1) re-guard admin/นักบัญชี + สโคปลูกค้า (ไม่เชื่อ client)
+ *   2) ★ ตรวจ path ต้องอยู่ใต้ `{tenant}/manual/` ของ tenant นี้ (กันชี้ไฟล์ข้าม tenant/ที่อื่น)
+ *   3) ★ ยืนยันไฟล์อยู่จริงใน Storage (กันสร้าง entry ชี้ไฟล์เปล่า)
+ *   4) upsert bill_entries (source='manual') + 1 line ว่าง → คืน id ให้ client พาไปหน้าแก้
+ */
+export async function finalizeBillUploadAction(input: {
+  customerId?: string | null;
+  entryType: EntryType;
+  path: string;
+  name: string;
+  mime: string;
+}): Promise<SaveResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    const customerId = isUuid(input.customerId) ? input.customerId : null;
+    if (input.customerId != null && input.customerId !== "" && !customerId) {
+      return { ok: false, message: "ลูกค้าไม่ถูกต้อง" };
+    }
+    if (!customerInScope(ctx, customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
     }
 
-    // 4) อัปเข้า Supabase Storage bucket `bills` (ตรงเข้า supabase เสมอ — ให้ sign แสดงได้)
-    const safeName = sanitizeUploadName(file.name) || `file.${extOf(file.name) || "bin"}`;
-    const objectPath = [
-      ctx.tenantId,
-      "manual",
-      folderCode,
-      monthFolder(),
-      `${safeStamp()}_${safeName}`,
-    ].join("/");
+    const path = typeof input.path === "string" ? input.path : "";
+    // ★ path ต้องอยู่ใต้โฟลเดอร์ manual ของ tenant นี้เท่านั้น
+    if (!path.startsWith(`${ctx.tenantId}/manual/`)) {
+      return { ok: false, message: "เส้นทางไฟล์ไม่ถูกต้อง" };
+    }
+    // ★ ยืนยันไฟล์อยู่จริง (client อัปสำเร็จ) — sign url สั้น ๆ เป็นตัวตรวจ ถ้าไม่มีไฟล์จะ error
+    const probe = await service.storage.from(BILLS_BUCKET).createSignedUrl(path, 60);
+    if (probe.error || !probe.data?.signedUrl) {
+      return { ok: false, message: "ยังไม่พบไฟล์ที่อัป กรุณาลองใหม่" };
+    }
 
-    const buf = Buffer.from(await file.arrayBuffer());
-    const { error: upErr } = await service.storage
-      .from(BILLS_BUCKET)
-      .upload(objectPath, buf, { contentType: file.type || "application/octet-stream", upsert: false });
-    if (upErr) return { ok: false, message: "อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่" };
-
-    // 5) สร้าง entry ใหม่ (manual/draft) + แนบไฟล์ + 1 line ว่าง
     const up = await upsertEntry(service, ctx.tenantId, {
-      entryType,
+      entryType: asEntryType(input.entryType),
       customerId,
-      uploadPath: objectPath,
-      uploadName: file.name.slice(0, 200),
-      uploadMime: file.type || null,
+      uploadPath: path,
+      uploadName: input.name.slice(0, 200),
+      uploadMime: input.mime || null,
     });
     if (!up.ok) {
-      // สร้าง entry ไม่ได้ → เก็บไฟล์ค้างไว้ไม่ได้ (orphan) ลบทิ้ง best-effort
-      await service.storage.from(BILLS_BUCKET).remove([objectPath]);
+      // สร้าง entry ไม่ได้ → ลบไฟล์กันค้าง (orphan) best-effort
+      await service.storage.from(BILLS_BUCKET).remove([path]);
       return { ok: false, message: friendlyError(up.error) };
     }
     await addLine(service, ctx.tenantId, up.data.id, {});
@@ -616,7 +658,7 @@ export async function uploadAccountingFileAction(formData: FormData): Promise<Sa
     return { ok: true, message: "อัปโหลดไฟล์แล้ว — คีย์รายการต่อได้เลย", id: up.data.id };
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
-    return { ok: false, message: "อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่" };
+    return { ok: false, message: "บันทึกไฟล์ไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
 
