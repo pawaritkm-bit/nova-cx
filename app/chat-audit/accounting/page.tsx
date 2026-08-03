@@ -47,6 +47,7 @@ import CustomerTaxIdField from "./CustomerTaxIdField";
 import EntryDateField from "./EntryDateField";
 import UploadFileButton from "./UploadFileButton";
 import UndoDeleteBar from "./UndoDeleteBar";
+import CustomerTabs from "./CustomerTabs";
 import { extOf } from "@/lib/accounting/upload";
 import "../chat-admin.css";
 import "../bills/bills.css";
@@ -822,12 +823,13 @@ export default async function AccountingPage({
   const editId = sp.edit ?? "";
   const editEntry = editId ? allEntries.find((e) => e.id === editId) ?? null : null;
 
-  // ---- sign ไฟล์เฉพาะที่โชว์: entry ของแท็บที่เปิด + entry ที่กำลังแก้ (บิลไลน์ + ไฟล์อัปเอง) ----
+  // ---- sign ไฟล์ของลูกค้าที่เปิด "ทุกแท็บ" (ให้สลับแท็บในจอได้ทันที) + entry ที่กำลังแก้ ----
+  //   ★ perf/UX #1: render ทั้ง 3 ตาราง แล้ว client สลับโชว์ → ต้อง sign รูปทุกแท็บของลูกค้ารายนี้
   const shownEntries = openGroup ? entriesOfType(openGroup, selectedType) : [];
-  // ลำดับบิลของบริบทที่เปิด (ลูกค้า+แท็บเดียวกัน เรียงเหมือนตาราง) — ให้ EntryEditor ทำปุ่มก่อนหน้า/ถัดไป
+  // ลำดับบิลของแท็บปัจจุบัน (URL) — ให้ EntryEditor ทำปุ่มก่อนหน้า/ถัดไป (edit overlay ยึด type จาก URL)
   const navOrderIds = shownEntries.map((e) => e.id);
   const pathsToSign: string[] = [];
-  for (const e of shownEntries) {
+  for (const e of openGroup ? openGroup.entries : []) {
     const p = entryObjectPath(e);
     if (p) pathsToSign.push(p);
   }
@@ -872,89 +874,53 @@ export default async function AccountingPage({
       {/* สรุปของลูกค้ารายนี้ */}
       <KpiRow s={g.summary.all} />
 
-      {/* แท็บย่อย ภาษีซื้อ/ขาย/รอระบุ */}
-      <div className="acc-subtabs">
-        {TYPE_TABS.map((t) => {
-          const n = countOfType(g, t.type);
-          const active = selectedType === t.type;
-          const href = `/chat-audit/accounting${buildQuery({
-            accountant: accParam,
-            q,
-            month: monthParam,
-            open: key,
-            type: t.type,
-          })}`;
-          return (
-            <Link
-              key={t.type}
-              href={href}
-              scroll={false}
-              className={`acc-subtab${active ? " active" : ""}${t.type === "unspecified" && n > 0 ? " amber" : ""}`}
-              aria-current={active ? "page" : undefined}
-            >
-              {t.label} <span className="acc-subtab-n">{n}</span>
-            </Link>
-          );
-        })}
-
-        <span className="acc-toolbar-spacer" />
-        {/* เพิ่มรายการเองให้ลูกค้ารายนี้ */}
-        <form action={createEntryAction} className="acc-inline">
-          {g.customerId ? <input type="hidden" name="customerId" value={g.customerId} /> : null}
-          <input type="hidden" name="entryType" value={selectedType} />
-          {accParam ? <input type="hidden" name="accountant" value={accParam} /> : null}
-          <button type="submit" className="btn">+ เพิ่มรายการ</button>
-        </form>
-        {/* อัปโหลดไฟล์เองให้ลูกค้ารายนี้ (ผูกลูกค้า) */}
-        <UploadFileButton
-          lockedCustomerId={g.customerId}
-          lockedCustomerLabel={customerLabel(code, g.name)}
-          defaultEntryType={selectedType}
-          label="อัปไฟล์"
-          accountant={accParam}
-        />
-        {/* ตรวจทาน + Excel ของลูกค้ารายนี้ */}
-        {g.customerId ? (
-          <a
-            href={`/chat-audit/accounting/review${buildQuery({ month: selectedMonth || undefined })}${selectedMonth ? "&" : "?"}customerId=${g.customerId}`}
-            className="btn btn-ghost"
-          >
-            ตรวจทาน / ออก Excel
-          </a>
-        ) : null}
-        {/* ยอดยกมาต่อบัญชีของลูกค้ารายนี้ (เตรียมออกงบการเงิน) */}
-        {g.customerId ? (
-          <a
-            href={`/chat-audit/accounting/opening?customerId=${g.customerId}`}
-            className="btn btn-ghost"
-          >
-            ยอดยกมา
-          </a>
-        ) : null}
-        {/* งบการเงินของลูกค้ารายนี้ (สมุดรายวัน/แยกประเภท/งบทดลอง/กำไรขาดทุน/ฐานะการเงิน) */}
-        {g.customerId ? (
-          <a
-            href={`/chat-audit/accounting/reports?customerId=${g.customerId}`}
-            className="btn btn-ghost"
-          >
-            งบการเงิน
-          </a>
-        ) : null}
-      </div>
-
-      <EntryTable
-        entries={entriesOfType(g, selectedType)}
-        signed={signed}
-        editHrefOf={(id) =>
-          `/chat-audit/accounting${buildQuery({
-            accountant: accParam,
-            q,
-            month: monthParam,
-            open: key,
-            type: selectedType,
-            edit: id,
-          })}`
+      {/* แท็บ ซื้อ/ขาย/รอระบุ + ตาราง — ★ สลับในจอ (client) ไม่วิ่ง server (perf #1) */}
+      <CustomerTabs
+        initialType={selectedType}
+        counts={{
+          purchase: countOfType(g, "purchase"),
+          sale: countOfType(g, "sale"),
+          unspecified: countOfType(g, "unspecified"),
+        }}
+        customerId={g.customerId}
+        customerLabel={customerLabel(code, g.name)}
+        accountant={accParam}
+        reviewHref={
+          g.customerId
+            ? `/chat-audit/accounting/review${buildQuery({ month: selectedMonth || undefined })}${selectedMonth ? "&" : "?"}customerId=${g.customerId}`
+            : undefined
         }
+        openingHref={g.customerId ? `/chat-audit/accounting/opening?customerId=${g.customerId}` : undefined}
+        reportsHref={g.customerId ? `/chat-audit/accounting/reports?customerId=${g.customerId}` : undefined}
+        tables={{
+          purchase: (
+            <EntryTable
+              entries={entriesOfType(g, "purchase")}
+              signed={signed}
+              editHrefOf={(id) =>
+                `/chat-audit/accounting${buildQuery({ accountant: accParam, q, month: monthParam, open: key, type: "purchase", edit: id })}`
+              }
+            />
+          ),
+          sale: (
+            <EntryTable
+              entries={entriesOfType(g, "sale")}
+              signed={signed}
+              editHrefOf={(id) =>
+                `/chat-audit/accounting${buildQuery({ accountant: accParam, q, month: monthParam, open: key, type: "sale", edit: id })}`
+              }
+            />
+          ),
+          unspecified: (
+            <EntryTable
+              entries={entriesOfType(g, "unspecified")}
+              signed={signed}
+              editHrefOf={(id) =>
+                `/chat-audit/accounting${buildQuery({ accountant: accParam, q, month: monthParam, open: key, type: "unspecified", edit: id })}`
+              }
+            />
+          ),
+        }}
       />
     </div>
   );
