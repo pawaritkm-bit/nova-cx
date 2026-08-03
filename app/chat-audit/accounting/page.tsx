@@ -945,6 +945,15 @@ export default async function AccountingPage({
             ยอดยกมา
           </a>
         ) : null}
+        {/* งบการเงินของลูกค้ารายนี้ (สมุดรายวัน/แยกประเภท/งบทดลอง/กำไรขาดทุน/ฐานะการเงิน) */}
+        {g.customerId ? (
+          <a
+            href={`/chat-audit/accounting/reports?customerId=${g.customerId}`}
+            className="btn btn-ghost"
+          >
+            งบการเงิน
+          </a>
+        ) : null}
       </div>
 
       <EntryTable

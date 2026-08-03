@@ -1200,3 +1200,17 @@
   .nova-dash .acc-opening-row { grid-template-columns: 1fr 1fr; }
   .nova-dash .acc-opening-preview-row { grid-template-columns: 70px 1fr 90px; }
 }
+
+/* ---- งบการเงิน (reports) ---- */
+.nova-dash .acc-jrow-sep td { border-top: 2px solid #e2e8f0; background: #f8fafc; }
+.nova-dash .acc-jr-credit { padding-left: 22px; color: #475569; }
+.nova-dash .acc-ledger-acct { margin-bottom: 20px; }
+.nova-dash .acc-ledger-head {
+  font-weight: 600;
+  padding: 8px 10px;
+  background: #f1f5f9;
+  border-radius: 8px 8px 0 0;
+  margin-bottom: 2px;
+}
+.nova-dash .acc-ledger-head .muted { font-weight: 500; font-size: 12px; }
+.nova-dash .v-red { color: #dc2626; }
