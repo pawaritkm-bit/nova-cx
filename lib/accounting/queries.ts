@@ -79,6 +79,12 @@ export type BillEntry = {
   source: EntrySource;
   aiConfidence: number | null;
   notes: string | null;
+  /**
+   * เดือนที่ใช้เครดิตภาษีซื้อ (input VAT) รูปแบบ 'YYYY-MM' (ค.ศ.) — เฉพาะบิลซื้อ
+   *   null = ใช้เดือนของ doc_date (ค่าโดยปริยาย ไม่ยกเดือน)
+   *   ★ degrade: ถ้าคอลัมน์ input_tax_month ยังไม่ apply (migration 0060) → null เสมอ
+   */
+  inputTaxMonth: string | null;
   createdAt: string;
   confirmedAt: string | null;
   lines: BillEntryLine[];
@@ -137,6 +143,33 @@ export function lineNet(line: Pick<BillEntryLine, "amount" | "vatAmount" | "whtA
 /** ปัดทศนิยม 2 ตำแหน่ง (กัน floating error สะสม) */
 export function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * เดือน 'YYYY-MM' ของวันที่เอกสาร (ISO 'YYYY-MM-DD') — คืน null ถ้าไม่มี/รูปแบบพัง
+ *   ★ doc_date เป็น date ล้วน (ไม่มีเวลา) → เดือนคือ 7 ตัวแรก ไม่ขึ้นกับ timezone
+ */
+export function monthOf(docDate: string | null | undefined): string | null {
+  if (!docDate) return null;
+  const m = /^(\d{4})-(0[1-9]|1[0-2])/.exec(docDate);
+  return m ? `${m[1]}-${m[2]}` : null;
+}
+
+/**
+ * เดือนที่ใช้เครดิตภาษีซื้อจริงของบิล (pure — เทสต์ได้)
+ *   = inputTaxMonth (ถ้ามีและถูกรูปแบบ 'YYYY-MM') · มิฉะนั้น = เดือนของ doc_date
+ *   คืน null ถ้าทั้งคู่ไม่มี (บิลยังไม่ลงวันที่ + ไม่ได้ระบุเดือนใช้ภาษี)
+ *
+ *   ★ ใช้ยึด "เดือนที่ใช้ภาษี" ในรายงานภาษีซื้อ (แทนเดือนของ doc_date)
+ *   ★ degrade: inputTaxMonth = null/undefined (คอลัมน์ยังไม่ apply) → คืนเดือนของ doc_date
+ *     = พฤติกรรมเดิม (ยึดวันที่บิล) — ไม่พัง, ไม่ยกเดือน
+ */
+export function effectiveTaxMonth(
+  entry: { inputTaxMonth?: string | null; docDate: string | null }
+): string | null {
+  const im = entry.inputTaxMonth;
+  if (im && /^\d{4}-(0[1-9]|1[0-2])$/.test(im)) return im;
+  return monthOf(entry.docDate);
 }
 
 /** สรุปยอดของ 1 entry (รวมทุก line) */
@@ -225,6 +258,9 @@ type RawEntry = {
   created_at: string;
   confirmed_at: string | null;
 };
+
+/** แถวเดือนที่ใช้ภาษี (best-effort — คอลัมน์ input_tax_month เพิ่ง add ใน 0060) */
+type RawInputTaxMonth = { id: string; input_tax_month: string | null };
 
 /** cast string ดิบจาก DB → PaymentMethod | null */
 function asPaymentMethodDb(v: string | null): PaymentMethod | null {
@@ -344,6 +380,25 @@ export async function listEntries(
 
   const entryIds = rawEntries.map((e) => e.id);
 
+  // เดือนที่ใช้ภาษีซื้อ (input_tax_month) — ★ best-effort แยก query
+  //   คอลัมน์นี้เพิ่ง add ด้วย migration 0060 · ถ้ายังไม่ apply → select error →
+  //   ถือเป็น null ทั้งหมด (degrade เงียบ ไม่ทำ list พัง = ยึดเดือน doc_date ตามเดิม)
+  const inputTaxMonthByEntry = new Map<string, string | null>();
+  try {
+    const { data: itmData, error: itmErr } = await db
+      .from("bill_entries")
+      .select("id, input_tax_month")
+      .eq("tenant_id", tenantId)
+      .in("id", entryIds);
+    if (!itmErr) {
+      for (const r of (itmData ?? []) as unknown as RawInputTaxMonth[]) {
+        inputTaxMonthByEntry.set(r.id, r.input_tax_month ?? null);
+      }
+    }
+  } catch {
+    // คอลัมน์ยังไม่ apply → คงเป็น null ทั้งหมด
+  }
+
   // lines ของ entry เหล่านี้
   const { data: lineData } = await db
     .from("bill_entry_lines")
@@ -432,6 +487,7 @@ export async function listEntries(
     source: e.source === "manual" ? "manual" : "ai",
     aiConfidence: e.ai_confidence,
     notes: e.notes,
+    inputTaxMonth: inputTaxMonthByEntry.get(e.id) ?? null,
     createdAt: e.created_at,
     confirmedAt: e.confirmed_at,
     lines: linesByEntry.get(e.id) ?? [],

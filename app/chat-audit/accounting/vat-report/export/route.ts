@@ -3,7 +3,7 @@ import ExcelJS from "exceljs";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/access";
-import { listEntries, monthBounds, round2, type ListEntriesFilter } from "@/lib/accounting/queries";
+import { listEntries, monthBounds, round2, effectiveTaxMonth, type ListEntriesFilter } from "@/lib/accounting/queries";
 import { buildVatReport, type VatReport, type VatReportKind } from "@/lib/accounting/vat-report";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +19,17 @@ const THAI_MONTHS = [
 ];
 
 const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+/** เลื่อนเดือน 'YYYY-MM' ไป delta เดือน (ติดลบ = ย้อนหลัง) */
+function shiftMonth(ym: string, delta: number): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(ym);
+  if (!m) return ym;
+  let y = Number(m[1]);
+  let mo = Number(m[2]) + delta;
+  while (mo < 1) { mo += 12; y -= 1; }
+  while (mo > 12) { mo -= 12; y += 1; }
+  return `${y}-${String(mo).padStart(2, "0")}`;
+}
 
 /** YYYY-MM → "ก.ค. 2569" (คืน "ทุกเดือน" ถ้าไม่มี) */
 function shortMonthLabel(month: string): string {
@@ -193,11 +204,31 @@ export async function GET(req: Request) {
       companyAddress = "";
     }
 
-    const filter: ListEntriesFilter = { customerId, entryType: kind };
-    if (fromDate) filter.dateFrom = fromDate;
-    if (toDate) filter.dateTo = toDate;
-    const { entries } = await listEntries(service, tenantId, filter);
-    const report = buildVatReport(entries, kind);
+    // ★ ภาษีซื้อยึด "เดือนที่ใช้ภาษี" (effectiveTaxMonth) — บิลยกเดือนมาใช้ก็เข้ารายงาน
+    //   ภาษีขาย = กรอง doc_date ตามช่วงปกติ
+    let report;
+    if (kind === "purchase" && fromDate && toDate) {
+      const startMonth = fromDate.slice(0, 7);
+      const endMonth = toDate.slice(0, 7);
+      const lowerBound = monthBounds(shiftMonth(startMonth, -6))?.first ?? fromDate;
+      const { entries } = await listEntries(service, tenantId, {
+        customerId,
+        entryType: "purchase",
+        dateFrom: lowerBound,
+        dateTo: toDate,
+      });
+      const inPeriod = entries.filter((e) => {
+        const tm = effectiveTaxMonth(e);
+        return tm != null && tm >= startMonth && tm <= endMonth;
+      });
+      report = buildVatReport(inPeriod, "purchase");
+    } else {
+      const filter: ListEntriesFilter = { customerId, entryType: kind };
+      if (fromDate) filter.dateFrom = fromDate;
+      if (toDate) filter.dateTo = toDate;
+      const { entries } = await listEntries(service, tenantId, filter);
+      report = buildVatReport(entries, kind);
+    }
 
     const periodLabel = fromDate && toDate ? periodLabelOf(fromDate, toDate) : "ทุกเดือน";
     const xlsx = await buildVatReportWorkbook(report, {

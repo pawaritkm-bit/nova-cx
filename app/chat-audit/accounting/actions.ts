@@ -92,6 +92,13 @@ function asDate(v: unknown): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 }
 
+/** เดือนที่ใช้ภาษีซื้อ 'YYYY-MM' (ค.ศ.) — null ถ้าผิดรูป/ว่าง (= ใช้เดือน doc_date) */
+function asTaxMonth(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(s) ? s : null;
+}
+
 /** ตัวเลขปลอดภัย (NaN/ค่าพัง → 0) — จำกัดช่วงกันค่าเวอร์ */
 function asNumber(v: unknown): number {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
@@ -150,6 +157,8 @@ export type SaveEntryInput = {
   /** บัญชีเงินฝากที่ใช้ (เฉพาะ transfer) — id ใน customer_bank_accounts */
   paymentBankAccountId?: string | null;
   notes?: string | null;
+  /** เดือนที่ใช้ภาษีซื้อ 'YYYY-MM' (ค.ศ.) — เฉพาะบิลซื้อ · null = ใช้เดือน doc_date */
+  inputTaxMonth?: string | null;
   lines: EditableLineInput[];
   /** id ของ line ที่ผู้ใช้ลบใน editor (ต้องลบใน DB ด้วย) */
   deletedLineIds?: string[];
@@ -233,6 +242,18 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
     });
     if (!up.ok) return { ok: false, message: friendlyError(up.error) };
     const entryId = up.data.id;
+
+    // ★ เดือนที่ใช้ภาษีซื้อ (input_tax_month) — เฉพาะบิลซื้อ · best-effort
+    //   คอลัมน์เพิ่ง add ใน migration 0060 → ถ้ายังไม่ apply update จะ error (ไม่ throw)
+    //   → ข้ามเงียบ ไม่ให้การบันทึกบิลล้ม (degrade)
+    if (asEntryType(input.entryType) === "purchase") {
+      const { error: itmErr } = await service
+        .from("bill_entries")
+        .update({ input_tax_month: asTaxMonth(input.inputTaxMonth) })
+        .eq("id", entryId)
+        .eq("tenant_id", ctx.tenantId);
+      void itmErr; // คอลัมน์ยังไม่ apply 0060 → เพิกเฉย
+    }
 
     // 2) ลบ line ที่ผู้ใช้เอาออก
     for (const lid of input.deletedLineIds ?? []) {

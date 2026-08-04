@@ -7,9 +7,27 @@ import {
   monthRange,
   monthBounds,
   dateRange,
+  effectiveTaxMonth,
   type BillEntry,
   type BillEntryLine,
 } from "@/lib/accounting/queries";
+
+describe("effectiveTaxMonth — เดือนที่ใช้ภาษีซื้อ", () => {
+  it("มี inputTaxMonth ถูกรูปแบบ → ใช้ค่านั้น (ยกเดือน)", () => {
+    expect(effectiveTaxMonth({ inputTaxMonth: "2026-07", docDate: "2026-06-15" })).toBe("2026-07");
+  });
+  it("ไม่มี inputTaxMonth → ใช้เดือนของ doc_date (พฤติกรรมเดิม)", () => {
+    expect(effectiveTaxMonth({ inputTaxMonth: null, docDate: "2026-06-15" })).toBe("2026-06");
+    expect(effectiveTaxMonth({ docDate: "2026-06-01" })).toBe("2026-06");
+  });
+  it("inputTaxMonth ผิดรูป → fallback doc_date", () => {
+    expect(effectiveTaxMonth({ inputTaxMonth: "bad", docDate: "2026-06-15" })).toBe("2026-06");
+    expect(effectiveTaxMonth({ inputTaxMonth: "2026-13", docDate: "2026-06-15" })).toBe("2026-06");
+  });
+  it("ไม่มีทั้งคู่ → null (บิลไม่ลงวันที่)", () => {
+    expect(effectiveTaxMonth({ inputTaxMonth: null, docDate: null })).toBeNull();
+  });
+});
 
 /**
  * accounting/queries — คำนวณสรุป (pure) + monthRange

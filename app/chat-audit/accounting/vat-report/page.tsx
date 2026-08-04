@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/access";
-import { listEntries, monthBounds, type ListEntriesFilter } from "@/lib/accounting/queries";
+import { listEntries, monthBounds, effectiveTaxMonth, type ListEntriesFilter } from "@/lib/accounting/queries";
 import { buildVatReport, type VatReportKind } from "@/lib/accounting/vat-report";
 import VatReportDoc from "./VatReportDoc";
 import "./vat-report.css";
@@ -81,6 +81,17 @@ function recentMonthOptions(count: number): { value: string; label: string }[] {
     }
   }
   return out;
+}
+
+/** เลื่อนเดือน 'YYYY-MM' ไป delta เดือน (delta ติดลบ = ย้อนหลัง) */
+function shiftMonth(ym: string, delta: number): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(ym);
+  if (!m) return ym;
+  let y = Number(m[1]);
+  let mo = Number(m[2]) + delta;
+  while (mo < 1) { mo += 12; y -= 1; }
+  while (mo > 12) { mo -= 12; y += 1; }
+  return `${y}-${String(mo).padStart(2, "0")}`;
 }
 
 /** วันที่/เวลาพิมพ์ (เวลาไทย) → "04/08/2569 09:30" */
@@ -224,18 +235,38 @@ export default async function VatReportPage({
   const companyAddress = await loadAddress(service, tenantId, customerId);
 
   // ---- ดึง entries ตามลูกค้า+ประเภท+ช่วงวัน แล้ว build รายงาน ----
-  //   fromDate/toDate มีค่าเสมอ (default = ทั้งเดือนปัจจุบัน) → กรอง doc_date ในช่วง [from, to]
-  const filter: ListEntriesFilter = {
-    customerId,
-    entryType: kind,
-    dateFrom: fromDate,
-    dateTo: toDate,
-  };
-
+  //   ★ ภาษีขาย: กรอง doc_date ในช่วง [from, to] ตามปกติ
+  //   ★ ภาษีซื้อ: ยึด "เดือนที่ใช้ภาษี" (effectiveTaxMonth = input_tax_month ?? เดือน doc_date)
+  //     บิลเดือนก่อน (≤6 เดือน) ที่ยกมาใช้ในช่วงนี้ต้องเข้ารายงานด้วย → ดึงกว้างขึ้นแล้วกรองในแอป
   let report;
   try {
-    const { entries } = await listEntries(service, tenantId, filter);
-    report = buildVatReport(entries, kind);
+    if (kind === "purchase") {
+      const startMonth = fromDate.slice(0, 7);
+      const endMonth = toDate.slice(0, 7);
+      // ดึงบิลซื้อ doc_date ตั้งแต่ 6 เดือนก่อน startMonth ถึง toDate (ครอบบิลที่ยกเดือนมาใช้)
+      const lowerBound = monthBounds(shiftMonth(startMonth, -6))?.first ?? fromDate;
+      const { entries } = await listEntries(service, tenantId, {
+        customerId,
+        entryType: "purchase",
+        dateFrom: lowerBound,
+        dateTo: toDate,
+      });
+      // คัดเฉพาะบิลที่ "ใช้ภาษีในเดือน" อยู่ในช่วงเดือนที่เลือก [startMonth, endMonth]
+      const inPeriod = entries.filter((e) => {
+        const tm = effectiveTaxMonth(e); // null = บิลไม่มีวันที่ + ไม่ระบุเดือน → ตัดออก
+        return tm != null && tm >= startMonth && tm <= endMonth;
+      });
+      report = buildVatReport(inPeriod, "purchase");
+    } else {
+      const filter: ListEntriesFilter = {
+        customerId,
+        entryType: "sale",
+        dateFrom: fromDate,
+        dateTo: toDate,
+      };
+      const { entries } = await listEntries(service, tenantId, filter);
+      report = buildVatReport(entries, "sale");
+    }
   } catch {
     return <ErrorShell message="อ่านข้อมูลไม่สำเร็จ — ตรวจการตั้งค่า SUPABASE_SERVICE_ROLE_KEY และ migration" />;
   }

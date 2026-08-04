@@ -80,6 +80,27 @@ function thaiToIso(s: string): string {
   return `${year}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
+/** ตัวเลือก "เดือนที่ใช้ภาษีซื้อ" — เดือนฐาน (YYYY-MM ค.ศ.) + n เดือนถัดไป · label ไทย พ.ศ. */
+const TH_MONTHS_SHORT = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+function taxMonthLabel(ym: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(ym);
+  if (!m) return ym;
+  return `${TH_MONTHS_SHORT[Number(m[2]) - 1] ?? m[2]} ${Number(m[1]) + 543}`;
+}
+function taxMonthOptions(baseYm: string, ahead = 6): string[] {
+  const m = /^(\d{4})-(\d{2})$/.exec(baseYm);
+  if (!m) return [];
+  let y = Number(m[1]);
+  let mo = Number(m[2]);
+  const out: string[] = [];
+  for (let i = 0; i <= ahead; i++) {
+    out.push(`${y}-${String(mo).padStart(2, "0")}`);
+    mo++;
+    if (mo > 12) { mo = 1; y++; }
+  }
+  return out;
+}
+
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
     return [
@@ -147,6 +168,10 @@ export default function EntryEditor({
   // ★ เก็บเป็นข้อความ วว/ดด/ปปปป (ไทย) เพื่อแสดง/แก้ตามที่ผู้ใช้ต้องการ — แปลงเป็น ISO ตอนบันทึก
   const [docDate, setDocDate] = useState<string>(entry.docDate ? isoToThai(entry.docDate) : "");
   const [docNo, setDocNo] = useState<string>(entry.docNo ?? "");
+  // เดือนที่ใช้ภาษีซื้อ (เฉพาะบิลซื้อ) — 'YYYY-MM' ค.ศ. · default = เดือนของ doc_date
+  const [inputTaxMonth, setInputTaxMonth] = useState<string>(
+    entry.inputTaxMonth || (entry.docDate ? entry.docDate.slice(0, 7) : "")
+  );
   const [partyName, setPartyName] = useState<string>(entry.counterpartyName ?? "");
   const [partyTaxId, setPartyTaxId] = useState<string>(entry.counterpartyTaxId ?? "");
   const [whtForm, setWhtForm] = useState<WhtForm | "">(entry.whtForm ?? "");
@@ -271,6 +296,8 @@ export default function EntryEditor({
       paymentMethod: paymentMethod || null,
       // คงบัญชีเงินฝากที่ผูกไว้เดิม (ถ้ามี) — เลิก UI เลือกแล้ว แต่ไม่ล้างข้อมูลเดิม
       paymentBankAccountId: entry.paymentBankAccountId ?? null,
+      // เดือนที่ใช้ภาษีซื้อ — เฉพาะบิลซื้อ (ขาย/รอระบุ = null)
+      inputTaxMonth: entryType === "purchase" ? (inputTaxMonth || null) : null,
       lines: lines.map((l) => ({
         id: l.id,
         vatType: l.vatType,
@@ -478,6 +505,26 @@ export default function EntryEditor({
                 <span>เลขที่เอกสาร {aiSrc && entry.docNo ? <AiTag /> : null}</span>
                 <input type="text" value={docNo} onChange={(e) => setDocNo(e.target.value)} disabled={readOnly} placeholder="เช่น INV-001" />
               </label>
+              {/* ใช้ภาษีในเดือน — เฉพาะบิลซื้อ (ยกภาษีซื้อไปใช้เดือนอื่นได้ ตามกฎหมาย ≤ 6 เดือน) */}
+              {entryType === "purchase" ? (
+                <label className="acc-field">
+                  <span>ใช้ภาษีในเดือน</span>
+                  {(() => {
+                    const docIso = thaiToIso(docDate);
+                    const baseYm = docIso ? docIso.slice(0, 7) : entry.docDate ? entry.docDate.slice(0, 7) : inputTaxMonth;
+                    const opts = taxMonthOptions(baseYm);
+                    if (inputTaxMonth && !opts.includes(inputTaxMonth)) opts.unshift(inputTaxMonth);
+                    return (
+                      <select value={inputTaxMonth} onChange={(e) => setInputTaxMonth(e.target.value)} disabled={readOnly}>
+                        {opts.length === 0 ? <option value="">— ตามวันที่บิล —</option> : null}
+                        {opts.map((ym) => (
+                          <option key={ym} value={ym}>{taxMonthLabel(ym)}</option>
+                        ))}
+                      </select>
+                    );
+                  })()}
+                </label>
+              ) : null}
               <label className="acc-field">
                 <span>ภ.ง.ด.</span>
                 <select value={whtForm} onChange={(e) => setWhtForm(e.target.value as WhtForm | "")} disabled={readOnly}>
