@@ -21,11 +21,13 @@
   width: 100%;
   max-width: 1100px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 10px 12px;
   margin-bottom: 16px;
 }
-.vr-toolbar-hint { color: #667; font-size: 14px; flex: 1; }
+/* ข้อความแนะนำ = อยู่บรรทัดของตัวเอง (กันถูกบีบจนคำไทยแตกเป็นแนวตั้ง) */
+.vr-toolbar-hint { color: #667; font-size: 13px; flex: 1 1 100%; margin: 0; order: 99; }
 
 /* ตัวเลือกเดือน (ประจำเดือน) บนแถบเครื่องมือ */
 .vr-month-picker {
