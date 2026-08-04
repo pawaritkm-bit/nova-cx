@@ -119,6 +119,7 @@ async function loadBillPrefill(
     .eq("entry_id", billId)
     .order("line_no", { ascending: true });
 
+  const billDate = isoToThaiDate(e.doc_date);
   const items: ReceiptCertItem[] = ((lineData ?? []) as {
     line_no: number;
     description: string | null;
@@ -126,6 +127,8 @@ async function loadBillPrefill(
     vat_amount: number | string | null;
     wht_amount: number | string | null;
   }[]).map((l) => ({
+    // วันที่แต่ละแถว = วันที่บิล (ทุกบรรทัดของบิลเดียวกันใช้วันเดียว)
+    date: billDate,
     description: l.description ?? "",
     // จำนวนเงินที่ "จ่ายจริง" ต่อบรรทัด = มูลค่า + VAT − หัก ณ ที่จ่าย
     amount: lineNet({
@@ -133,9 +136,10 @@ async function loadBillPrefill(
       vatAmount: num(l.vat_amount),
       whtAmount: num(l.wht_amount),
     }),
+    note: "",
   }));
 
-  return { items, docDate: isoToThaiDate(e.doc_date) };
+  return { items, docDate: billDate };
 }
 
 export default async function ReceiptCertPage({
@@ -201,14 +205,13 @@ export default async function ReceiptCertPage({
       docDate = pre.docDate;
     }
   }
-  if (items.length === 0) items = [{ description: "", amount: 0 }];
+  if (items.length === 0) items = [{ date: "", description: "", amount: 0, note: "" }];
   if (!docDate) docDate = todayThaiDate();
 
   return (
     <ReceiptCertDoc
-      businessName={businessName}
+      customerName={defaultPayerName}
       taxId={cust.tax_id ?? ""}
-      payerName={defaultPayerName}
       docDate={docDate}
       items={items}
       backHref="/chat-audit/accounting"

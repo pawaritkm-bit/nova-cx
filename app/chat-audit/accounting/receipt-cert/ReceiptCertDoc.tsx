@@ -4,59 +4,80 @@ import { useMemo, useState } from "react";
 import { parseAmountInput, formatMoney } from "@/lib/accounting/calc";
 import { bahtText } from "@/lib/accounting/baht-text";
 
-/** 1 รายการในใบรับรอง (รายการ + จำนวนเงิน) */
+/** 1 รายการในใบรับรอง (วันที่ / รายละเอียด / จำนวนเงิน / หมายเหตุ) */
 export type ReceiptCertItem = {
+  date: string;
   description: string;
   amount: number;
+  note: string;
 };
 
 /** แถวในฟอร์ม — เก็บ amount เป็น string เพื่อให้พิมพ์/แก้ได้ลื่น (parse ตอนคำนวณ) */
 type Row = {
   key: number;
+  date: string;
   description: string;
   amount: string;
+  note: string;
 };
 
 /**
  * ใบรับรองแทนใบเสร็จรับเงิน — เอกสารที่ "แก้ไขช่องได้" + พิมพ์/บันทึก PDF ผ่านเบราว์เซอร์
  *
- * ★ ทุกช่องเป็น input/textarea (แก้ก่อนพิมพ์ได้) · ปุ่ม/แถบเครื่องมือซ่อนตอนพิมพ์ (print CSS)
+ * โครงตาม "ฟอร์มจริง" ที่ผู้ใช้ส่งมา:
+ *   หัว: ชื่อเรื่อง → "[ชื่อผู้ซื้อ] (ผู้ซื้อ)" → "เลขประจำตัวผู้เสียภาษีอากร [tax id]"
+ *   มุมขวาบน: เลขที่ / วันที่
+ *   ตาราง 4 คอลัมน์: วัน เดือน ปี | รายละเอียดค่าจ่าย | จำนวนเงิน | หมายเหตุ
+ *   รวมทั้งสิ้น + ตัวอักษร (bahtText)
+ *   ย่อหน้ารับรอง (ข้าพเจ้า/ตำแหน่ง/เนื่องจาก/ช่วงวันที่) แก้ได้ทุกช่อง
+ *   ช่องหมายเหตุเพิ่มเติม + ลายเซ็น 2 ช่อง (ผู้เบิกจ่าย/ผู้อนุมัติ)
+ *
+ * ★ ทุกช่องเป็น input/textarea (แก้ก่อนพิมพ์ได้) · ปุ่ม/เครื่องมือซ่อนตอนพิมพ์ (.no-print)
  * ★ ยอดรวม = ผลบวกทุกแถว (parse robust) + แปลงเป็นตัวอักษรไทยอัตโนมัติ (bahtText)
- * ★ เพิ่ม/ลบแถวได้ · หัวกระดาษ (ชื่อกิจการ/เลขภาษี) prefill จากลูกค้า แต่ยังแก้ได้
  * ★ ไม่ยิง network — เอกสารทำงานฝั่ง client ล้วน (Phase 1 ไม่บันทึก DB)
  */
 export default function ReceiptCertDoc({
-  businessName,
+  customerName,
   taxId,
-  payerName,
   docDate,
   items,
   backHref,
 }: {
-  businessName: string;
+  /** ชื่อผู้ซื้อ/ผู้เบิกจ่าย (default = ผู้ติดต่อ หรือ ชื่อกิจการลูกค้า) */
+  customerName: string;
   taxId: string;
-  payerName: string;
+  /** วันที่เอกสาร (มุมขวาบน) dd/mm/พ.ศ. */
   docDate: string;
   items: ReceiptCertItem[];
   backHref: string;
 }) {
-  // ---- state หัวกระดาษ/เอกสาร (แก้ได้ทุกช่อง) ----
-  const [bizName, setBizName] = useState(businessName);
-  const [bizAddress, setBizAddress] = useState("");
-  const [bizTaxId, setBizTaxId] = useState(taxId);
+  // ---- หัวเอกสาร / meta ----
+  const [buyerName, setBuyerName] = useState(customerName);
+  const [buyerTaxId, setBuyerTaxId] = useState(taxId);
   const [docNo, setDocNo] = useState("");
   const [date, setDate] = useState(docDate);
-  const [payer, setPayer] = useState(payerName);
-  const [payeeName, setPayeeName] = useState("");
-  const [payeeAddress, setPayeeAddress] = useState("");
 
-  // ---- state ตารางรายการ ----
+  // ---- ย่อหน้ารับรอง ----
+  const [payer, setPayer] = useState(customerName);
+  const [position, setPosition] = useState("เจ้าของกิจการ");
+  const [reason, setReason] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  // ---- หมายเหตุเพิ่มเติม (ล่างสุด) ----
+  const [extraNote, setExtraNote] = useState("");
+
+  // ---- ตารางรายการ ----
   const [rows, setRows] = useState<Row[]>(() =>
-    (items.length > 0 ? items : [{ description: "", amount: 0 }]).map((it, i) => ({
-      key: i,
-      description: it.description,
-      amount: it.amount ? String(it.amount) : "",
-    }))
+    (items.length > 0 ? items : [{ date: "", description: "", amount: 0, note: "" }]).map(
+      (it, i) => ({
+        key: i,
+        date: it.date,
+        description: it.description,
+        amount: it.amount ? String(it.amount) : "",
+        note: it.note,
+      })
+    )
   );
   const [nextKey, setNextKey] = useState(rows.length);
 
@@ -70,7 +91,7 @@ export default function ReceiptCertDoc({
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   }
   function addRow() {
-    setRows((prev) => [...prev, { key: nextKey, description: "", amount: "" }]);
+    setRows((prev) => [...prev, { key: nextKey, date: "", description: "", amount: "", note: "" }]);
     setNextKey((k) => k + 1);
   }
   function removeRow(key: number) {
@@ -95,39 +116,8 @@ export default function ReceiptCertDoc({
 
       {/* ================= ตัวเอกสาร (A4) ================= */}
       <div className="rcv-page">
-        {/* หัวกระดาษ = ข้อมูลลูกค้า (ผู้จ่าย/ผู้รับรอง) */}
-        <div className="rcv-head">
-          <input
-            className="rcv-in rcv-bizname"
-            value={bizName}
-            onChange={(e) => setBizName(e.target.value)}
-            placeholder="ชื่อกิจการ / ชื่อผู้รับรอง"
-            aria-label="ชื่อกิจการ"
-          />
-          <textarea
-            className="rcv-in rcv-address"
-            value={bizAddress}
-            onChange={(e) => setBizAddress(e.target.value)}
-            placeholder="ที่อยู่กิจการ"
-            rows={2}
-            aria-label="ที่อยู่กิจการ"
-          />
-          <div className="rcv-taxline">
-            <span className="rcv-label">เลขประจำตัวผู้เสียภาษี:</span>
-            <input
-              className="rcv-in rcv-taxid"
-              value={bizTaxId}
-              onChange={(e) => setBizTaxId(e.target.value)}
-              placeholder="—"
-              aria-label="เลขประจำตัวผู้เสียภาษี"
-            />
-          </div>
-        </div>
-
-        <h1 className="rcv-title">ใบรับรองแทนใบเสร็จรับเงิน</h1>
-
-        {/* เลขที่ + วันที่ */}
-        <div className="rcv-meta">
+        {/* เลขที่ / วันที่ (มุมขวาบน) */}
+        <div className="rcv-topmeta">
           <div className="rcv-meta-item">
             <span className="rcv-label">เลขที่</span>
             <input
@@ -150,34 +140,54 @@ export default function ReceiptCertDoc({
           </div>
         </div>
 
-        {/* คำรับรอง */}
-        <p className="rcv-statement">
-          ข้าพเจ้า{" "}
-          <input
-            className="rcv-in rcv-payer"
-            value={payer}
-            onChange={(e) => setPayer(e.target.value)}
-            placeholder="ชื่อผู้จ่ายเงิน"
-            aria-label="ชื่อผู้จ่ายเงิน"
-          />{" "}
-          ขอรับรองว่าได้จ่ายเงินตามรายการข้างล่างนี้จริง
-          เนื่องจากผู้รับเงินไม่สามารถออกใบเสร็จรับเงินให้ได้
-        </p>
+        {/* หัวเอกสาร (กลาง) = ชื่อเรื่อง → ผู้ซื้อ → เลขภาษี */}
+        <div className="rcv-head">
+          <h1 className="rcv-title">ใบรับรองแทนใบเสร็จรับเงิน</h1>
+          <div className="rcv-buyerline">
+            <input
+              className="rcv-in rcv-buyer"
+              value={buyerName}
+              onChange={(e) => setBuyerName(e.target.value)}
+              placeholder="ชื่อผู้ซื้อ"
+              aria-label="ชื่อผู้ซื้อ"
+            />
+            <span className="rcv-buyer-suffix"> (ผู้ซื้อ)</span>
+          </div>
+          <div className="rcv-taxline">
+            <span>เลขประจำตัวผู้เสียภาษีอากร</span>
+            <input
+              className="rcv-in rcv-taxid"
+              value={buyerTaxId}
+              onChange={(e) => setBuyerTaxId(e.target.value)}
+              placeholder="—"
+              aria-label="เลขประจำตัวผู้เสียภาษีอากร"
+            />
+          </div>
+        </div>
 
-        {/* ตารางรายการ */}
+        {/* ตารางรายการ 4 คอลัมน์ */}
         <table className="rcv-table">
           <thead>
             <tr>
-              <th className="rcv-col-no">ลำดับ</th>
-              <th className="rcv-col-desc">รายการ</th>
-              <th className="rcv-col-amt">จำนวนเงิน (บาท)</th>
+              <th className="rcv-col-date">วัน เดือน ปี</th>
+              <th className="rcv-col-desc">รายละเอียดค่าจ่าย</th>
+              <th className="rcv-col-amt">จำนวนเงิน</th>
+              <th className="rcv-col-note">หมายเหตุ</th>
               <th className="rcv-col-del no-print" aria-label="ลบ" />
             </tr>
           </thead>
           <tbody>
             {rows.map((r, idx) => (
               <tr key={r.key}>
-                <td className="rcv-col-no">{idx + 1}</td>
+                <td className="rcv-col-date">
+                  <input
+                    className="rcv-in rcv-cell rcv-cell-date"
+                    value={r.date}
+                    onChange={(e) => updateRow(r.key, { date: e.target.value })}
+                    placeholder="วว/ดด/ปปปป"
+                    aria-label={`วันที่รายการที่ ${idx + 1}`}
+                  />
+                </td>
                 <td>
                   <input
                     className="rcv-in rcv-cell"
@@ -197,6 +207,15 @@ export default function ReceiptCertDoc({
                     aria-label={`จำนวนเงินรายการที่ ${idx + 1}`}
                   />
                 </td>
+                <td className="rcv-col-note">
+                  <input
+                    className="rcv-in rcv-cell"
+                    value={r.note}
+                    onChange={(e) => updateRow(r.key, { note: e.target.value })}
+                    placeholder=""
+                    aria-label={`หมายเหตุรายการที่ ${idx + 1}`}
+                  />
+                </td>
                 <td className="rcv-col-del no-print">
                   <button
                     type="button"
@@ -214,10 +233,10 @@ export default function ReceiptCertDoc({
           </tbody>
           <tfoot>
             <tr>
-              <td colSpan={2} className="rcv-total-label">
-                รวมเงินทั้งสิ้น
-              </td>
+              <td className="rcv-total-label">รวมทั้งสิ้น</td>
+              <td />
               <td className="rcv-col-amt rcv-total-amt">{formatMoney(total)}</td>
+              <td>บาท</td>
               <td className="no-print" />
             </tr>
           </tfoot>
@@ -232,40 +251,77 @@ export default function ReceiptCertDoc({
 
         {/* ยอดรวมเป็นตัวอักษร */}
         <p className="rcv-amount-text">
-          <span className="rcv-label">ตัวอักษร</span>
+          <span className="rcv-label">จำนวนเงิน (ตัวอักษร)</span>
           <span className="rcv-amount-words">({totalText})</span>
         </p>
 
-        {/* ผู้รับเงิน */}
-        <div className="rcv-payee">
-          <div className="rcv-payee-line">
-            <span className="rcv-label">ผู้รับเงิน</span>
-            <input
-              className="rcv-in rcv-payee-name"
-              value={payeeName}
-              onChange={(e) => setPayeeName(e.target.value)}
-              placeholder="ชื่อผู้รับเงิน"
-              aria-label="ชื่อผู้รับเงิน"
-            />
-          </div>
-          <div className="rcv-payee-line">
-            <span className="rcv-label">ที่อยู่</span>
-            <textarea
-              className="rcv-in rcv-payee-address"
-              value={payeeAddress}
-              onChange={(e) => setPayeeAddress(e.target.value)}
-              placeholder="ที่อยู่ผู้รับเงิน"
-              rows={2}
-              aria-label="ที่อยู่ผู้รับเงิน"
-            />
-          </div>
+        {/* ย่อหน้ารับรอง */}
+        <p className="rcv-statement">
+          ข้าพเจ้า{" "}
+          <input
+            className="rcv-in rcv-inline rcv-inline-name"
+            value={payer}
+            onChange={(e) => setPayer(e.target.value)}
+            placeholder="ชื่อผู้เบิกจ่าย"
+            aria-label="ชื่อผู้เบิกจ่าย"
+          />{" "}
+          (ผู้เบิกจ่าย) ตำแหน่ง{" "}
+          <input
+            className="rcv-in rcv-inline"
+            value={position}
+            onChange={(e) => setPosition(e.target.value)}
+            placeholder="ตำแหน่ง"
+            aria-label="ตำแหน่ง"
+          />{" "}
+          ขอรับรองว่า รายจ่ายข้างต้นนี้ไม่อาจเรียกเก็บใบเสร็จรับเงินจากผู้รับเงินได้
+          และข้าพเจ้าได้จ่ายเงินไปจริง เนื่องจาก{" "}
+          <input
+            className="rcv-in rcv-inline rcv-inline-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="เหตุผล / ผู้รับเงิน"
+            aria-label="เนื่องจาก"
+          />{" "}
+          ตั้งแต่วันที่{" "}
+          <input
+            className="rcv-in rcv-inline rcv-inline-date"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+            placeholder="วว/ดด/ปปปป"
+            aria-label="ตั้งแต่วันที่"
+          />{" "}
+          ถึงวันที่{" "}
+          <input
+            className="rcv-in rcv-inline rcv-inline-date"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+            placeholder="วว/ดด/ปปปป"
+            aria-label="ถึงวันที่"
+          />
+        </p>
+
+        {/* หมายเหตุเพิ่มเติม (แก้ได้) */}
+        <div className="rcv-extranote">
+          <span className="rcv-label">หมายเหตุ</span>
+          <textarea
+            className="rcv-in rcv-extranote-box"
+            value={extraNote}
+            onChange={(e) => setExtraNote(e.target.value)}
+            placeholder="หมายเหตุเพิ่มเติม (ถ้ามี)"
+            rows={2}
+            aria-label="หมายเหตุเพิ่มเติม"
+          />
         </div>
 
-        {/* ช่องลงชื่อ */}
+        {/* ช่องลงชื่อ 2 ช่อง */}
         <div className="rcv-sign">
           <div className="rcv-sign-box">
             <div className="rcv-sign-line" />
-            <div className="rcv-sign-label">( ลงชื่อ ) ผู้จ่ายเงิน / ผู้รับรอง</div>
+            <div className="rcv-sign-label">( ลงชื่อ ) ผู้เบิกจ่าย</div>
+          </div>
+          <div className="rcv-sign-box">
+            <div className="rcv-sign-line" />
+            <div className="rcv-sign-label">( ลงชื่อ ) ผู้อนุมัติ</div>
           </div>
         </div>
       </div>
