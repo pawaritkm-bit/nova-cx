@@ -532,6 +532,7 @@ function EntryTable({
                       entryType={e.entryType}
                       status={e.status}
                       editHref={editHref}
+                      customerId={e.customerId}
                     />
                   </td>
                 </tr>
@@ -999,6 +1000,21 @@ export default async function AccountingPage({
           customerId={g.customerId}
           initialTaxId={taxIdById.get(g.customerId) ?? null}
         />
+      ) : null}
+
+      {/* ออกใบรับรองแทนใบเสร็จ (ฟอร์มเปล่าของลูกค้ารายนี้ — หัวกระดาษดึงข้อมูลลูกค้าให้) */}
+      {g.customerId ? (
+        <div className="acc-scopebar" style={{ marginBottom: 10 }}>
+          <span className="acc-scope-label">เอกสาร</span>
+          <a
+            href={`/chat-audit/accounting/receipt-cert?customer=${g.customerId}`}
+            className="btn btn-ghost"
+            target="_blank"
+            rel="noopener"
+          >
+            ＋ ใบรับรองแทนใบเสร็จ
+          </a>
+        </div>
       ) : null}
 
       {/* สรุปของลูกค้ารายนี้ */}

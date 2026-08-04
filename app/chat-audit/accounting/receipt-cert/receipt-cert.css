@@ -1,0 +1,239 @@
+/* ============================================================
+   ใบรับรองแทนใบเสร็จรับเงิน — เอกสารพิมพ์/บันทึก PDF ผ่านเบราว์เซอร์
+   ★ ทุกช่องแก้ได้ (input/textarea) หน้าจอ · ตอนพิมพ์ให้ดู "สะอาด" เหมือนเอกสารจริง
+   ★ .no-print = ซ่อนตอนพิมพ์ (แถบเครื่องมือ/ปุ่มเพิ่ม-ลบแถว)
+   ★ prefix rcv-* กันชนสไตล์เดิม (acc-* / bills / dashboard)
+   ============================================================ */
+
+.rcv-shell {
+  min-height: 100vh;
+  background: #eef1f5;
+  padding: 20px 12px 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: "Sarabun", "TH Sarabun New", system-ui, -apple-system, sans-serif;
+  color: #1a1a1a;
+}
+
+/* ---- แถบเครื่องมือ ---- */
+.rcv-toolbar {
+  width: 100%;
+  max-width: 820px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.rcv-toolbar-hint {
+  color: #667;
+  font-size: 14px;
+  flex: 1;
+}
+
+.rcv-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #cbd2dc;
+  background: #fff;
+  color: #1a1a1a;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.rcv-btn:hover { background: #f4f6f9; }
+.rcv-btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.rcv-btn-primary:hover { background: #195ecb; }
+.rcv-btn-ghost { background: transparent; }
+
+/* ---- ตัวเอกสาร (จำลอง A4) ---- */
+.rcv-page {
+  width: 100%;
+  max-width: 820px;
+  background: #fff;
+  padding: 48px 56px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+/* ---- ช่องกรอกทั่วไป (โปร่ง เหมือนกระดาษ) ---- */
+.rcv-in {
+  font-family: inherit;
+  font-size: 16px;
+  color: #1a1a1a;
+  border: none;
+  border-bottom: 1px dashed #b9c2cf;
+  background: #fbfcfe;
+  padding: 2px 4px;
+  outline: none;
+  border-radius: 3px;
+}
+.rcv-in:focus { border-bottom-color: #1f6feb; background: #f2f7ff; }
+.rcv-in::placeholder { color: #aab3c0; font-weight: 400; }
+textarea.rcv-in { resize: vertical; width: 100%; box-sizing: border-box; }
+
+/* ---- หัวกระดาษ ---- */
+.rcv-head { text-align: center; margin-bottom: 20px; }
+.rcv-bizname {
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  width: 90%;
+  margin: 0 auto 6px;
+  display: block;
+}
+.rcv-address {
+  text-align: center;
+  width: 90%;
+  margin: 0 auto 6px;
+  font-size: 15px;
+}
+.rcv-taxline {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 15px;
+}
+.rcv-taxid { width: 200px; text-align: center; }
+
+.rcv-title {
+  text-align: center;
+  font-size: 24px;
+  font-weight: 700;
+  margin: 18px 0 24px;
+  text-decoration: underline;
+  text-underline-offset: 6px;
+}
+
+.rcv-label { color: #445; font-weight: 600; font-size: 15px; }
+
+/* ---- เลขที่ + วันที่ ---- */
+.rcv-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+.rcv-meta-item { display: flex; align-items: baseline; gap: 8px; }
+.rcv-docno { width: 160px; }
+.rcv-date { width: 150px; text-align: center; }
+
+/* ---- คำรับรอง ---- */
+.rcv-statement {
+  font-size: 16px;
+  line-height: 2.1;
+  margin: 8px 0 22px;
+  text-indent: 40px;
+}
+.rcv-payer { width: 260px; text-align: center; }
+
+/* ---- ตารางรายการ ---- */
+.rcv-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+.rcv-table th,
+.rcv-table td {
+  border: 1px solid #333;
+  padding: 8px 10px;
+  font-size: 15px;
+}
+.rcv-table th { background: #f0f3f7; font-weight: 700; text-align: center; }
+.rcv-col-no { width: 60px; text-align: center; }
+.rcv-col-amt { width: 170px; text-align: right; }
+.rcv-col-del { width: 40px; text-align: center; border: none !important; }
+td.rcv-col-del { border: none !important; }
+
+.rcv-cell { width: 100%; box-sizing: border-box; border-bottom: none; background: transparent; }
+.rcv-cell:focus { background: #f2f7ff; }
+.rcv-cell-amt { text-align: right; }
+
+.rcv-total-label { text-align: right; font-weight: 700; }
+.rcv-total-amt { font-weight: 700; }
+
+.rcv-row-del {
+  border: none;
+  background: transparent;
+  color: #c0392b;
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+}
+.rcv-row-del:disabled { color: #ccc; cursor: not-allowed; }
+
+.rcv-addrow-wrap { margin: 4px 0 18px; }
+
+/* ---- ยอดรวมตัวอักษร ---- */
+.rcv-amount-text {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 16px;
+  margin: 4px 0 26px;
+}
+.rcv-amount-words { font-weight: 700; }
+
+/* ---- ผู้รับเงิน ---- */
+.rcv-payee { margin-bottom: 34px; }
+.rcv-payee-line { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.rcv-payee-name { flex: 1; }
+.rcv-payee-address { flex: 1; }
+
+/* ---- ช่องลงชื่อ ---- */
+.rcv-sign { display: flex; justify-content: flex-end; margin-top: 40px; }
+.rcv-sign-box { text-align: center; width: 300px; }
+.rcv-sign-line { border-bottom: 1px dotted #333; height: 40px; margin-bottom: 6px; }
+.rcv-sign-label { font-size: 15px; color: #333; }
+
+/* ---- error/สิทธิ์ ---- */
+.rcv-error {
+  background: #fff;
+  padding: 32px 40px;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  text-align: center;
+  max-width: 520px;
+  margin-top: 40px;
+}
+.rcv-error p { font-size: 16px; margin-bottom: 20px; color: #333; }
+
+/* ============================================================
+   PRINT — เอกสารสะอาด (ซ่อนแถบเครื่องมือ/ปุ่ม, เต็มหน้า A4)
+   ============================================================ */
+@media print {
+  .no-print { display: none !important; }
+  /* ซ่อนแถบโหลดด้านบนของ layout chat-audit ตอนพิมพ์ */
+  .nav-progress { display: none !important; }
+
+  .rcv-shell { background: #fff; padding: 0; display: block; }
+  .rcv-page {
+    max-width: none;
+    width: 100%;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 24px 28px;
+  }
+
+  /* ช่องกรอก → ดูเหมือนข้อความปกติ (ไม่มีกรอบ/พื้นหลัง) */
+  .rcv-in {
+    border: none !important;
+    background: transparent !important;
+    color: #000 !important;
+  }
+  .rcv-in::placeholder { color: transparent !important; }
+
+  .rcv-table th { background: transparent !important; }
+  .rcv-table th,
+  .rcv-table td { border-color: #000 !important; }
+
+  @page { size: A4; margin: 14mm; }
+}

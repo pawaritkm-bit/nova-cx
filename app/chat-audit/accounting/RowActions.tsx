@@ -19,11 +19,14 @@ export default function RowActions({
   entryType,
   status,
   editHref,
+  customerId,
 }: {
   entryId: string;
   entryType: EntryType;
   status: EntryStatus;
   editHref: string;
+  /** ลูกค้าเจ้าของบิล — ใช้สร้างลิงก์ "ใบรับรองแทนใบเสร็จ" (null = บิลไม่ผูกลูกค้า → ซ่อนปุ่ม) */
+  customerId?: string | null;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -72,6 +75,18 @@ export default function RowActions({
         <Link href={editHref} className="acc-mini-btn" scroll={false} aria-label="ตรวจ/แก้">
           ตรวจ/แก้
         </Link>
+        {/* ออกใบรับรองแทนใบเสร็จ (prefill รายการ/ยอด/วันที่ จากบิลนี้) — เฉพาะบิลที่ผูกลูกค้า */}
+        {customerId ? (
+          <a
+            href={`/chat-audit/accounting/receipt-cert?customer=${customerId}&bill=${entryId}`}
+            className="acc-mini-btn"
+            target="_blank"
+            rel="noopener"
+            title="ออกใบรับรองแทนใบเสร็จจากบิลนี้"
+          >
+            ใบรับรองฯ
+          </a>
+        ) : null}
         {!confirmed
           ? moveTargets.map((t) => (
               <button
