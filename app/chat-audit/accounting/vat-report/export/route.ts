@@ -4,7 +4,7 @@ import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/access";
 import { listEntries, monthBounds, round2, effectiveTaxMonth, type ListEntriesFilter } from "@/lib/accounting/queries";
-import { buildVatReport, type VatReport, type VatReportKind } from "@/lib/accounting/vat-report";
+import { buildVatReport, type VatReportKind } from "@/lib/accounting/vat-report";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +12,35 @@ const XLSX_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MONEY_FMT = "#,##0.00";
+
+/** เพดานกันค่าปลอมจาก POST (body) */
+const MAX_ROWS = 5000;
+const MAX_TEXT = 300;
+const MAX_MONEY = 1e12;
+
+/** แถวแสดงผลสำหรับ Excel (วันที่/สถานประกอบการ = ข้อความสำเร็จรูปแล้ว) */
+type VatExcelRow = {
+  dateText: string;
+  docNo: string;
+  partyName: string;
+  partyTaxId: string;
+  estab: string;
+  baseVat: number;
+  baseExempt: number;
+  vat: number;
+};
+type VatExcelTotals = { count: number; baseVat: number; baseExempt: number; vat: number };
+
+/** coerce → string ตัดความยาว (กัน payload ยักษ์) */
+function clampText(v: unknown): string {
+  return typeof v === "string" ? v.slice(0, MAX_TEXT) : "";
+}
+/** coerce → number ปลอดภัย: NaN/Infinity → 0, clamp ช่วง, ปัด 2 */
+function clampMoney(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return round2(Math.max(-MAX_MONEY, Math.min(MAX_MONEY, n)));
+}
 
 const THAI_MONTHS = [
   "", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
@@ -60,13 +89,15 @@ function periodLabelOf(from: string, to: string): string {
  *   คอลัมน์ตรงกับหน้าจอ: ลำดับ | วดป | เลขที่ | คู่ค้า | เลขภาษี | สนญ. | คิด VAT | ยกเว้น | VAT
  */
 async function buildVatReportWorkbook(
-  report: VatReport,
+  kind: VatReportKind,
+  rows: VatExcelRow[],
+  totals: VatExcelTotals,
   header: { companyName: string; companyAddress: string; companyTaxId: string; monthLabel: string }
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "NOVA-CX";
   wb.created = new Date();
-  const title = report.kind === "sale" ? "รายงานภาษีขาย" : "รายงานภาษีซื้อ";
+  const title = kind === "sale" ? "รายงานภาษีขาย" : "รายงานภาษีซื้อ";
   const ws = wb.addWorksheet(title);
 
   ws.addRow([title]).font = { bold: true, size: 14 };
@@ -77,7 +108,7 @@ async function buildVatReportWorkbook(
   ws.addRow([]);
 
   const partyHeader =
-    report.kind === "sale" ? "ชื่อผู้ซื้อสินค้า/ผู้รับบริการ" : "ชื่อผู้ขายสินค้า/ผู้ให้บริการ";
+    kind === "sale" ? "ชื่อผู้ซื้อสินค้า/ผู้รับบริการ" : "ชื่อผู้ขายสินค้า/ผู้ให้บริการ";
   const head = ws.addRow([
     "ลำดับที่",
     "วัน/เดือน/ปี",
@@ -92,14 +123,14 @@ async function buildVatReportWorkbook(
   head.font = { bold: true };
   head.alignment = { horizontal: "center", wrapText: true };
 
-  report.rows.forEach((r, i) => {
+  rows.forEach((r, i) => {
     ws.addRow([
       i + 1,
-      thaiDate(r.docDate),
+      r.dateText,
       r.docNo,
       r.partyName,
-      r.partyTaxId ?? "",
-      r.isHeadOffice ? "สำนักงานใหญ่" : "",
+      r.partyTaxId,
+      r.estab,
       round2(r.baseVat),
       round2(r.baseExempt),
       round2(r.vat),
@@ -112,10 +143,10 @@ async function buildVatReportWorkbook(
     "",
     "",
     "",
-    `รวมทั้งสิ้น ${report.totals.count} รายการ`,
-    round2(report.totals.baseVatTotal),
-    round2(report.totals.baseExemptTotal),
-    round2(report.totals.vatTotal),
+    `รวมทั้งสิ้น ${totals.count} รายการ`,
+    round2(totals.baseVat),
+    round2(totals.baseExempt),
+    round2(totals.vat),
   ]);
   total.font = { bold: true };
 
@@ -124,6 +155,26 @@ async function buildVatReportWorkbook(
 
   const buf = await wb.xlsx.writeBuffer();
   return Buffer.from(buf);
+}
+
+/** สร้าง response ดาวน์โหลด .xlsx (ชื่อไฟล์ไทย + ascii fallback) */
+function xlsxResponse(
+  xlsx: Buffer,
+  kind: VatReportKind,
+  codePart: string,
+  rangePart: string
+): NextResponse {
+  const kindName = kind === "sale" ? "รายงานภาษีขาย" : "รายงานภาษีซื้อ";
+  const filename = `${kindName}${codePart}${rangePart}.xlsx`;
+  const asciiFallback = `vat-report${codePart}.xlsx`;
+  return new NextResponse(xlsx as unknown as BodyInit, {
+    status: 200,
+    headers: {
+      "content-type": XLSX_CONTENT_TYPE,
+      "content-disposition": `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      "cache-control": "no-store",
+    },
+  });
 }
 
 /**
@@ -231,27 +282,136 @@ export async function GET(req: Request) {
     }
 
     const periodLabel = fromDate && toDate ? periodLabelOf(fromDate, toDate) : "ทุกเดือน";
-    const xlsx = await buildVatReportWorkbook(report, {
-      companyName: (c?.business_name || c?.name || "กิจการ").trim(),
-      companyAddress,
-      companyTaxId: (c?.tax_id ?? "").trim(),
-      monthLabel: periodLabel,
-    });
+    // แปลงรายงาน (server) → แถวแสดงผล Excel
+    const excelRows: VatExcelRow[] = report.rows.map((r) => ({
+      dateText: thaiDate(r.docDate),
+      docNo: r.docNo,
+      partyName: r.partyName,
+      partyTaxId: r.partyTaxId ?? "",
+      estab: r.isHeadOffice ? "สำนักงานใหญ่" : "",
+      baseVat: r.baseVat,
+      baseExempt: r.baseExempt,
+      vat: r.vat,
+    }));
+    const xlsx = await buildVatReportWorkbook(
+      kind,
+      excelRows,
+      {
+        count: report.totals.count,
+        baseVat: report.totals.baseVatTotal,
+        baseExempt: report.totals.baseExemptTotal,
+        vat: report.totals.vatTotal,
+      },
+      {
+        companyName: (c?.business_name || c?.name || "กิจการ").trim(),
+        companyAddress,
+        companyTaxId: (c?.tax_id ?? "").trim(),
+        monthLabel: periodLabel,
+      }
+    );
 
-    const kindName = kind === "sale" ? "รายงานภาษีขาย" : "รายงานภาษีซื้อ";
     const codePart = c?.customer_code ? `-${c.customer_code.replace(/[^\w.-]/g, "")}` : `-${customerId.slice(0, 8)}`;
     const rangePart = fromDate && toDate ? `-${fromDate}_${toDate}` : "";
-    const filename = `${kindName}${codePart}${rangePart}.xlsx`;
-    const asciiFallback = `vat-report${codePart}.xlsx`;
+    return xlsxResponse(xlsx, kind, codePart, rangePart);
+  } catch {
+    return NextResponse.json({ error: "server_error", message: "ออกรายงานไม่สำเร็จ" }, { status: 500 });
+  }
+}
 
-    return new NextResponse(xlsx as unknown as BodyInit, {
-      status: 200,
-      headers: {
-        "content-type": XLSX_CONTENT_TYPE,
-        "content-disposition": `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
-        "cache-control": "no-store",
-      },
+/**
+ * POST /chat-audit/accounting/vat-report/export
+ *   body JSON = ค่าที่นักบัญชี "แก้บนจอ" (header + rows) → สร้าง .xlsx ให้ตรงที่เห็น
+ *   ★ ยอดรวมคิดใหม่ที่ server จาก rows (ไม่เชื่อ total จาก client)
+ *   ★ สิทธิ์เหมือน GET (default deny) · validate/clamp ค่าที่รับมา · PDPA: ไม่ log ค่า
+ */
+export async function POST(req: Request) {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid_params", message: "รูปแบบข้อมูลไม่ถูกต้อง" }, { status: 400 });
+  }
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  const customerId = typeof b.customer === "string" ? b.customer : "";
+  const kind: VatReportKind = b.kind === "sale" ? "sale" : "purchase";
+  const fromRaw = typeof b.from === "string" ? b.from : "";
+  const toRaw = typeof b.to === "string" ? b.to : "";
+  let fromDate = DATE_RE.test(fromRaw) ? fromRaw : "";
+  let toDate = DATE_RE.test(toRaw) ? toRaw : "";
+  if (fromDate && toDate && fromDate > toDate) [fromDate, toDate] = [toDate, fromDate];
+
+  if (!getSupabaseEnv()) {
+    return NextResponse.json({ error: "db_unavailable", message: "ยังไม่ได้ตั้งค่าฐานข้อมูล" }, { status: 503 });
+  }
+  if (!UUID_RE.test(customerId)) {
+    return NextResponse.json({ error: "invalid_params", message: "ต้องระบุลูกค้า" }, { status: 400 });
+  }
+
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const access = await resolveAccountingAccess(authed, service);
+    if (!access) {
+      return NextResponse.json({ error: "forbidden", message: "ไม่มีสิทธิ์ออกรายงาน" }, { status: 403 });
+    }
+    if (!customerInScope(access, customerId)) {
+      return NextResponse.json(
+        { error: "forbidden", message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" },
+        { status: 403 }
+      );
+    }
+    const tenantId = access.tenantId;
+
+    // customer_code สำหรับตั้งชื่อไฟล์เท่านั้น (ไม่ใช้ค่าจาก DB เป็นเนื้อรายงาน — เนื้อมาจาก body)
+    const { data: cust } = await service
+      .from("customers")
+      .select("customer_code")
+      .eq("id", customerId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    const c = (cust as { customer_code: string | null } | null) ?? null;
+
+    // แปลง rows จาก body → แถว Excel (clamp กันค่าปลอม) + คิดยอดรวมใหม่
+    const rawRows = Array.isArray(b.rows) ? b.rows.slice(0, MAX_ROWS) : [];
+    let baseVat = 0;
+    let baseExempt = 0;
+    let vat = 0;
+    const excelRows: VatExcelRow[] = rawRows.map((rr) => {
+      const r = (rr ?? {}) as Record<string, unknown>;
+      const row: VatExcelRow = {
+        dateText: clampText(r.dateText),
+        docNo: clampText(r.docNo),
+        partyName: clampText(r.partyName),
+        partyTaxId: clampText(r.partyTaxId),
+        estab: clampText(r.estab),
+        baseVat: clampMoney(r.baseVat),
+        baseExempt: clampMoney(r.baseExempt),
+        vat: clampMoney(r.vat),
+      };
+      baseVat += row.baseVat;
+      baseExempt += row.baseExempt;
+      vat += row.vat;
+      return row;
     });
+
+    const header = (b.header ?? {}) as Record<string, unknown>;
+    const monthLabel = fromDate && toDate ? periodLabelOf(fromDate, toDate) : "ทุกเดือน";
+    const xlsx = await buildVatReportWorkbook(
+      kind,
+      excelRows,
+      { count: excelRows.length, baseVat: round2(baseVat), baseExempt: round2(baseExempt), vat: round2(vat) },
+      {
+        companyName: clampText(header.companyName) || "กิจการ",
+        companyAddress: clampText(header.companyAddress),
+        companyTaxId: clampText(header.companyTaxId),
+        monthLabel,
+      }
+    );
+
+    const codePart = c?.customer_code ? `-${c.customer_code.replace(/[^\w.-]/g, "")}` : `-${customerId.slice(0, 8)}`;
+    const rangePart = fromDate && toDate ? `-${fromDate}_${toDate}` : "";
+    return xlsxResponse(xlsx, kind, codePart, rangePart);
   } catch {
     return NextResponse.json({ error: "server_error", message: "ออกรายงานไม่สำเร็จ" }, { status: 500 });
   }

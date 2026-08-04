@@ -1,10 +1,25 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { formatMoney } from "@/lib/accounting/calc";
+import { formatMoney, parseAmountInput, round2 } from "@/lib/accounting/calc";
+import { downloadExcelFromPost } from "@/lib/accounting/excel-download";
 import { updateCustomerFieldsAction } from "../customer-admin-actions";
 import type { VatReportKind, VatReportRow, VatReportTotals } from "@/lib/accounting/vat-report";
+
+/** แถวตารางแบบแก้ได้ (client-only) — เงินเก็บเป็นข้อความเพื่อแก้อิสระ, parse ตอนคิดยอด */
+type EditRow = {
+  key: number;
+  dateText: string;
+  docNo: string;
+  partyName: string;
+  partyTaxId: string;
+  ho: string;
+  branch: string;
+  baseVat: string;
+  baseExempt: string;
+  vat: string;
+};
 
 /** วันที่ ISO (YYYY-MM-DD) → dd/mm/พ.ศ. (คืน "-" ถ้าไม่มี/พัง) */
 function thaiDate(iso: string | null): string {
@@ -38,8 +53,6 @@ export default function VatReportDoc({
   monthOptions,
   printedAt,
   rows,
-  totals,
-  excelHref,
   backHref,
 }: {
   /** id ลูกค้า — ใช้สร้าง URL เปลี่ยนช่วงวัน + บันทึกที่อยู่ถาวร */
@@ -78,6 +91,96 @@ export default function VatReportDoc({
   // ---- บันทึกที่อยู่ถาวรให้ลูกค้า (optional) ----
   const [saving, startSave] = useTransition();
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // ---- แถวตารางแก้ได้ (client-only, พิมพ์/Excel ตามที่แก้ · ไม่บันทึกกลับบิล) ----
+  //   init ครั้งเดียวจาก props rows · เงินเก็บเป็นข้อความ (parse ตอนคิดยอด)
+  const [editRows, setEditRows] = useState<EditRow[]>(() =>
+    rows.map((r, i) => ({
+      key: i,
+      dateText: thaiDate(r.docDate),
+      docNo: r.docNo,
+      partyName: r.partyName,
+      partyTaxId: r.partyTaxId ?? "",
+      ho: r.isHeadOffice ? "X" : "",
+      branch: r.isHeadOffice ? "" : "-",
+      baseVat: formatMoney(r.baseVat),
+      baseExempt: formatMoney(r.baseExempt),
+      vat: formatMoney(r.vat),
+    }))
+  );
+  const [nextKey, setNextKey] = useState(rows.length);
+
+  // ยอดรวมท้าย 3 คอลัมน์ + จำนวนรายการ — คิดใหม่สดจากที่แก้บนจอ
+  const liveTotals = useMemo(() => {
+    let baseVat = 0;
+    let baseExempt = 0;
+    let vat = 0;
+    for (const r of editRows) {
+      baseVat += parseAmountInput(r.baseVat);
+      baseExempt += parseAmountInput(r.baseExempt);
+      vat += parseAmountInput(r.vat);
+    }
+    return {
+      count: editRows.length,
+      baseVat: round2(baseVat),
+      baseExempt: round2(baseExempt),
+      vat: round2(vat),
+    };
+  }, [editRows]);
+
+  function updateRow(key: number, patch: Partial<EditRow>) {
+    setEditRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  }
+  function addRow() {
+    setEditRows((prev) => [
+      ...prev,
+      { key: nextKey, dateText: "", docNo: "", partyName: "", partyTaxId: "", ho: "X", branch: "", baseVat: "", baseExempt: "", vat: "" },
+    ]);
+    setNextKey((k) => k + 1);
+  }
+  function removeRow(key: number) {
+    setEditRows((prev) => prev.filter((r) => r.key !== key));
+  }
+
+  // ---- Excel: ส่งค่าที่แก้บนจอไป POST → server สร้าง .xlsx ให้ตรงที่เห็น ----
+  const [excelBusy, setExcelBusy] = useState(false);
+  const [excelErr, setExcelErr] = useState<string | null>(null);
+  async function onExportExcel() {
+    setExcelErr(null);
+    setExcelBusy(true);
+    try {
+      const payload = {
+        customer: customerId,
+        kind,
+        from: fromDate,
+        to: toDate,
+        header: { companyName: name, companyTaxId: taxId, companyAddress: address },
+        rows: editRows.map((r) => ({
+          dateText: r.dateText,
+          docNo: r.docNo,
+          partyName: r.partyName,
+          partyTaxId: r.partyTaxId,
+          // รวม 2 คอลัมน์หน้าจอ (สนญ./สาขา) เป็นข้อความสถานประกอบการเดียวใน Excel
+          estab: r.ho.trim()
+            ? "สำนักงานใหญ่"
+            : r.branch.trim() && r.branch.trim() !== "-"
+            ? `สาขา ${r.branch.trim()}`
+            : "",
+          baseVat: parseAmountInput(r.baseVat),
+          baseExempt: parseAmountInput(r.baseExempt),
+          vat: parseAmountInput(r.vat),
+        })),
+      };
+      const err = await downloadExcelFromPost(
+        "/chat-audit/accounting/vat-report/export",
+        payload,
+        "vat-report.xlsx"
+      );
+      if (err) setExcelErr(err);
+    } finally {
+      setExcelBusy(false);
+    }
+  }
 
   /** นำทางไปช่วงวันใหม่ (คง customer/type) เพื่อ re-query ตามช่วง [from, to] */
   function pushRange(from: string, to: string) {
@@ -156,12 +259,24 @@ export default function VatReportDoc({
             ))}
           </select>
         </label>
-        <span className="vr-toolbar-hint">เลือกช่วงวัน หรือกด “ทั้งเดือน” · แล้วพิมพ์/บันทึก PDF หรือ Excel</span>
+        <span className="vr-toolbar-hint">
+          เลือกช่วงวัน หรือกด “ทั้งเดือน” · แก้ตัวเลข/ข้อความในตารางได้ แล้วพิมพ์/บันทึก PDF หรือ Excel
+          (ทั้งพิมพ์และ Excel = ตามที่แก้บนจอ)
+        </span>
         <a href={journalHref} className="vr-btn vr-btn-ghost">{journalLabel}</a>
-        <a href={excelHref} className="vr-btn vr-btn-ghost">⬇ Excel</a>
+        <button
+          type="button"
+          className="vr-btn vr-btn-ghost"
+          onClick={onExportExcel}
+          disabled={excelBusy}
+          title="ออก Excel ตามค่าที่แก้บนจอ"
+        >
+          {excelBusy ? "กำลังสร้าง…" : "⬇ Excel"}
+        </button>
         <button type="button" className="vr-btn vr-btn-primary" onClick={() => window.print()}>
           🖨 พิมพ์ / บันทึก PDF
         </button>
+        {excelErr && <span className="vr-save-err">{excelErr}</span>}
       </div>
 
       {/* ================= ตัวเอกสาร ================= */}
@@ -234,6 +349,7 @@ export default function VatReportDoc({
               <th rowSpan={2} className="vr-col-money">มูลค่าสินค้า/บริการ<br />ที่คิด VAT</th>
               <th rowSpan={2} className="vr-col-money">มูลค่าสินค้า/บริการ<br />ที่ยกเว้น VAT</th>
               <th rowSpan={2} className="vr-col-money">จำนวนเงิน<br />ภาษีมูลค่าเพิ่ม</th>
+              <th rowSpan={2} className="vr-col-del no-print" aria-label="ลบ" />
             </tr>
             <tr>
               <th className="vr-col-date">วัน/เดือน/ปี</th>
@@ -243,23 +359,105 @@ export default function VatReportDoc({
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {editRows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="vr-empty">ไม่มีรายการในช่วงวันที่นี้</td>
+                <td colSpan={10} className="vr-empty">ไม่มีรายการในช่วงวันที่นี้ — กด “＋ เพิ่มรายการ” เพื่อพิมพ์เพิ่มได้</td>
+                <td className="vr-col-del no-print" />
               </tr>
             ) : (
-              rows.map((r, i) => (
-                <tr key={r.entryId}>
+              editRows.map((r, i) => (
+                <tr key={r.key}>
                   <td className="vr-c-seq">{i + 1}</td>
-                  <td className="vr-c-date">{thaiDate(r.docDate)}</td>
-                  <td className="vr-c-no">{r.docNo || "-"}</td>
-                  <td className="vr-c-party">{r.partyName || "-"}</td>
-                  <td className="vr-c-tax">{r.partyTaxId || "-"}</td>
-                  <td className="vr-c-ho">{r.isHeadOffice ? "X" : ""}</td>
-                  <td className="vr-c-branch">{r.isHeadOffice ? "" : "-"}</td>
-                  <td className="vr-c-money">{formatMoney(r.baseVat)}</td>
-                  <td className="vr-c-money">{formatMoney(r.baseExempt)}</td>
-                  <td className="vr-c-money">{formatMoney(r.vat)}</td>
+                  <td className="vr-c-date">
+                    <input
+                      className="vr-in vr-cell vr-cell-center"
+                      value={r.dateText}
+                      onChange={(e) => updateRow(r.key, { dateText: e.target.value })}
+                      placeholder="วว/ดด/ปปปป"
+                      aria-label={`วันที่รายการที่ ${i + 1}`}
+                    />
+                  </td>
+                  <td className="vr-c-no">
+                    <input
+                      className="vr-in vr-cell vr-cell-center"
+                      value={r.docNo}
+                      onChange={(e) => updateRow(r.key, { docNo: e.target.value })}
+                      aria-label={`เลขที่ใบกำกับรายการที่ ${i + 1}`}
+                    />
+                  </td>
+                  <td className="vr-c-party">
+                    <input
+                      className="vr-in vr-cell"
+                      value={r.partyName}
+                      onChange={(e) => updateRow(r.key, { partyName: e.target.value })}
+                      aria-label={`ชื่อคู่ค้ารายการที่ ${i + 1}`}
+                    />
+                  </td>
+                  <td className="vr-c-tax">
+                    <input
+                      className="vr-in vr-cell vr-cell-center"
+                      value={r.partyTaxId}
+                      onChange={(e) => updateRow(r.key, { partyTaxId: e.target.value })}
+                      aria-label={`เลขภาษีคู่ค้ารายการที่ ${i + 1}`}
+                    />
+                  </td>
+                  <td className="vr-c-ho">
+                    <input
+                      className="vr-in vr-cell vr-cell-center"
+                      value={r.ho}
+                      onChange={(e) => updateRow(r.key, { ho: e.target.value })}
+                      aria-label={`สำนักงานใหญ่รายการที่ ${i + 1}`}
+                    />
+                  </td>
+                  <td className="vr-c-branch">
+                    <input
+                      className="vr-in vr-cell vr-cell-center"
+                      value={r.branch}
+                      onChange={(e) => updateRow(r.key, { branch: e.target.value })}
+                      aria-label={`สาขาที่รายการที่ ${i + 1}`}
+                    />
+                  </td>
+                  <td className="vr-c-money">
+                    <input
+                      className="vr-in vr-cell vr-cell-money"
+                      value={r.baseVat}
+                      onChange={(e) => updateRow(r.key, { baseVat: e.target.value })}
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      aria-label={`มูลค่าคิด VAT รายการที่ ${i + 1}`}
+                    />
+                  </td>
+                  <td className="vr-c-money">
+                    <input
+                      className="vr-in vr-cell vr-cell-money"
+                      value={r.baseExempt}
+                      onChange={(e) => updateRow(r.key, { baseExempt: e.target.value })}
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      aria-label={`มูลค่ายกเว้น VAT รายการที่ ${i + 1}`}
+                    />
+                  </td>
+                  <td className="vr-c-money">
+                    <input
+                      className="vr-in vr-cell vr-cell-money"
+                      value={r.vat}
+                      onChange={(e) => updateRow(r.key, { vat: e.target.value })}
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      aria-label={`ภาษีมูลค่าเพิ่มรายการที่ ${i + 1}`}
+                    />
+                  </td>
+                  <td className="vr-col-del no-print">
+                    <button
+                      type="button"
+                      className="vr-row-del"
+                      onClick={() => removeRow(r.key)}
+                      aria-label="ลบแถว"
+                      title="ลบแถว"
+                    >
+                      ✕
+                    </button>
+                  </td>
                 </tr>
               ))
             )}
@@ -267,14 +465,26 @@ export default function VatReportDoc({
           <tfoot>
             <tr className="vr-total">
               <td colSpan={7} className="vr-total-label">
-                รวมทั้งสิ้น {totals.count.toLocaleString("th-TH")} รายการ
+                รวมทั้งสิ้น {liveTotals.count.toLocaleString("th-TH")} รายการ
               </td>
-              <td className="vr-c-money">{formatMoney(totals.baseVatTotal)}</td>
-              <td className="vr-c-money">{formatMoney(totals.baseExemptTotal)}</td>
-              <td className="vr-c-money">{formatMoney(totals.vatTotal)}</td>
+              <td className="vr-c-money">{formatMoney(liveTotals.baseVat)}</td>
+              <td className="vr-c-money">{formatMoney(liveTotals.baseExempt)}</td>
+              <td className="vr-c-money">{formatMoney(liveTotals.vat)}</td>
+              <td className="vr-col-del no-print" />
             </tr>
           </tfoot>
         </table>
+
+        {/* ปุ่มเพิ่มแถว + ข้อความเตือน (ซ่อนตอนพิมพ์) */}
+        <div className="vr-addrow-wrap no-print">
+          <button type="button" className="vr-btn vr-btn-ghost vr-btn-sm" onClick={addRow}>
+            ＋ เพิ่มรายการ
+          </button>
+          <span className="vr-editnote">
+            การแก้ในหน้านี้ใช้เฉพาะตอนพิมพ์/ออก Excel เท่านั้น — ไม่กระทบข้อมูลบิลจริง
+            (ต้องการแก้ข้อมูลจริงให้ไปที่ “ตรวจ/แก้” ที่บิล)
+          </span>
+        </div>
       </div>
     </div>
   );

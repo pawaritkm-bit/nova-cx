@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { formatMoney } from "@/lib/accounting/calc";
+import { formatMoney, parseAmountInput, round2 } from "@/lib/accounting/calc";
+import { downloadExcelFromPost } from "@/lib/accounting/excel-download";
 import {
   BOOK_ORDER,
   BOOK_LABELS,
@@ -20,11 +21,51 @@ function thaiDate(iso: string | null): string {
   return `${d}/${m}/${Number(y) + 543}`;
 }
 
+/** แถวสมุดรายวันแบบแก้ได้ (client-only) — เดบิต/เครดิตเก็บเป็นข้อความ, parse ตอนคิดยอด */
+type JbEditRow = {
+  key: number;
+  dateText: string;
+  docNo: string;
+  description: string;
+  debitAcct: string;
+  debit: string;
+  creditAcct: string;
+  credit: string;
+};
+
+/** แตกใบสำคัญของ 1 เล่มเป็นแถวแก้ได้ (วันที่/เลขที่/คำอธิบายโชว์เฉพาะแถวแรกของใบ) */
+function initRows(book: JournalBook): JbEditRow[] {
+  const out: JbEditRow[] = [];
+  let k = 0;
+  for (const p of book.postings) {
+    const rows = zipPosting(p);
+    rows.forEach((r, i) => {
+      out.push({
+        key: k++,
+        dateText: i === 0 ? thaiDate(p.date) : "",
+        docNo: i === 0 ? p.docNo ?? "" : "",
+        description: i === 0 ? p.description : "",
+        debitAcct: r.debit ? `${r.debit.accountCode} ${r.debit.accountName}` : "",
+        debit: r.debit ? formatMoney(r.debit.amount) : "",
+        creditAcct: r.credit ? `${r.credit.accountCode} ${r.credit.accountName}` : "",
+        credit: r.credit ? formatMoney(r.credit.amount) : "",
+      });
+    });
+  }
+  return out;
+}
+
+/** นับ "รายการ" (ใบสำคัญ) = แถวที่ขึ้นต้นใบใหม่ (มีวันที่/เลขที่/คำอธิบาย) */
+function countDocs(rows: JbEditRow[]): number {
+  return rows.filter((r) => r.dateText.trim() || r.docNo.trim() || r.description.trim()).length;
+}
+
 /**
- * สมุดรายวัน 5 เล่ม — เอกสารพิมพ์/บันทึก PDF (ต่อลูกค้า/เดือน)
+ * สมุดรายวัน 5 เล่ม — เอกสารพิมพ์/บันทึก PDF/Excel (ต่อลูกค้า/เดือน)
  *   แต่ละเล่ม: วันที่ | เลขที่ | คำอธิบาย | บัญชี(เดบิต) | เดบิต | บัญชี(เครดิต) | เครดิต + รวมเดบิต/เครดิต
+ *   ★ ทุกช่องแก้ได้ (client-only) — พิมพ์และ Excel = ตามที่แก้บนจอ · ไม่บันทึกกลับบิลจริง
  *   ★ reuse สไตล์ vr-* (vat-report.css) + jb-* (journal-books.css) · แต่ละเล่มขึ้นหน้าใหม่ตอนพิมพ์
- *   ★ ไม่ยิง network · PDPA: ไม่ log ค่าใด ๆ
+ *   ★ ไม่ยิง network ตอนแก้ · Excel ยิง POST ตอนกดปุ่มเท่านั้น · PDPA: ไม่ log ค่า
  */
 /** ตัวเลือกเล่มบน dropdown: ทั้งหมด + 5 เล่ม (BookKind) */
 const BOOK_CHOICES: { value: string; label: string }[] = [
@@ -71,10 +112,50 @@ export default function JournalBooksDoc({
   );
   const shownBooks = visibleBooks(book);
 
-  // ลิงก์ Excel ตามช่วงวัน + เล่มที่เลือก (book != all → เฉพาะเล่มนั้น)
-  const exParams = new URLSearchParams({ customer: customerId, from: fromDate, to: toDate });
-  if (book !== "all") exParams.set("book", book);
-  const excelHref = `/chat-audit/accounting/journal-books/export?${exParams.toString()}`;
+  // ---- แถวแก้ได้ต่อเล่ม (client-only) — init ครั้งเดียวจาก props books ----
+  const [bookRows, setBookRows] = useState<Record<BookKind, JbEditRow[]>>(() => {
+    const rec = {} as Record<BookKind, JbEditRow[]>;
+    for (const k of BOOK_ORDER) rec[k] = initRows(books[k]);
+    return rec;
+  });
+  // เริ่ม key เพิ่มใหม่ที่เลขสูง ๆ กันชนกับ key เริ่มต้น (0..n ต่อเล่ม)
+  const [nextKey, setNextKey] = useState(1_000_000);
+
+  // ยอดรวมเดบิต/เครดิต + จำนวนรายการต่อเล่ม — คิดใหม่สดจากที่แก้บนจอ
+  const bookTotals = useMemo(() => {
+    const rec = {} as Record<BookKind, { debit: number; credit: number; docs: number }>;
+    for (const k of BOOK_ORDER) {
+      let debit = 0;
+      let credit = 0;
+      for (const r of bookRows[k]) {
+        if (r.debit.trim()) debit += parseAmountInput(r.debit);
+        if (r.credit.trim()) credit += parseAmountInput(r.credit);
+      }
+      rec[k] = { debit: round2(debit), credit: round2(credit), docs: countDocs(bookRows[k]) };
+    }
+    return rec;
+  }, [bookRows]);
+
+  function updateRow(kind: BookKind, key: number, patch: Partial<JbEditRow>) {
+    setBookRows((prev) => ({
+      ...prev,
+      [kind]: prev[kind].map((r) => (r.key === key ? { ...r, ...patch } : r)),
+    }));
+  }
+  function addRow(kind: BookKind) {
+    const nk = nextKey;
+    setNextKey((k) => k + 1);
+    setBookRows((prev) => ({
+      ...prev,
+      [kind]: [
+        ...prev[kind],
+        { key: nk, dateText: "", docNo: "", description: "", debitAcct: "", debit: "", creditAcct: "", credit: "" },
+      ],
+    }));
+  }
+  function removeRow(kind: BookKind, key: number) {
+    setBookRows((prev) => ({ ...prev, [kind]: prev[kind].filter((r) => r.key !== key) }));
+  }
 
   /** นำทางไปช่วงวันใหม่ (คง customer + เล่มที่เลือกอยู่) */
   function pushRange(from: string, to: string) {
@@ -92,6 +173,42 @@ export default function JournalBooksDoc({
     if (!y || !m) return;
     const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
     pushRange(`${month}-01`, `${month}-${String(last).padStart(2, "0")}`);
+  }
+
+  // ---- Excel: ส่งค่าที่แก้บนจอไป POST → server สร้าง .xlsx ให้ตรงที่เห็น ----
+  const [excelBusy, setExcelBusy] = useState(false);
+  const [excelErr, setExcelErr] = useState<string | null>(null);
+  async function onExportExcel() {
+    setExcelErr(null);
+    setExcelBusy(true);
+    try {
+      const payload = {
+        customer: customerId,
+        from: fromDate,
+        to: toDate,
+        book, // เล่มที่เลือก (all/kind) — server จะ export เฉพาะเล่มที่เห็น
+        books: BOOK_ORDER.map((kind) => ({
+          kind,
+          rows: bookRows[kind].map((r) => ({
+            dateText: r.dateText,
+            docNo: r.docNo,
+            description: r.description,
+            debitAcct: r.debitAcct,
+            debit: r.debit.trim() ? parseAmountInput(r.debit) : null,
+            creditAcct: r.creditAcct,
+            credit: r.credit.trim() ? parseAmountInput(r.credit) : null,
+          })),
+        })),
+      };
+      const err = await downloadExcelFromPost(
+        "/chat-audit/accounting/journal-books/export",
+        payload,
+        "journal-books.xlsx"
+      );
+      if (err) setExcelErr(err);
+    } finally {
+      setExcelBusy(false);
+    }
   }
 
   return (
@@ -147,11 +264,22 @@ export default function JournalBooksDoc({
             ))}
           </select>
         </label>
-        <span className="vr-toolbar-hint" style={{ flex: 1 }} />
-        <a href={excelHref} className="vr-btn vr-btn-ghost">⬇ Excel</a>
+        <span className="vr-toolbar-hint">
+          แก้ตัวเลข/ข้อความในตารางได้ แล้วพิมพ์/บันทึก PDF หรือ Excel (ทั้งพิมพ์และ Excel = ตามที่แก้บนจอ)
+        </span>
+        <button
+          type="button"
+          className="vr-btn vr-btn-ghost"
+          onClick={onExportExcel}
+          disabled={excelBusy}
+          title="ออก Excel ตามค่าที่แก้บนจอ"
+        >
+          {excelBusy ? "กำลังสร้าง…" : "⬇ Excel"}
+        </button>
         <button type="button" className="vr-btn vr-btn-primary" onClick={() => window.print()}>
           🖨 พิมพ์ / บันทึก PDF
         </button>
+        {excelErr && <span className="vr-save-err">{excelErr}</span>}
       </div>
 
       {/* บิลที่ลงบัญชีไม่ได้ (ตกหล่น) — เตือนบนจอ ไม่พิมพ์ */}
@@ -175,19 +303,47 @@ export default function JournalBooksDoc({
           <div className="vr-head-right"><div>สำนักงานใหญ่</div></div>
         </div>
 
+        {/* ข้อความเตือน (ซ่อนตอนพิมพ์): แก้ในหน้านี้ไม่กระทบข้อมูลบิลจริง */}
+        <div className="vr-editnote no-print" style={{ marginBottom: 10 }}>
+          การแก้ในหน้านี้ใช้เฉพาะตอนพิมพ์/ออก Excel เท่านั้น — ไม่กระทบข้อมูลบิลจริง
+          (ต้องการแก้ข้อมูลจริงให้ไปที่ “ตรวจ/แก้” ที่บิล)
+        </div>
+
         {shownBooks.map((kind) => (
-          <BookSection key={kind} book={books[kind]} />
+          <BookSection
+            key={kind}
+            label={BOOK_LABELS[kind]}
+            rows={bookRows[kind]}
+            totals={bookTotals[kind]}
+            onUpdate={(key, patch) => updateRow(kind, key, patch)}
+            onAdd={() => addRow(kind)}
+            onRemove={(key) => removeRow(kind, key)}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-/** 1 เล่ม = หัวข้อ + ตาราง + แถวรวม (ขึ้นหน้าใหม่ตอนพิมพ์) */
-function BookSection({ book }: { book: JournalBook }) {
+/** 1 เล่ม = หัวข้อ + ตารางแก้ได้ + แถวรวม (ขึ้นหน้าใหม่ตอนพิมพ์) */
+function BookSection({
+  label,
+  rows,
+  totals,
+  onUpdate,
+  onAdd,
+  onRemove,
+}: {
+  label: string;
+  rows: JbEditRow[];
+  totals: { debit: number; credit: number; docs: number };
+  onUpdate: (key: number, patch: Partial<JbEditRow>) => void;
+  onAdd: () => void;
+  onRemove: (key: number) => void;
+}) {
   return (
     <section className="jb-book">
-      <h2 className="jb-book-title">{book.label}</h2>
+      <h2 className="jb-book-title">{label}</h2>
       <table className="vr-table jb-table">
         <thead>
           <tr>
@@ -198,46 +354,113 @@ function BookSection({ book }: { book: JournalBook }) {
             <th className="vr-col-money">เดบิต</th>
             <th className="jb-col-acct">บัญชี (เครดิต)</th>
             <th className="vr-col-money">เครดิต</th>
+            <th className="vr-col-del no-print" aria-label="ลบ" />
           </tr>
         </thead>
         <tbody>
-          {book.postings.length === 0 ? (
+          {rows.length === 0 ? (
             <tr>
-              <td colSpan={7} className="vr-empty">ไม่มีรายการในเล่มนี้</td>
+              <td colSpan={7} className="vr-empty">ไม่มีรายการในเล่มนี้ — กด “＋ เพิ่มบรรทัด” เพื่อพิมพ์เพิ่มได้</td>
+              <td className="vr-col-del no-print" />
             </tr>
           ) : (
-            book.postings.map((p) => {
-              const rows = zipPosting(p);
-              return rows.map((r, i) => (
-                <tr key={`${p.entryId}-${i}`} className={i === 0 ? "jb-firstrow" : undefined}>
-                  {/* วันที่/เลขที่/คำอธิบาย โชว์เฉพาะแถวแรกของใบสำคัญ */}
-                  <td className="jb-c-date">{i === 0 ? thaiDate(p.date) : ""}</td>
-                  <td className="jb-c-no">{i === 0 ? (p.docNo || "-") : ""}</td>
-                  <td className="jb-c-desc">{i === 0 ? (p.description || "-") : ""}</td>
-                  <td className="jb-c-acct">
-                    {r.debit ? `${r.debit.accountCode} ${r.debit.accountName}` : ""}
-                  </td>
-                  <td className="vr-c-money">{r.debit ? formatMoney(r.debit.amount) : ""}</td>
-                  <td className="jb-c-acct jb-c-credit">
-                    {r.credit ? `${r.credit.accountCode} ${r.credit.accountName}` : ""}
-                  </td>
-                  <td className="vr-c-money">{r.credit ? formatMoney(r.credit.amount) : ""}</td>
-                </tr>
-              ));
-            })
+            rows.map((r, i) => (
+              <tr key={r.key}>
+                <td className="jb-c-date">
+                  <input
+                    className="vr-in vr-cell vr-cell-center"
+                    value={r.dateText}
+                    onChange={(e) => onUpdate(r.key, { dateText: e.target.value })}
+                    placeholder="วว/ดด/ปปปป"
+                    aria-label={`วันที่บรรทัดที่ ${i + 1}`}
+                  />
+                </td>
+                <td className="jb-c-no">
+                  <input
+                    className="vr-in vr-cell vr-cell-center"
+                    value={r.docNo}
+                    onChange={(e) => onUpdate(r.key, { docNo: e.target.value })}
+                    aria-label={`เลขที่บรรทัดที่ ${i + 1}`}
+                  />
+                </td>
+                <td className="jb-c-desc">
+                  <input
+                    className="vr-in vr-cell"
+                    value={r.description}
+                    onChange={(e) => onUpdate(r.key, { description: e.target.value })}
+                    aria-label={`คำอธิบายบรรทัดที่ ${i + 1}`}
+                  />
+                </td>
+                <td className="jb-c-acct">
+                  <input
+                    className="vr-in vr-cell"
+                    value={r.debitAcct}
+                    onChange={(e) => onUpdate(r.key, { debitAcct: e.target.value })}
+                    aria-label={`บัญชีเดบิตบรรทัดที่ ${i + 1}`}
+                  />
+                </td>
+                <td className="vr-c-money">
+                  <input
+                    className="vr-in vr-cell vr-cell-money"
+                    value={r.debit}
+                    onChange={(e) => onUpdate(r.key, { debit: e.target.value })}
+                    inputMode="decimal"
+                    placeholder=""
+                    aria-label={`เดบิตบรรทัดที่ ${i + 1}`}
+                  />
+                </td>
+                <td className="jb-c-acct jb-c-credit">
+                  <input
+                    className="vr-in vr-cell"
+                    value={r.creditAcct}
+                    onChange={(e) => onUpdate(r.key, { creditAcct: e.target.value })}
+                    aria-label={`บัญชีเครดิตบรรทัดที่ ${i + 1}`}
+                  />
+                </td>
+                <td className="vr-c-money">
+                  <input
+                    className="vr-in vr-cell vr-cell-money"
+                    value={r.credit}
+                    onChange={(e) => onUpdate(r.key, { credit: e.target.value })}
+                    inputMode="decimal"
+                    placeholder=""
+                    aria-label={`เครดิตบรรทัดที่ ${i + 1}`}
+                  />
+                </td>
+                <td className="vr-col-del no-print">
+                  <button
+                    type="button"
+                    className="vr-row-del"
+                    onClick={() => onRemove(r.key)}
+                    aria-label="ลบบรรทัด"
+                    title="ลบบรรทัด"
+                  >
+                    ✕
+                  </button>
+                </td>
+              </tr>
+            ))
           )}
         </tbody>
         <tfoot>
           <tr className="vr-total">
             <td colSpan={4} className="vr-total-label">
-              รวม {book.postings.length.toLocaleString("th-TH")} รายการ
+              รวม {totals.docs.toLocaleString("th-TH")} รายการ
             </td>
-            <td className="vr-c-money">{formatMoney(book.totalDebit)}</td>
+            <td className="vr-c-money">{formatMoney(totals.debit)}</td>
             <td />
-            <td className="vr-c-money">{formatMoney(book.totalCredit)}</td>
+            <td className="vr-c-money">{formatMoney(totals.credit)}</td>
+            <td className="vr-col-del no-print" />
           </tr>
         </tfoot>
       </table>
+
+      {/* ปุ่มเพิ่มบรรทัด (ซ่อนตอนพิมพ์) */}
+      <div className="vr-addrow-wrap no-print">
+        <button type="button" className="vr-btn vr-btn-ghost vr-btn-sm" onClick={onAdd}>
+          ＋ เพิ่มบรรทัด
+        </button>
+      </div>
     </section>
   );
 }

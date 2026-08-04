@@ -189,6 +189,43 @@
 .vr-total td { font-weight: 700; background: #f7f9fc; }
 .vr-total-label { text-align: right; }
 
+/* ---- ช่องแก้ได้ในตาราง (input ต่อ cell) ---- */
+.vr-cell {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;          /* ใช้เส้นของ cell แทน */
+  border-bottom: none;
+  background: transparent;
+  padding: 1px 2px;
+  font-size: 12px;
+}
+.vr-cell:focus { background: #f2f7ff; }
+.vr-cell-money { text-align: right; font-variant-numeric: tabular-nums; }
+.vr-cell-center { text-align: center; }
+
+/* คอลัมน์ปุ่มลบ (ซ่อนตอนพิมพ์) */
+.vr-col-del { width: 34px; text-align: center; border: none !important; }
+.vr-row-del {
+  border: none;
+  background: transparent;
+  color: #c0392b;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.vr-row-del:hover { color: #922b21; }
+
+/* แถวปุ่มเพิ่ม + ข้อความเตือน (ใต้ตาราง, ซ่อนตอนพิมพ์) */
+.vr-addrow-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 10px 0 4px;
+}
+.vr-editnote { color: #8a6d3b; font-size: 12.5px; }
+
 /* ============================================================
    PRINT — เอกสารสะอาด, แนวนอน, ซ่อนแถบเครื่องมือ, แบ่งหน้าไม่ตัดกลางแถว
    ============================================================ */
