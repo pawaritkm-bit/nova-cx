@@ -8,9 +8,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  */
 
 // mock ตัวสกัด AI (ตั้งค่าผลต่อเทสต์)
+//   extractMock       = extractBillData (รูปบิลไลน์)
+//   extractBillsMock  = extractBillsData (PDF/ไฟล์เอกสาร) — default คืน [] (อ่านไม่ได้ → draft ว่าง)
 const extractMock = vi.fn();
+const extractBillsMock = vi.fn(() => [] as unknown[]);
 vi.mock("@/lib/ai/bill-extract", () => ({
   extractBillData: (...a: unknown[]) => extractMock(...a),
+  extractBillsData: (...a: unknown[]) => extractBillsMock(...a),
 }));
 
 import {
@@ -111,6 +115,8 @@ function makeWorkerDb(opts: {
 
 beforeEach(() => {
   extractMock.mockReset();
+  extractBillsMock.mockReset();
+  extractBillsMock.mockReturnValue([]); // default: PDF อ่านไม่ได้ → draft ว่าง
 });
 
 describe("selectExtractionCandidates — subtract-done กันคิวค้าง", () => {
@@ -316,15 +322,17 @@ describe("processBillExtraction", () => {
     expect(extractMock).not.toHaveBeenCalled();
   });
 
-  it("PDF (attachment_type=file) → draft ว่าง (unspecified) ไม่เรียก AI, line amount=0 ai_filled=false", async () => {
+  it("PDF (attachment_type=file) → ใช้ extractBillsData (ไม่ใช่ extractBillData); อ่านไม่ได้ → draft ว่าง", async () => {
     const { db, inserts } = makeWorkerDb({
       attachments: [
-        { id: "att-pdf", tenant_id: "t1", attachment_type: "file", doc_kind: "purchase", drive_file_id: "t1/doc.pdf", chat_message_id: null },
+        { id: "att-pdf", tenant_id: "t1", attachment_type: "file", doc_kind: "file", drive_file_id: "t1/doc.pdf", chat_message_id: null },
       ],
     });
     const res = await processBillExtraction(db, { limit: 10 });
     expect(res.created).toBe(1);
     expect(res.blank).toBe(1);
+    // ★ PDF ใช้ extractBillsData (gpt-5-mini อ่าน PDF) — ไม่เรียก extractBillData (บิลรูป)
+    expect(extractBillsMock).toHaveBeenCalledTimes(1);
     expect(extractMock).not.toHaveBeenCalled();
 
     const entryIns = inserts.find((i) => i.table === "bill_entries")!;
@@ -333,6 +341,52 @@ describe("processBillExtraction", () => {
     const lineIns = inserts.find((i) => i.table === "bill_entry_lines")!;
     expect(lineIns.rows[0].amount).toBe(0);
     expect(lineIns.rows[0].ai_filled).toBe(false);
+  });
+
+  it("ไฟล์เอกสาร (attachment_type=file, .xlsx) อ่านไม่ได้ → draft ว่างพร้อมไฟล์แนบ ไม่เรียก AI", async () => {
+    const { db, inserts } = makeWorkerDb({
+      attachments: [
+        { id: "att-xlsx", tenant_id: "t1", attachment_type: "file", doc_kind: "file", drive_file_id: "t1/report.xlsx", chat_message_id: null },
+      ],
+    });
+    const res = await processBillExtraction(db, { limit: 10 });
+    expect(res.created).toBe(1);
+    expect(res.blank).toBe(1);
+    // Excel/doc อ่านไม่ได้ → ไม่เรียก AI ทั้งสองตัว
+    expect(extractBillsMock).not.toHaveBeenCalled();
+    expect(extractMock).not.toHaveBeenCalled();
+    const entryIns = inserts.find((i) => i.table === "bill_entries")!;
+    expect(entryIns.rows[0].entry_type).toBe("unspecified");
+  });
+
+  it("PDF ที่ AI อ่านได้ → เติมหัว/บรรทัดจากบิลแรกของ extractBillsData", async () => {
+    extractBillsMock.mockReturnValue([
+      {
+        doc_date: "2026-06-01",
+        doc_no: "INV-PDF-1",
+        seller_name: "ร้านค้า A",
+        seller_tax_id: null,
+        buyer_name: null,
+        buyer_tax_id: null,
+        lines: [
+          { vat_type: "vat", description: "ค่าบริการ", amount: 1000, vat_amount: 70, account_code: null, wht_rate: null, wht_amount: null, low_confidence: false },
+        ],
+        overall_confidence: 0.9,
+      },
+    ]);
+    const { db, inserts } = makeWorkerDb({
+      attachments: [
+        { id: "att-pdf2", tenant_id: "t1", attachment_type: "file", doc_kind: "file", drive_file_id: "t1/bill.pdf", chat_message_id: null },
+      ],
+    });
+    const res = await processBillExtraction(db, { limit: 10 });
+    expect(res.created).toBe(1);
+    expect(res.extracted).toBe(1);
+    expect(extractBillsMock).toHaveBeenCalledTimes(1);
+    const entryIns = inserts.find((i) => i.table === "bill_entries")!;
+    expect(entryIns.rows[0].doc_no).toBe("INV-PDF-1");
+    const lineIns = inserts.find((i) => i.table === "bill_entry_lines")!;
+    expect(lineIns.rows[0].amount).toBe(1000);
   });
 
   it("AI คืน null (ไม่มี key/สกัดไม่ได้) → draft ว่าง unspecified", async () => {

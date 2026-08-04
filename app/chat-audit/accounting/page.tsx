@@ -89,12 +89,16 @@ function whtFormLabel(form: string | null): string {
   return "";
 }
 
-/** วันที่แบบไทยสั้น (YYYY-MM-DD → 1 ก.ค. 2569) — fallback ค่าเดิม */
+/** วันที่บิลแบบไทย วว/ดด/ปปปป (พ.ศ.) — YYYY-MM-DD → 01/07/2569 */
 function formatDate(iso: string | null): string {
   if (!iso) return "-";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (m) return `${m[3]}/${m[2]}/${Number(m[1]) + 543}`;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("th-TH", { year: "numeric", month: "short", day: "numeric" });
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear() + 543}`;
 }
 
 /** object path ของไฟล์บิลของ entry (บิลไลน์ ก่อน แล้วไฟล์อัปเอง) — null = ไม่มีไฟล์ */
@@ -102,9 +106,14 @@ function entryObjectPath(e: BillEntry): string | null {
   return e.attachmentObjectPath ?? e.uploadPath;
 }
 
-/** ไฟล์ของ entry เป็น "รูป" ไหม (บิลไลน์ = รูปเสมอ · ไฟล์อัปเอง = ดูจาก uploadMime) */
+/** นามสกุลไฟล์เอกสาร (ไม่ใช่รูป) — ไฟล์ไลน์ตอนนี้เป็น PDF/Excel/doc ได้ ไม่ใช่รูปเสมอ */
+const DOC_EXT_RE = /\.(pdf|xlsx?|docx?|pptx?|csv|txt|zip)$/i;
+
+/** ไฟล์ของ entry เป็น "รูป" ไหม (บิลไลน์ = รูป เว้นแต่นามสกุลเป็นเอกสาร · ไฟล์อัปเอง = ดูจาก uploadMime) */
 function entryIsImage(e: BillEntry): boolean {
-  if (e.attachmentObjectPath) return true;
+  // ★ ไฟล์ไลน์ (attachmentObjectPath): เดิมเป็นรูปเสมอ · ตอนนี้อาจเป็นเอกสาร (PDF/Excel) →
+  //   นามสกุลเป็นเอกสาร = ไม่ใช่รูป (โชว์ thumbnail ไฟล์), อื่น ๆ ถือเป็นรูป (คงพฤติกรรมเดิม)
+  if (e.attachmentObjectPath) return !DOC_EXT_RE.test(e.attachmentObjectPath);
   return (e.uploadMime ?? "").startsWith("image/");
 }
 
@@ -852,8 +861,8 @@ export default async function AccountingPage({
     fetchCustomerAddresses(service, tenantId, custIds),
   ]);
 
-  // ---- จัดการลูกค้า (เฉพาะ admin): รายชื่อนักบัญชี + ผู้ดูแลปัจจุบันต่อลูกค้า ----
-  //   ★ โหลดเฉพาะ admin (นักบัญชี/หัวหน้าไม่เห็นปุ่มนี้ + action guard admin ซ้ำ)
+  // ---- จัดการลูกค้า: รายชื่อนักบัญชี + ผู้ดูแลปัจจุบันต่อลูกค้า (สำหรับปุ่ม "เปลี่ยนผู้ดูแล") ----
+  //   ★ โหลดเฉพาะ admin (เปลี่ยนผู้ดูแล = admin เท่านั้น) — นักบัญชี/หัวหน้าไม่ต้องใช้ dropdown นี้
   let accountantOptions: AccountantOption[] = [];
   let accountantByCustomer = new Map<string, string | null>();
   if (access.mode === "admin") {
@@ -862,7 +871,10 @@ export default async function AccountingPage({
       mapCustomersToAccountant(service, tenantId, custIds),
     ]);
   }
-  const showCustomerAdmin = access.mode === "admin";
+  // ★ "แก้ไขข้อมูลลูกค้า" (ชื่อ/รหัส/เลขภาษี/ที่อยู่): เปิดให้ทุกคนที่เห็นลูกค้ารายนั้น
+  //   (admin เห็นทุกราย · นักบัญชี/หัวหน้าเห็นเฉพาะลูกค้าในสโคป — หน้านี้ scope มาให้แล้ว + action assert สโคปซ้ำ)
+  //   ★ "เปลี่ยนผู้ดูแล" (reassign) = admin เท่านั้น (งานจัดการทีม)
+  const canReassignCustomer = access.mode === "admin";
 
   // ---- ตัวกรอง (validate ก่อนใช้) ----
   const q = (sp.q ?? "").trim();
@@ -1010,10 +1022,11 @@ export default async function AccountingPage({
         </div>
       ) : null}
 
-      {/* จัดการลูกค้า (admin): เปลี่ยนผู้ดูแล + แก้ ชื่อ/รหัส/เลขภาษี */}
-      {showCustomerAdmin && g.customerId ? (
+      {/* จัดการลูกค้า: แก้ ชื่อ/รหัส/เลขภาษี/ที่อยู่ (ทุกคนที่เห็นลูกค้า) · เปลี่ยนผู้ดูแล (admin) */}
+      {g.customerId ? (
         <CustomerAdminControls
           customerId={g.customerId}
+          canReassign={canReassignCustomer}
           currentAccountantId={accountantByCustomer.get(g.customerId) ?? null}
           accountants={accountantOptions}
           initialName={g.name ?? null}

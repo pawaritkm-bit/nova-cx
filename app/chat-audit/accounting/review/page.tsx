@@ -16,12 +16,16 @@ export const dynamic = "force-dynamic";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** วันที่แบบไทยสั้น (YYYY-MM-DD → 1 ก.ค. 2569) */
+/** วันที่บิลแบบไทย วว/ดด/ปปปป (พ.ศ.) — YYYY-MM-DD → 01/07/2569 */
 function formatDate(iso: string | null): string {
   if (!iso) return "-";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (m) return `${m[3]}/${m[2]}/${Number(m[1]) + 543}`;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("th-TH", { year: "numeric", month: "short", day: "numeric" });
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear() + 543}`;
 }
 
 /** ป้าย ภ.ง.ด. */

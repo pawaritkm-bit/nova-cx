@@ -1,9 +1,10 @@
 "use server";
 
 /**
- * Server actions "จัดการลูกค้า (admin เท่านั้น)" ของหน้าลงบันทึกบัญชี
- *   1) reassignCustomerAction  — เปลี่ยนนักบัญชี/ทีมงานที่ดูแลลูกค้ารายนั้น
- *   2) updateCustomerFieldsAction — แก้ ชื่อ / รหัสลูกค้า / เลขภาษี ของลูกค้า
+ * Server actions "จัดการลูกค้า" ของหน้าลงบันทึกบัญชี
+ *   1) reassignCustomerAction  — เปลี่ยนนักบัญชี/ทีมงานที่ดูแลลูกค้ารายนั้น (★ admin เท่านั้น)
+ *   2) updateCustomerFieldsAction — แก้ ชื่อ / รหัสลูกค้า / เลขภาษี / ที่อยู่ (★ admin หรือ
+ *      นักบัญชี/หัวหน้าที่ดูแลลูกค้ารายนั้น — assertCustomerInScope)
  *
  * flow ความปลอดภัย (ยึดมาตรฐาน write path เดียวกับ actions.ts/share-circle-actions.ts):
  *   1) requireAccountingAccess (สิทธิ์จาก session จริง) + tenantId จาก session
@@ -21,6 +22,7 @@ import { revalidatePath } from "next/cache";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import {
   requireAccountingAccess,
+  assertCustomerInScope,
   AccountingAuthError,
   type AccountingAccess,
 } from "@/lib/accounting/access";
@@ -164,23 +166,29 @@ export type UpdateCustomerFieldsInput = {
 };
 
 /**
- * แก้ไขข้อมูลลูกค้า (admin): ชื่อ / รหัสลูกค้า / เลขภาษี
+ * แก้ไขข้อมูลลูกค้า (admin หรือ นักบัญชี/หัวหน้าที่ดูแลลูกค้ารายนั้น): ชื่อ / รหัสลูกค้า / เลขภาษี / ที่อยู่
  *   - name: ห้ามว่าง (คอลัมน์ NOT NULL)
  *   - code: unique (tenant_id, customer_code) — ชนซ้ำ → แจ้งสุภาพ (จับ error 23505)
  *   - taxId: 13 หลัก (strip ตัวคั่น) — เปลี่ยนแล้ว re-decide บิล 'รอระบุ' + ส่งกลับ NOVA Sale (best-effort)
  *   ★ อัปเดตเฉพาะช่องที่ส่งมา (undefined = ไม่แตะ)
+ *   ★ สิทธิ์: admin เห็นทุกลูกค้า · นักบัญชี/หัวหน้าแก้ได้เฉพาะลูกค้าที่ตัวเองดูแล (assertCustomerInScope)
+ *     — reassign ผู้ดูแล ยังเป็น admin เท่านั้น (แยก action)
  */
 export async function updateCustomerFieldsAction(
   customerId: string,
   fields: UpdateCustomerFieldsInput
 ): Promise<SaveResult> {
   try {
-    const { ctx, service } = await requireAdmin();
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
 
     if (!isUuid(customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
     if (!(await customerBelongsToTenant(service, ctx.tenantId, customerId))) {
       return { ok: false, message: "ไม่พบลูกค้าในสำนักงานนี้" };
     }
+    // ★ สโคป: นักบัญชี/หัวหน้าแก้ได้เฉพาะลูกค้าที่ตัวเองดูแล (admin ผ่านทุกราย) — กันแก้ลูกค้าคนอื่น
+    assertCustomerInScope(ctx, customerId);
 
     const patch: Record<string, unknown> = {};
 

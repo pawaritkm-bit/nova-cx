@@ -61,20 +61,23 @@ function numToInput(n: number): string {
   return n ? String(n) : "";
 }
 
-/** ISO (2026-06-01) → ไทย วว/ดด/ปปปป (01/06/2026) สำหรับแสดง/แก้ */
+/** ISO (2026-06-01) → ไทย วว/ดด/ปปปป พ.ศ. (01/06/2569) สำหรับแสดง/แก้ */
 function isoToThai(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? "");
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso ?? "";
+  return m ? `${m[3]}/${m[2]}/${Number(m[1]) + 543}` : iso ?? "";
 }
 
-/** ไทย วว/ดด/ปปปป → ISO (2026-06-01) สำหรับเก็บ · รูปผิด/ยังพิมพ์ไม่ครบ = "" */
+/** ไทย วว/ดด/ปปปป (พ.ศ.) → ISO (2026-06-01) สำหรับเก็บ · รูปผิด/ยังพิมพ์ไม่ครบ = "" */
 function thaiToIso(s: string): string {
   const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((s ?? "").trim());
   if (!m) return "";
   const d = Number(m[1]);
   const mo = Number(m[2]);
+  let year = Number(m[3]);
   if (d < 1 || d > 31 || mo < 1 || mo > 12) return "";
-  return `${m[3]}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  // ปี >= 2500 = พ.ศ. → แปลงเป็น ค.ศ. (เผื่อกรอก ค.ศ. มาก็ยังรับได้)
+  if (year >= 2500) year -= 543;
+  return `${year}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
 function initLines(entry: BillEntry): LineRow[] {
@@ -468,7 +471,7 @@ export default function EntryEditor({
                   value={docDate}
                   onChange={(e) => setDocDate(e.target.value)}
                   disabled={readOnly}
-                  placeholder="วว/ดด/ปปปป เช่น 01/06/2026"
+                  placeholder="วว/ดด/ปปปป เช่น 01/06/2569"
                 />
               </label>
               <label className="acc-field">

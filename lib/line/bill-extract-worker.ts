@@ -23,8 +23,9 @@ import { classifyShareCircleImage } from "@/lib/ai/bill-classify";
  *     ลูกค้าเรา = ผู้ซื้อ → 'purchase' (counterparty = ผู้ขาย)
  *     จับคู่ไม่ชัด/ไม่มีข้อมูลลูกค้า → 'unspecified' (รอคนเลือกในหน้า UI) — ไม่เดา
  *   เก็บ seller และ buyer ที่ AI อ่านไว้ทั้งคู่ ให้ UI โชว์ตอน unspecified
- * ★ ไฟล์ PDF (attachment_type='file'): vision อ่านไม่ได้ตรง ๆ →
- *   สร้าง "draft ว่าง" (unspecified) ให้คนคีย์ (ปลอดภัยกว่าข้าม — ไม่ให้บิลตกหล่นจากคิว)
+ * ★ ไฟล์เอกสาร (attachment_type='file', doc_kind='file'): ดึงมาสร้าง bill_entry ด้วย —
+ *   PDF → ให้ AI อ่าน (extractBillsData/gpt-5-mini อ่าน PDF ได้) · Excel/doc/อ่านไม่ได้ →
+ *   "draft ว่าง" ให้คนคีย์ (ไฟล์แนบเปิด/ดาวน์โหลดได้เหมือนบิลรูป — ไม่ให้บิลตกหล่นจากคิว)
  * ★ degrade: ไม่มี OpenAI key → extractBillData คืน null → ยังสร้าง draft ว่างให้คนคีย์
  * ★ PDPA: ไม่ log objectPath/เนื้อบิล/ตัวเลข — log แค่ error สั้น ๆ
  */
@@ -33,6 +34,13 @@ const BILLS_BUCKET = "bills";
 
 /** doc_kind ที่ถือเป็นบิลต้องลงบัญชี */
 const BILL_DOC_KINDS = ["sale", "purchase", "handwritten", "cash"];
+
+/**
+ * doc_kind ที่ eligible เข้าคิวสกัด = บิลรูป (BILL_DOC_KINDS) + 'file' (ไฟล์เอกสาร PDF/Excel/doc)
+ *   ★ ไฟล์เอกสารได้ doc_kind='file' ตอน fetch (attachments.ts) — ไม่คัด AI → ต้อง eligible เองที่นี่
+ *     เพื่อสร้าง bill_entry (draft): PDF ให้ AI อ่าน, เอกสารอื่น = draft ว่างพร้อมไฟล์แนบ
+ */
+const EXTRACT_ELIGIBLE_DOC_KINDS = [...BILL_DOC_KINDS, "file"];
 
 /** doc_kind ที่ "ไม่ใช่ใบกำกับภาษี" → ไม่มี VAT แน่นอน (บังคับ novat ทุก line ไม่ต้องเดา) */
 const NONVAT_DOC_KINDS = new Set(["handwritten", "cash", "slip"]);
@@ -478,7 +486,7 @@ export async function selectExtractionCandidates(
     .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id")
     .eq("fetch_status", "stored")
     .in("attachment_type", ["image", "file"])
-    .in("doc_kind", BILL_DOC_KINDS)
+    .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
     .not("drive_file_id", "is", null)
     .order("created_at", { ascending: true })
     .limit(CANDIDATE_SCAN_LIMIT);
@@ -522,21 +530,42 @@ export async function processBillExtraction(
     const objectPath = row.drive_file_id;
     if (!objectPath) continue;
 
-    const mime = mimeFromPath(objectPath);
-    const nonImage = isNonImage(row.attachment_type, mime);
+    // ★ ชนิดไฟล์ (จากนามสกุลบน storage) — ตัดสินว่า AI อ่านได้ไหม
+    //   - รูป (image / นามสกุลรูป): vision อ่านได้ (extractBillData, gpt-4o-mini)
+    //   - PDF: file input อ่านได้ (extractBillsData, gpt-5-mini อ่าน PDF ได้)
+    //   - ไฟล์เอกสารอื่น (Excel/doc/csv): อ่านไม่ได้ → สร้าง draft ว่างพร้อมไฟล์แนบ
+    const lowerPath = objectPath.toLowerCase();
+    const isPdf = lowerPath.endsWith(".pdf");
+    const isImageExt = /\.(jpe?g|png|gif|webp|heic|heif)$/.test(lowerPath);
+    const isImage = row.attachment_type === "image" || isImageExt;
+    const isDocumentFile = !isImage; // ไฟล์ที่ไม่ใช่รูป (PDF/Excel/doc/…)
+    const aiReadable = isImage || isPdf;
+    const mime = isPdf ? "application/pdf" : mimeFromPath(objectPath);
 
     // 3) จับคู่ลูกค้าเราจาก chat_group (best-effort) — ทำก่อนดาวน์โหลด/AI เพื่อเช็คธงท้าวแชร์
     const customer = await resolveCustomer(db, row.chat_message_id);
+    const shareFlag = customer.id
+      ? await getCustomerShareCircleFlag(db, row.tenant_id, customer.id)
+      : false;
 
-    // ★ ลูกค้าท้าวแชร์ (is_share_circle=true): "แยกเนื้อหา" ไม่ใช่ข้ามทุกใบ
-    //   กลุ่มท้าวแชร์ส่งทั้ง "ลิสต์วงแชร์" และ "บิลจริง" ปนกัน → ใช้ AI แยก:
-    //     - เป็นลิสต์วงแชร์ (มั่นใจ) → มาร์ก doc_kind='share_circle' ไม่สร้างบิล (โมดูลวงแชร์อ่าน)
-    //     - เป็นบิลจริง/ไม่ชัด/PDF/degrade → สร้างบิลตามปกติ (บิลจริงไม่หาย)
-    //   ★ gate false-positive: ทำเฉพาะลูกค้า is_share_circle เท่านั้น (flag=false → ข้ามทั้งบล็อกนี้
-    //     ลูกค้าปกติ flow เดิม 100%) · คอลัมน์ยังไม่ apply → flag=false → เหมือนเดิม
-    //   คืน buf ที่ดาวน์โหลดแล้ว (ถ้าเป็นบิล) ให้ extract ใช้ต่อ — ไม่ดาวน์โหลดซ้ำ
+    // ★ ลูกค้าท้าวแชร์ (is_share_circle=true) — guard เดิมต้องไม่พัง:
+    //   - ไฟล์เอกสาร/PDF (ไม่ใช่รูป): "ข้ามการสร้างบิล" เหมือนพฤติกรรมเดิม (วงแชร์ไม่เคยได้บิลจากไฟล์
+    //     เพราะเดิมไม่ดึงไฟล์เลย) → มาร์ก doc_kind='share_circle' ให้ออกจากคิว (กันวนสแกน/starve)
+    //   - รูป: "แยกเนื้อหา" ด้วย AI (ลิสต์วงแชร์ vs บิลจริง) เหมือนเดิม — บิลจริงยังสร้าง
+    //   ★ gate false-positive: ทำเฉพาะลูกค้า is_share_circle (flag=false → ลูกค้าปกติ flow เดิม 100%)
+    //   preBuf: buf รูปที่ดาวน์โหลดแล้ว (ถ้าเป็นบิล) ให้ extract ใช้ต่อ — ไม่ดาวน์โหลดซ้ำ
     let preBuf: Buffer | null = null;
-    if (customer.id && !nonImage && (await getCustomerShareCircleFlag(db, row.tenant_id, customer.id))) {
+    if (shareFlag) {
+      if (isDocumentFile) {
+        // วงแชร์ + ไฟล์เอกสาร → ไม่สร้างบิล (guard เดิม) · มาร์กออกจากคิว
+        await db
+          .from("message_attachments")
+          .update({ doc_kind: "share_circle" })
+          .eq("id", row.id)
+          .eq("tenant_id", row.tenant_id);
+        continue;
+      }
+      // วงแชร์ + รูป → ดาวน์โหลด + classify ลิสต์วง/บิลจริง (เหมือนเดิม)
       try {
         const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(objectPath);
         if (dlErr || !blob) {
@@ -561,10 +590,10 @@ export async function processBillExtraction(
       // ไม่ใช่ลิสต์วง (หรือ classify ไม่ได้/ไม่มั่นใจ) → สร้างบิลตามปกติ (keep-if-unsure: บิลจริงไม่หาย)
     }
 
-    // 4) รูป → ดาวน์โหลด + สกัด · PDF/เอกสาร → ข้ามการสกัด (draft ว่าง)
-    let bill = null as Awaited<ReturnType<typeof extractBillData>> | null;
-    if (!nonImage) {
-      let buf: Buffer | null = preBuf; // ★ reuse ถ้าดาวน์โหลดไปแล้ว (share-circle branch)
+    // 4) รูป/PDF → ดาวน์โหลด + AI สกัด · เอกสารอื่น (Excel/doc) → draft ว่าง (มีไฟล์แนบให้เปิด/ดาวน์โหลด)
+    let bill = null as ExtractedBill | null;
+    if (aiReadable) {
+      let buf: Buffer | null = preBuf; // ★ reuse ถ้าดาวน์โหลดไปแล้ว (share-circle image branch)
       if (!buf) {
         try {
           const { data: blob, error: dlErr } = await db.storage
@@ -580,7 +609,15 @@ export async function processBillExtraction(
           continue;
         }
       }
-      bill = await extractBillData(buf, mime);
+      if (isPdf) {
+        // ★ PDF: ใช้ extractBillsData (gpt-5-mini อ่าน PDF ได้) แล้วเอา "บิลแรก"
+        //   (1 attachment = 1 entry เพราะ attachment_id unique) · อ่านไม่ได้ = [] → bill=null (draft ว่าง)
+        const bills = await extractBillsData(buf, mime);
+        bill = bills[0] ?? null;
+      } else {
+        // รูปบิลไลน์ = gpt-4o-mini (ประหยัด · ปริมาณมากทุกวันผ่าน cron)
+        bill = await extractBillData(buf, mime);
+      }
     }
 
     // 5) ตัดสินฝั่งซื้อ/ขาย จากลูกค้าเรา (resolve แล้วด้านบน)

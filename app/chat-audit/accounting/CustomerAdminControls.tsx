@@ -8,15 +8,17 @@ import { reassignCustomerAction, updateCustomerFieldsAction } from "./customer-a
 export type AccountantOption = { employeeId: string; name: string };
 
 /**
- * แผงจัดการลูกค้า (เฉพาะ admin) ในหัวการ์ดลูกค้า หน้า /chat-audit/accounting
- *   1) เปลี่ยนผู้ดูแล — เลือกนักบัญชีจาก dropdown → reassignCustomerAction
- *   2) แก้ไขข้อมูลลูกค้า — ชื่อ / รหัส / เลขภาษี (inline) → updateCustomerFieldsAction
+ * แผงจัดการลูกค้า ในหัวการ์ดลูกค้า หน้า /chat-audit/accounting
+ *   1) เปลี่ยนผู้ดูแล — เลือกนักบัญชีจาก dropdown → reassignCustomerAction (★ เฉพาะ admin: canReassign)
+ *   2) แก้ไขข้อมูลลูกค้า — ชื่อ / รหัส / เลขภาษี / ที่อยู่ (inline) → updateCustomerFieldsAction
+ *      (★ admin หรือ นักบัญชี/หัวหน้าที่ดูแลลูกค้ารายนั้น — action assert สโคปซ้ำ)
  *
- * ★ server เป็นคน gate ว่าจะ render ไหม (แสดงเฉพาะ admin) + guard ซ้ำใน action
+ * ★ server เป็นคน gate: render ปุ่มแก้ให้ทุกคนที่เห็นลูกค้า · reassign เฉพาะ canReassign (admin)
  * ★ กลมกลืน (คลาส acc-*) · สำเร็จ → router.refresh (สโคป/ป้ายผู้ดูแล sync กับ server)
  */
 export default function CustomerAdminControls({
   customerId,
+  canReassign = false,
   currentAccountantId,
   accountants,
   initialName,
@@ -25,6 +27,8 @@ export default function CustomerAdminControls({
   initialAddress,
 }: {
   customerId: string;
+  /** true = แสดงปุ่ม "เปลี่ยนผู้ดูแล" (admin เท่านั้น) */
+  canReassign?: boolean;
   currentAccountantId: string | null;
   accountants: AccountantOption[];
   initialName: string | null;
@@ -95,55 +99,57 @@ export default function CustomerAdminControls({
 
   return (
     <div className="acc-scopebar" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-      <span className="acc-scope-label">จัดการ (แอดมิน)</span>
+      <span className="acc-scope-label">จัดการลูกค้า</span>
 
-      {/* ---- เปลี่ยนผู้ดูแล ---- */}
-      {!assignOpen ? (
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={() => {
-            setAssignOpen(true);
-            setEditOpen(false);
-          }}
-          disabled={pending}
-          title="เปลี่ยนนักบัญชี/ทีมงานที่ดูแลลูกค้ารายนี้"
-        >
-          🔁 เปลี่ยนผู้ดูแล{currentName ? ` (ตอนนี้: ${currentName})` : ""}
-        </button>
-      ) : (
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <select
-            className="acc-taxid-input"
-            value={empId}
-            onChange={(e) => setEmpId(e.target.value)}
-            disabled={pending}
-            aria-label="เลือกนักบัญชีที่จะมอบหมาย"
-          >
-            <option value="">— เลือกนักบัญชี —</option>
-            {accountants.map((a) => (
-              <option key={a.employeeId} value={a.employeeId}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-          <button type="button" className="btn" onClick={doReassign} disabled={pending}>
-            {pending ? "…" : "บันทึก"}
-          </button>
+      {/* ---- เปลี่ยนผู้ดูแล (admin เท่านั้น — ห่อทั้งบล็อกด้วย canReassign กันนักบัญชีเห็นฟอร์ม) ---- */}
+      {canReassign ? (
+        !assignOpen ? (
           <button
             type="button"
             className="btn btn-ghost"
             onClick={() => {
-              setAssignOpen(false);
-              setAssignMsg(null);
-              setEmpId(currentAccountantId ?? "");
+              setAssignOpen(true);
+              setEditOpen(false);
             }}
             disabled={pending}
+            title="เปลี่ยนนักบัญชี/ทีมงานที่ดูแลลูกค้ารายนี้"
           >
-            ยกเลิก
+            🔁 เปลี่ยนผู้ดูแล{currentName ? ` (ตอนนี้: ${currentName})` : ""}
           </button>
-        </span>
-      )}
+        ) : (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <select
+              className="acc-taxid-input"
+              value={empId}
+              onChange={(e) => setEmpId(e.target.value)}
+              disabled={pending}
+              aria-label="เลือกนักบัญชีที่จะมอบหมาย"
+            >
+              <option value="">— เลือกนักบัญชี —</option>
+              {accountants.map((a) => (
+                <option key={a.employeeId} value={a.employeeId}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            <button type="button" className="btn" onClick={doReassign} disabled={pending}>
+              {pending ? "…" : "บันทึก"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setAssignOpen(false);
+                setAssignMsg(null);
+                setEmpId(currentAccountantId ?? "");
+              }}
+              disabled={pending}
+            >
+              ยกเลิก
+            </button>
+          </span>
+        )
+      ) : null}
 
       {/* ---- แก้ไขข้อมูลลูกค้า ---- */}
       {!editOpen ? (
