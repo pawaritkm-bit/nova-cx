@@ -83,18 +83,20 @@
 textarea.rcv-in { resize: vertical; width: 100%; box-sizing: border-box; }
 
 /* ---- เลขที่ + วันที่ (มุมขวาบน) ---- */
+/* วันที่ (บน) / เลขที่ (ใต้) มุมขวาบน — เรียงลงล่าง ชิดขวา */
 .rcv-topmeta {
   display: flex;
-  justify-content: flex-end;
-  gap: 24px;
-  margin-bottom: 8px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  margin-bottom: 6px;
 }
-.rcv-meta-item { display: flex; align-items: baseline; gap: 8px; }
+.rcv-meta-item { display: flex; align-items: baseline; gap: 6px; }
 .rcv-docno { width: 150px; }
 .rcv-date { width: 140px; text-align: center; }
 
 /* ---- หัวเอกสาร (กลาง) ---- */
-.rcv-head { text-align: center; margin-bottom: 20px; }
+.rcv-head { text-align: center; margin-bottom: 12px; }
 .rcv-title {
   text-align: center;
   font-size: 24px;
@@ -144,8 +146,8 @@ textarea.rcv-in { resize: vertical; width: 100%; box-sizing: border-box; }
 /* ---- คำรับรอง (ย่อหน้า + inline inputs) ---- */
 .rcv-statement {
   font-size: 15px;
-  line-height: 2;
-  margin: 18px 0 20px;
+  line-height: 1.85;
+  margin: 12px 0 14px;
   text-indent: 40px;
   text-align: left; /* ไทยไม่มีช่องคำ — justify จะเว้นช่องโหว่ที่ space รอบช่องกรอก จึงใช้ left */
   /* กันคำแตกกลาง: ตัดบรรทัดปกติ ไม่ break-all; ปล่อยตกที่ space รอบ input */
@@ -172,7 +174,7 @@ textarea.rcv-in { resize: vertical; width: 100%; box-sizing: border-box; }
 .rcv-inline-date { min-width: 8ch; max-width: 13ch; }
 
 /* ---- หมายเหตุเพิ่มเติม ---- */
-.rcv-extranote { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 30px; }
+.rcv-extranote { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 16px; }
 .rcv-extranote-box { flex: 1; }
 
 /* ---- ตารางรายการ ---- */
@@ -184,7 +186,7 @@ textarea.rcv-in { resize: vertical; width: 100%; box-sizing: border-box; }
 .rcv-table th,
 .rcv-table td {
   border: 1px solid #333;
-  padding: 8px 10px;
+  padding: 4px 8px;
   font-size: 15px;
 }
 .rcv-table th { background: #f0f3f7; font-weight: 700; text-align: center; }
@@ -226,7 +228,7 @@ td.rcv-col-del { border: none !important; }
 .rcv-amount-words { font-weight: 700; }
 
 /* ---- ช่องลงชื่อ (2 ช่อง: ผู้เบิกจ่าย / ผู้อนุมัติ) ---- */
-.rcv-sign { display: flex; justify-content: space-around; gap: 24px; margin-top: 48px; }
+.rcv-sign { display: flex; justify-content: space-around; gap: 24px; margin-top: 28px; }
 .rcv-sign-box { text-align: center; width: 45%; max-width: 280px; }
 .rcv-sign-line { border-bottom: 1px dotted #333; height: 40px; margin-bottom: 6px; }
 .rcv-sign-label { font-size: 15px; color: #333; }

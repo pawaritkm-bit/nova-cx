@@ -116,18 +116,8 @@ export default function ReceiptCertDoc({
 
       {/* ================= ตัวเอกสาร (A4) ================= */}
       <div className="rcv-page">
-        {/* เลขที่ / วันที่ (มุมขวาบน) */}
+        {/* วันที่ / เลขที่ (มุมขวาบน — วันที่ขึ้นก่อน เลขที่อยู่ใต้) */}
         <div className="rcv-topmeta">
-          <div className="rcv-meta-item">
-            <span className="rcv-label">เลขที่</span>
-            <input
-              className="rcv-in rcv-docno"
-              value={docNo}
-              onChange={(e) => setDocNo(e.target.value)}
-              placeholder="เช่น 2569/001"
-              aria-label="เลขที่เอกสาร"
-            />
-          </div>
           <div className="rcv-meta-item">
             <span className="rcv-label">วันที่</span>
             <input
@@ -136,6 +126,16 @@ export default function ReceiptCertDoc({
               onChange={(e) => setDate(e.target.value)}
               placeholder="วว/ดด/ปปปป"
               aria-label="วันที่"
+            />
+          </div>
+          <div className="rcv-meta-item">
+            <span className="rcv-label">เลขที่</span>
+            <input
+              className="rcv-in rcv-docno"
+              value={docNo}
+              onChange={(e) => setDocNo(e.target.value)}
+              placeholder="เช่น 2569/001"
+              aria-label="เลขที่เอกสาร"
             />
           </div>
         </div>
@@ -235,10 +235,9 @@ export default function ReceiptCertDoc({
           </tbody>
           <tfoot>
             <tr>
-              <td className="rcv-total-label">รวมทั้งสิ้น</td>
-              <td />
+              <td colSpan={2} className="rcv-total-label">รวมทั้งสิ้น</td>
               <td className="rcv-col-amt rcv-total-amt">{formatMoney(total)}</td>
-              <td>บาท</td>
+              <td className="rcv-col-note" />
               <td className="no-print" />
             </tr>
           </tfoot>
