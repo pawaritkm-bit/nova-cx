@@ -159,6 +159,8 @@ export type UpdateCustomerFieldsInput = {
   /** รหัสลูกค้า (customer_code) — unique ต่อ tenant */
   code?: string | null;
   taxId?: string | null;
+  /** ที่อยู่บริษัทลูกค้า (customers.address — migration 0058) · "" = ล้าง */
+  address?: string | null;
 };
 
 /**
@@ -208,38 +210,63 @@ export async function updateCustomerFieldsAction(
       patch.tax_id = taxIdToWrite;
     }
 
-    if (Object.keys(patch).length === 0) {
+    // ที่อยู่ (customers.address) — เขียนแยกแบบ best-effort (คอลัมน์เพิ่งเพิ่ม 0058)
+    //   ส่ง "" = ล้างเป็น null · undefined = ไม่แตะ
+    let addressProvided = false;
+    let addressToWrite: string | null = null;
+    if (fields.address !== undefined) {
+      addressProvided = true;
+      addressToWrite = fields.address === null ? null : clampText(fields.address, 500);
+    }
+
+    if (Object.keys(patch).length === 0 && !addressProvided) {
       return { ok: false, message: "ไม่มีข้อมูลที่ต้องบันทึก" };
     }
 
-    const { data: updated, error } = await service
-      .from("customers")
-      .update(patch)
-      .eq("id", customerId)
-      .eq("tenant_id", ctx.tenantId)
-      .is("deleted_at", null)
-      .select("id, external_ref, customer_code")
-      .maybeSingle();
+    // ---- อัปเดตช่องหลัก (ชื่อ/รหัส/เลขภาษี) ถ้ามี ----
+    let cust: { id: string; external_ref: string | null; customer_code: string | null } | null = null;
+    if (Object.keys(patch).length > 0) {
+      const { data: updated, error } = await service
+        .from("customers")
+        .update(patch)
+        .eq("id", customerId)
+        .eq("tenant_id", ctx.tenantId)
+        .is("deleted_at", null)
+        .select("id, external_ref, customer_code")
+        .maybeSingle();
 
-    if (error) {
-      // ชนรหัสซ้ำ (unique tenant_id, customer_code)
-      if (error.code === "23505") {
-        return { ok: false, message: "รหัสลูกค้านี้ถูกใช้กับลูกค้ารายอื่นแล้ว" };
+      if (error) {
+        // ชนรหัสซ้ำ (unique tenant_id, customer_code)
+        if (error.code === "23505") {
+          return { ok: false, message: "รหัสลูกค้านี้ถูกใช้กับลูกค้ารายอื่นแล้ว" };
+        }
+        return { ok: false, message: "บันทึกข้อมูลลูกค้าไม่สำเร็จ กรุณาลองใหม่" };
       }
-      return { ok: false, message: "บันทึกข้อมูลลูกค้าไม่สำเร็จ กรุณาลองใหม่" };
+      if (!updated) {
+        return { ok: false, message: "ไม่พบลูกค้าที่จะแก้ไข" };
+      }
+      cust = updated as { id: string; external_ref: string | null; customer_code: string | null };
     }
-    if (!updated) {
-      return { ok: false, message: "ไม่พบลูกค้าที่จะแก้ไข" };
+
+    // ---- อัปเดตที่อยู่ (best-effort — คอลัมน์ยังไม่ apply migration → จับ error เงียบ ไม่ crash) ----
+    let addressFailed = false;
+    if (addressProvided) {
+      try {
+        const { error: addrErr } = await service
+          .from("customers")
+          .update({ address: addressToWrite })
+          .eq("id", customerId)
+          .eq("tenant_id", ctx.tenantId)
+          .is("deleted_at", null);
+        if (addrErr) addressFailed = true;
+      } catch {
+        addressFailed = true; // คอลัมน์ address ยังไม่มี (ยังไม่ apply 0058)
+      }
     }
-    const cust = updated as {
-      id: string;
-      external_ref: string | null;
-      customer_code: string | null;
-    };
 
     // เลขภาษีเปลี่ยน → รักษา loop เดิม: re-decide บิล 'รอระบุ' + ส่งกลับ NOVA Sale (best-effort)
     let redecided = 0;
-    if (taxIdToWrite) {
+    if (taxIdToWrite && cust) {
       try {
         const r = await redecideExistingEntries(service, ctx.tenantId, { customerId });
         redecided = r.updated;
@@ -255,7 +282,9 @@ export async function updateCustomerFieldsAction(
 
     revalidatePath(PATH);
     const suffix = redecided > 0 ? ` · จับคู่ซื้อ/ขายให้ ${redecided} รายการแล้ว` : "";
-    return { ok: true, message: `บันทึกข้อมูลลูกค้าแล้ว${suffix}`, id: customerId };
+    // ที่อยู่บันทึกไม่สำเร็จ (คอลัมน์ยังไม่ apply) → แจ้งเตือน แต่ช่องอื่นบันทึกแล้ว
+    const addrNote = addressFailed ? " (ยังบันทึกที่อยู่ไม่ได้ — โปรด apply migration 0058)" : "";
+    return { ok: true, message: `บันทึกข้อมูลลูกค้าแล้ว${suffix}${addrNote}`, id: customerId };
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "บันทึกข้อมูลลูกค้าไม่สำเร็จ กรุณาลองใหม่" };

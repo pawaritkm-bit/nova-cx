@@ -29,6 +29,8 @@ export default function CustomerTabs({
   reviewHref,
   openingHref,
   reportsHref,
+  vatPurchaseHref,
+  vatSaleHref,
   tables,
   shareCircle,
   shareCircleCount,
@@ -41,6 +43,10 @@ export default function CustomerTabs({
   reviewHref?: string;
   openingHref?: string;
   reportsHref?: string;
+  /** รายงานภาษีซื้อ (ฟอร์มราชการ) — เปิดแท็บใหม่พิมพ์/PDF */
+  vatPurchaseHref?: string;
+  /** รายงานภาษีขาย (ฟอร์มราชการ) */
+  vatSaleHref?: string;
   tables: Record<EntryType, ReactNode>;
   /** เนื้อในแท็บ "วงแชร์" — undefined = ลูกค้ารายนี้ไม่ใช่ท้าวแชร์ (ไม่โชว์แท็บ) */
   shareCircle?: ReactNode;
@@ -108,6 +114,17 @@ export default function CustomerTabs({
             />
             {reviewHref ? (
               <a href={reviewHref} className="btn btn-ghost">ตรวจทาน / ออก Excel</a>
+            ) : null}
+            {/* รายงานภาษีซื้อ/ขาย (ฟอร์มราชการ) — เปิดแท็บใหม่ให้พิมพ์สะอาด */}
+            {vatPurchaseHref ? (
+              <a href={vatPurchaseHref} className="btn btn-ghost" target="_blank" rel="noopener">
+                รายงานภาษีซื้อ
+              </a>
+            ) : null}
+            {vatSaleHref ? (
+              <a href={vatSaleHref} className="btn btn-ghost" target="_blank" rel="noopener">
+                รายงานภาษีขาย
+              </a>
             ) : null}
             {openingHref ? (
               <a href={openingHref} className="btn btn-ghost">ยอดยกมา</a>

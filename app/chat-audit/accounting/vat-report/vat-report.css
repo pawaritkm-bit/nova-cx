@@ -1,0 +1,145 @@
+/* ============================================================
+   รายงานภาษีซื้อ / รายงานภาษีขาย (ฟอร์มราชการ) — พิมพ์/บันทึก PDF
+   ★ .no-print = ซ่อนตอนพิมพ์ (แถบเครื่องมือ)
+   ★ prefix vr-* กันชนสไตล์เดิม (acc-* / rcv-* / bills / dashboard)
+   ★ พิมพ์แนวนอน (landscape) เพราะตารางกว้าง 10 คอลัมน์
+   ============================================================ */
+
+.vr-shell {
+  min-height: 100vh;
+  background: #eef1f5;
+  padding: 20px 12px 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: "Sarabun", "TH Sarabun New", system-ui, -apple-system, sans-serif;
+  color: #1a1a1a;
+}
+
+/* ---- แถบเครื่องมือ ---- */
+.vr-toolbar {
+  width: 100%;
+  max-width: 1100px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.vr-toolbar-hint { color: #667; font-size: 14px; flex: 1; }
+
+.vr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #cbd2dc;
+  background: #fff;
+  color: #1a1a1a;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.vr-btn:hover { background: #f4f6f9; }
+.vr-btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.vr-btn-primary:hover { background: #195ecb; }
+.vr-btn-ghost { background: transparent; }
+
+/* ---- ตัวเอกสาร ---- */
+.vr-page {
+  width: 100%;
+  max-width: 1100px;
+  background: #fff;
+  padding: 32px 36px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+/* ---- หัวรายงาน (3 คอลัมน์) ---- */
+.vr-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
+  gap: 16px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.vr-head-left { text-align: left; }
+.vr-head-right { text-align: right; }
+.vr-head-center { text-align: center; }
+.vr-title { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+.vr-company { font-size: 15px; font-weight: 700; }
+.vr-address {
+  font-size: 13px;
+  color: #333;
+  margin: 2px auto 4px;
+  max-width: 460px;
+  min-height: 16px;
+  border-bottom: 1px dotted #b9c2cf; /* ว่าง = เส้นให้เขียนมือ */
+}
+.vr-month { font-size: 14px; }
+
+/* ---- ตาราง ---- */
+.vr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.vr-table th,
+.vr-table td {
+  border: 1px solid #333;
+  padding: 4px 6px;
+  vertical-align: middle;
+}
+.vr-table th { background: #f0f3f7; font-weight: 700; text-align: center; }
+
+.vr-col-seq { width: 44px; }
+.vr-col-date { width: 78px; }
+.vr-col-no { width: 90px; }
+.vr-col-tax { width: 120px; }
+.vr-col-ho, .vr-col-branch { width: 56px; }
+.vr-col-money { width: 108px; }
+
+.vr-c-seq { text-align: center; }
+.vr-c-date { text-align: center; }
+.vr-c-no { text-align: center; }
+.vr-c-party { text-align: left; }
+.vr-c-tax { text-align: center; font-variant-numeric: tabular-nums; }
+.vr-c-ho, .vr-c-branch { text-align: center; }
+.vr-c-money { text-align: right; font-variant-numeric: tabular-nums; }
+
+.vr-empty { text-align: center; color: #777; padding: 20px; }
+
+.vr-total td { font-weight: 700; background: #f7f9fc; }
+.vr-total-label { text-align: right; }
+
+/* ============================================================
+   PRINT — เอกสารสะอาด, แนวนอน, ซ่อนแถบเครื่องมือ, แบ่งหน้าไม่ตัดกลางแถว
+   ============================================================ */
+@media print {
+  .no-print { display: none !important; }
+  .nav-progress { display: none !important; }
+
+  .vr-shell { background: #fff; padding: 0; display: block; }
+  .vr-page {
+    max-width: none;
+    width: 100%;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 0;
+  }
+  .vr-table th { background: transparent !important; }
+  .vr-table th,
+  .vr-table td { border-color: #000 !important; }
+  .vr-total td { background: transparent !important; }
+
+  /* หัวตารางซ้ำทุกหน้า + ไม่ตัดกลางแถว */
+  .vr-table thead { display: table-header-group; }
+  .vr-table tfoot { display: table-footer-group; }
+  .vr-table tr { page-break-inside: avoid; }
+
+  @page { size: A4 landscape; margin: 12mm; }
+}

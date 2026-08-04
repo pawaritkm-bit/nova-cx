@@ -22,6 +22,7 @@ export default function CustomerAdminControls({
   initialName,
   initialCode,
   initialTaxId,
+  initialAddress,
 }: {
   customerId: string;
   currentAccountantId: string | null;
@@ -29,6 +30,8 @@ export default function CustomerAdminControls({
   initialName: string | null;
   initialCode: string | null;
   initialTaxId: string | null;
+  /** ที่อยู่บริษัทลูกค้า (customers.address) — undefined ถ้าคอลัมน์ยังไม่ apply */
+  initialAddress?: string | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -43,6 +46,7 @@ export default function CustomerAdminControls({
   const [name, setName] = useState(initialName ?? "");
   const [code, setCode] = useState(initialCode ?? "");
   const [taxId, setTaxId] = useState(initialTaxId ?? "");
+  const [address, setAddress] = useState(initialAddress ?? "");
   const [editMsg, setEditMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   function doReassign() {
@@ -76,6 +80,7 @@ export default function CustomerAdminControls({
         name,
         code, // "" = ล้างรหัส
         taxId, // "" = ล้างเลขภาษี
+        address, // "" = ล้างที่อยู่
       });
       setEditMsg({ ok: res.ok, text: res.message });
       if (res.ok) {
@@ -208,6 +213,19 @@ export default function CustomerAdminControls({
               disabled={pending}
             />
           </label>
+          <label className="acc-taxid-field" style={{ margin: 0, flexBasis: "100%" }}>
+            <span className="acc-taxid-label">ที่อยู่ (ขึ้นหัวรายงานภาษีซื้อ/ขาย)</span>
+            <textarea
+              className="acc-taxid-input"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="ที่อยู่บริษัทลูกค้า (เว้นว่างได้)"
+              maxLength={500}
+              rows={2}
+              disabled={pending}
+              style={{ width: "100%", resize: "vertical" }}
+            />
+          </label>
           <button type="button" className="btn" onClick={doUpdate} disabled={pending}>
             {pending ? "กำลังบันทึก…" : "บันทึกข้อมูล"}
           </button>
@@ -220,6 +238,7 @@ export default function CustomerAdminControls({
               setName(initialName ?? "");
               setCode(initialCode ?? "");
               setTaxId(initialTaxId ?? "");
+              setAddress(initialAddress ?? "");
             }}
             disabled={pending}
           >
