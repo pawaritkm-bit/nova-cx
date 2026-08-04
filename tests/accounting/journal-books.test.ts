@@ -30,22 +30,16 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
 }
 
 // ---------------------------------------------------------------------
-describe("journal-books: classifyBook (จัดเล่มแบบ partition)", () => {
-  it("ซื้อ + เชื่อ/เช็ค → เล่มซื้อ", () => {
-    expect(classifyBook("purchase", "credit")).toBe("purchase");
-    expect(classifyBook("purchase", "cheque")).toBe("purchase");
+describe("journal-books: classifyBook (จัดเล่มตามชนิดเอกสาร)", () => {
+  it("บิลซื้อทุกวิธีชำระ → เล่มซื้อ", () => {
+    for (const m of ["credit", "cheque", "cash", "transfer", null] as (PaymentMethod | null)[]) {
+      expect(classifyBook("purchase", m)).toBe("purchase");
+    }
   });
-  it("ซื้อ + เงินสด/โอน → เล่มจ่ายเงิน", () => {
-    expect(classifyBook("purchase", "cash")).toBe("payment");
-    expect(classifyBook("purchase", "transfer")).toBe("payment");
-  });
-  it("ขาย + เชื่อ/เช็ค → เล่มขาย", () => {
-    expect(classifyBook("sale", "credit")).toBe("sale");
-    expect(classifyBook("sale", "cheque")).toBe("sale");
-  });
-  it("ขาย + เงินสด/โอน → เล่มรับเงิน", () => {
-    expect(classifyBook("sale", "cash")).toBe("receipt");
-    expect(classifyBook("sale", "transfer")).toBe("receipt");
+  it("บิลขายทุกวิธีชำระ → เล่มขาย", () => {
+    for (const m of ["credit", "cheque", "cash", "transfer", null] as (PaymentMethod | null)[]) {
+      expect(classifyBook("sale", m)).toBe("sale");
+    }
   });
 
   // ★ #10: บิลขายห้ามตกเล่ม "ทั่วไป" — ทุกวิธีจ่าย (รวม null) ต้องไม่ใช่ general
@@ -81,7 +75,7 @@ describe("journal-books: buildJournalBooks (post เข้าเล่ม + เ�
     expect(p.credits.some((c) => c.accountCode === "2010")).toBe(true); // เจ้าหนี้การค้า
   });
 
-  it("ซื้อเงินสดเข้าเล่มจ่ายเงิน (ไม่เข้าเล่มซื้อ) — กัน double count", () => {
+  it("ซื้อเงินสดเข้าเล่มซื้อ (ตามชนิดเอกสาร) · เล่มจ่ายว่าง", () => {
     const entries = [
       mkEntry({
         id: "p2", entryType: "purchase", paymentMethod: "cash",
@@ -89,12 +83,11 @@ describe("journal-books: buildJournalBooks (post เข้าเล่ม + เ�
       }),
     ];
     const { books } = buildJournalBooks(entries);
-    expect(books.payment.postings).toHaveLength(1);
-    expect(books.purchase.postings).toHaveLength(0);
-    expect(books.payment.postings[0].credits.some((c) => c.accountCode === "1010")).toBe(true); // เงินสด
+    expect(books.purchase.postings).toHaveLength(1);
+    expect(books.payment.postings).toHaveLength(0);
   });
 
-  it("ขายเชื่อเข้าเล่มขาย · ขายเงินสดเข้าเล่มรับเงิน", () => {
+  it("ขายทุกใบเข้าเล่มขาย (เงินสด/เชื่อ) · เล่มรับ/ทั่วไปว่าง", () => {
     const entries = [
       mkEntry({ id: "s1", entryType: "sale", paymentMethod: "credit",
         lines: [mkLine({ accountCode: "4010", accountName: "ขายสินค้า", amount: 1000, vatAmount: 70 })] }),
@@ -102,8 +95,8 @@ describe("journal-books: buildJournalBooks (post เข้าเล่ม + เ�
         lines: [mkLine({ accountCode: "4010", accountName: "ขายสินค้า", amount: 2000, vatAmount: 140 })] }),
     ];
     const { books } = buildJournalBooks(entries);
-    expect(books.sale.postings).toHaveLength(1);
-    expect(books.receipt.postings).toHaveLength(1);
+    expect(books.sale.postings).toHaveLength(2);
+    expect(books.receipt.postings).toHaveLength(0);
     expect(books.general.postings).toHaveLength(0); // #10: ขายไม่เข้าทั่วไป
   });
 
