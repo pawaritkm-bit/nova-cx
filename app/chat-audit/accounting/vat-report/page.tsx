@@ -27,6 +27,39 @@ function monthLabelOf(month: string): string {
   return `${THAI_MONTHS[mi]} ปี พ.ศ. ${year}`;
 }
 
+/** เดือนปัจจุบันตามเวลาไทย → "YYYY-MM" (ใช้เป็น default เมื่อไม่ได้ส่ง month มา) */
+function currentMonthThai(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const y = parts.find((p) => p.type === "year")?.value ?? "1970";
+  const m = parts.find((p) => p.type === "month")?.value ?? "01";
+  return `${y}-${m}`;
+}
+
+/**
+ * รายการเดือนย้อนหลัง `count` เดือน (นับจากเดือนปัจจุบันเวลาไทย) สำหรับ dropdown เลือกเดือน
+ *   คืน [{ value: "YYYY-MM", label: "กรกฎาคม 2569" }, ...] เรียงจากใหม่→เก่า
+ */
+function recentMonthOptions(count: number): { value: string; label: string }[] {
+  const cur = currentMonthThai();
+  let y = Number(cur.slice(0, 4));
+  let mi = Number(cur.slice(5, 7));
+  const out: { value: string; label: string }[] = [];
+  for (let i = 0; i < count; i++) {
+    const value = `${y}-${String(mi).padStart(2, "0")}`;
+    out.push({ value, label: `${THAI_MONTHS[mi]} ${y + 543}` });
+    mi -= 1;
+    if (mi < 1) {
+      mi = 12;
+      y -= 1;
+    }
+  }
+  return out;
+}
+
 /** วันที่/เวลาพิมพ์ (เวลาไทย) → "04/08/2569 09:30" */
 function printedAtThai(): string {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -73,7 +106,7 @@ async function loadAddress(
  *   ต่อลูกค้า 1 ราย + เดือนภาษี → เอกสารพิมพ์/บันทึก PDF + ดาวน์โหลด Excel
  *
  * searchParams:
- *   customer=<uuid> (จำเป็น) · type=purchase|sale (จำเป็น) · month=YYYY-MM (ถ้าไม่ระบุ = ทุกเดือน)
+ *   customer=<uuid> (จำเป็น) · type=purchase|sale (จำเป็น) · month=YYYY-MM (ถ้าไม่ระบุ = เดือนปัจจุบันเวลาไทย)
  *
  * ★ guard: resolveAccountingAccess + customerInScope (นักบัญชีเห็นเฉพาะลูกค้าตัวเอง)
  * ★ tenantId จาก session · PDPA: ไม่ log ชื่อ/เลขภาษี/ที่อยู่/ตัวเลข
@@ -108,8 +141,18 @@ export default async function VatReportPage({
   const typeParam = (sp.type ?? "").trim();
   const kind: VatReportKind = typeParam === "sale" ? "sale" : "purchase";
 
+  // เดือนภาษี: ถ้าไม่ส่ง/ส่งพัง → default = เดือนปัจจุบัน (เวลาไทย) แทน "ทุกเดือน"
+  //   → หัวรายงานไม่ค้างที่ "ทุกเดือน" และ query ข้อมูลเดือนนั้นเสมอ
   const monthParam = (sp.month ?? "").trim();
-  const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(monthParam) ? monthParam : "";
+  const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(monthParam)
+    ? monthParam
+    : currentMonthThai();
+
+  // ตัวเลือกเดือนบน dropdown (24 เดือนล่าสุด) — เผื่อ selectedMonth หลุดช่วงก็ยัดเข้าไปด้วย
+  const monthOptions = recentMonthOptions(24);
+  if (!monthOptions.some((o) => o.value === validMonth)) {
+    monthOptions.unshift({ value: validMonth, label: monthLabelOf(validMonth).replace(" ปี พ.ศ. ", " ") });
+  }
 
   // ---- หัวกระดาษ = ข้อมูลลูกค้า ----
   const { data: custRow } = await service
@@ -132,8 +175,8 @@ export default async function VatReportPage({
   const companyAddress = await loadAddress(service, tenantId, customerId);
 
   // ---- ดึง entries ตามลูกค้า+ประเภท+เดือน แล้ว build รายงาน ----
-  const filter: ListEntriesFilter = { customerId, entryType: kind };
-  if (validMonth) filter.month = validMonth;
+  //   validMonth มีค่าเสมอแล้ว (default = เดือนปัจจุบัน) → filter ตามเดือนที่เลือกเสมอ
+  const filter: ListEntriesFilter = { customerId, entryType: kind, month: validMonth };
 
   let report;
   try {
@@ -143,20 +186,23 @@ export default async function VatReportPage({
     return <ErrorShell message="อ่านข้อมูลไม่สำเร็จ — ตรวจการตั้งค่า SUPABASE_SERVICE_ROLE_KEY และ migration" />;
   }
 
-  // ---- ลิงก์ Excel (route แยก คง scope/filter เดิม) ----
+  // ---- ลิงก์ Excel (route แยก คง scope/filter เดิม) — export เดือนที่เลือกเสมอ ----
   const ex = new URLSearchParams();
   ex.set("customer", customerId);
   ex.set("type", kind);
-  if (validMonth) ex.set("month", validMonth);
+  ex.set("month", validMonth);
   const excelHref = `/chat-audit/accounting/vat-report/export?${ex.toString()}`;
 
   return (
     <VatReportDoc
+      customerId={customerId}
       kind={kind}
       companyName={companyName}
       companyTaxId={(cust.tax_id ?? "").trim()}
       companyAddress={companyAddress}
       monthLabel={monthLabelOf(validMonth)}
+      selectedMonth={validMonth}
+      monthOptions={monthOptions}
       printedAt={printedAtThai()}
       rows={report.rows}
       totals={report.totals}
