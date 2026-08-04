@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { setInputTaxMonthAction } from "./actions";
 import { taxMonthOptions, taxMonthLabel } from "@/lib/accounting/tax-month";
-import { monthOf, effectiveTaxMonth } from "@/lib/accounting/queries";
+import { monthOf } from "@/lib/accounting/queries";
 
 /**
  * ตัวเลือก "ยื่นภาษีในเดือน" เล็ก ๆ ในแถวบิล (list) — เฉพาะบิลซื้อ
@@ -32,8 +32,9 @@ export default function InputTaxMonthCell({
 
   // เดือนฐานสำหรับตัวเลือก = เดือนของ doc_date (บิลไม่มีวันที่ → ใช้ inputTaxMonth ถ้ามี)
   const baseYm = monthOf(docDate) ?? inputTaxMonth ?? "";
-  // ค่าปัจจุบันที่โชว์ = เดือนที่ใช้ภาษีจริง (ยกเดือน หรือตามวันที่บิล)
-  const current = effectiveTaxMonth({ inputTaxMonth, docDate }) ?? "";
+  // ★ ค่าปัจจุบัน = "เดือนที่ติ๊ก" เท่านั้น (ไม่ยึดวันที่บิล) · ยังไม่ติ๊ก = "" → ยังไม่เข้ารายงาน
+  const current = inputTaxMonth ?? "";
+  const notTagged = !current;
 
   const opts = taxMonthOptions(baseYm);
   // เผื่อ inputTaxMonth เดิมอยู่นอกช่วงตัวเลือก (เช่นเคยตั้งไว้ไกล) → คงให้เลือกอยู่
@@ -53,7 +54,10 @@ export default function InputTaxMonthCell({
   }
 
   return (
-    <span className="acc-itm" title="เดือนที่นำภาษีซื้อของบิลนี้ไปยื่น (ยกได้ ≤ 6 เดือน)">
+    <span
+      className={`acc-itm${notTagged ? " acc-itm-empty" : ""}`}
+      title="เดือนที่นำภาษีซื้อของบิลนี้ไปยื่น (ยกได้ ≤ 6 เดือน) — ต้องเลือกก่อนถึงเข้ารายงาน"
+    >
       <span className="acc-itm-label">ยื่นภาษีในเดือน</span>
       <select
         className="acc-itm-select"
@@ -61,7 +65,9 @@ export default function InputTaxMonthCell({
         onChange={(e) => onPick(e.target.value)}
         disabled={pending}
         aria-label="ยื่นภาษีในเดือน"
+        style={notTagged ? { borderColor: "#e0a020", background: "#fff9ec", color: "#8a5a00" } : undefined}
       >
+        {notTagged ? <option value="">— เลือกเดือน —</option> : null}
         {opts.map((ym) => (
           <option key={ym} value={ym}>
             {taxMonthLabel(ym)}

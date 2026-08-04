@@ -7,7 +7,7 @@
  * ★ รวม logic ที่เดิมกระจายใน EntryEditor / vat-report ไว้ที่เดียว (ใช้ร่วม + เทสต์ได้)
  * ★ pure ล้วน · PDPA: ไม่ log อะไร
  */
-import { monthBounds, effectiveTaxMonth } from "@/lib/accounting/queries";
+import { monthBounds } from "@/lib/accounting/queries";
 
 const YM_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
 
@@ -71,8 +71,10 @@ export function purchaseFetchLowerBound(startMonth: string, fallback: string): s
 export function filterPurchaseByTaxMonth<
   T extends { inputTaxMonth?: string | null; docDate: string | null }
 >(entries: T[], startMonth: string, endMonth: string): T[] {
+  // ★ ยึด "เดือนที่นักบัญชีติ๊ก" (inputTaxMonth) ล้วน — ไม่ fallback วันที่บิล
+  //   บิลที่ยังไม่ติ๊ก (inputTaxMonth = null) → ยังไม่เข้ารายงาน/สมุดรายวัน (ต้องติ๊กก่อน)
   return entries.filter((e) => {
-    const tm = effectiveTaxMonth(e);
-    return tm != null && tm >= startMonth && tm <= endMonth;
+    const tm = e.inputTaxMonth;
+    return !!tm && /^\d{4}-(0[1-9]|1[0-2])$/.test(tm) && tm >= startMonth && tm <= endMonth;
   });
 }
