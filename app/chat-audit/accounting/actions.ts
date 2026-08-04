@@ -546,6 +546,73 @@ export async function setEntryDocDateAction(
   }
 }
 
+/**
+ * ตั้ง "ยื่นภาษีในเดือน" (input_tax_month) ให้บิลซื้อ — จากแถวในตาราง (list) แบบด่วน
+ *   บิลซื้อยกภาษีซื้อไปใช้เดือนถัดไปได้ (≤6 เดือน) → เลือกเดือนที่แถวได้เลยไม่ต้องเปิดบิล.
+ *   month = null (หรือว่าง) = ล้างค่า → กลับไปใช้เดือนของ doc_date.
+ *
+ * ★ action เล็ก — แก้เฉพาะ input_tax_month (ไม่ใช่ save เต็มใบ)
+ * ★ guard: requireAccountingAccess + assertCustomerInScope (นักบัญชีแก้ได้เฉพาะลูกค้าตัวเอง)
+ * ★ validate month = 'YYYY-MM' หรือ null ก่อนเขียน · best-effort (คอลัมน์ 0060 apply แล้ว แต่จับ error เผื่อ)
+ * ★ PDPA: ไม่ log entryId/เดือน/ลูกค้า
+ */
+export async function setInputTaxMonthAction(
+  entryId: string,
+  month: string | null
+): Promise<SaveResult> {
+  if (!isUuid(entryId)) return { ok: false, message: "ไม่พบรายการที่เลือก" };
+  // month ต้องเป็น null/ว่าง (= ตามวันที่บิล) หรือรูปแบบ 'YYYY-MM' เท่านั้น
+  const normalized =
+    month == null || month === "" ? null : asTaxMonth(month);
+  if (month != null && month !== "" && normalized === null) {
+    return { ok: false, message: "เดือนไม่ถูกต้อง (ต้องเป็น ปี-เดือน)" };
+  }
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    // ★ สโคปนักบัญชี: ตั้งได้เฉพาะบิลของลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
+    const currentCustomer = await loadEntryCustomerId(service, ctx.tenantId, entryId);
+    if (currentCustomer === undefined) {
+      return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
+    }
+    assertCustomerInScope(ctx, currentCustomer);
+
+    // ★ เฉพาะบิลซื้อเท่านั้นที่ยกเดือนได้ (กันตั้งให้บิลขาย/รอระบุ)
+    const { data: row } = await service
+      .from("bill_entries")
+      .select("entry_type")
+      .eq("id", entryId)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (!row) return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
+    if ((row as { entry_type: string }).entry_type !== "purchase") {
+      return { ok: false, message: "ตั้งเดือนยื่นภาษีได้เฉพาะบิลซื้อ" };
+    }
+
+    // best-effort — คอลัมน์ input_tax_month apply แล้ว (0060) แต่จับ error เผื่อ schema cache
+    const { error } = await service
+      .from("bill_entries")
+      .update({ input_tax_month: normalized })
+      .eq("id", entryId)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null);
+    if (error) return { ok: false, message: "บันทึกเดือนยื่นภาษีไม่สำเร็จ กรุณาลองใหม่" };
+
+    revalidatePath(PATH);
+    return {
+      ok: true,
+      message: normalized ? "ตั้งเดือนยื่นภาษีแล้ว" : "ใช้เดือนตามวันที่บิลแล้ว",
+      id: entryId,
+    };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "บันทึกเดือนยื่นภาษีไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
 /** เดือน 'YYYY-MM' (UTC) จากเวลาปัจจุบัน — โฟลเดอร์เก็บไฟล์ */
 function monthFolder(now = new Date()): string {
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;

@@ -47,6 +47,7 @@ import { createEntryAction } from "./actions";
 import ChatAuditFrame from "../_Frame";
 import EntryEditor from "./EntryEditor";
 import RowActions from "./RowActions";
+import InputTaxMonthCell from "./InputTaxMonthCell";
 import CustomerTaxIdField from "./CustomerTaxIdField";
 import EntryDateField from "./EntryDateField";
 import UploadFileButton from "./UploadFileButton";
@@ -558,7 +559,17 @@ function EntryTable({
                   {/* ถ้าบิลผสม (หลาย line) → docrow เป็นยอดรวม (bold) แล้วแตก sub-lines ด้านล่าง */}
                   {multi ? (
                     <>
-                      <td className="acc-multi">{e.lines.length} รายการ</td>
+                      <td className="acc-multi">
+                        {e.lines.length} รายการ
+                        {/* ยื่นภาษีในเดือน — เฉพาะบิลซื้อ (ยกภาษีซื้อไปเดือนที่ยื่นจริงได้ ≤6 เดือน) */}
+                        {e.entryType === "purchase" ? (
+                          <InputTaxMonthCell
+                            entryId={e.id}
+                            inputTaxMonth={e.inputTaxMonth}
+                            docDate={e.docDate}
+                          />
+                        ) : null}
+                      </td>
                       <td className="num strong">{formatMoney(s.amount)}</td>
                       <td className="num strong">{formatMoney(s.vat)}</td>
                       <td className="num strong">
@@ -574,6 +585,14 @@ function EntryTable({
                         <span className={`vat-badge ${single?.vatType === "novat" ? "no" : "yes"}`}>
                           {single?.vatType === "novat" ? "ไม่ VAT" : "VAT"}
                         </span>
+                        {/* ยื่นภาษีในเดือน — เฉพาะบิลซื้อ (หลังป้าย VAT) */}
+                        {e.entryType === "purchase" ? (
+                          <InputTaxMonthCell
+                            entryId={e.id}
+                            inputTaxMonth={e.inputTaxMonth}
+                            docDate={e.docDate}
+                          />
+                        ) : null}
                       </td>
                       <td className="num">{formatMoney(single ? single.amount : 0)}</td>
                       <td className="num">{formatMoney(single ? single.vatAmount : 0)}</td>

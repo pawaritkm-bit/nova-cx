@@ -180,13 +180,14 @@ export default function VatReportDoc({
               placeholder="ชื่อกิจการ"
               aria-label="ชื่อกิจการ"
             />
-            {/* ที่อยู่บริษัทลูกค้า — แก้ได้ (prints); ว่างก็พิมพ์ใส่ได้เลย */}
-            <input
+            {/* ที่อยู่บริษัทลูกค้า — แก้ได้ (prints) · textarea ตัดบรรทัดเองเมื่อยาว (กันตกขอบ) */}
+            <textarea
               className="vr-in vr-address-in"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               placeholder="ที่อยู่กิจการ (พิมพ์ใส่ได้)"
               aria-label="ที่อยู่กิจการ"
+              rows={1}
             />
             <div className="vr-month">{periodLabel}</div>
           </div>

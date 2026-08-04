@@ -3,8 +3,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/access";
-import { listEntries, monthBounds, effectiveTaxMonth, type ListEntriesFilter } from "@/lib/accounting/queries";
+import { listEntries, monthBounds, type ListEntriesFilter } from "@/lib/accounting/queries";
 import { buildVatReport, type VatReportKind } from "@/lib/accounting/vat-report";
+import { purchaseFetchLowerBound, filterPurchaseByTaxMonth } from "@/lib/accounting/tax-month";
 import VatReportDoc from "./VatReportDoc";
 import "./vat-report.css";
 
@@ -81,17 +82,6 @@ function recentMonthOptions(count: number): { value: string; label: string }[] {
     }
   }
   return out;
-}
-
-/** เลื่อนเดือน 'YYYY-MM' ไป delta เดือน (delta ติดลบ = ย้อนหลัง) */
-function shiftMonth(ym: string, delta: number): string {
-  const m = /^(\d{4})-(\d{2})$/.exec(ym);
-  if (!m) return ym;
-  let y = Number(m[1]);
-  let mo = Number(m[2]) + delta;
-  while (mo < 1) { mo += 12; y -= 1; }
-  while (mo > 12) { mo -= 12; y += 1; }
-  return `${y}-${String(mo).padStart(2, "0")}`;
 }
 
 /** วันที่/เวลาพิมพ์ (เวลาไทย) → "04/08/2569 09:30" */
@@ -244,18 +234,15 @@ export default async function VatReportPage({
       const startMonth = fromDate.slice(0, 7);
       const endMonth = toDate.slice(0, 7);
       // ดึงบิลซื้อ doc_date ตั้งแต่ 6 เดือนก่อน startMonth ถึง toDate (ครอบบิลที่ยกเดือนมาใช้)
-      const lowerBound = monthBounds(shiftMonth(startMonth, -6))?.first ?? fromDate;
+      const lowerBound = purchaseFetchLowerBound(startMonth, fromDate);
       const { entries } = await listEntries(service, tenantId, {
         customerId,
         entryType: "purchase",
         dateFrom: lowerBound,
         dateTo: toDate,
       });
-      // คัดเฉพาะบิลที่ "ใช้ภาษีในเดือน" อยู่ในช่วงเดือนที่เลือก [startMonth, endMonth]
-      const inPeriod = entries.filter((e) => {
-        const tm = effectiveTaxMonth(e); // null = บิลไม่มีวันที่ + ไม่ระบุเดือน → ตัดออก
-        return tm != null && tm >= startMonth && tm <= endMonth;
-      });
+      // คัดเฉพาะบิลที่ "ยื่นภาษีในเดือน" อยู่ในช่วงเดือนที่เลือก [startMonth, endMonth]
+      const inPeriod = filterPurchaseByTaxMonth(entries, startMonth, endMonth);
       report = buildVatReport(inPeriod, "purchase");
     } else {
       const filter: ListEntriesFilter = {

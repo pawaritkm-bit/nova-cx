@@ -2,8 +2,9 @@ import { redirect } from "next/navigation";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/access";
-import { listEntries, monthBounds, type ListEntriesFilter } from "@/lib/accounting/queries";
+import { listEntries, monthBounds, type ListEntriesFilter, type BillEntry } from "@/lib/accounting/queries";
 import { buildJournalBooks } from "@/lib/accounting/journal-books";
+import { purchaseFetchLowerBound, filterPurchaseByTaxMonth } from "@/lib/accounting/tax-month";
 import JournalBooksDoc from "./JournalBooksDoc";
 import "../vat-report/vat-report.css";
 import "./journal-books.css";
@@ -164,8 +165,30 @@ export default async function JournalBooksPage({
 
   let result;
   try {
-    const filter: ListEntriesFilter = { customerId, dateFrom: fromDate, dateTo: toDate };
-    const { entries } = await listEntries(service, tenantId, filter);
+    const startMonth = fromDate.slice(0, 7);
+    const endMonth = toDate.slice(0, 7);
+
+    // ★ บิลซื้อ: ยึด "เดือนที่ใช้ภาษี" (effectiveTaxMonth = input_tax_month ?? เดือน doc_date)
+    //   บิลเดือนก่อน (≤6 เดือน) ที่ยกมายื่นในช่วงนี้ต้องเข้าสมุดรายวัน(ซื้อ)ด้วย → ดึงกว้างแล้วกรองในแอป
+    //   (สอดคล้องรายงานภาษีซื้อ — บิลยกเดือนไปโผล่ในเดือนที่ยื่นจริง)
+    const lowerBound = purchaseFetchLowerBound(startMonth, fromDate);
+    const purchaseFilter: ListEntriesFilter = {
+      customerId,
+      entryType: "purchase",
+      dateFrom: lowerBound,
+      dateTo: toDate,
+    };
+    // ★ บิลขาย/อื่น ๆ: คงกรอง doc_date ในช่วง [from, to] เดิม (ไม่ยกเดือน)
+    const otherFilter: ListEntriesFilter = { customerId, dateFrom: fromDate, dateTo: toDate };
+
+    const [purchaseRes, otherRes] = await Promise.all([
+      listEntries(service, tenantId, purchaseFilter),
+      listEntries(service, tenantId, otherFilter),
+    ]);
+
+    const purchaseInPeriod = filterPurchaseByTaxMonth(purchaseRes.entries, startMonth, endMonth);
+    const nonPurchase = otherRes.entries.filter((e) => e.entryType !== "purchase");
+    const entries: BillEntry[] = [...purchaseInPeriod, ...nonPurchase];
     result = buildJournalBooks(entries);
   } catch {
     return <ErrorShell message="อ่านข้อมูลไม่สำเร็จ — ตรวจการตั้งค่า SUPABASE_SERVICE_ROLE_KEY และ migration" />;

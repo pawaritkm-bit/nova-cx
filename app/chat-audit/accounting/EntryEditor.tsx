@@ -15,6 +15,7 @@ import {
 import type { BillEntry, EntryType, VatType, WhtForm, PaymentMethod } from "@/lib/accounting/queries";
 import { resolveEntryNav } from "@/lib/accounting/entry-nav";
 import { contraAccountFor, paymentMethodLabel } from "@/lib/accounting/payment";
+import { taxMonthOptions, taxMonthLabel } from "@/lib/accounting/tax-month";
 
 /**
  * EntryEditor — หน้าต่างตรวจ/แก้บิล (verify panel)
@@ -80,26 +81,7 @@ function thaiToIso(s: string): string {
   return `${year}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
-/** ตัวเลือก "เดือนที่ใช้ภาษีซื้อ" — เดือนฐาน (YYYY-MM ค.ศ.) + n เดือนถัดไป · label ไทย พ.ศ. */
-const TH_MONTHS_SHORT = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
-function taxMonthLabel(ym: string): string {
-  const m = /^(\d{4})-(\d{2})$/.exec(ym);
-  if (!m) return ym;
-  return `${TH_MONTHS_SHORT[Number(m[2]) - 1] ?? m[2]} ${Number(m[1]) + 543}`;
-}
-function taxMonthOptions(baseYm: string, ahead = 6): string[] {
-  const m = /^(\d{4})-(\d{2})$/.exec(baseYm);
-  if (!m) return [];
-  let y = Number(m[1]);
-  let mo = Number(m[2]);
-  const out: string[] = [];
-  for (let i = 0; i <= ahead; i++) {
-    out.push(`${y}-${String(mo).padStart(2, "0")}`);
-    mo++;
-    if (mo > 12) { mo = 1; y++; }
-  }
-  return out;
-}
+// ตัวเลือก/ป้าย "เดือนที่ใช้ภาษีซื้อ" — ย้ายไป lib/accounting/tax-month.ts (ใช้ร่วมกับ list/รายงาน)
 
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
@@ -505,10 +487,10 @@ export default function EntryEditor({
                 <span>เลขที่เอกสาร {aiSrc && entry.docNo ? <AiTag /> : null}</span>
                 <input type="text" value={docNo} onChange={(e) => setDocNo(e.target.value)} disabled={readOnly} placeholder="เช่น INV-001" />
               </label>
-              {/* ใช้ภาษีในเดือน — เฉพาะบิลซื้อ (ยกภาษีซื้อไปใช้เดือนอื่นได้ ตามกฎหมาย ≤ 6 เดือน) */}
+              {/* ยื่นภาษีในเดือน — เฉพาะบิลซื้อ (ยกภาษีซื้อไปยื่นเดือนอื่นได้ ตามกฎหมาย ≤ 6 เดือน) */}
               {entryType === "purchase" ? (
                 <label className="acc-field">
-                  <span>ใช้ภาษีในเดือน</span>
+                  <span>ยื่นภาษีในเดือน</span>
                   {(() => {
                     const docIso = thaiToIso(docDate);
                     const baseYm = docIso ? docIso.slice(0, 7) : entry.docDate ? entry.docDate.slice(0, 7) : inputTaxMonth;

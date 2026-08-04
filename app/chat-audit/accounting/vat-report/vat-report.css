@@ -134,9 +134,18 @@
   font-size: 13px;
   color: #333;
   text-align: center;
+  display: block;
   width: 100%;
-  max-width: 460px;
+  max-width: 620px;
   margin: 2px auto 4px;
+  /* ★ textarea: ตัดบรรทัดเอง + สูงตามเนื้อหา กันที่อยู่ยาวตกขอบ */
+  resize: none;
+  field-sizing: content;
+  min-height: 1.5em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow: hidden;
 }
 .vr-taxid-line { display: inline; }
 .vr-taxid-in {
