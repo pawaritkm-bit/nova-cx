@@ -37,6 +37,18 @@ export const BOOK_LABELS: Record<BookKind, string> = {
 export const BOOK_ORDER: BookKind[] = ["purchase", "sale", "payment", "receipt", "general"];
 
 /**
+ * เล่มที่จะแสดง จากตัวเลือกฝั่ง UI
+ *   - "all" (หรือค่าไม่รู้จัก) → ครบ 5 เล่มตาม BOOK_ORDER
+ *   - ค่าตรงกับ BookKind → เล่มนั้นเล่มเดียว
+ *   (ใช้ทั้งบนจอและตอนพิมพ์ → พิมพ์เฉพาะเล่มที่เลือก)
+ */
+export function visibleBooks(selected: string): BookKind[] {
+  return (BOOK_ORDER as string[]).includes(selected)
+    ? [selected as BookKind]
+    : BOOK_ORDER;
+}
+
+/**
  * จัดบิล 1 ใบเข้าเล่ม — ★ ตามที่ผู้ใช้ยืนยัน: บิลซื้อ/ขาย "ทุกใบ" เข้าเล่มซื้อ/ขายตามชนิดเอกสาร
  *   (สมุดรายวันเฉพาะแบบยึด "ชนิดเอกสาร" — ไม่แยกตามวิธีชำระ)
  *   - บิลซื้อทุกใบ (เงินสด/โอน/เชื่อ) → สมุดรายวันซื้อ

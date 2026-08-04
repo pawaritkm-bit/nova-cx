@@ -102,6 +102,13 @@ export type ListEntriesFilter = {
   entryType?: EntryType;
   /** เดือน YYYY-MM (กรองที่ doc_date) */
   month?: string;
+  /**
+   * ช่วงวันที่ (YYYY-MM-DD) กรองที่ doc_date แบบ inclusive ทั้งสองด้าน
+   *   - ถ้ามี dateFrom/dateTo (อย่างน้อยหนึ่งด้าน) จะ "แทนที่" การกรองด้วย month
+   *   - ใช้กับรายงานภาษีที่เลือกช่วงวันเองได้
+   */
+  dateFrom?: string;
+  dateTo?: string;
   customerId?: string;
   /**
    * จำกัดเฉพาะลูกค้าในชุดนี้ (สโคปนักบัญชี — เห็นเฉพาะลูกค้าที่ตัวเองดูแล)
@@ -258,6 +265,34 @@ export function monthRange(month?: string): { start: string; end: string } | nul
   return { start, end };
 }
 
+/** วันแรก–วันสุดท้ายของเดือน YYYY-MM (ISO date) · null ถ้ารูปแบบพัง
+ *   ใช้เป็น default ช่วงวัน + ปุ่มลัด "ทั้งเดือน" ของรายงานภาษี */
+export function monthBounds(month?: string): { first: string; last: string } | null {
+  if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
+  const [y, m] = month.split("-").map(Number);
+  // Date.UTC(y, m, 0) = วันที่ 0 ของเดือนถัดไป = วันสุดท้ายของเดือน m (m เป็นเลข 1-based)
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { first: `${month}-01`, last: `${month}-${String(lastDay).padStart(2, "0")}` };
+}
+
+/**
+ * ช่วงวันที่ from/to (YYYY-MM-DD, inclusive ทั้งคู่) → bounds สำหรับ gte/lte
+ *   - รูปแบบผิดทั้งคู่ → null (ผู้เรียก fallback ไปกรองด้วย month)
+ *   - มีข้างเดียว → เปิดปลายอีกข้าง (start only / end only)
+ *   - from > to → สลับให้ (กันผู้ใช้ใส่กลับด้าน)
+ */
+export function dateRange(
+  from?: string,
+  to?: string
+): { start: string | null; end: string | null } | null {
+  const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+  const f = from && DATE_RE.test(from) ? from : null;
+  const t = to && DATE_RE.test(to) ? to : null;
+  if (!f && !t) return null;
+  if (f && t && f > t) return { start: t, end: f };
+  return { start: f, end: t };
+}
+
 /**
  * ดึงรายการ entry + lines (+ ชื่อลูกค้า + object path ไฟล์บิล) ตาม filter
  *   - tenantId มาจาก session เท่านั้น
@@ -289,8 +324,15 @@ export async function listEntries(
   if (filter.customerIds && filter.customerIds.length > 0) {
     q = q.in("customer_id", filter.customerIds);
   }
-  const range = monthRange(filter.month);
-  if (range) q = q.gte("doc_date", range.start).lt("doc_date", range.end);
+  // ช่วงวันที่ (from/to) มาก่อน month — ถ้ามีให้ใช้ช่วงวัน (inclusive); ไม่งั้น fallback กรองทั้งเดือน
+  const dr = dateRange(filter.dateFrom, filter.dateTo);
+  if (dr) {
+    if (dr.start) q = q.gte("doc_date", dr.start);
+    if (dr.end) q = q.lte("doc_date", dr.end);
+  } else {
+    const range = monthRange(filter.month);
+    if (range) q = q.gte("doc_date", range.start).lt("doc_date", range.end);
+  }
 
   const { data: entryData, error: entryErr } = await q;
   if (entryErr) {

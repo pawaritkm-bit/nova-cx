@@ -5,6 +5,8 @@ import {
   summarizeEntry,
   summarizeEntries,
   monthRange,
+  monthBounds,
+  dateRange,
   type BillEntry,
   type BillEntryLine,
 } from "@/lib/accounting/queries";
@@ -139,5 +141,46 @@ describe("monthRange — ช่วงวันของเดือน", () => {
     expect(monthRange("2026-13")).toBeNull();
     expect(monthRange("bad")).toBeNull();
     expect(monthRange(undefined)).toBeNull();
+  });
+});
+
+describe("monthBounds — วันแรก/วันสุดท้ายของเดือน", () => {
+  it("เดือน 31 วัน", () => {
+    expect(monthBounds("2026-07")).toEqual({ first: "2026-07-01", last: "2026-07-31" });
+  });
+  it("เดือน 30 วัน (มิ.ย.)", () => {
+    expect(monthBounds("2026-06")).toEqual({ first: "2026-06-01", last: "2026-06-30" });
+  });
+  it("ก.พ. ปีปกติ = 28, ปีอธิกสุรทิน = 29", () => {
+    expect(monthBounds("2026-02")).toEqual({ first: "2026-02-01", last: "2026-02-28" });
+    expect(monthBounds("2028-02")).toEqual({ first: "2028-02-01", last: "2028-02-29" });
+  });
+  it("ธ.ค. → 31", () => {
+    expect(monthBounds("2026-12")).toEqual({ first: "2026-12-01", last: "2026-12-31" });
+  });
+  it("รูปแบบผิด → null", () => {
+    expect(monthBounds("2026-13")).toBeNull();
+    expect(monthBounds("bad")).toBeNull();
+    expect(monthBounds(undefined)).toBeNull();
+  });
+});
+
+describe("dateRange — ช่วงวันที่ inclusive (from/to)", () => {
+  it("ครบทั้งคู่", () => {
+    expect(dateRange("2026-06-01", "2026-06-30")).toEqual({ start: "2026-06-01", end: "2026-06-30" });
+  });
+  it("from > to → สลับให้", () => {
+    expect(dateRange("2026-06-30", "2026-06-01")).toEqual({ start: "2026-06-01", end: "2026-06-30" });
+  });
+  it("มีข้างเดียว → เปิดปลายอีกข้าง", () => {
+    expect(dateRange("2026-06-15", undefined)).toEqual({ start: "2026-06-15", end: null });
+    expect(dateRange(undefined, "2026-06-15")).toEqual({ start: null, end: "2026-06-15" });
+  });
+  it("รูปแบบผิดทั้งคู่ / ไม่ส่ง → null", () => {
+    expect(dateRange(undefined, undefined)).toBeNull();
+    expect(dateRange("bad", "2026-13-40")).toBeNull();
+  });
+  it("ตัดค่าพังข้างเดียว (เก็บเฉพาะที่ถูก)", () => {
+    expect(dateRange("2026-06-01", "bad")).toEqual({ start: "2026-06-01", end: null });
   });
 });

@@ -46,6 +46,10 @@
   cursor: pointer;
   font-family: inherit;
 }
+.vr-date-in {
+  font-variant-numeric: tabular-nums;
+  min-width: 140px;
+}
 .vr-btn-sm { padding: 5px 12px; font-size: 13px; }
 
 /* แถวปุ่ม "บันทึกที่อยู่ให้ลูกค้า" (ใต้หัว, ซ่อนตอนพิมพ์) */

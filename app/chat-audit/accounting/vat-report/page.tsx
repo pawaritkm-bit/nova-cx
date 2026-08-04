@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/access";
-import { listEntries, type ListEntriesFilter } from "@/lib/accounting/queries";
+import { listEntries, monthBounds, type ListEntriesFilter } from "@/lib/accounting/queries";
 import { buildVatReport, type VatReportKind } from "@/lib/accounting/vat-report";
 import VatReportDoc from "./VatReportDoc";
 import "./vat-report.css";
@@ -37,6 +37,29 @@ function currentMonthThai(): string {
   const y = parts.find((p) => p.type === "year")?.value ?? "1970";
   const m = parts.find((p) => p.type === "month")?.value ?? "01";
   return `${y}-${m}`;
+}
+
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+/** ISO (YYYY-MM-DD) → "dd/mm/พ.ศ." (คืน "" ถ้าพัง) */
+function thaiDateShort(iso: string): string {
+  if (!DATE_RE.test(iso)) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${Number(y) + 543}`;
+}
+
+/**
+ * ป้ายหัวรายงานจากช่วงวันที่ [from, to]
+ *   - ถ้าเป็น "ทั้งเดือนพอดี" (from=วันที่1 & to=วันสุดท้ายของเดือนเดียวกัน) → "เดือนภาษี มิถุนายน ปี พ.ศ. 2569"
+ *   - ไม่งั้น → "ตั้งแต่ 01/06/2569 ถึง 15/06/2569"
+ */
+function periodLabelOf(from: string, to: string): string {
+  const fm = from.slice(0, 7);
+  const bounds = monthBounds(fm);
+  if (bounds && fm === to.slice(0, 7) && from === bounds.first && to === bounds.last) {
+    return `เดือนภาษี ${monthLabelOf(fm)}`;
+  }
+  return `ตั้งแต่ ${thaiDateShort(from)} ถึง ${thaiDateShort(to)}`;
 }
 
 /**
@@ -114,7 +137,13 @@ async function loadAddress(
 export default async function VatReportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ customer?: string; type?: string; month?: string }>;
+  searchParams: Promise<{
+    customer?: string;
+    type?: string;
+    month?: string;
+    from?: string;
+    to?: string;
+  }>;
 }) {
   const sp = await searchParams;
 
@@ -141,18 +170,38 @@ export default async function VatReportPage({
   const typeParam = (sp.type ?? "").trim();
   const kind: VatReportKind = typeParam === "sale" ? "sale" : "purchase";
 
-  // เดือนภาษี: ถ้าไม่ส่ง/ส่งพัง → default = เดือนปัจจุบัน (เวลาไทย) แทน "ทุกเดือน"
-  //   → หัวรายงานไม่ค้างที่ "ทุกเดือน" และ query ข้อมูลเดือนนั้นเสมอ
-  const monthParam = (sp.month ?? "").trim();
-  const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(monthParam)
-    ? monthParam
-    : currentMonthThai();
+  // ---- ช่วงวันที่รายงาน ----
+  //   รับ from/to (YYYY-MM-DD) เป็นหลัก · ถ้าไม่ส่ง/พัง → default = ทั้งเดือนปัจจุบัน (เวลาไทย)
+  //   ถ้ามีข้างเดียว → เติมอีกข้างแบบช่วงวันเดียว (กัน range ค้าง)
+  const fromParam = (sp.from ?? "").trim();
+  const toParam = (sp.to ?? "").trim();
+  const fromValid = DATE_RE.test(fromParam) ? fromParam : "";
+  const toValid = DATE_RE.test(toParam) ? toParam : "";
 
-  // ตัวเลือกเดือนบน dropdown (24 เดือนล่าสุด) — เผื่อ selectedMonth หลุดช่วงก็ยัดเข้าไปด้วย
-  const monthOptions = recentMonthOptions(24);
-  if (!monthOptions.some((o) => o.value === validMonth)) {
-    monthOptions.unshift({ value: validMonth, label: monthLabelOf(validMonth).replace(" ปี พ.ศ. ", " ") });
+  let fromDate: string;
+  let toDate: string;
+  if (fromValid || toValid) {
+    fromDate = fromValid || toValid;
+    toDate = toValid || fromValid;
+    // ใส่กลับด้าน → สลับให้ (หัวรายงาน/ช่องวันจะได้เรียงถูก)
+    if (fromDate > toDate) [fromDate, toDate] = [toDate, fromDate];
+  } else {
+    const b = monthBounds(currentMonthThai())!;
+    fromDate = b.first;
+    toDate = b.last;
   }
+
+  // ปุ่มลัด "ทั้งเดือน": เดือนอ้างอิง = เดือนของ fromDate
+  const selectedMonth = fromDate.slice(0, 7);
+  const monthOptions = recentMonthOptions(24);
+  if (!monthOptions.some((o) => o.value === selectedMonth)) {
+    monthOptions.unshift({
+      value: selectedMonth,
+      label: monthLabelOf(selectedMonth).replace(" ปี พ.ศ. ", " "),
+    });
+  }
+
+  const periodLabel = periodLabelOf(fromDate, toDate);
 
   // ---- หัวกระดาษ = ข้อมูลลูกค้า ----
   const { data: custRow } = await service
@@ -174,9 +223,14 @@ export default async function VatReportPage({
   const companyName = (cust.business_name || cust.name || "กิจการ").trim();
   const companyAddress = await loadAddress(service, tenantId, customerId);
 
-  // ---- ดึง entries ตามลูกค้า+ประเภท+เดือน แล้ว build รายงาน ----
-  //   validMonth มีค่าเสมอแล้ว (default = เดือนปัจจุบัน) → filter ตามเดือนที่เลือกเสมอ
-  const filter: ListEntriesFilter = { customerId, entryType: kind, month: validMonth };
+  // ---- ดึง entries ตามลูกค้า+ประเภท+ช่วงวัน แล้ว build รายงาน ----
+  //   fromDate/toDate มีค่าเสมอ (default = ทั้งเดือนปัจจุบัน) → กรอง doc_date ในช่วง [from, to]
+  const filter: ListEntriesFilter = {
+    customerId,
+    entryType: kind,
+    dateFrom: fromDate,
+    dateTo: toDate,
+  };
 
   let report;
   try {
@@ -186,11 +240,12 @@ export default async function VatReportPage({
     return <ErrorShell message="อ่านข้อมูลไม่สำเร็จ — ตรวจการตั้งค่า SUPABASE_SERVICE_ROLE_KEY และ migration" />;
   }
 
-  // ---- ลิงก์ Excel (route แยก คง scope/filter เดิม) — export เดือนที่เลือกเสมอ ----
+  // ---- ลิงก์ Excel (route แยก คง scope/filter เดิม) — export ช่วงวันเดียวกันเสมอ ----
   const ex = new URLSearchParams();
   ex.set("customer", customerId);
   ex.set("type", kind);
-  ex.set("month", validMonth);
+  ex.set("from", fromDate);
+  ex.set("to", toDate);
   const excelHref = `/chat-audit/accounting/vat-report/export?${ex.toString()}`;
 
   return (
@@ -200,8 +255,10 @@ export default async function VatReportPage({
       companyName={companyName}
       companyTaxId={(cust.tax_id ?? "").trim()}
       companyAddress={companyAddress}
-      monthLabel={monthLabelOf(validMonth)}
-      selectedMonth={validMonth}
+      periodLabel={periodLabel}
+      fromDate={fromDate}
+      toDate={toDate}
+      selectedMonth={selectedMonth}
       monthOptions={monthOptions}
       printedAt={printedAtThai()}
       rows={report.rows}

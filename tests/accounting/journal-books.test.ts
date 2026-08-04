@@ -4,6 +4,7 @@ import {
   classifyBook,
   buildJournalBooks,
   zipPosting,
+  visibleBooks,
   BOOK_ORDER,
   type JournalPosting,
 } from "@/lib/accounting/journal-books";
@@ -146,5 +147,21 @@ describe("journal-books: zipPosting (จับคู่เดบิต/เคร
     expect(rows[0].credit?.accountCode).toBe("2010");
     expect(rows[1].debit?.accountCode).toBe("1154");
     expect(rows[1].credit).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------
+describe("journal-books: visibleBooks (เลือกเล่มที่แสดง/พิมพ์)", () => {
+  it("'all' → ครบ 5 เล่มตามลำดับ", () => {
+    expect(visibleBooks("all")).toEqual(BOOK_ORDER);
+  });
+  it("ค่าไม่รู้จัก → ครบ 5 เล่ม (กัน param เพี้ยน)", () => {
+    expect(visibleBooks("")).toEqual(BOOK_ORDER);
+    expect(visibleBooks("weird")).toEqual(BOOK_ORDER);
+  });
+  it("ระบุเล่มเดียว → เล่มนั้นเล่มเดียว", () => {
+    expect(visibleBooks("sale")).toEqual(["sale"]);
+    expect(visibleBooks("purchase")).toEqual(["purchase"]);
+    expect(visibleBooks("general")).toEqual(["general"]);
   });
 });

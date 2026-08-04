@@ -1,8 +1,12 @@
 "use client";
 
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { formatMoney } from "@/lib/accounting/calc";
 import {
   BOOK_ORDER,
+  BOOK_LABELS,
+  visibleBooks,
   zipPosting,
   type JournalBook,
   type BookKind,
@@ -22,29 +26,128 @@ function thaiDate(iso: string | null): string {
  *   ★ reuse สไตล์ vr-* (vat-report.css) + jb-* (journal-books.css) · แต่ละเล่มขึ้นหน้าใหม่ตอนพิมพ์
  *   ★ ไม่ยิง network · PDPA: ไม่ log ค่าใด ๆ
  */
+/** ตัวเลือกเล่มบน dropdown: ทั้งหมด + 5 เล่ม (BookKind) */
+const BOOK_CHOICES: { value: string; label: string }[] = [
+  { value: "all", label: "ทุกเล่ม (5 เล่ม)" },
+  ...BOOK_ORDER.map((k) => ({ value: k, label: BOOK_LABELS[k] })),
+];
+
 export default function JournalBooksDoc({
+  customerId,
   companyName,
-  monthLabel,
+  periodLabel,
+  fromDate,
+  toDate,
+  selectedMonth,
+  monthOptions,
+  initialBook,
   printedAt,
   books,
   skipped,
-  excelHref,
   backHref,
 }: {
+  /** id ลูกค้า — ใช้สร้าง URL เปลี่ยนช่วงวัน */
+  customerId: string;
   companyName: string;
-  monthLabel: string;
+  /** ป้ายช่วงหัวสมุดรายวัน เช่น "มิถุนายน ปี พ.ศ. 2569" หรือ "ตั้งแต่ … ถึง …" */
+  periodLabel: string;
+  /** ช่วงวันที่ที่เลือกอยู่ (YYYY-MM-DD) */
+  fromDate: string;
+  toDate: string;
+  /** เดือนอ้างอิงของปุ่มลัด "ทั้งเดือน" (YYYY-MM) */
+  selectedMonth: string;
+  monthOptions: { value: string; label: string }[];
+  /** เล่มเริ่มต้น (ส่งมาทาง ?book= จากรายงานภาษี) — "all" ถ้าไม่ระบุ */
+  initialBook: string;
   printedAt: string;
   books: Record<BookKind, JournalBook>;
   skipped: SkippedEntry[];
-  excelHref: string;
   backHref: string;
 }) {
+  const router = useRouter();
+  // เล่มที่เลือก (client) — normalize ผ่าน visibleBooks ตอน render
+  const [book, setBook] = useState<string>(
+    BOOK_CHOICES.some((c) => c.value === initialBook) ? initialBook : "all"
+  );
+  const shownBooks = visibleBooks(book);
+
+  // ลิงก์ Excel ตามช่วงวัน + เล่มที่เลือก (book != all → เฉพาะเล่มนั้น)
+  const exParams = new URLSearchParams({ customer: customerId, from: fromDate, to: toDate });
+  if (book !== "all") exParams.set("book", book);
+  const excelHref = `/chat-audit/accounting/journal-books/export?${exParams.toString()}`;
+
+  /** นำทางไปช่วงวันใหม่ (คง customer + เล่มที่เลือกอยู่) */
+  function pushRange(from: string, to: string) {
+    const params = new URLSearchParams();
+    params.set("customer", customerId);
+    params.set("from", from);
+    params.set("to", to);
+    if (book !== "all") params.set("book", book);
+    router.push(`/chat-audit/accounting/journal-books?${params.toString()}`);
+  }
+
+  /** ปุ่มลัด "ทั้งเดือน": เลือกเดือน YYYY-MM → from=วันที่1, to=วันสุดท้ายของเดือน */
+  function onWholeMonth(month: string) {
+    const [y, m] = month.split("-").map(Number);
+    if (!y || !m) return;
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    pushRange(`${month}-01`, `${month}-${String(last).padStart(2, "0")}`);
+  }
+
   return (
     <div className="vr-shell">
       {/* ---- แถบเครื่องมือ (ซ่อนตอนพิมพ์) ---- */}
       <div className="vr-toolbar no-print">
         <a href={backHref} className="vr-btn vr-btn-ghost">← กลับ</a>
-        <span className="vr-toolbar-hint">ตรวจแล้วกด “พิมพ์ / บันทึก PDF” หรือดาวน์โหลด Excel (ทั้ง 5 เล่ม)</span>
+        <label className="vr-month-picker">
+          <span>ตั้งแต่</span>
+          <input
+            type="date"
+            className="vr-select vr-date-in"
+            value={fromDate}
+            max={toDate || undefined}
+            onChange={(e) => e.target.value && pushRange(e.target.value, toDate)}
+            aria-label="วันเริ่มต้น"
+          />
+        </label>
+        <label className="vr-month-picker">
+          <span>ถึง</span>
+          <input
+            type="date"
+            className="vr-select vr-date-in"
+            value={toDate}
+            min={fromDate || undefined}
+            onChange={(e) => e.target.value && pushRange(fromDate, e.target.value)}
+            aria-label="วันสิ้นสุด"
+          />
+        </label>
+        <label className="vr-month-picker">
+          <span>ทั้งเดือน</span>
+          <select
+            className="vr-select"
+            value={selectedMonth}
+            onChange={(e) => onWholeMonth(e.target.value)}
+            aria-label="เลือกทั้งเดือน"
+          >
+            {monthOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="vr-month-picker">
+          <span>เล่ม</span>
+          <select
+            className="vr-select"
+            value={book}
+            onChange={(e) => setBook(e.target.value)}
+            aria-label="เลือกเล่มสมุดรายวัน"
+          >
+            {BOOK_CHOICES.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+        </label>
+        <span className="vr-toolbar-hint" style={{ flex: 1 }} />
         <a href={excelHref} className="vr-btn vr-btn-ghost">⬇ Excel</a>
         <button type="button" className="vr-btn vr-btn-primary" onClick={() => window.print()}>
           🖨 พิมพ์ / บันทึก PDF
@@ -59,7 +162,7 @@ export default function JournalBooksDoc({
         </div>
       ) : null}
 
-      {/* ================= 5 เล่ม ================= */}
+      {/* ================= เล่มที่เลือก (ทั้งหมด/เล่มเดียว) ================= */}
       <div className="vr-page">
         {/* หัวรวม */}
         <div className="vr-head">
@@ -67,12 +170,12 @@ export default function JournalBooksDoc({
           <div className="vr-head-center">
             <div className="vr-title">- สมุดรายวัน -</div>
             <div className="vr-company">{companyName}</div>
-            <div className="vr-month">เดือน {monthLabel}</div>
+            <div className="vr-month">{periodLabel}</div>
           </div>
           <div className="vr-head-right"><div>สำนักงานใหญ่</div></div>
         </div>
 
-        {BOOK_ORDER.map((kind) => (
+        {shownBooks.map((kind) => (
           <BookSection key={kind} book={books[kind]} />
         ))}
       </div>

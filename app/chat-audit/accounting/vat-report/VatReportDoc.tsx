@@ -31,7 +31,9 @@ export default function VatReportDoc({
   companyName,
   companyTaxId,
   companyAddress,
-  monthLabel,
+  periodLabel,
+  fromDate,
+  toDate,
   selectedMonth,
   monthOptions,
   printedAt,
@@ -40,18 +42,21 @@ export default function VatReportDoc({
   excelHref,
   backHref,
 }: {
-  /** id ลูกค้า — ใช้สร้าง URL เปลี่ยนเดือน + บันทึกที่อยู่ถาวร */
+  /** id ลูกค้า — ใช้สร้าง URL เปลี่ยนช่วงวัน + บันทึกที่อยู่ถาวร */
   customerId: string;
   kind: VatReportKind;
   companyName: string;
   companyTaxId: string;
   /** ที่อยู่บริษัทลูกค้า (จาก customers.address) · "" = ยังไม่กรอก → เว้น/ขีดเส้น */
   companyAddress: string;
-  /** ป้ายเดือนภาษี เช่น "กรกฎาคม ปี พ.ศ. 2569" */
-  monthLabel: string;
-  /** เดือนที่เลือกอยู่ "YYYY-MM" (ค่าใน dropdown) */
+  /** ป้ายช่วงหัวรายงาน เช่น "เดือนภาษี มิถุนายน ปี พ.ศ. 2569" หรือ "ตั้งแต่ … ถึง …" */
+  periodLabel: string;
+  /** ช่วงวันที่ที่เลือกอยู่ (YYYY-MM-DD) สำหรับช่อง date input */
+  fromDate: string;
+  toDate: string;
+  /** เดือนอ้างอิงของปุ่มลัด "ทั้งเดือน" (YYYY-MM) */
   selectedMonth: string;
-  /** ตัวเลือกเดือนย้อนหลังสำหรับ dropdown */
+  /** ตัวเลือกเดือนย้อนหลังสำหรับปุ่มลัด "ทั้งเดือน" */
   monthOptions: { value: string; label: string }[];
   /** วันที่/เวลาพิมพ์ (เวลาไทย) เช่น "04/08/2569 09:30" */
   printedAt: string;
@@ -74,14 +79,33 @@ export default function VatReportDoc({
   const [saving, startSave] = useTransition();
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  /** เปลี่ยนเดือน → navigate ไป URL เดิม + month=YYYY-MM เพื่อ re-query เดือนนั้น */
-  function onMonthChange(value: string) {
+  /** นำทางไปช่วงวันใหม่ (คง customer/type) เพื่อ re-query ตามช่วง [from, to] */
+  function pushRange(from: string, to: string) {
     const params = new URLSearchParams();
     params.set("customer", customerId);
     params.set("type", kind);
-    params.set("month", value);
+    params.set("from", from);
+    params.set("to", to);
     router.push(`/chat-audit/accounting/vat-report?${params.toString()}`);
   }
+
+  /** ปุ่มลัด "ทั้งเดือน": เลือกเดือน YYYY-MM → from=วันที่1, to=วันสุดท้ายของเดือนนั้น */
+  function onWholeMonth(month: string) {
+    const [y, m] = month.split("-").map(Number);
+    if (!y || !m) return;
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate(); // วันสุดท้ายของเดือน
+    pushRange(`${month}-01`, `${month}-${String(last).padStart(2, "0")}`);
+  }
+
+  // ลิงก์ไปสมุดรายวันเล่มที่ตรงกัน (ภาษีขาย→เล่มขาย, ภาษีซื้อ→เล่มซื้อ) ลูกค้า+ช่วงเดียวกัน
+  const jbParams = new URLSearchParams({
+    customer: customerId,
+    from: fromDate,
+    to: toDate,
+    book: kind, // "purchase" | "sale"
+  });
+  const journalHref = `/chat-audit/accounting/journal-books?${jbParams.toString()}`;
+  const journalLabel = kind === "sale" ? "→ สมุดรายวันขาย" : "→ สมุดรายวันซื้อ";
 
   /** บันทึกที่อยู่ปัจจุบันให้ลูกค้าถาวร (customers.address) */
   function saveAddress() {
@@ -98,19 +122,42 @@ export default function VatReportDoc({
       <div className="vr-toolbar no-print">
         <a href={backHref} className="vr-btn vr-btn-ghost">← กลับ</a>
         <label className="vr-month-picker">
-          <span>ประจำเดือน</span>
+          <span>ตั้งแต่</span>
+          <input
+            type="date"
+            className="vr-select vr-date-in"
+            value={fromDate}
+            max={toDate || undefined}
+            onChange={(e) => e.target.value && pushRange(e.target.value, toDate)}
+            aria-label="วันเริ่มต้น"
+          />
+        </label>
+        <label className="vr-month-picker">
+          <span>ถึง</span>
+          <input
+            type="date"
+            className="vr-select vr-date-in"
+            value={toDate}
+            min={fromDate || undefined}
+            onChange={(e) => e.target.value && pushRange(fromDate, e.target.value)}
+            aria-label="วันสิ้นสุด"
+          />
+        </label>
+        <label className="vr-month-picker">
+          <span>ทั้งเดือน</span>
           <select
             className="vr-select"
             value={selectedMonth}
-            onChange={(e) => onMonthChange(e.target.value)}
-            aria-label="เลือกเดือนภาษี"
+            onChange={(e) => onWholeMonth(e.target.value)}
+            aria-label="เลือกทั้งเดือน"
           >
             {monthOptions.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
         </label>
-        <span className="vr-toolbar-hint">ตรวจแล้วกด “พิมพ์ / บันทึก PDF” หรือดาวน์โหลด Excel</span>
+        <span className="vr-toolbar-hint">เลือกช่วงวัน หรือกด “ทั้งเดือน” · แล้วพิมพ์/บันทึก PDF หรือ Excel</span>
+        <a href={journalHref} className="vr-btn vr-btn-ghost">{journalLabel}</a>
         <a href={excelHref} className="vr-btn vr-btn-ghost">⬇ Excel</a>
         <button type="button" className="vr-btn vr-btn-primary" onClick={() => window.print()}>
           🖨 พิมพ์ / บันทึก PDF
@@ -141,7 +188,7 @@ export default function VatReportDoc({
               placeholder="ที่อยู่กิจการ (พิมพ์ใส่ได้)"
               aria-label="ที่อยู่กิจการ"
             />
-            <div className="vr-month">เดือนภาษี {monthLabel}</div>
+            <div className="vr-month">{periodLabel}</div>
           </div>
           <div className="vr-head-right">
             <div>Page 1</div>
@@ -197,7 +244,7 @@ export default function VatReportDoc({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="vr-empty">ไม่มีรายการในเดือนภาษีนี้</td>
+                <td colSpan={9} className="vr-empty">ไม่มีรายการในช่วงวันที่นี้</td>
               </tr>
             ) : (
               rows.map((r, i) => (

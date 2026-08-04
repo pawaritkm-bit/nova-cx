@@ -3,7 +3,7 @@ import ExcelJS from "exceljs";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/access";
-import { listEntries, round2, type ListEntriesFilter } from "@/lib/accounting/queries";
+import { listEntries, monthBounds, round2, type ListEntriesFilter } from "@/lib/accounting/queries";
 import { buildVatReport, type VatReport, type VatReportKind } from "@/lib/accounting/vat-report";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +18,8 @@ const THAI_MONTHS = [
   "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.",
 ];
 
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
 /** YYYY-MM → "ก.ค. 2569" (คืน "ทุกเดือน" ถ้าไม่มี) */
 function shortMonthLabel(month: string): string {
   const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
@@ -30,6 +32,16 @@ function thaiDate(iso: string | null): string {
   if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return "";
   const [y, mm, dd] = iso.slice(0, 10).split("-");
   return `${dd}/${mm}/${Number(y) + 543}`;
+}
+
+/** ป้ายช่วงวันสำหรับหัว Excel — ทั้งเดือนพอดี = "ก.ค. 2569" · ไม่งั้น = "01/06/2569 - 30/06/2569" */
+function periodLabelOf(from: string, to: string): string {
+  const fm = from.slice(0, 7);
+  const b = monthBounds(fm);
+  if (b && fm === to.slice(0, 7) && from === b.first && to === b.last) {
+    return shortMonthLabel(fm);
+  }
+  return `${thaiDate(from)} - ${thaiDate(to)}`;
 }
 
 /**
@@ -104,19 +116,37 @@ async function buildVatReportWorkbook(
 }
 
 /**
- * GET /chat-audit/accounting/vat-report/export?customer=<uuid>&type=purchase|sale&month=YYYY-MM
- *   ดาวน์โหลดรายงานภาษีซื้อ/ขายเป็น .xlsx (คอลัมน์ตรงกับหน้าจอ)
+ * GET /chat-audit/accounting/vat-report/export?customer=<uuid>&type=purchase|sale&from=YYYY-MM-DD&to=YYYY-MM-DD
+ *   (รองรับ month=YYYY-MM แบบเดิมด้วย — จะแปลงเป็นช่วงทั้งเดือน) · ดาวน์โหลด .xlsx
  *
  * สิทธิ์ (default deny): resolveAccountingAccess + customerInScope · tenantId จาก session
- * ★ PDPA: ไม่ log ชื่อ/เลขภาษี/ที่อยู่/ตัวเลข · ชื่อไฟล์ใช้รหัสลูกค้า/เดือนเท่านั้น
+ * ★ PDPA: ไม่ log ชื่อ/เลขภาษี/ที่อยู่/ตัวเลข · ชื่อไฟล์ใช้รหัสลูกค้า/ช่วงวันเท่านั้น
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const customerId = url.searchParams.get("customer") ?? "";
   const typeParam = url.searchParams.get("type") ?? "";
-  const monthParam = url.searchParams.get("month") ?? "";
   const kind: VatReportKind = typeParam === "sale" ? "sale" : "purchase";
-  const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(monthParam) ? monthParam : "";
+
+  // ช่วงวัน: รับ from/to เป็นหลัก · fallback month=YYYY-MM → แปลงเป็นทั้งเดือน
+  const fromParam = url.searchParams.get("from") ?? "";
+  const toParam = url.searchParams.get("to") ?? "";
+  const monthParam = url.searchParams.get("month") ?? "";
+  const fromValid = DATE_RE.test(fromParam) ? fromParam : "";
+  const toValid = DATE_RE.test(toParam) ? toParam : "";
+  let fromDate = "";
+  let toDate = "";
+  if (fromValid || toValid) {
+    fromDate = fromValid || toValid;
+    toDate = toValid || fromValid;
+    if (fromDate > toDate) [fromDate, toDate] = [toDate, fromDate];
+  } else {
+    const b = monthBounds(monthParam);
+    if (b) {
+      fromDate = b.first;
+      toDate = b.last;
+    }
+  }
 
   if (!getSupabaseEnv()) {
     return NextResponse.json({ error: "db_unavailable", message: "ยังไม่ได้ตั้งค่าฐานข้อมูล" }, { status: 503 });
@@ -164,21 +194,23 @@ export async function GET(req: Request) {
     }
 
     const filter: ListEntriesFilter = { customerId, entryType: kind };
-    if (validMonth) filter.month = validMonth;
+    if (fromDate) filter.dateFrom = fromDate;
+    if (toDate) filter.dateTo = toDate;
     const { entries } = await listEntries(service, tenantId, filter);
     const report = buildVatReport(entries, kind);
 
+    const periodLabel = fromDate && toDate ? periodLabelOf(fromDate, toDate) : "ทุกเดือน";
     const xlsx = await buildVatReportWorkbook(report, {
       companyName: (c?.business_name || c?.name || "กิจการ").trim(),
       companyAddress,
       companyTaxId: (c?.tax_id ?? "").trim(),
-      monthLabel: shortMonthLabel(validMonth),
+      monthLabel: periodLabel,
     });
 
     const kindName = kind === "sale" ? "รายงานภาษีขาย" : "รายงานภาษีซื้อ";
     const codePart = c?.customer_code ? `-${c.customer_code.replace(/[^\w.-]/g, "")}` : `-${customerId.slice(0, 8)}`;
-    const monthPart = validMonth ? `-${validMonth}` : "";
-    const filename = `${kindName}${codePart}${monthPart}.xlsx`;
+    const rangePart = fromDate && toDate ? `-${fromDate}_${toDate}` : "";
+    const filename = `${kindName}${codePart}${rangePart}.xlsx`;
     const asciiFallback = `vat-report${codePart}.xlsx`;
 
     return new NextResponse(xlsx as unknown as BodyInit, {
