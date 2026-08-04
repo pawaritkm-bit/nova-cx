@@ -32,6 +32,10 @@ import {
 import { normalizeTaxId } from "@/lib/accounting/tax-id";
 import { redecideExistingEntries } from "@/lib/line/bill-extract-worker";
 import { pushCustomerTaxId } from "@/lib/integrations/nova-sales-outbound";
+import {
+  fetchCustomerFromNovaSales,
+  type NovaSalesCustomerInfo,
+} from "@/lib/integrations/nova-sales-query";
 
 const PATH = "/chat-audit/accounting";
 
@@ -163,6 +167,8 @@ export type UpdateCustomerFieldsInput = {
   taxId?: string | null;
   /** ที่อยู่บริษัทลูกค้า (customers.address — migration 0058) · "" = ล้าง */
   address?: string | null;
+  /** เบอร์โทรติดต่อ (customers.phone — migration 0059) · "" = ล้าง */
+  phone?: string | null;
 };
 
 /**
@@ -227,7 +233,16 @@ export async function updateCustomerFieldsAction(
       addressToWrite = fields.address === null ? null : clampText(fields.address, 500);
     }
 
-    if (Object.keys(patch).length === 0 && !addressProvided) {
+    // เบอร์โทร (customers.phone) — เขียนแยกแบบ best-effort (คอลัมน์เพิ่งเพิ่ม 0059)
+    //   ส่ง "" = ล้างเป็น null · undefined = ไม่แตะ
+    let phoneProvided = false;
+    let phoneToWrite: string | null = null;
+    if (fields.phone !== undefined) {
+      phoneProvided = true;
+      phoneToWrite = fields.phone === null ? null : clampText(fields.phone, 60);
+    }
+
+    if (Object.keys(patch).length === 0 && !addressProvided && !phoneProvided) {
       return { ok: false, message: "ไม่มีข้อมูลที่ต้องบันทึก" };
     }
 
@@ -272,6 +287,22 @@ export async function updateCustomerFieldsAction(
       }
     }
 
+    // ---- อัปเดตเบอร์โทร (best-effort — คอลัมน์ยังไม่ apply migration 0059 → จับ error เงียบ ไม่ crash) ----
+    let phoneFailed = false;
+    if (phoneProvided) {
+      try {
+        const { error: phoneErr } = await service
+          .from("customers")
+          .update({ phone: phoneToWrite })
+          .eq("id", customerId)
+          .eq("tenant_id", ctx.tenantId)
+          .is("deleted_at", null);
+        if (phoneErr) phoneFailed = true;
+      } catch {
+        phoneFailed = true; // คอลัมน์ phone ยังไม่มี (ยังไม่ apply 0059)
+      }
+    }
+
     // เลขภาษีเปลี่ยน → รักษา loop เดิม: re-decide บิล 'รอระบุ' + ส่งกลับ NOVA Sale (best-effort)
     let redecided = 0;
     if (taxIdToWrite && cust) {
@@ -290,11 +321,94 @@ export async function updateCustomerFieldsAction(
 
     revalidatePath(PATH);
     const suffix = redecided > 0 ? ` · จับคู่ซื้อ/ขายให้ ${redecided} รายการแล้ว` : "";
-    // ที่อยู่บันทึกไม่สำเร็จ (คอลัมน์ยังไม่ apply) → แจ้งเตือน แต่ช่องอื่นบันทึกแล้ว
+    // ที่อยู่/เบอร์บันทึกไม่สำเร็จ (คอลัมน์ยังไม่ apply) → แจ้งเตือน แต่ช่องอื่นบันทึกแล้ว
     const addrNote = addressFailed ? " (ยังบันทึกที่อยู่ไม่ได้ — โปรด apply migration 0058)" : "";
-    return { ok: true, message: `บันทึกข้อมูลลูกค้าแล้ว${suffix}${addrNote}`, id: customerId };
+    const phoneNote = phoneFailed ? " (ยังบันทึกเบอร์โทรไม่ได้ — โปรด apply migration 0059)" : "";
+    return {
+      ok: true,
+      message: `บันทึกข้อมูลลูกค้าแล้ว${suffix}${addrNote}${phoneNote}`,
+      id: customerId,
+    };
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "บันทึกข้อมูลลูกค้าไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+// ---------------------------------------------------------------------
+// (3) ดึงข้อมูลลูกค้าจาก NOVA Sales (ที่อยู่/เบอร์/ชื่อ) ด้วยเลขภาษี
+// ---------------------------------------------------------------------
+
+export type PullFromNovaSalesResult = {
+  ok: boolean;
+  message: string;
+  /** ข้อมูลที่ดึงมาได้ (ให้ฟอร์มเติมช่องให้ผู้ใช้ตรวจแล้วกดบันทึกเอง — ★ ไม่บันทึกอัตโนมัติ) */
+  data?: NovaSalesCustomerInfo;
+};
+
+/**
+ * ดึงข้อมูลลูกค้าจาก NOVA Sales มาเติมในฟอร์ม (admin หรือ นักบัญชี/หัวหน้าที่ดูแลลูกค้ารายนั้น)
+ *   - จับคู่ลูกค้าด้วย tax_id ที่ CX เก็บไว้ → ยิง NOVA Sales External API v1 (query client)
+ *   - คืน ที่อยู่ / เบอร์ / ชื่อ ให้ฟอร์มเติมช่อง → ★ ผู้ใช้ตรวจแล้วกด "บันทึกข้อมูล" เอง
+ *     (เลือกทางปลอดภัย: ไม่เขียนทับอัตโนมัติ กันข้อมูลต้นทางเพี้ยนไปทับของที่นักบัญชีแก้ไว้)
+ *   - degrade อย่างสุภาพ: ไม่มีเลขภาษี / ยังไม่เปิดการเชื่อม / ไม่เจอ → แจ้งข้อความ ไม่ crash
+ *   ★ PDPA: ไม่ log เลขภาษี/ชื่อ/ที่อยู่/เบอร์
+ */
+export async function pullCustomerFromNovaSalesAction(
+  customerId: string
+): Promise<PullFromNovaSalesResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    if (!isUuid(customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    if (!(await customerBelongsToTenant(service, ctx.tenantId, customerId))) {
+      return { ok: false, message: "ไม่พบลูกค้าในสำนักงานนี้" };
+    }
+    // ★ สโคปเดียวกับการแก้ลูกค้า: นักบัญชี/หัวหน้าดึงได้เฉพาะลูกค้าที่ตัวเองดูแล (admin ผ่านทุกราย)
+    assertCustomerInScope(ctx, customerId);
+
+    // ดึงเลขภาษีของลูกค้าเป็นกุญแจจับคู่
+    const { data: cust } = await service
+      .from("customers")
+      .select("tax_id")
+      .eq("id", customerId)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+
+    const taxId = (cust as { tax_id: string | null } | null)?.tax_id ?? null;
+    if (!taxId) {
+      return {
+        ok: false,
+        message: "ลูกค้ารายนี้ยังไม่มีเลขภาษี — กรอกเลขภาษีก่อนจึงจะดึงจาก NOVA Sales ได้",
+      };
+    }
+
+    const res = await fetchCustomerFromNovaSales(taxId);
+    if (res.ok) {
+      return {
+        ok: true,
+        message: "ดึงข้อมูลจาก NOVA Sales แล้ว — ตรวจสอบความถูกต้องแล้วกด “บันทึกข้อมูล”",
+        data: res.data,
+      };
+    }
+
+    // แปลงเหตุผลเป็นข้อความสุภาพต่อผู้ใช้ (ไม่เปิดเผยรายละเอียดภายใน)
+    const msg =
+      res.reason === "not_configured"
+        ? "ยังไม่ได้เปิดการเชื่อมกับ NOVA Sales (ผู้ดูแลระบบต้องตั้งค่า NOVA_SALES_QUERY_URL และ NOVA_SALES_QUERY_API_KEY)"
+        : res.reason === "unauthorized"
+          ? "เชื่อมต่อ NOVA Sales ไม่ได้ (คีย์ไม่ถูกต้อง) — โปรดแจ้งผู้ดูแลระบบ"
+          : res.reason === "invalid_tax_id"
+            ? "เลขภาษีของลูกค้าไม่ครบ 13 หลัก จึงค้นใน NOVA Sales ไม่ได้"
+            : res.reason === "not_found"
+              ? "ไม่พบข้อมูลลูกค้ารายนี้ใน NOVA Sales"
+              : "ดึงข้อมูลจาก NOVA Sales ไม่สำเร็จ กรุณาลองใหม่";
+    return { ok: false, message: msg };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ดึงข้อมูลจาก NOVA Sales ไม่สำเร็จ กรุณาลองใหม่" };
   }
 }

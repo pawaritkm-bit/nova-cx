@@ -373,6 +373,34 @@ async function fetchCustomerAddresses(
 }
 
 /**
+ * ดึงเบอร์โทร (phone) ของ customerIds — สำหรับ prefill ช่องแก้เบอร์โทร
+ *   ★ best-effort: คอลัมน์ phone เพิ่งเพิ่ม (migration 0059) — ยังไม่ apply → คืน map ว่าง (ไม่ crash)
+ *   ★ แยกจาก fetchCustomerAddresses เพื่อให้ degrade อิสระ (address apply แล้วแต่ phone ยัง ก็ยังได้ address)
+ */
+async function fetchCustomerPhones(
+  service: SupabaseClient,
+  tenantId: string,
+  ids: string[]
+): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>();
+  if (ids.length === 0) return map;
+  try {
+    const { data, error } = await service
+      .from("customers")
+      .select("id, phone")
+      .eq("tenant_id", tenantId)
+      .in("id", ids);
+    if (error) return map; // คอลัมน์ยังไม่มี → ปล่อยว่าง
+    for (const c of (data ?? []) as { id: string; phone: string | null }[]) {
+      map.set(c.id, c.phone);
+    }
+  } catch {
+    // คอลัมน์ phone ยังไม่ apply / blip → คืน map ว่าง
+  }
+  return map;
+}
+
+/**
  * สร้าง signed URL (batch — 1 call) ให้ thumbnail ที่ต้องโชว์ (PDPA/perf)
  *   ★ perf: batch เดียว = ไม่บล็อก SSR render นาน (ต่างจาก sign ทีละใบ 100+ ครั้ง)
  *     รูปเต็ม แต่ thumbnail ในตาราง lazy-load → เบราว์เซอร์โหลดเฉพาะที่เห็นในจอ
@@ -855,10 +883,11 @@ export default async function AccountingPage({
   // รหัสลูกค้า (สำหรับ avatar/ชื่อ/ค้นหา/ไฟล์ Excel) เฉพาะที่โชว์
   //   ★ perf: ไม่ดึงรายชื่อลูกค้า 5,000 รายทุกคลิกแล้ว — dropdown อัปไฟล์โหลดตอนเปิดกล่อง (on-demand)
   const custIds = [...new Set(allEntries.map((e) => e.customerId).filter((x): x is string => !!x))];
-  const [codeById, taxIdById, addressById] = await Promise.all([
+  const [codeById, taxIdById, addressById, phoneById] = await Promise.all([
     fetchCustomerCodes(service, tenantId, custIds),
     fetchCustomerTaxIds(service, tenantId, custIds),
     fetchCustomerAddresses(service, tenantId, custIds),
+    fetchCustomerPhones(service, tenantId, custIds),
   ]);
 
   // ---- จัดการลูกค้า: รายชื่อนักบัญชี + ผู้ดูแลปัจจุบันต่อลูกค้า (สำหรับปุ่ม "เปลี่ยนผู้ดูแล") ----
@@ -1033,6 +1062,7 @@ export default async function AccountingPage({
           initialCode={code}
           initialTaxId={taxIdById.get(g.customerId) ?? null}
           initialAddress={addressById.get(g.customerId) ?? null}
+          initialPhone={phoneById.get(g.customerId) ?? null}
         />
       ) : null}
 

@@ -2,7 +2,11 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { reassignCustomerAction, updateCustomerFieldsAction } from "./customer-admin-actions";
+import {
+  reassignCustomerAction,
+  updateCustomerFieldsAction,
+  pullCustomerFromNovaSalesAction,
+} from "./customer-admin-actions";
 
 /** นักบัญชี 1 คนสำหรับ dropdown */
 export type AccountantOption = { employeeId: string; name: string };
@@ -25,6 +29,7 @@ export default function CustomerAdminControls({
   initialCode,
   initialTaxId,
   initialAddress,
+  initialPhone,
 }: {
   customerId: string;
   /** true = แสดงปุ่ม "เปลี่ยนผู้ดูแล" (admin เท่านั้น) */
@@ -36,6 +41,8 @@ export default function CustomerAdminControls({
   initialTaxId: string | null;
   /** ที่อยู่บริษัทลูกค้า (customers.address) — undefined ถ้าคอลัมน์ยังไม่ apply */
   initialAddress?: string | null;
+  /** เบอร์โทรติดต่อ (customers.phone) — undefined ถ้าคอลัมน์ยังไม่ apply */
+  initialPhone?: string | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -51,7 +58,10 @@ export default function CustomerAdminControls({
   const [code, setCode] = useState(initialCode ?? "");
   const [taxId, setTaxId] = useState(initialTaxId ?? "");
   const [address, setAddress] = useState(initialAddress ?? "");
+  const [phone, setPhone] = useState(initialPhone ?? "");
   const [editMsg, setEditMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // สถานะปุ่ม "ดึงจาก NOVA Sales" (แยกจาก pending บันทึก เพื่อโชว์ข้อความของตัวเอง)
+  const [pulling, setPulling] = useState(false);
 
   function doReassign() {
     setAssignMsg(null);
@@ -85,12 +95,33 @@ export default function CustomerAdminControls({
         code, // "" = ล้างรหัส
         taxId, // "" = ล้างเลขภาษี
         address, // "" = ล้างที่อยู่
+        phone, // "" = ล้างเบอร์โทร
       });
       setEditMsg({ ok: res.ok, text: res.message });
       if (res.ok) {
         setEditOpen(false);
         router.refresh();
       }
+    });
+  }
+
+  /**
+   * ดึงข้อมูลจาก NOVA Sales ด้วยเลขภาษีของลูกค้า → เติมช่อง ชื่อ/ที่อยู่/เบอร์ ให้
+   *   ★ ไม่บันทึกอัตโนมัติ: เติมช่องแล้วให้ผู้ใช้ตรวจ แล้วกด "บันทึกข้อมูล" เอง
+   *   ★ เติมเฉพาะช่องที่ NOVA Sales มีค่า (ค่าว่างไม่ทับของเดิมในฟอร์ม)
+   */
+  function doPull() {
+    setEditMsg(null);
+    setPulling(true);
+    startTransition(async () => {
+      const res = await pullCustomerFromNovaSalesAction(customerId);
+      if (res.ok && res.data) {
+        if (res.data.name) setName(res.data.name);
+        if (res.data.address) setAddress(res.data.address);
+        if (res.data.phone) setPhone(res.data.phone);
+      }
+      setEditMsg({ ok: res.ok, text: res.message });
+      setPulling(false);
     });
   }
 
@@ -219,6 +250,18 @@ export default function CustomerAdminControls({
               disabled={pending}
             />
           </label>
+          <label className="acc-taxid-field" style={{ margin: 0 }}>
+            <span className="acc-taxid-label">เบอร์โทรติดต่อ</span>
+            <input
+              className="acc-taxid-input"
+              inputMode="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="เบอร์โทรติดต่อ (เว้นว่างได้)"
+              maxLength={60}
+              disabled={pending}
+            />
+          </label>
           <label className="acc-taxid-field" style={{ margin: 0, flexBasis: "100%" }}>
             <span className="acc-taxid-label">ที่อยู่ (ขึ้นหัวรายงานภาษีซื้อ/ขาย)</span>
             <textarea
@@ -232,8 +275,18 @@ export default function CustomerAdminControls({
               style={{ width: "100%", resize: "vertical" }}
             />
           </label>
+          {/* ดึงจาก NOVA Sales: เติม ชื่อ/ที่อยู่/เบอร์ ด้วยเลขภาษี — ผู้ใช้ตรวจแล้วกดบันทึกเอง */}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={doPull}
+            disabled={pending}
+            title="ดึงชื่อ/ที่อยู่/เบอร์โทร จาก NOVA Sales ด้วยเลขภาษีของลูกค้า"
+          >
+            {pulling ? "กำลังดึง…" : "⬇️ ดึงจาก NOVA Sales"}
+          </button>
           <button type="button" className="btn" onClick={doUpdate} disabled={pending}>
-            {pending ? "กำลังบันทึก…" : "บันทึกข้อมูล"}
+            {pending && !pulling ? "กำลังบันทึก…" : "บันทึกข้อมูล"}
           </button>
           <button
             type="button"
@@ -245,6 +298,7 @@ export default function CustomerAdminControls({
               setCode(initialCode ?? "");
               setTaxId(initialTaxId ?? "");
               setAddress(initialAddress ?? "");
+              setPhone(initialPhone ?? "");
             }}
             disabled={pending}
           >
