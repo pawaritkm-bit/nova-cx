@@ -56,38 +56,45 @@ describe("tax-month: purchaseFetchLowerBound", () => {
   });
 });
 
-describe("tax-month: filterPurchaseByTaxMonth (ยึดเดือนที่ติ๊ก inputTaxMonth ล้วน)", () => {
+describe("tax-month: filterPurchaseByTaxMonth (ยึด effectiveTaxMonth)", () => {
   const mk = (id: string, docDate: string | null, inputTaxMonth: string | null = null) => ({
     id,
     docDate,
     inputTaxMonth,
   });
 
-  it("★ ต้องติ๊ก (inputTaxMonth) ก่อนถึงเข้ารายงาน — ไม่ยึดวันที่บิล", () => {
+  it("บิลปกติ (ไม่ยกเดือน) เข้าตามเดือน doc_date", () => {
     const entries = [
-      mk("a", "2026-07-05", null),      // ก.ค. แต่ยังไม่ติ๊ก → ไม่เข้า
-      mk("b", "2026-06-20", "2026-07"), // บิล มิ.ย. ติ๊กยื่น ก.ค. → เข้า
+      mk("a", "2026-07-05"), // ก.ค.
+      mk("b", "2026-06-30"), // มิ.ย. → นอกช่วง
     ];
     const out = filterPurchaseByTaxMonth(entries, "2026-07", "2026-07");
-    expect(out.map((e) => e.id)).toEqual(["b"]);
+    expect(out.map((e) => e.id)).toEqual(["a"]);
   });
 
-  it("ยกเดือน: ติ๊ก ก.ค. → โผล่ ก.ค. ไม่โผล่ มิ.ย.", () => {
-    const entries = [mk("a", "2026-06-20", "2026-07")];
-    expect(filterPurchaseByTaxMonth(entries, "2026-07", "2026-07").map((e) => e.id)).toEqual(["a"]);
-    expect(filterPurchaseByTaxMonth(entries, "2026-06", "2026-06")).toEqual([]);
-  });
-
-  it("ยังไม่ติ๊ก (null) → ตัดออกแม้มีวันที่บิล", () => {
-    expect(filterPurchaseByTaxMonth([mk("a", "2026-07-05", null)], "2026-07", "2026-07")).toEqual([]);
-    expect(filterPurchaseByTaxMonth([mk("a", null, null)], "2026-07", "2026-07")).toEqual([]);
-  });
-
-  it("ช่วงหลายเดือน [start,end] inclusive (ตามเดือนที่ติ๊ก)", () => {
+  it("บิลยกเดือน (inputTaxMonth) โผล่ในเดือนที่ยื่นจริง ไม่ใช่เดือน doc_date", () => {
     const entries = [
-      mk("a", "2026-06-01", "2026-06"),
-      mk("b", "2026-07-01", "2026-07"),
-      mk("c", "2026-08-01", "2026-08"),
+      mk("a", "2026-06-20", "2026-07"), // บิล มิ.ย. ยกไปยื่น ก.ค.
+      mk("b", "2026-07-10"),            // บิล ก.ค. ปกติ
+    ];
+    // เลือกช่วง ก.ค. → ได้ทั้ง a (ยกมา) และ b
+    const jul = filterPurchaseByTaxMonth(entries, "2026-07", "2026-07");
+    expect(jul.map((e) => e.id).sort()).toEqual(["a", "b"]);
+    // เลือกช่วง มิ.ย. → a ไม่โผล่ (ยกออกไป ก.ค. แล้ว)
+    const jun = filterPurchaseByTaxMonth(entries, "2026-06", "2026-06");
+    expect(jun.map((e) => e.id)).toEqual([]);
+  });
+
+  it("บิลไม่มีวันที่ + ไม่ระบุเดือน (effectiveTaxMonth=null) → ตัดออก", () => {
+    const entries = [mk("a", null, null)];
+    expect(filterPurchaseByTaxMonth(entries, "2026-07", "2026-07")).toEqual([]);
+  });
+
+  it("ช่วงหลายเดือน [start,end] inclusive", () => {
+    const entries = [
+      mk("a", "2026-06-01"),
+      mk("b", "2026-07-01"),
+      mk("c", "2026-08-01"),
     ];
     const out = filterPurchaseByTaxMonth(entries, "2026-06", "2026-07");
     expect(out.map((e) => e.id).sort()).toEqual(["a", "b"]);
