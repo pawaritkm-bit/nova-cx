@@ -28,7 +28,8 @@ import { taxMonthOptions, taxMonthLabel } from "@/lib/accounting/tax-month";
  *     - "พิมพ์ทับได้ทุกช่อง" — แก้ VAT/หักเองได้ (ไม่ถูก override กลับ)
  * ★ เปลี่ยนประเภท ซื้อ↔ขาย (แก้ AI ผิด) ในฟอร์ม → บันทึกแล้วย้ายแท็บเอง
  * ★ ทุกการเขียนผ่าน server action (guard admin + service-role) — client แค่ช่วยแสดง/กรอก
- * ★ entry ที่ยืนยันแล้ว = อ่านอย่างเดียว (ปิดการแก้) เหลือแค่ปุ่มลบ
+ * ★ entry ที่ยืนยันแล้ว = เริ่มต้นอ่านอย่างเดียว (กันแก้พลาด) — กดปุ่ม "✏️ แก้ไข" เพื่อ
+ *   ปลดล็อกทั้งใบ (unlocked) แล้วแก้ทุกช่องได้ · บันทึกแล้วยัง "คงสถานะยืนยัน" (ไม่ปลดเป็นร่าง)
  */
 
 type LineRow = {
@@ -133,7 +134,11 @@ export default function EntryEditor({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // บิลยืนยันแล้ว = readOnly (เริ่มต้นล็อก) · กด "แก้ไข" → unlocked → ปลดล็อกทั้งใบ
+  //   locked = "ล็อกอยู่จริงตอนนี้" (ใช้คุม disabled/ซ่อนปุ่มทั้งฟอร์ม)
   const readOnly = entry.status === "confirmed";
+  const [unlocked, setUnlocked] = useState(false);
+  const locked = readOnly && !unlocked;
   // บิลนี้ AI เป็นคนลงให้ (source='ai') → โชว์ป้าย 🤖 บนช่องหัวที่ AI เติม + ป้าย 🟢/🟡 ต่อบรรทัด
   const aiSrc = entry.source === "ai";
 
@@ -325,10 +330,10 @@ export default function EntryEditor({
         router.refresh();
       }
     };
-    // ยืนยันแล้ว (อ่านอย่างเดียว) หรือ "ยังไม่ได้แก้อะไร" → เลื่อนเลย ไม่ต้อง save (เร็วขึ้น)
+    // ล็อกอยู่ (ยืนยันแล้วยังไม่กดแก้) หรือ "ยังไม่ได้แก้อะไร" → เลื่อนเลย ไม่ต้อง save (เร็วขึ้น)
     const unchanged =
       initialInputRef.current !== null && initialInputRef.current === JSON.stringify(buildInput(false));
-    if (readOnly || unchanged) {
+    if (locked || unchanged) {
       go();
       return;
     }
@@ -404,8 +409,11 @@ export default function EntryEditor({
           <button type="button" className="acc-modal-close" onClick={close} aria-label="ปิด">✕</button>
         </div>
 
-        {readOnly ? (
-          <div className="acc-note">รายการนี้ยืนยันแล้ว — แก้ไขไม่ได้ (ลบได้)</div>
+        {readOnly && !unlocked ? (
+          <div className="acc-note">รายการนี้ยืนยันแล้ว — กด “✏️ แก้ไข” เพื่อปรับแก้ (หรือลบได้)</div>
+        ) : null}
+        {readOnly && unlocked ? (
+          <div className="acc-note">กำลังแก้บิลที่ยืนยันแล้ว — บันทึกแล้วยัง “คงสถานะยืนยัน”</div>
         ) : null}
 
         <div className="acc-modal-body">
@@ -465,7 +473,7 @@ export default function EntryEditor({
                 <select
                   value={entryType}
                   onChange={(e) => setEntryType(e.target.value as EntryType)}
-                  disabled={readOnly}
+                  disabled={locked}
                 >
                   <option value="purchase">บิลซื้อ</option>
                   <option value="sale">บิลขาย</option>
@@ -479,13 +487,13 @@ export default function EntryEditor({
                   inputMode="numeric"
                   value={docDate}
                   onChange={(e) => setDocDate(e.target.value)}
-                  disabled={readOnly}
+                  disabled={locked}
                   placeholder="วว/ดด/ปปปป เช่น 01/06/2569"
                 />
               </label>
               <label className="acc-field">
                 <span>เลขที่เอกสาร {aiSrc && entry.docNo ? <AiTag /> : null}</span>
-                <input type="text" value={docNo} onChange={(e) => setDocNo(e.target.value)} disabled={readOnly} placeholder="เช่น INV-001" />
+                <input type="text" value={docNo} onChange={(e) => setDocNo(e.target.value)} disabled={locked} placeholder="เช่น INV-001" />
               </label>
               {/* ยื่นภาษีในเดือน — เฉพาะบิลซื้อ (ยกภาษีซื้อไปยื่นเดือนอื่นได้ ตามกฎหมาย ≤ 6 เดือน) */}
               {entryType === "purchase" ? (
@@ -497,7 +505,7 @@ export default function EntryEditor({
                     const opts = taxMonthOptions(baseYm);
                     if (inputTaxMonth && !opts.includes(inputTaxMonth)) opts.unshift(inputTaxMonth);
                     return (
-                      <select value={inputTaxMonth} onChange={(e) => setInputTaxMonth(e.target.value)} disabled={readOnly}>
+                      <select value={inputTaxMonth} onChange={(e) => setInputTaxMonth(e.target.value)} disabled={locked}>
                         {opts.length === 0 ? <option value="">— ตามวันที่บิล —</option> : null}
                         {opts.map((ym) => (
                           <option key={ym} value={ym}>{taxMonthLabel(ym)}</option>
@@ -509,7 +517,7 @@ export default function EntryEditor({
               ) : null}
               <label className="acc-field">
                 <span>ภ.ง.ด.</span>
-                <select value={whtForm} onChange={(e) => setWhtForm(e.target.value as WhtForm | "")} disabled={readOnly}>
+                <select value={whtForm} onChange={(e) => setWhtForm(e.target.value as WhtForm | "")} disabled={locked}>
                   <option value="">— ไม่มี —</option>
                   <option value="pnd3">ภ.ง.ด.3</option>
                   <option value="pnd53">ภ.ง.ด.53</option>
@@ -523,7 +531,7 @@ export default function EntryEditor({
                 <select
                   value={paymentMethod}
                   onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod | "")}
-                  disabled={readOnly}
+                  disabled={locked}
                 >
                   <option value="">— ยังไม่ระบุ —</option>
                   <option value="cash">{paymentMethodLabel("cash", entryType)}</option>
@@ -542,11 +550,11 @@ export default function EntryEditor({
               ) : null}
               <label className="acc-field acc-field-wide">
                 <span>คู่ค้า {aiSrc && entry.counterpartyName ? <AiTag /> : null}</span>
-                <input type="text" value={partyName} onChange={(e) => setPartyName(e.target.value)} disabled={readOnly} placeholder="ชื่อผู้ขาย/ผู้ซื้อ" />
+                <input type="text" value={partyName} onChange={(e) => setPartyName(e.target.value)} disabled={locked} placeholder="ชื่อผู้ขาย/ผู้ซื้อ" />
               </label>
               <label className="acc-field">
                 <span>เลขผู้เสียภาษี {aiSrc && entry.counterpartyTaxId ? <AiTag /> : null}</span>
-                <input type="text" value={partyTaxId} onChange={(e) => setPartyTaxId(e.target.value)} disabled={readOnly} placeholder="13 หลัก" />
+                <input type="text" value={partyTaxId} onChange={(e) => setPartyTaxId(e.target.value)} disabled={locked} placeholder="13 หลัก" />
               </label>
             </div>
 
@@ -569,7 +577,7 @@ export default function EntryEditor({
                 const net = calcNet(amt, vat, wht);
                 // ป้ายช่วยตรวจ 3 สถานะ (เฉพาะบิล AI ที่ยังแก้ได้):
                 //   🟢 มั่นใจ (confident) · 🟡 AI เดา—ตรวจ (guess) · 🟡 โปรดตรวจ/เติม (check)
-                const badge = !readOnly
+                const badge = !locked
                   ? lineBadge(
                       { accountCode: l.accountCode, amount: amt, aiFilled: l.aiFilled, aiLowConfidence: l.aiLowConfidence },
                       entry.source
@@ -598,7 +606,7 @@ export default function EntryEditor({
                       <select
                         value={l.vatType}
                         onChange={(e) => onVatSelect(l, e.target.value)}
-                        disabled={readOnly}
+                        disabled={locked}
                         aria-label="ประเภท VAT"
                         title="VAT นอก = บวก 7% เพิ่ม · VAT ใน = บิลรวม VAT แล้ว (เลือกเพื่อถอด VAT ออกจากยอด)"
                         className="acc-vat-sel"
@@ -609,18 +617,18 @@ export default function EntryEditor({
                       </select>
                       <AccountCell
                         line={l}
-                        readOnly={readOnly}
+                        readOnly={locked}
                         onSelect={(code, name) => patchLine(l.key, { accountCode: code, accountName: name })}
                         onNameChange={(name) => patchLine(l.key, { accountName: name })}
                         onClear={() => patchLine(l.key, { accountCode: "", accountName: "" })}
                       />
                     </div>
-                    <input className="num" inputMode="decimal" value={l.amount} onChange={(e) => onAmountChange(l, e.target.value)} disabled={readOnly} placeholder="0.00" aria-label="มูลค่า" />
-                    <input className="num" inputMode="decimal" value={l.vatAmount} onChange={(e) => patchLine(l.key, { vatAmount: e.target.value })} disabled={readOnly} placeholder="0.00" aria-label="VAT" />
-                    <input className="num" inputMode="decimal" value={l.whtRate} onChange={(e) => onWhtRateChange(l, e.target.value)} disabled={readOnly} placeholder="0" aria-label="อัตราหัก %" />
-                    <input className="num" inputMode="decimal" value={l.whtAmount} onChange={(e) => patchLine(l.key, { whtAmount: e.target.value })} disabled={readOnly} placeholder="0.00" aria-label="หัก ณ ที่จ่าย" />
+                    <input className="num" inputMode="decimal" value={l.amount} onChange={(e) => onAmountChange(l, e.target.value)} disabled={locked} placeholder="0.00" aria-label="มูลค่า" />
+                    <input className="num" inputMode="decimal" value={l.vatAmount} onChange={(e) => patchLine(l.key, { vatAmount: e.target.value })} disabled={locked} placeholder="0.00" aria-label="VAT" />
+                    <input className="num" inputMode="decimal" value={l.whtRate} onChange={(e) => onWhtRateChange(l, e.target.value)} disabled={locked} placeholder="0" aria-label="อัตราหัก %" />
+                    <input className="num" inputMode="decimal" value={l.whtAmount} onChange={(e) => patchLine(l.key, { whtAmount: e.target.value })} disabled={locked} placeholder="0.00" aria-label="หัก ณ ที่จ่าย" />
                     <span className="num acc-net">{formatMoney(net)}</span>
-                    {!readOnly ? (
+                    {!locked ? (
                       <button type="button" className="acc-line-del" onClick={() => removeLine(l)} aria-label="ลบบรรทัด" title="ลบบรรทัด">✕</button>
                     ) : (
                       <span />
@@ -629,7 +637,7 @@ export default function EntryEditor({
                 );
               })}
 
-              {!readOnly ? (
+              {!locked ? (
                 <button type="button" className="acc-add-line" onClick={addLine}>+ เพิ่มบรรทัด</button>
               ) : null}
 
@@ -650,6 +658,7 @@ export default function EntryEditor({
             {/* ---- ปุ่ม ---- */}
             <div className="acc-modal-actions">
               {!readOnly ? (
+                /* บิลร่าง — บันทึกร่าง / ยืนยัน (flow เดิม) */
                 <>
                   <button type="button" className="btn" onClick={() => save(false)} disabled={pending}>
                     {pending ? "กำลังบันทึก…" : "บันทึกร่าง"}
@@ -658,7 +667,22 @@ export default function EntryEditor({
                     ยืนยัน
                   </button>
                 </>
-              ) : null}
+              ) : !unlocked ? (
+                /* บิลยืนยันแล้ว (ล็อก) — กดเพื่อปลดล็อกทั้งใบ */
+                <button type="button" className="btn" onClick={() => { setUnlocked(true); setMsg(null); }} disabled={pending}>
+                  ✏️ แก้ไข
+                </button>
+              ) : (
+                /* บิลยืนยันแล้ว + ปลดล็อก — บันทึกการแก้ไข (คงสถานะยืนยัน) / ยกเลิก (กลับไปล็อก) */
+                <>
+                  <button type="button" className="btn green" onClick={() => save(false)} disabled={pending}>
+                    {pending ? "กำลังบันทึก…" : "บันทึกการแก้ไข"}
+                  </button>
+                  <button type="button" className="btn btn-ghost" onClick={() => { setUnlocked(false); setMsg(null); }} disabled={pending}>
+                    ยกเลิก
+                  </button>
+                </>
+              )}
               <button type="button" className="btn danger" onClick={remove} disabled={pending}>ลบ</button>
               <span className="acc-toolbar-spacer" />
               <button type="button" className="btn btn-ghost" onClick={close} disabled={pending}>ปิด</button>

@@ -225,6 +225,11 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
       if (!ba) return { ok: false, message: "บัญชีธนาคารไม่ถูกต้อง (ไม่ใช่บัญชีของลูกค้ารายนี้)" };
     }
 
+    // ★ อนุญาตแก้บิลที่ยืนยันแล้ว (นักบัญชีกด "แก้ไข" ในหน้าตรวจเพื่อแก้จุดที่ AI อ่านผิด)
+    //   การแก้ผ่าน composite save นี้ "คงสถานะ confirmed" ไว้ (payload ไม่แตะ status)
+    //   — flow draft→confirm ปกติไม่ได้รับผลกระทบ (draft ก็แก้ได้อยู่แล้ว)
+    const editOpts = { allowConfirmed: true } as const;
+
     // 1) upsert หัวเอกสาร
     const up = await upsertEntry(service, ctx.tenantId, {
       id: input.id,
@@ -239,7 +244,7 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
       paymentMethod,
       paymentBankAccountId,
       notes: clampText(input.notes, 500),
-    });
+    }, editOpts);
     if (!up.ok) return { ok: false, message: friendlyError(up.error) };
     const entryId = up.data.id;
 
@@ -258,7 +263,7 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
     // 2) ลบ line ที่ผู้ใช้เอาออก
     for (const lid of input.deletedLineIds ?? []) {
       if (isUuid(lid)) {
-        const res = await deleteLine(service, ctx.tenantId, lid);
+        const res = await deleteLine(service, ctx.tenantId, lid, editOpts);
         if (!res.ok && res.error !== "not_found") {
           return { ok: false, message: friendlyError(res.error) };
         }
@@ -282,9 +287,9 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
       };
       let res: ActionResult;
       if (l.id && isUuid(l.id)) {
-        res = await updateLine(service, ctx.tenantId, l.id, payload);
+        res = await updateLine(service, ctx.tenantId, l.id, payload, editOpts);
       } else {
-        res = await addLine(service, ctx.tenantId, entryId, payload);
+        res = await addLine(service, ctx.tenantId, entryId, payload, editOpts);
       }
       if (!res.ok) return { ok: false, message: friendlyError(res.error) };
     }

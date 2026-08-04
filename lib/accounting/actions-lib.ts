@@ -77,12 +77,15 @@ function resolveWht(amount: number, whtRate: number | null | undefined, whtAmoun
 /**
  * upsert หัวเอกสาร (insert ใหม่ = manual / update ของเดิม)
  *   - update: scope ด้วย id + tenant_id (กัน cross-tenant)
- *   - ห้ามแก้ entry ที่ confirmed แล้ว (คืน error) — ป้องกันแก้ของที่เข้ารายงานแล้ว
+ *   - ปกติห้ามแก้ entry ที่ confirmed แล้ว (คืน error) — ป้องกันแก้ของที่เข้ารายงานแล้วโดยไม่ตั้งใจ
+ *   - opts.allowConfirmed = true → อนุญาตแก้บิลที่ยืนยันแล้ว (นักบัญชีกด "แก้ไข" เพื่อแก้ที่ AI อ่านผิด)
+ *     ★ payload ไม่มี field `status` → การแก้ "คงสถานะ confirmed" ไว้เสมอ (ไม่ปลดกลับเป็น draft)
  */
 export async function upsertEntry(
   db: DB,
   tenantId: string,
-  input: UpsertEntryInput
+  input: UpsertEntryInput,
+  opts?: { allowConfirmed?: boolean }
 ): Promise<ActionResult> {
   const payload: Record<string, unknown> = {
     entry_type: input.entryType,
@@ -119,7 +122,7 @@ export async function upsertEntry(
       .is("deleted_at", null)
       .maybeSingle();
     if (!cur) return { ok: false, error: "not_found" };
-    if ((cur as { status?: string }).status === "confirmed") {
+    if (!opts?.allowConfirmed && (cur as { status?: string }).status === "confirmed") {
       return { ok: false, error: "entry_confirmed" };
     }
     const { error } = await db
@@ -141,8 +144,17 @@ export async function upsertEntry(
   return { ok: true, data: { id: (data as { id: string }).id } };
 }
 
-/** ตรวจว่า entry อยู่ใน tenant + ยังไม่ confirmed (สำหรับ mutate line) */
-async function assertEditableEntry(db: DB, tenantId: string, entryId: string): Promise<string | null> {
+/**
+ * ตรวจว่า entry อยู่ใน tenant (สำหรับ mutate line)
+ *   - ปกติ: confirmed แล้วห้ามแก้ line (คืน "entry_confirmed")
+ *   - allowConfirmed = true → ยอมให้แก้ line ของบิลที่ยืนยันแล้ว (คงสถานะ confirmed)
+ */
+async function assertEditableEntry(
+  db: DB,
+  tenantId: string,
+  entryId: string,
+  allowConfirmed = false
+): Promise<string | null> {
   const { data } = await db
     .from("bill_entries")
     .select("status")
@@ -151,7 +163,7 @@ async function assertEditableEntry(db: DB, tenantId: string, entryId: string): P
     .is("deleted_at", null)
     .maybeSingle();
   if (!data) return "not_found";
-  if ((data as { status?: string }).status === "confirmed") return "entry_confirmed";
+  if (!allowConfirmed && (data as { status?: string }).status === "confirmed") return "entry_confirmed";
   return null;
 }
 
@@ -160,9 +172,10 @@ export async function addLine(
   db: DB,
   tenantId: string,
   entryId: string,
-  input: LineInput
+  input: LineInput,
+  opts?: { allowConfirmed?: boolean }
 ): Promise<ActionResult> {
-  const guard = await assertEditableEntry(db, tenantId, entryId);
+  const guard = await assertEditableEntry(db, tenantId, entryId, opts?.allowConfirmed);
   if (guard) return { ok: false, error: guard };
 
   let lineNo = input.lineNo;
@@ -207,7 +220,8 @@ export async function updateLine(
   db: DB,
   tenantId: string,
   lineId: string,
-  input: LineInput
+  input: LineInput,
+  opts?: { allowConfirmed?: boolean }
 ): Promise<ActionResult> {
   // หา entry แม่เพื่อเช็คสถานะ
   const { data: line } = await db
@@ -217,7 +231,7 @@ export async function updateLine(
     .eq("tenant_id", tenantId)
     .maybeSingle();
   if (!line) return { ok: false, error: "not_found" };
-  const guard = await assertEditableEntry(db, tenantId, (line as { entry_id: string }).entry_id);
+  const guard = await assertEditableEntry(db, tenantId, (line as { entry_id: string }).entry_id, opts?.allowConfirmed);
   if (guard) return { ok: false, error: guard };
 
   const patch: Record<string, unknown> = {};
@@ -265,7 +279,8 @@ async function currentLineAmount(db: DB, tenantId: string, lineId: string): Prom
 export async function deleteLine(
   db: DB,
   tenantId: string,
-  lineId: string
+  lineId: string,
+  opts?: { allowConfirmed?: boolean }
 ): Promise<ActionResult<{ id: string }>> {
   const { data: line } = await db
     .from("bill_entry_lines")
@@ -274,7 +289,7 @@ export async function deleteLine(
     .eq("tenant_id", tenantId)
     .maybeSingle();
   if (!line) return { ok: false, error: "not_found" };
-  const guard = await assertEditableEntry(db, tenantId, (line as { entry_id: string }).entry_id);
+  const guard = await assertEditableEntry(db, tenantId, (line as { entry_id: string }).entry_id, opts?.allowConfirmed);
   if (guard) return { ok: false, error: guard };
 
   const { error } = await db
