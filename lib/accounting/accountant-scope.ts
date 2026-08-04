@@ -163,3 +163,96 @@ export async function listAccountantsWithCounts(
 
   return aggregateAccountantCards(groups, names, entryCustomerIds);
 }
+
+// ---------------------------------------------------------------------
+// ★ admin: reassign ผู้ดูแลลูกค้า (ต้องมีรายชื่อนักบัญชี + ผู้ดูแลปัจจุบันต่อลูกค้า)
+// ---------------------------------------------------------------------
+
+/** นักบัญชี 1 คนสำหรับ dropdown เปลี่ยนผู้ดูแล */
+export type AccountantOption = { employeeId: string; name: string };
+
+/**
+ * รายชื่อ "นักบัญชี" ทั้ง tenant สำหรับ dropdown เปลี่ยนผู้ดูแล (admin)
+ *   = employees ที่ employee_type='accountant' + active + ยังไม่ลบ (source of truth เดียวกับ guard login)
+ *   เรียงตามชื่อ (ไทย) · คืน [] ถ้าไม่มี
+ */
+export async function listAccountantEmployees(
+  db: DB,
+  tenantId: string
+): Promise<AccountantOption[]> {
+  const { data } = await db
+    .from("employees")
+    .select("id, first_name, nickname")
+    .eq("tenant_id", tenantId)
+    .eq("employee_type", "accountant")
+    .eq("is_active", true)
+    .is("deleted_at", null);
+  const opts: AccountantOption[] = [];
+  for (const e of (data ?? []) as RawEmployee[]) {
+    const name = e.nickname?.trim() || e.first_name?.trim();
+    if (name) opts.push({ employeeId: e.id, name });
+  }
+  opts.sort((a, b) => a.name.localeCompare(b.name, "th"));
+  return opts;
+}
+
+/**
+ * ผู้ดูแลปัจจุบันของแต่ละลูกค้า (จาก chat_groups.responsible_employee_id)
+ *   คืน Map<customerId, employeeId|null>:
+ *     - employeeId เดียว (ทุกกลุ่มของลูกค้าชี้คนเดียวกัน) → คืน id นั้น
+ *     - ไม่มีกลุ่ม / กลุ่มไม่มีผู้ดูแล / ผู้ดูแลปนกันหลายคน → null (แสดง "ยังไม่กำหนด/ปนกัน")
+ *   ★ scope tenant เสมอ · pure หลังดึง (แต่รวม query ให้)
+ */
+export async function mapCustomersToAccountant(
+  db: DB,
+  tenantId: string,
+  customerIds: string[]
+): Promise<Map<string, string | null>> {
+  const result = new Map<string, string | null>();
+  const ids = [...new Set(customerIds.filter((x) => !!x))];
+  if (ids.length === 0) return result;
+
+  const { data } = await db
+    .from("chat_groups")
+    .select("customer_id, responsible_employee_id")
+    .eq("tenant_id", tenantId)
+    .in("customer_id", ids)
+    .is("deleted_at", null);
+
+  // customerId → set(employeeId ที่ไม่ null)
+  const empByCust = new Map<string, Set<string>>();
+  for (const r of (data ?? []) as RawGroup[]) {
+    if (!r.customer_id || !r.responsible_employee_id) continue;
+    const set = empByCust.get(r.customer_id) ?? new Set<string>();
+    set.add(r.responsible_employee_id);
+    empByCust.set(r.customer_id, set);
+  }
+  for (const cid of ids) {
+    const set = empByCust.get(cid);
+    result.set(cid, set && set.size === 1 ? [...set][0] : null);
+  }
+  return result;
+}
+
+/**
+ * เปลี่ยนผู้ดูแล (reassign) ลูกค้า 1 ราย → นักบัญชีคนใหม่
+ *   อัปเดต responsible_employee_id ของ "ทุกกลุ่มไลน์ของลูกค้ารายนี้" (source of truth ของสโคป)
+ *   คืนจำนวนกลุ่มที่อัปเดต (0 = ลูกค้ายังไม่มีกลุ่มไลน์ผูก → กำหนดผู้ดูแลไม่ได้)
+ *   ★ ผู้เรียกต้อง guard admin + tenant + ยืนยัน employee เป็นนักบัญชีใน tenant มาก่อนแล้ว
+ */
+export async function reassignCustomerAccountant(
+  db: DB,
+  tenantId: string,
+  customerId: string,
+  employeeId: string
+): Promise<{ ok: boolean; updated: number }> {
+  const { data, error } = await db
+    .from("chat_groups")
+    .update({ responsible_employee_id: employeeId })
+    .eq("tenant_id", tenantId)
+    .eq("customer_id", customerId)
+    .is("deleted_at", null)
+    .select("id");
+  if (error) return { ok: false, updated: 0 };
+  return { ok: true, updated: (data ?? []).length };
+}

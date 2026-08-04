@@ -9,7 +9,10 @@ import {
   customerIdsForAccountant,
   getEmployeeName,
   listAccountantsWithCounts,
+  listAccountantEmployees,
+  mapCustomersToAccountant,
   type AccountantCard,
+  type AccountantOption,
 } from "@/lib/accounting/accountant-scope";
 import {
   listTeamAccountantCards,
@@ -51,6 +54,7 @@ import UndoDeleteBar from "./UndoDeleteBar";
 import CustomerTabs from "./CustomerTabs";
 import ShareCirclePanel from "./ShareCirclePanel";
 import ShareCircleToggle from "./ShareCircleToggle";
+import CustomerAdminControls from "./CustomerAdminControls";
 import {
   customerHasShareCircle,
   getCustomerShareCircleFlag,
@@ -819,6 +823,18 @@ export default async function AccountingPage({
     fetchCustomerTaxIds(service, tenantId, custIds),
   ]);
 
+  // ---- จัดการลูกค้า (เฉพาะ admin): รายชื่อนักบัญชี + ผู้ดูแลปัจจุบันต่อลูกค้า ----
+  //   ★ โหลดเฉพาะ admin (นักบัญชี/หัวหน้าไม่เห็นปุ่มนี้ + action guard admin ซ้ำ)
+  let accountantOptions: AccountantOption[] = [];
+  let accountantByCustomer = new Map<string, string | null>();
+  if (access.mode === "admin") {
+    [accountantOptions, accountantByCustomer] = await Promise.all([
+      listAccountantEmployees(service, tenantId),
+      mapCustomersToAccountant(service, tenantId, custIds),
+    ]);
+  }
+  const showCustomerAdmin = access.mode === "admin";
+
   // ---- ตัวกรอง (validate ก่อนใช้) ----
   const q = (sp.q ?? "").trim();
   const monthOptions = [...new Set(allEntries.map(monthKeyOf).filter((m): m is string => !!m))].sort((a, b) => b.localeCompare(a));
@@ -963,6 +979,18 @@ export default async function AccountingPage({
           <span className="acc-scope-label">วงแชร์</span>
           <ShareCircleToggle customerId={g.customerId} initialOn={shareIsFlag} />
         </div>
+      ) : null}
+
+      {/* จัดการลูกค้า (admin): เปลี่ยนผู้ดูแล + แก้ ชื่อ/รหัส/เลขภาษี */}
+      {showCustomerAdmin && g.customerId ? (
+        <CustomerAdminControls
+          customerId={g.customerId}
+          currentAccountantId={accountantByCustomer.get(g.customerId) ?? null}
+          accountants={accountantOptions}
+          initialName={g.name ?? null}
+          initialCode={code}
+          initialTaxId={taxIdById.get(g.customerId) ?? null}
+        />
       ) : null}
 
       {/* เลขภาษีของลูกค้า (loop เก็บเลขภาษี) — กรอก/แก้ได้ เฉพาะลูกค้าที่จับคู่แล้ว */}

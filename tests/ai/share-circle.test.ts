@@ -64,6 +64,50 @@ describe("normalizeCircle — สกัด 1 วง (ระดับวง/เ�
     // ปล่อยผ่าน (เกณฑ์ garbage คือ ≥9 หลัก) — ชื่อวงจริงบางวงอาจเป็นตัวเลขสั้น
     expect(normalizeCircle({ circle_name: "02112534" })).not.toBeNull();
   });
+
+  // ★ งาน A: รอบเปีย (round_note) + จำนวนสมาชิก (member_count) ต้องมาครบทุกวง
+  it("มี รอบ+จำนวนคน → เก็บ round_note + member_count ครบ (จำนวนคนเป็น int)", () => {
+    const c = normalizeCircle({
+      circle_name: "วงบิท",
+      round_note: "รายเดือน",
+      member_count: 21,
+    });
+    expect(c).not.toBeNull();
+    expect(c!.round_note).toBe("รายเดือน");
+    expect(c!.member_count).toBe(21);
+  });
+  it("member_count เป็น string ('16คน') → normalize เป็น int 16", () => {
+    // AI อาจคืนตัวเลขเป็น string; asIntOrNull ดึงเฉพาะเลขที่ parse ได้
+    const c = normalizeCircle({ circle_name: "วงคริสต์มาส", round_note: "ราย 15 วัน", member_count: "16" });
+    expect(c!.member_count).toBe(16);
+    expect(c!.round_note).toBe("ราย 15 วัน");
+  });
+  it("รอบเปียหลายแบบ (ราย 10 วัน / รายสัปดาห์) เก็บข้อความตามที่เขียน", () => {
+    expect(normalizeCircle({ circle_name: "วง A", round_note: "ราย 10 วัน", member_count: 30 })!.round_note).toBe(
+      "ราย 10 วัน"
+    );
+    expect(normalizeCircle({ circle_name: "วง B", round_note: "รายสัปดาห์", member_count: 12 })!.round_note).toBe(
+      "รายสัปดาห์"
+    );
+  });
+  it("member_count เป็นทศนิยม (เพี้ยน) → ปัดเป็น int", () => {
+    expect(normalizeCircle({ circle_name: "วง", member_count: 20.6 })!.member_count).toBe(21);
+  });
+});
+
+describe("normalizeShareCircles — รอบ+จำนวนสมาชิก ครบทุกวง (งาน A)", () => {
+  it("หลายวงในลิสต์ → ทุกวงได้ round_note + member_count", () => {
+    const rows = normalizeShareCircles({
+      circles: [
+        { circle_name: "วงบิท", round_note: "รายเดือน", member_count: 21, tao_income: 50000 },
+        { circle_name: "วงคริสต์มาส", round_note: "ราย 15 วัน", member_count: "16", tao_income: 30000 },
+        { circle_name: "วงปีใหม่", round_note: "รายสัปดาห์", member_count: 12 },
+      ],
+    });
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r.round_note)).toEqual(["รายเดือน", "ราย 15 วัน", "รายสัปดาห์"]);
+    expect(rows.map((r) => r.member_count)).toEqual([21, 16, 12]);
+  });
 });
 
 describe("normalizeShareCircles — จาก object ดิบของโมเดล", () => {
