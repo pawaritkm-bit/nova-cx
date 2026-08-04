@@ -273,8 +273,8 @@ export default function ReceiptCertDoc({
             placeholder="ตำแหน่ง"
             aria-label="ตำแหน่ง"
           />{" "}
-          ขอรับรองว่า รายจ่ายข้างต้นนี้ไม่อาจเรียกเก็บใบเสร็จรับเงินจากผู้รับเงินได้
-          และข้าพเจ้าได้จ่ายเงินไปจริง เนื่องจาก{" "}
+          ขอรับรองว่า รายจ่ายข้างต้นนี้ไม่อาจเรียกเก็บใบเสร็จจากผู้รับได้
+          และข้าพเจ้าได้จ่ายจากทาง เนื่องจาก{" "}
           <input
             className="rcv-in rcv-inline rcv-inline-reason"
             value={reason}
@@ -282,7 +282,7 @@ export default function ReceiptCertDoc({
             placeholder="เหตุผล / ผู้รับเงิน"
             aria-label="เนื่องจาก"
           />{" "}
-          ตั้งแต่วันที่{" "}
+          โดยแท้ ตั้งแต่วันที่{" "}
           <input
             className="rcv-in rcv-inline rcv-inline-date"
             value={fromDate}
@@ -297,7 +297,9 @@ export default function ReceiptCertDoc({
             onChange={(e) => setToDate(e.target.value)}
             placeholder="วว/ดด/ปปปป"
             aria-label="ถึงวันที่"
-          />
+          />{" "}
+          โดยให้ถือเอาความถูกต้องแน่นอนและนำไปใช้ประกอบสำนวนงานได้แทน
+          ซึ่งข้าพเจ้าได้ตรวจสอบและลงชื่อรับรอง
         </p>
 
         {/* หมายเหตุเพิ่มเติม (แก้ได้) */}

@@ -1,0 +1,44 @@
+/* ============================================================
+   สมุดรายวัน 5 เล่ม — สไตล์เสริมจาก vat-report.css (ใช้ vr-* ร่วม)
+   ★ เพิ่มเฉพาะ jb-* (หัวข้อเล่ม + คอลัมน์เดบิต/เครดิต) — additive ไม่ทับของเดิม
+   ★ แต่ละเล่มขึ้นหน้าใหม่ตอนพิมพ์
+   ============================================================ */
+
+.jb-book {
+  margin-bottom: 28px;
+}
+.jb-book-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 8px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 2px solid #333;
+}
+
+.jb-table {
+  font-size: 12px;
+}
+.jb-col-date { width: 78px; }
+.jb-col-no { width: 90px; }
+.jb-col-desc { width: 160px; }
+.jb-col-acct { width: 180px; }
+
+.jb-c-date { text-align: center; }
+.jb-c-no { text-align: center; }
+.jb-c-desc { text-align: left; }
+.jb-c-acct { text-align: left; }
+/* เครดิตย่อหน้าเล็กน้อยตามธรรมเนียมสมุดรายวัน */
+.jb-c-credit { padding-left: 18px; }
+
+/* เส้นคั่นบน = เริ่มใบสำคัญใหม่ (อ่านง่ายเมื่อหลายบรรทัด/ใบ) */
+.jb-firstrow td {
+  border-top: 2px solid #333;
+}
+
+@media print {
+  /* แต่ละเล่มขึ้นหน้าใหม่ (ยกเว้นเล่มแรก) */
+  .jb-book { break-before: page; page-break-before: always; }
+  .jb-book:first-of-type { break-before: auto; page-break-before: auto; }
+  .jb-book-title { border-bottom-color: #000 !important; }
+  .jb-firstrow td { border-top-color: #000 !important; }
+}

@@ -1,0 +1,140 @@
+"use client";
+
+import { formatMoney } from "@/lib/accounting/calc";
+import {
+  BOOK_ORDER,
+  zipPosting,
+  type JournalBook,
+  type BookKind,
+} from "@/lib/accounting/journal-books";
+import type { SkippedEntry } from "@/lib/accounting/journal";
+
+/** วันที่ ISO → dd/mm/พ.ศ. (คืน "-" ถ้าไม่มี) */
+function thaiDate(iso: string | null): string {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return "-";
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  return `${d}/${m}/${Number(y) + 543}`;
+}
+
+/**
+ * สมุดรายวัน 5 เล่ม — เอกสารพิมพ์/บันทึก PDF (ต่อลูกค้า/เดือน)
+ *   แต่ละเล่ม: วันที่ | เลขที่ | คำอธิบาย | บัญชี(เดบิต) | เดบิต | บัญชี(เครดิต) | เครดิต + รวมเดบิต/เครดิต
+ *   ★ reuse สไตล์ vr-* (vat-report.css) + jb-* (journal-books.css) · แต่ละเล่มขึ้นหน้าใหม่ตอนพิมพ์
+ *   ★ ไม่ยิง network · PDPA: ไม่ log ค่าใด ๆ
+ */
+export default function JournalBooksDoc({
+  companyName,
+  monthLabel,
+  printedAt,
+  books,
+  skipped,
+  excelHref,
+  backHref,
+}: {
+  companyName: string;
+  monthLabel: string;
+  printedAt: string;
+  books: Record<BookKind, JournalBook>;
+  skipped: SkippedEntry[];
+  excelHref: string;
+  backHref: string;
+}) {
+  return (
+    <div className="vr-shell">
+      {/* ---- แถบเครื่องมือ (ซ่อนตอนพิมพ์) ---- */}
+      <div className="vr-toolbar no-print">
+        <a href={backHref} className="vr-btn vr-btn-ghost">← กลับ</a>
+        <span className="vr-toolbar-hint">ตรวจแล้วกด “พิมพ์ / บันทึก PDF” หรือดาวน์โหลด Excel (ทั้ง 5 เล่ม)</span>
+        <a href={excelHref} className="vr-btn vr-btn-ghost">⬇ Excel</a>
+        <button type="button" className="vr-btn vr-btn-primary" onClick={() => window.print()}>
+          🖨 พิมพ์ / บันทึก PDF
+        </button>
+      </div>
+
+      {/* บิลที่ลงบัญชีไม่ได้ (ตกหล่น) — เตือนบนจอ ไม่พิมพ์ */}
+      {skipped.length > 0 ? (
+        <div className="vr-note no-print">
+          <strong>มี {skipped.length} บิลที่ยังลงสมุดรายวันไม่ได้</strong> (ไม่ถูกนับในเล่มใด) —
+          กรุณาแก้ให้ครบก่อนออกงบ: ระบุประเภทซื้อ/ขาย, เลือกบัญชีทุกบรรทัด, ระบุวิธีรับ/จ่ายเงิน
+        </div>
+      ) : null}
+
+      {/* ================= 5 เล่ม ================= */}
+      <div className="vr-page">
+        {/* หัวรวม */}
+        <div className="vr-head">
+          <div className="vr-head-left"><div>วันที่พิมพ์ {printedAt}</div></div>
+          <div className="vr-head-center">
+            <div className="vr-title">- สมุดรายวัน -</div>
+            <div className="vr-company">{companyName}</div>
+            <div className="vr-month">เดือน {monthLabel}</div>
+          </div>
+          <div className="vr-head-right"><div>สำนักงานใหญ่</div></div>
+        </div>
+
+        {BOOK_ORDER.map((kind) => (
+          <BookSection key={kind} book={books[kind]} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 1 เล่ม = หัวข้อ + ตาราง + แถวรวม (ขึ้นหน้าใหม่ตอนพิมพ์) */
+function BookSection({ book }: { book: JournalBook }) {
+  return (
+    <section className="jb-book">
+      <h2 className="jb-book-title">{book.label}</h2>
+      <table className="vr-table jb-table">
+        <thead>
+          <tr>
+            <th className="jb-col-date">วันที่</th>
+            <th className="jb-col-no">เลขที่</th>
+            <th className="jb-col-desc">คำอธิบาย</th>
+            <th className="jb-col-acct">บัญชี (เดบิต)</th>
+            <th className="vr-col-money">เดบิต</th>
+            <th className="jb-col-acct">บัญชี (เครดิต)</th>
+            <th className="vr-col-money">เครดิต</th>
+          </tr>
+        </thead>
+        <tbody>
+          {book.postings.length === 0 ? (
+            <tr>
+              <td colSpan={7} className="vr-empty">ไม่มีรายการในเล่มนี้</td>
+            </tr>
+          ) : (
+            book.postings.map((p) => {
+              const rows = zipPosting(p);
+              return rows.map((r, i) => (
+                <tr key={`${p.entryId}-${i}`} className={i === 0 ? "jb-firstrow" : undefined}>
+                  {/* วันที่/เลขที่/คำอธิบาย โชว์เฉพาะแถวแรกของใบสำคัญ */}
+                  <td className="jb-c-date">{i === 0 ? thaiDate(p.date) : ""}</td>
+                  <td className="jb-c-no">{i === 0 ? (p.docNo || "-") : ""}</td>
+                  <td className="jb-c-desc">{i === 0 ? (p.description || "-") : ""}</td>
+                  <td className="jb-c-acct">
+                    {r.debit ? `${r.debit.accountCode} ${r.debit.accountName}` : ""}
+                  </td>
+                  <td className="vr-c-money">{r.debit ? formatMoney(r.debit.amount) : ""}</td>
+                  <td className="jb-c-acct jb-c-credit">
+                    {r.credit ? `${r.credit.accountCode} ${r.credit.accountName}` : ""}
+                  </td>
+                  <td className="vr-c-money">{r.credit ? formatMoney(r.credit.amount) : ""}</td>
+                </tr>
+              ));
+            })
+          )}
+        </tbody>
+        <tfoot>
+          <tr className="vr-total">
+            <td colSpan={4} className="vr-total-label">
+              รวม {book.postings.length.toLocaleString("th-TH")} รายการ
+            </td>
+            <td className="vr-c-money">{formatMoney(book.totalDebit)}</td>
+            <td />
+            <td className="vr-c-money">{formatMoney(book.totalCredit)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </section>
+  );
+}

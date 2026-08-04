@@ -31,6 +31,8 @@ export default function CustomerTabs({
   reportsHref,
   vatPurchaseHref,
   vatSaleHref,
+  sbtHref,
+  journalBooksHref,
   statementHref,
   tables,
   shareCircle,
@@ -48,6 +50,10 @@ export default function CustomerTabs({
   vatPurchaseHref?: string;
   /** รายงานภาษีขาย (ฟอร์มราชการ) */
   vatSaleHref?: string;
+  /** รายงาน ภธ.40 (ภาษีธุรกิจเฉพาะ) */
+  sbtHref?: string;
+  /** สมุดรายวัน 5 เล่ม */
+  journalBooksHref?: string;
   /** AI แยกสเตทเมนต์ เข้า-ออก */
   statementHref?: string;
   tables: Record<EntryType, ReactNode>;
@@ -127,6 +133,18 @@ export default function CustomerTabs({
             {vatSaleHref ? (
               <a href={vatSaleHref} className="btn btn-ghost" target="_blank" rel="noopener">
                 รายงานภาษีขาย
+              </a>
+            ) : null}
+            {/* สมุดรายวัน 5 เล่ม (double-entry) — เปิดแท็บใหม่พิมพ์/PDF */}
+            {journalBooksHref ? (
+              <a href={journalBooksHref} className="btn btn-ghost" target="_blank" rel="noopener">
+                สมุดรายวัน
+              </a>
+            ) : null}
+            {/* ภธ.40 ภาษีธุรกิจเฉพาะ (ฐานแก้ได้ Phase 1) */}
+            {sbtHref ? (
+              <a href={sbtHref} className="btn btn-ghost" target="_blank" rel="noopener">
+                ภธ.40
               </a>
             ) : null}
             {openingHref ? (

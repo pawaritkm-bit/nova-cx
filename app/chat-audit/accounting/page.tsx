@@ -1091,6 +1091,16 @@ export default async function AccountingPage({
             ? `/chat-audit/accounting/vat-report?customer=${g.customerId}&type=sale${selectedMonth ? `&month=${selectedMonth}` : ""}`
             : undefined
         }
+        journalBooksHref={
+          g.customerId
+            ? `/chat-audit/accounting/journal-books?customer=${g.customerId}${selectedMonth ? `&month=${selectedMonth}` : ""}`
+            : undefined
+        }
+        sbtHref={
+          g.customerId
+            ? `/chat-audit/accounting/sbt-report?customer=${g.customerId}${selectedMonth ? `&month=${selectedMonth}` : ""}`
+            : undefined
+        }
         // แท็บวงแชร์ — เฉพาะลูกค้าที่กำลังกาง + เป็นท้าวแชร์ (โหลดไว้ด้านบน)
         shareCircle={g.customerId && g.customerId === shareCustomerId ? shareCircleTab : undefined}
         shareCircleCount={shareCircleCount}
