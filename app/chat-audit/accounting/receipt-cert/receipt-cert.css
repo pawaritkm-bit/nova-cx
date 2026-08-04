@@ -19,7 +19,7 @@
 /* ---- แถบเครื่องมือ ---- */
 .rcv-toolbar {
   width: 100%;
-  max-width: 820px;
+  max-width: 800px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -51,21 +51,24 @@
 .rcv-btn-primary:hover { background: #195ecb; }
 .rcv-btn-ghost { background: transparent; }
 
-/* ---- ตัวเอกสาร (จำลอง A4) ---- */
+/* ---- ตัวเอกสาร (จำลอง A4) ----
+   max-width 800px + padding 56px สองข้าง → พื้นที่เนื้อหา ~688px
+   ตรงกับ A4 (210mm) หัก margin พิมพ์ 14mm สองข้าง → อ่าน/พิมพ์พอดีหน้า */
 .rcv-page {
   width: 100%;
-  max-width: 820px;
+  max-width: 800px;
   background: #fff;
-  padding: 48px 56px;
+  padding: 44px 56px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
   border-radius: 4px;
   box-sizing: border-box;
+  font-size: 15px;
 }
 
 /* ---- ช่องกรอกทั่วไป (โปร่ง เหมือนกระดาษ) ---- */
 .rcv-in {
   font-family: inherit;
-  font-size: 16px;
+  font-size: 15px;
   color: #1a1a1a;
   border: none;
   border-bottom: 1px dashed #b9c2cf;
@@ -73,6 +76,7 @@
   padding: 2px 4px;
   outline: none;
   border-radius: 3px;
+  vertical-align: baseline; /* ให้ baseline ตรงกับข้อความรอบข้างในย่อหน้า */
 }
 .rcv-in:focus { border-bottom-color: #1f6feb; background: #f2f7ff; }
 .rcv-in::placeholder { color: #aab3c0; font-weight: 400; }
@@ -105,31 +109,67 @@ textarea.rcv-in { resize: vertical; width: 100%; box-sizing: border-box; }
   align-items: baseline;
   gap: 2px;
   margin-bottom: 6px;
+  flex-wrap: wrap; /* ชื่อบริษัทยาว → ตกบรรทัดได้ ไม่ถูกดัน/ตัด */
 }
-.rcv-buyer { font-size: 18px; font-weight: 700; text-align: center; width: 55%; min-width: 240px; }
-.rcv-buyer-suffix { font-size: 18px; font-weight: 700; }
+/* ชื่อบริษัท/ผู้ซื้อในหัวเอกสาร — โตตามเนื้อหา (field-sizing) เพื่อไม่ตัดชื่อยาว
+   fallback: width auto (ตาม size attr) + min-width กันแคบเกิน, max-width กันล้นหน้า */
+.rcv-buyer {
+  font-size: 18px;
+  font-weight: 700;
+  text-align: center;
+  field-sizing: content;
+  width: auto;
+  min-width: 240px;
+  max-width: 100%;
+}
+.rcv-buyer-suffix { font-size: 18px; font-weight: 700; white-space: nowrap; }
 .rcv-taxline {
   display: flex;
   justify-content: center;
   align-items: baseline;
   gap: 6px;
   font-size: 15px;
+  flex-wrap: wrap;
 }
-.rcv-taxid { width: 220px; text-align: center; }
+.rcv-taxid {
+  text-align: center;
+  field-sizing: content;
+  width: auto;
+  min-width: 180px;
+  max-width: 100%;
+}
 
 .rcv-label { color: #445; font-weight: 600; font-size: 15px; }
 
-/* ---- คำรับรอง (inline inputs) ---- */
+/* ---- คำรับรอง (ย่อหน้า + inline inputs) ---- */
 .rcv-statement {
-  font-size: 16px;
-  line-height: 2.4;
+  font-size: 15px;
+  line-height: 2;
   margin: 18px 0 20px;
   text-indent: 40px;
+  text-align: left; /* ไทยไม่มีช่องคำ — justify จะเว้นช่องโหว่ที่ space รอบช่องกรอก จึงใช้ left */
+  /* กันคำแตกกลาง: ตัดบรรทัดปกติ ไม่ break-all; ปล่อยตกที่ space รอบ input */
+  word-break: normal;
+  overflow-wrap: break-word;
+  line-break: normal;
 }
-.rcv-inline { min-width: 90px; text-align: center; }
-.rcv-inline-name { min-width: 180px; }
-.rcv-inline-reason { min-width: 220px; }
-.rcv-inline-date { width: 120px; }
+
+/* ★ ช่องกรอกในย่อหน้า — กว้าง "พอดีเนื้อหา" กันช่องว่างโหว่ + กันตัดข้อความยาว
+   field-sizing: content = หด/ขยายตามที่พิมพ์จริง (Chrome/Edge 123+, Safari 17.4+)
+   fallback เบราว์เซอร์เก่า: width auto อิงตาม attribute size (ตั้งใน TSX) + min-width กันแคบ
+   ไม่ใส่ overflow:hidden / text-overflow:ellipsis → เนื้อหายาวต้องเห็นครบเสมอ */
+.rcv-inline {
+  field-sizing: content;
+  width: auto;
+  min-width: 5ch;
+  max-width: 100%;
+  text-align: center;
+  display: inline-block;
+  vertical-align: baseline;
+}
+.rcv-inline-name { min-width: 8ch; text-align: left; }
+.rcv-inline-reason { min-width: 8ch; text-align: left; }
+.rcv-inline-date { min-width: 8ch; max-width: 13ch; }
 
 /* ---- หมายเหตุเพิ่มเติม ---- */
 .rcv-extranote { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 30px; }
@@ -227,6 +267,8 @@ td.rcv-col-del { border: none !important; }
     color: #000 !important;
   }
   .rcv-in::placeholder { color: transparent !important; }
+  /* ช่องในย่อหน้าตอนพิมพ์ = พอดีเนื้อหา ไม่เว้นช่องว่างเผื่อ */
+  .rcv-inline { min-width: 0 !important; }
 
   .rcv-table th { background: transparent !important; }
   .rcv-table th,

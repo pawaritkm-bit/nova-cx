@@ -150,6 +150,7 @@ export default function ReceiptCertDoc({
               onChange={(e) => setBuyerName(e.target.value)}
               placeholder="ชื่อผู้ซื้อ"
               aria-label="ชื่อผู้ซื้อ"
+              size={30}
             />
             <span className="rcv-buyer-suffix"> (ผู้ซื้อ)</span>
           </div>
@@ -161,6 +162,7 @@ export default function ReceiptCertDoc({
               onChange={(e) => setBuyerTaxId(e.target.value)}
               placeholder="—"
               aria-label="เลขประจำตัวผู้เสียภาษีอากร"
+              size={20}
             />
           </div>
         </div>
@@ -264,6 +266,7 @@ export default function ReceiptCertDoc({
             onChange={(e) => setPayer(e.target.value)}
             placeholder="ชื่อผู้เบิกจ่าย"
             aria-label="ชื่อผู้เบิกจ่าย"
+            size={22}
           />{" "}
           (ผู้เบิกจ่าย) ตำแหน่ง{" "}
           <input
@@ -272,6 +275,7 @@ export default function ReceiptCertDoc({
             onChange={(e) => setPosition(e.target.value)}
             placeholder="ตำแหน่ง"
             aria-label="ตำแหน่ง"
+            size={14}
           />{" "}
           ขอรับรองว่า รายจ่ายข้างต้นนี้ไม่อาจเรียกเก็บใบเสร็จจากผู้รับได้
           และข้าพเจ้าได้จ่ายชำระให้กับทาง{" "}
@@ -281,6 +285,7 @@ export default function ReceiptCertDoc({
             onChange={(e) => setReason(e.target.value)}
             placeholder="ชื่อผู้รับเงิน"
             aria-label="ผู้รับเงิน"
+            size={24}
           />{" "}
           โดยแท้ ตั้งแต่วันที่{" "}
           <input
@@ -289,6 +294,7 @@ export default function ReceiptCertDoc({
             onChange={(e) => setFromDate(e.target.value)}
             placeholder="วว/ดด/ปปปป"
             aria-label="ตั้งแต่วันที่"
+            size={10}
           />{" "}
           ถึงวันที่{" "}
           <input
@@ -297,6 +303,7 @@ export default function ReceiptCertDoc({
             onChange={(e) => setToDate(e.target.value)}
             placeholder="วว/ดด/ปปปป"
             aria-label="ถึงวันที่"
+            size={10}
           />{" "}
           โดยให้ลูกจ้างในความดูแลเบิกเงินและนำไปชำระค่าสินค้าแทน
           ซึ่งข้าพเจ้าได้ตรวจสอบ และลงชื่ออนุมัติเสมอ
