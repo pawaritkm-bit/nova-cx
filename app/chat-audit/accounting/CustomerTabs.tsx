@@ -31,6 +31,7 @@ export default function CustomerTabs({
   reportsHref,
   vatPurchaseHref,
   vatSaleHref,
+  statementHref,
   tables,
   shareCircle,
   shareCircleCount,
@@ -47,6 +48,8 @@ export default function CustomerTabs({
   vatPurchaseHref?: string;
   /** รายงานภาษีขาย (ฟอร์มราชการ) */
   vatSaleHref?: string;
+  /** AI แยกสเตทเมนต์ เข้า-ออก */
+  statementHref?: string;
   tables: Record<EntryType, ReactNode>;
   /** เนื้อในแท็บ "วงแชร์" — undefined = ลูกค้ารายนี้ไม่ใช่ท้าวแชร์ (ไม่โชว์แท็บ) */
   shareCircle?: ReactNode;
@@ -131,6 +134,9 @@ export default function CustomerTabs({
             ) : null}
             {reportsHref ? (
               <a href={reportsHref} className="btn btn-ghost">งบการเงิน</a>
+            ) : null}
+            {statementHref ? (
+              <a href={statementHref} className="btn btn-ghost">แยกสเตทเมนต์</a>
             ) : null}
           </>
         ) : null}

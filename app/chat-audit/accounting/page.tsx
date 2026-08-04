@@ -1080,6 +1080,7 @@ export default async function AccountingPage({
         }
         openingHref={g.customerId ? `/chat-audit/accounting/opening?customerId=${g.customerId}` : undefined}
         reportsHref={g.customerId ? `/chat-audit/accounting/reports?customerId=${g.customerId}` : undefined}
+        statementHref={g.customerId ? `/chat-audit/accounting/statement?customerId=${g.customerId}` : undefined}
         vatPurchaseHref={
           g.customerId
             ? `/chat-audit/accounting/vat-report?customer=${g.customerId}&type=purchase${selectedMonth ? `&month=${selectedMonth}` : ""}`
