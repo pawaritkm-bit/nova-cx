@@ -183,7 +183,7 @@ describe("journal — บิลที่ตกหล่น (skipped) พร้�
     expect(r.lines.find((l) => l.accountCode === "1020")?.credit).toBe(535);
   });
 
-  it("ไม่ระบุวิธีจ่าย → ตกหล่น", () => {
+  it("ไม่ระบุวิธีจ่าย → ถือเป็น 'เชื่อ' (ตั้งเจ้าหนี้) เข้าสมุด ไม่ตกหล่น", () => {
     const r = buildJournalEntries([
       mkEntry({
         id: "n",
@@ -192,7 +192,9 @@ describe("journal — บิลที่ตกหล่น (skipped) พร้�
         lines: [mkLine({ accountCode: "5010", amount: 500 })],
       }),
     ]);
-    expect(r.skipped[0].reason).toContain("วิธีรับ/จ่าย");
+    expect(r.skipped.length).toBe(0);
+    // เครดิต = เจ้าหนี้การค้า (2010) เพราะ default เป็นเชื่อ
+    expect(r.lines.some((l) => l.side === "credit" && l.accountCode === "2010")).toBe(true);
   });
 });
 
