@@ -119,7 +119,9 @@ export function buildJournalEntries(entries: BillEntry[]): JournalResult {
     }
 
     // 3) บัญชีคู่ (เครดิต/เดบิต) จากวิธีรับ/จ่ายเงิน
-    const contra = contraAccountFor(e.paymentMethod, e.entryType, e.paymentBankAccountCode);
+    //   ★ บิลที่ยังไม่ตั้งวิธีจ่าย/รับ → ถือเป็น "เชื่อ" (ตั้งเจ้าหนี้/ลูกหนี้) เพื่อให้เข้าสมุดรายวันเลย
+    //     (นักบัญชีค่อยแก้วิธีจ่ายจริงทีหลัง) — กันบิลตกหล่นจากสมุดรายวัน
+    const contra = contraAccountFor(e.paymentMethod ?? "credit", e.entryType, e.paymentBankAccountCode);
     if (!contra) {
       skip("ยังไม่ระบุวิธีรับ/จ่ายเงิน (คำนวณบัญชีคู่ไม่ได้)");
       continue;
