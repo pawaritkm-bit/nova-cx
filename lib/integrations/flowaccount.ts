@@ -1,4 +1,4 @@
-import { getFlowAccountConfig } from "@/lib/env";
+import { getFlowAccountSharedConfig } from "@/lib/env";
 
 /**
  * NOVA-CX → FlowAccount OpenAPI — thin REST client (ไม่ vendor SDK — ดู decision 0.1
@@ -6,6 +6,15 @@ import { getFlowAccountConfig } from "@/lib/env";
  *   - ไม่ตั้ง env ครบ → { ok:false, reason:"not_configured" } ไม่ยิง fetch
  *   - ไม่ throw — ทุก error จับแล้วคืนผลตาม reason
  *   - PDPA: ไม่ log payload เต็ม/เลขภาษี/ยอดเงิน — log แค่ status/reason
+ *
+ * ★★ M2 — credential ต่อลูกค้า (docs/05-flowaccount-integration.md หมวด M2, decision 0.3/0.4) ★★
+ *   `getAccessToken()`/`createSalesDocument()` รับ `FlowAccountCredential` ({clientId, clientSecret})
+ *   เป็นพารามิเตอร์ — ไม่อ่าน client_id/secret จาก env เองอีกต่อไป (caller คือ flowaccount-sync.ts
+ *   เป็นคนโหลด+ถอดรหัส credential ของลูกค้ารายนั้นแล้วส่งเข้ามา) ส่วน tokenUrl/apiBaseUrl/scope ยังเป็น
+ *   env กลาง (`getFlowAccountSharedConfig()`) เหมือนเดิมเพราะไม่ผูกกับบริษัทไหน
+ *
+ *   ⚠️ token cache เป็น `Map<clientId, {accessToken, expiresAtMs}>` (ไม่ใช่ตัวแปรเดี่ยวเหมือน M1) —
+ *   จุดนี้สำคัญที่สุดของ M2: ถ้าพลาดกลับไปใช้ตัวแปรเดี่ยว token ของลูกค้า A จะไปยิงสร้างเอกสารให้ลูกค้า B
  *
  * ★★ T0 — สเปกยืนยันแล้ว 100% จาก OpenAPI spec ทางการของ FlowAccount (developers.flowaccount.com) ★★
  *   Token   : POST {tokenUrl}  body=application/x-www-form-urlencoded
@@ -35,6 +44,15 @@ export type FlowAccountReason =
 
 export type AccessTokenResult = { ok: true; token: string } | { ok: false; reason: FlowAccountReason };
 
+/**
+ * credential FlowAccount ของลูกค้ารายหนึ่ง (มาจาก DB ต่อลูกค้า — ไม่ใช่ env กลาง ดู decision 0.3 ของ M2)
+ * ประกาศ type นี้ที่นี่ (ไม่ใช่ lib/env.ts) เพราะไม่ได้มาจาก env
+ */
+export type FlowAccountCredential = {
+  clientId: string;
+  clientSecret: string;
+};
+
 export type SalesDocumentPayload = {
   docType: FlowAccountDocType;
   /** body ที่ mapper (flowaccount-mapper.ts) สร้างมาแล้ว — client ไม่รู้ทรง field ภายใน (ส่งตรง) */
@@ -55,12 +73,15 @@ const TOKEN_EXPIRY_SAFETY_MS = 60_000;
 /**
  * cache token ใน memory ของ process (Vercel/Node server ทำงานแบบ long-lived ต่อ instance)
  * กันขอ token ใหม่ทุกครั้งที่กดส่งบิล (ประหยัด round-trip + กัน rate limit ฝั่ง FlowAccount)
+ *
+ * ★ M2: keyed by `clientId` — ห้ามกลับไปเป็นตัวแปรเดี่ยวเด็ดขาด (ดูคอมเมนต์หัวไฟล์) เพราะมีหลายบริษัท
+ *   ใช้งานพร้อมกันได้จริงแล้ว แต่ละ clientId ต้องมี token คนละตัวแยกกันชัดเจน
  */
-let cachedToken: { accessToken: string; expiresAtMs: number } | null = null;
+const tokenCache = new Map<string, { accessToken: string; expiresAtMs: number }>();
 
-/** ล้าง cache token — ใช้ในเทสต์เท่านั้น (กันเทสต์เคสหนึ่งกระทบเคสถัดไปข้ามกัน) */
+/** ล้าง cache token ทั้งหมด — ใช้ในเทสต์เท่านั้น (กันเทสต์เคสหนึ่งกระทบเคสถัดไปข้ามกัน) */
 export function __resetFlowAccountTokenCacheForTests(): void {
-  cachedToken = null;
+  tokenCache.clear();
 }
 
 /** ดึง string ตัวแรกจาก candidate keys ที่เป็น string ไม่ว่าง หรือ number → แปลงเป็น string */
@@ -75,24 +96,25 @@ function pickIdLike(json: Record<string, unknown> | null, keys: string[]): strin
 }
 
 /**
- * ขอ access token ด้วย OAuth2 client_credentials (cache ตามอายุ token)
- *   ไม่ตั้ง env ครบ → not_configured (ไม่ยิง fetch)
+ * ขอ access token ด้วย OAuth2 client_credentials (cache ตามอายุ token, keyed by credential.clientId)
+ *   ไม่ตั้ง env กลางครบ (tokenUrl/apiBaseUrl/scope) → not_configured (ไม่ยิง fetch) แม้ credential ครบ
  */
-export async function getAccessToken(): Promise<AccessTokenResult> {
-  const config = getFlowAccountConfig();
+export async function getAccessToken(credential: FlowAccountCredential): Promise<AccessTokenResult> {
+  const config = getFlowAccountSharedConfig();
   if (!config) return { ok: false, reason: "not_configured" };
 
   const now = Date.now();
-  if (cachedToken && cachedToken.expiresAtMs > now) {
-    return { ok: true, token: cachedToken.accessToken };
+  const cached = tokenCache.get(credential.clientId);
+  if (cached && cached.expiresAtMs > now) {
+    return { ok: true, token: cached.accessToken };
   }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TOKEN_TIMEOUT_MS);
   try {
     const body = new URLSearchParams({
-      client_id: config.clientId,
-      client_secret: config.clientSecret,
+      client_id: credential.clientId,
+      client_secret: credential.clientSecret,
       grant_type: "client_credentials",
       scope: config.scope,
     });
@@ -130,10 +152,10 @@ export async function getAccessToken(): Promise<AccessTokenResult> {
     }
     const expiresInSec =
       typeof json?.expires_in === "number" && json.expires_in > 0 ? json.expires_in : 3600;
-    cachedToken = {
+    tokenCache.set(credential.clientId, {
       accessToken,
       expiresAtMs: now + expiresInSec * 1000 - TOKEN_EXPIRY_SAFETY_MS,
-    };
+    });
     return { ok: true, token: accessToken };
   } catch (e) {
     const name = e instanceof Error ? e.name : "error";
@@ -155,15 +177,17 @@ function endpointFor(docType: FlowAccountDocType, apiBaseUrl: string): string {
 
 /**
  * สร้างเอกสารขาย (ใบกำกับภาษี/ใบเสร็จรับเงิน) ที่ FlowAccount — POST + timeout 8s
- *   ไม่ตั้ง env ครบ → not_configured (ไม่ยิง fetch) · ไม่ throw
+ *   ไม่ตั้ง env กลางครบ → not_configured (ไม่ยิง fetch) แม้ credential ครบ · ไม่ throw
+ *   ★ credential เป็นพารามิเตอร์ (ต่อลูกค้า) — ไม่อ่านจาก env (ดู decision 0.3 ของ M2)
  */
 export async function createSalesDocument(
-  payload: SalesDocumentPayload
+  payload: SalesDocumentPayload,
+  credential: FlowAccountCredential
 ): Promise<CreateSalesDocumentResult> {
-  const config = getFlowAccountConfig();
+  const config = getFlowAccountSharedConfig();
   if (!config) return { ok: false, reason: "not_configured" };
 
-  const tokenResult = await getAccessToken();
+  const tokenResult = await getAccessToken(credential);
   if (!tokenResult.ok) return { ok: false, reason: tokenResult.reason };
 
   const controller = new AbortController();

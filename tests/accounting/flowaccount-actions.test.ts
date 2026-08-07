@@ -3,21 +3,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 /**
  * เทสต์ server action `sendToFlowAccountAction` (ปุ่ม "ส่งไป FlowAccount")
  *   - guard สิทธิ์/สโคปนักบัญชี (assertCustomerInScope ผ่าน access.ts จริง)
- *   - allowlist FLOWACCOUNT_CUSTOMER_ID (ถ้าตั้งไว้)
  *   - forward ไป syncSaleEntryToFlowAccount (mock) แล้ว map ผลเป็นข้อความไทยสุภาพ
- * mock ชั้นล่าง (supabase/access/flowaccount-sync/env/next-cache) ตาม pattern tests/admin/actions.test.ts
+ *   ★ M2: ไม่มี allowlist FLOWACCOUNT_CUSTOMER_ID อีกต่อไป (ลบเทสต์เดิมทั้งหมดออก — ดู decision 0.5)
+ *     credential ต่อลูกค้าทำหน้าที่แทน (reason `customer_not_configured` มาจาก flowaccount-sync.ts)
+ * mock ชั้นล่าง (supabase/access/flowaccount-sync/next-cache) ตาม pattern tests/admin/actions.test.ts
  */
 const {
   requireAccountingAccessMock,
   loadEntryCustomerIdMock,
   syncSaleEntryToFlowAccountMock,
-  getFlowAccountAllowedCustomerIdMock,
   revalidatePathMock,
 } = vi.hoisted(() => ({
   requireAccountingAccessMock: vi.fn(),
   loadEntryCustomerIdMock: vi.fn(),
   syncSaleEntryToFlowAccountMock: vi.fn(),
-  getFlowAccountAllowedCustomerIdMock: vi.fn(),
   revalidatePathMock: vi.fn(),
 }));
 
@@ -40,14 +39,6 @@ vi.mock("@/lib/accounting/access", async (importActual) => {
 vi.mock("@/lib/accounting/flowaccount-sync", () => ({
   syncSaleEntryToFlowAccount: (...args: unknown[]) => syncSaleEntryToFlowAccountMock(...args),
 }));
-
-vi.mock("@/lib/env", async (importActual) => {
-  const actual = await importActual<typeof import("@/lib/env")>();
-  return {
-    ...actual,
-    getFlowAccountAllowedCustomerId: (...args: unknown[]) => getFlowAccountAllowedCustomerIdMock(...args),
-  };
-});
 
 import { sendToFlowAccountAction } from "@/app/chat-audit/accounting/flowaccount-actions";
 import { AccountingAuthError } from "@/lib/accounting/access";
@@ -80,7 +71,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   requireAccountingAccessMock.mockResolvedValue(adminCtx);
   loadEntryCustomerIdMock.mockResolvedValue(CUSTOMER_A);
-  getFlowAccountAllowedCustomerIdMock.mockReturnValue(undefined);
   syncSaleEntryToFlowAccountMock.mockResolvedValue({
     ok: true,
     docType: "tax_invoice",
@@ -127,28 +117,10 @@ describe("sendToFlowAccountAction", () => {
     expect(syncSaleEntryToFlowAccountMock).toHaveBeenCalledTimes(1);
   });
 
-  it("ตั้ง FLOWACCOUNT_CUSTOMER_ID แล้ว → ลูกค้าอื่นปฏิเสธ ไม่เรียก sync", async () => {
-    getFlowAccountAllowedCustomerIdMock.mockReturnValue(CUSTOMER_B);
-    loadEntryCustomerIdMock.mockResolvedValue(CUSTOMER_A); // ลูกค้า A ≠ allowlist B
+  it("ลูกค้ายังไม่เปิดใช้การเชื่อมต่อ FlowAccount (customer_not_configured) → ข้อความสุภาพ ไม่ throw", async () => {
+    syncSaleEntryToFlowAccountMock.mockResolvedValue({ ok: false, reason: "customer_not_configured" });
     const res = await sendToFlowAccountAction(ENTRY_ID);
-    expect(res.ok).toBe(false);
-    expect(res.message).toMatch(/FlowAccount/);
-    expect(syncSaleEntryToFlowAccountMock).not.toHaveBeenCalled();
-  });
-
-  it("ตั้ง FLOWACCOUNT_CUSTOMER_ID แล้ว → ลูกค้าที่อยู่ใน allowlist ผ่าน → เรียก sync", async () => {
-    getFlowAccountAllowedCustomerIdMock.mockReturnValue(CUSTOMER_A);
-    loadEntryCustomerIdMock.mockResolvedValue(CUSTOMER_A);
-    const res = await sendToFlowAccountAction(ENTRY_ID);
-    expect(res.ok).toBe(true);
-    expect(syncSaleEntryToFlowAccountMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("ไม่ตั้ง FLOWACCOUNT_CUSTOMER_ID (undefined) → ไม่บังคับ allowlist ผ่านได้ทุกลูกค้า", async () => {
-    getFlowAccountAllowedCustomerIdMock.mockReturnValue(undefined);
-    const res = await sendToFlowAccountAction(ENTRY_ID);
-    expect(res.ok).toBe(true);
-    expect(syncSaleEntryToFlowAccountMock).toHaveBeenCalledTimes(1);
+    expect(res).toEqual({ ok: false, message: "ลูกค้ารายนี้ยังไม่เปิดใช้การเชื่อมต่อ FlowAccount" });
   });
 
   it("entry ไม่ confirmed → คืนข้อความไทยสุภาพตาม reason ที่ sync ปฏิเสธ", async () => {

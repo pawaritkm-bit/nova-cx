@@ -402,6 +402,47 @@ async function fetchCustomerPhones(
   return map;
 }
 
+/** สถานะการเชื่อม FlowAccount ของลูกค้า 1 ราย (M2) — clientId ไม่ใช่ secret ส่งไปให้ client prefill ได้ */
+type FlowAccountCustomerStatus = { clientId: string | null; hasSecret: boolean };
+
+/**
+ * ลูกค้ารายไหน "เปิดใช้การเชื่อมต่อ FlowAccount" แล้วบ้าง (M2 — credential ต่อลูกค้า)
+ *   ★ best-effort: คอลัมน์เพิ่งเพิ่ม (migration 0062) — ยังไม่ apply → คืน map ว่าง
+ *   ★ ความปลอดภัย: select เฉพาะ flowaccount_client_id (public identifier ไม่ใช่ secret) +
+ *     เช็คแค่ว่า flowaccount_client_secret_enc "มีค่าไหม" (ไม่ select ค่าจริงของ ciphertext ออกมาที่ตัวแปร
+ *     ที่ return เลย — ใช้ `select("... , flowaccount_client_secret_enc")` แล้วคัดเหลือ boolean ก่อนคืนค่า
+ *     ต้อง"เชื่อมต่อสำเร็จจริง"ต้องมีครบทั้ง 2 ค่า ไม่ใช่แค่ client_id (ไม่งั้นโชว์ "เชื่อมแล้ว" ทั้งที่กดส่งจริง
+ *     จะเจอ customer_not_configured — ตามที่ reviewer ชี้ไว้)
+ */
+async function fetchCustomerFlowAccountStatus(
+  service: SupabaseClient,
+  tenantId: string,
+  ids: string[]
+): Promise<Map<string, FlowAccountCustomerStatus>> {
+  const map = new Map<string, FlowAccountCustomerStatus>();
+  if (ids.length === 0) return map;
+  try {
+    const { data, error } = await service
+      .from("customers")
+      .select("id, flowaccount_client_id, flowaccount_client_secret_enc")
+      .eq("tenant_id", tenantId)
+      .in("id", ids);
+    if (error) return map; // คอลัมน์ยังไม่มี → ปล่อยว่าง
+    for (const c of (data ?? []) as {
+      id: string;
+      flowaccount_client_id: string | null;
+      flowaccount_client_secret_enc: string | null;
+    }[]) {
+      const clientId = c.flowaccount_client_id?.trim() || null;
+      const hasSecret = !!(c.flowaccount_client_secret_enc && c.flowaccount_client_secret_enc.trim());
+      map.set(c.id, { clientId, hasSecret });
+    }
+  } catch {
+    // คอลัมน์ยังไม่ apply / blip → คืน map ว่าง (ถือว่ายังไม่ตั้งค่า)
+  }
+  return map;
+}
+
 /**
  * สร้าง signed URL (batch — 1 call) ให้ thumbnail ที่ต้องโชว์ (PDPA/perf)
  *   ★ perf: batch เดียว = ไม่บล็อก SSR render นาน (ต่างจาก sign ทีละใบ 100+ ครั้ง)
@@ -919,11 +960,12 @@ export default async function AccountingPage({
   // รหัสลูกค้า (สำหรับ avatar/ชื่อ/ค้นหา/ไฟล์ Excel) เฉพาะที่โชว์
   //   ★ perf: ไม่ดึงรายชื่อลูกค้า 5,000 รายทุกคลิกแล้ว — dropdown อัปไฟล์โหลดตอนเปิดกล่อง (on-demand)
   const custIds = [...new Set(allEntries.map((e) => e.customerId).filter((x): x is string => !!x))];
-  const [codeById, taxIdById, addressById, phoneById] = await Promise.all([
+  const [codeById, taxIdById, addressById, phoneById, hasFlowAccountById] = await Promise.all([
     fetchCustomerCodes(service, tenantId, custIds),
     fetchCustomerTaxIds(service, tenantId, custIds),
     fetchCustomerAddresses(service, tenantId, custIds),
     fetchCustomerPhones(service, tenantId, custIds),
+    fetchCustomerFlowAccountStatus(service, tenantId, custIds),
   ]);
 
   // ---- จัดการลูกค้า: รายชื่อนักบัญชี + ผู้ดูแลปัจจุบันต่อลูกค้า (สำหรับปุ่ม "เปลี่ยนผู้ดูแล") ----
@@ -1099,6 +1141,11 @@ export default async function AccountingPage({
           initialTaxId={taxIdById.get(g.customerId) ?? null}
           initialAddress={addressById.get(g.customerId) ?? null}
           initialPhone={phoneById.get(g.customerId) ?? null}
+          initialFlowAccountClientId={hasFlowAccountById.get(g.customerId)?.clientId ?? null}
+          hasFlowAccountCredential={
+            !!hasFlowAccountById.get(g.customerId)?.clientId &&
+            !!hasFlowAccountById.get(g.customerId)?.hasSecret
+          }
         />
       ) : null}
 

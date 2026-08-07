@@ -1,16 +1,18 @@
 "use server";
 
 /**
- * server action ปุ่ม "ส่งไป FlowAccount" (M1 — manual trigger, ดู docs/05-flowaccount-integration.md)
+ * server action ปุ่ม "ส่งไป FlowAccount" (M2 — credential ต่อลูกค้า, ดู docs/05-flowaccount-integration.md)
  *
  * flow ความปลอดภัย (ยึด pattern เดียวกับ actions.ts):
  *   1) requireAccountingAccess (admin/lead เห็นทุกลูกค้า · accountant เฉพาะลูกค้าที่ดูแล) + tenantId จาก session
  *   2) validate entryId (uuid)
  *   3) โหลด customer_id ของบิล (scope tenant) → assertCustomerInScope (ห้ามส่งบิลลูกค้านอกสโคป)
- *   4) allowlist FLOWACCOUNT_CUSTOMER_ID (ถ้าตั้งไว้) — ลูกค้าอื่นปฏิเสธทันที แม้อยู่ในสโคปนักบัญชี
- *   5) เรียก syncSaleEntryToFlowAccount (claim atomic → map → เรียก client → เขียนผล+log)
- *   6) revalidatePath หน้าบัญชี → คืนข้อความไทยสุภาพ (ไม่หลุด error ดิบ/payload/PII)
+ *   4) เรียก syncSaleEntryToFlowAccount (claim atomic → โหลด+ถอดรหัส credential ต่อลูกค้า → map →
+ *      เรียก client → เขียนผล+log)
+ *   5) revalidatePath หน้าบัญชี → คืนข้อความไทยสุภาพ (ไม่หลุด error ดิบ/payload/PII)
  *
+ * ★ M2: ไม่มี allowlist FLOWACCOUNT_CUSTOMER_ID อีกต่อไป (ดู decision 0.5 ของ M2) — ลูกค้าที่ไม่มี
+ *   credential เอง sync ไม่ได้อยู่แล้ว (reason `customer_not_configured` มาจาก flowaccount-sync.ts)
  * ★ ไม่แตะ backend contract — import flowaccount-sync ไปใช้/ห่อเท่านั้น
  * ★ PDPA: ไม่ log เนื้อบิล/ตัวเลข/ชื่อลูกค้า (ไม่มี console.* ที่นี่)
  */
@@ -23,7 +25,6 @@ import {
   AccountingAuthError,
 } from "@/lib/accounting/access";
 import { syncSaleEntryToFlowAccount, type SyncRejectReason } from "@/lib/accounting/flowaccount-sync";
-import { getFlowAccountAllowedCustomerId } from "@/lib/env";
 
 const PATH = "/chat-audit/accounting";
 
@@ -45,6 +46,7 @@ const REASON_MESSAGE: Partial<Record<SyncRejectReason, string>> = {
   not_confirmed: "บิลต้องยืนยันก่อนถึงจะส่งได้",
   missing_customer: "บิลนี้ยังไม่ผูกลูกค้า",
   already_syncing: "มีการส่งบิลนี้อยู่แล้ว กรุณารอสักครู่แล้วรีเฟรชหน้า",
+  customer_not_configured: "ลูกค้ารายนี้ยังไม่เปิดใช้การเชื่อมต่อ FlowAccount",
   missing_customer_tax_id: "ลูกค้ายังไม่มีเลขประจำตัวผู้เสียภาษี กรุณาเพิ่มก่อนส่ง",
   no_value_lines: "บิลนี้ไม่มีรายการที่มีมูลค่า",
   missing_doc_date: "บิลนี้ยังไม่มีวันที่เอกสาร",
@@ -77,12 +79,6 @@ export async function sendToFlowAccountAction(entryId: string): Promise<SendToFl
       return { ok: false, message: "ไม่พบบิลนี้ (อาจถูกลบไปแล้ว)" };
     }
     assertCustomerInScope(ctx, customerId);
-
-    // ★ allowlist FLOWACCOUNT_CUSTOMER_ID (M1 — 1 credential ต่อ 1 บริษัท) — เว้นว่าง = ไม่บังคับ (dev only)
-    const allowedCustomerId = getFlowAccountAllowedCustomerId();
-    if (allowedCustomerId && customerId !== allowedCustomerId) {
-      return { ok: false, message: "ลูกค้ารายนี้ยังไม่เปิดใช้การเชื่อมต่อ FlowAccount" };
-    }
 
     const result = await syncSaleEntryToFlowAccount(service, ctx.tenantId, entryId, {
       requestedBy: ctx.employeeId,
