@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { getSupabaseEnv, hasSupabaseEnv } from "@/lib/env";
+import { getSupabaseEnv, hasSupabaseEnv, getFlowAccountSharedConfig } from "@/lib/env";
 
 describe("lib/env — getSupabaseEnv / hasSupabaseEnv", () => {
   const original = { ...process.env };
@@ -40,5 +40,44 @@ describe("lib/env — getSupabaseEnv / hasSupabaseEnv", () => {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
     process.env.SUPABASE_SERVICE_ROLE_KEY = "service-key";
     expect(getSupabaseEnv()?.serviceRoleKey).toBe("service-key");
+  });
+});
+
+/**
+ * getFlowAccountSharedConfig — env กลาง (M2: tokenUrl/apiBaseUrl/scope เท่านั้น — ไม่มี clientId/secret
+ * อีกต่อไป เพราะย้ายไปเก็บต่อลูกค้าใน DB แล้ว ดู docs/05-flowaccount-integration.md หมวด M2)
+ */
+describe("lib/env — getFlowAccountSharedConfig", () => {
+  const original = { ...process.env };
+
+  beforeEach(() => {
+    delete process.env.FLOWACCOUNT_TOKEN_URL;
+    delete process.env.FLOWACCOUNT_API_BASE_URL;
+    delete process.env.FLOWACCOUNT_SCOPE;
+  });
+  afterEach(() => {
+    process.env = { ...original };
+  });
+
+  it("คืน null เมื่อไม่ตั้ง env เลย (ไม่ throw)", () => {
+    expect(getFlowAccountSharedConfig()).toBeNull();
+  });
+
+  it("คืน null เมื่อขาดตัวใดตัวหนึ่ง", () => {
+    process.env.FLOWACCOUNT_TOKEN_URL = "https://fa.example/token";
+    process.env.FLOWACCOUNT_API_BASE_URL = "https://fa.example";
+    // ขาด scope
+    expect(getFlowAccountSharedConfig()).toBeNull();
+  });
+
+  it("ครบ 3 ตัว → คืน config (ตัด trailing slash ของ url)", () => {
+    process.env.FLOWACCOUNT_TOKEN_URL = "https://fa.example/token/";
+    process.env.FLOWACCOUNT_API_BASE_URL = "https://fa.example/";
+    process.env.FLOWACCOUNT_SCOPE = "flowaccount-api";
+    expect(getFlowAccountSharedConfig()).toEqual({
+      tokenUrl: "https://fa.example/token",
+      apiBaseUrl: "https://fa.example",
+      scope: "flowaccount-api",
+    });
   });
 });

@@ -5,17 +5,24 @@ import {
 } from "@/lib/integrations/flowaccount-mapper";
 import {
   createSalesDocument,
+  type FlowAccountCredential,
   type FlowAccountDocType,
   type FlowAccountReason,
 } from "@/lib/integrations/flowaccount";
+import { decryptField } from "@/lib/crypto/field";
 import type { PaymentMethod, VatType } from "@/lib/accounting/queries";
 
 /**
  * orchestration: ส่งบิลขาย 1 ใบไป FlowAccount (manual trigger, ดู docs/05-flowaccount-integration.md)
  *   ลำดับ: guard ธุรกิจ (sale+confirmed+มีลูกค้า) → claim (atomic กันกดซ้ำ/สองแท็บ) →
- *          โหลดลูกค้า/lines → map payload (pure) → เรียก client → เขียนผล + insert log เสมอ
+ *          โหลดลูกค้า/lines → ถอดรหัส credential ต่อลูกค้า (M2) → map payload (pure) →
+ *          เรียก client → เขียนผล + insert log เสมอ
  *   ★ ทุก write scope ด้วย tenant_id (กัน cross-tenant แม้ client เป็น service_role)
- *   ★ PDPA: log สั้น ๆ ไม่มี payload/เลขภาษี/ยอดเงิน
+ *   ★ PDPA: log สั้น ๆ ไม่มี payload/เลขภาษี/ยอดเงิน/client_secret (plaintext หรือ ciphertext)
+ *
+ * ★★ M2 — credential ต่อลูกค้า ★★ ลูกค้าที่ยังไม่กรอก flowaccount_client_id/flowaccount_client_secret_enc
+ *   (หรือ ciphertext decrypt ไม่ได้) → reason `customer_not_configured` (เช็คหลัง claim เหมือน mapper reject
+ *   เดิม เพราะต้องโหลดตาราง customers ก่อนถึงจะรู้)
  */
 
 type DB = SupabaseClient;
@@ -26,6 +33,7 @@ export type SyncRejectReason =
   | "not_confirmed"
   | "missing_customer"
   | "already_syncing"
+  | "customer_not_configured"
   | MapperRejectReason
   | FlowAccountReason;
 
@@ -43,7 +51,13 @@ type RawEntry = {
   payment_method: string | null;
 };
 
-type RawCustomer = { name: string | null; tax_id: string | null; address: string | null };
+type RawCustomer = {
+  name: string | null;
+  tax_id: string | null;
+  address: string | null;
+  flowaccount_client_id: string | null;
+  flowaccount_client_secret_enc: string | null;
+};
 
 type RawLine = {
   description: string | null;
@@ -61,6 +75,22 @@ function asPaymentMethod(v: string | null): PaymentMethod | null {
   return v === "cash" || v === "cheque" || v === "transfer" || v === "credit" ? v : null;
 }
 
+/**
+ * ถอดรหัส credential FlowAccount ของลูกค้ารายนี้ — คืน null ถ้าไม่ครบ/ถอดรหัสไม่ได้
+ *   ★ จับ throw ทุกกรณี (CREDENTIAL_ENC_KEY ไม่ตั้ง/ciphertext เพี้ยน/คนละคีย์) — ไม่ให้ throw ทะลุขึ้นไป
+ *   ★ ไม่ log ทั้ง ciphertext และ plaintext ของ secret ที่ใดเลย
+ */
+function resolveCustomerCredential(customer: RawCustomer): FlowAccountCredential | null {
+  if (!customer.flowaccount_client_id || !customer.flowaccount_client_secret_enc) return null;
+  try {
+    const clientSecret = decryptField(customer.flowaccount_client_secret_enc);
+    return { clientId: customer.flowaccount_client_id, clientSecret };
+  } catch {
+    console.warn("[flowaccount-sync] decrypt customer credential failed");
+    return null;
+  }
+}
+
 /** ข้อความ error สั้น ๆ ให้นักบัญชีเห็นก่อนกดส่งใหม่ (ไม่มี payload/PII) */
 const REASON_LABEL: Partial<Record<SyncRejectReason, string>> = {
   not_found: "ไม่พบบิลนี้",
@@ -68,6 +98,7 @@ const REASON_LABEL: Partial<Record<SyncRejectReason, string>> = {
   not_confirmed: "บิลยังไม่ยืนยัน",
   missing_customer: "บิลยังไม่ผูกลูกค้า",
   already_syncing: "มีการส่งบิลนี้อยู่แล้ว",
+  customer_not_configured: "ลูกค้ารายนี้ยังไม่เปิดใช้การเชื่อมต่อ FlowAccount",
   missing_customer_tax_id: "ลูกค้าไม่มีเลขประจำตัวผู้เสียภาษี",
   no_value_lines: "ไม่มีรายการที่มีมูลค่า",
   missing_doc_date: "ไม่มีวันที่เอกสาร",
@@ -203,7 +234,7 @@ export async function syncSaleEntryToFlowAccount(
 
   const { data: customerData } = await db
     .from("customers")
-    .select("name, tax_id, address")
+    .select("name, tax_id, address, flowaccount_client_id, flowaccount_client_secret_enc")
     .eq("id", entry.customer_id)
     .eq("tenant_id", tenantId)
     .maybeSingle();
@@ -211,7 +242,16 @@ export async function syncSaleEntryToFlowAccount(
     name: null,
     tax_id: null,
     address: null,
+    flowaccount_client_id: null,
+    flowaccount_client_secret_enc: null,
   };
+
+  // ★ M2: credential ต่อลูกค้า — เช็คหลัง claim (ต้องโหลด customers ก่อนถึงจะรู้) ก่อนยิง fetch ใดๆ
+  const credential = resolveCustomerCredential(customer);
+  if (!credential) {
+    await writeFailure(db, tenantId, entryId, null, "customer_not_configured", requestedBy);
+    return { ok: false, reason: "customer_not_configured" };
+  }
 
   const { data: lineData } = await db
     .from("bill_entry_lines")
@@ -240,7 +280,10 @@ export async function syncSaleEntryToFlowAccount(
     return { ok: false, reason: mapResult.reason };
   }
 
-  const clientResult = await createSalesDocument({ docType: mapResult.docType, body: mapResult.body });
+  const clientResult = await createSalesDocument(
+    { docType: mapResult.docType, body: mapResult.body },
+    credential
+  );
   if (!clientResult.ok) {
     await writeFailure(db, tenantId, entryId, mapResult.docType, clientResult.reason, requestedBy);
     return { ok: false, reason: clientResult.reason };

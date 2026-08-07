@@ -46,6 +46,10 @@ FLOWACCOUNT_CUSTOMER_ID=   # uuid ของ customers.id ที่อนุญ�
 **M2+ ค่อยย้าย credential ไปเก็บต่อลูกค้า (encrypted ตาม pattern `CREDENTIAL_ENC_KEY`)** ถ้าจะเปิดหลายบริษัท
 พร้อมกันจริง — ไม่รวมใน M1
 
+> ⚠️ **อัปเดต (M2 — ดูหมวดท้ายไฟล์นี้)**: ข้อจำกัด 0.3 นี้ถูกยกเลิกแล้วในแผน M2 ข้างล่าง — ย้าย credential
+> ไปเก็บเข้ารหัสต่อลูกค้าจริง `FLOWACCOUNT_CUSTOMER_ID`/`FLOWACCOUNT_CLIENT_ID`/`FLOWACCOUNT_CLIENT_SECRET`
+> (env ระดับเดียว) **ถูกลบทิ้งทั้งหมด** หลัง M2 เสร็จ
+
 ---
 
 ## 1) โครงสร้างไฟล์ (ใหม่/แก้)
@@ -190,6 +194,10 @@ T8–T10 = ต่อ UI ให้ใช้งานจริงได้คร�
 เพิ่ม mapper ใหม่ map ไป `expensesApi`/`purchaseOrderApi` ของ FlowAccount — ยากกว่าฝั่งขายเพราะต้องรู้
 หมวดค่าใช้จ่าย/ภาษีซื้อ (input VAT) ที่ FlowAccount ต้องการ ซึ่งอาจต้องพึ่ง M4 (chart mapping) มาก่อนบางส่วน
 
+> ⚠️ **หมายเหตุ**: ป้าย "M2" ในหัวข้อนี้เขียนไว้ตอนวางแผน M1 (ยังไม่ตัดสินใจลำดับ M2 จริง) — ลำดับจริงที่ทำ
+> ต่อจาก M1 คือ **"FlowAccount credential ต่อลูกค้า"** (ดูหมวดท้ายไฟล์นี้) ไม่ใช่บิลซื้อ/ค่าใช้จ่ายตามที่ร่างไว้ตรงนี้
+> — บิลซื้อ/ค่าใช้จ่ายเลื่อนไปเป็นงานถัดไปหลังรองรับหลายบริษัทเสร็จ
+
 **M3 — Contacts (ข้อมูลลูกค้า)**
 เมื่อนักบัญชียืนยัน/แก้ข้อมูลลูกค้าใน CX (ชื่อ/เลขภาษี/ที่อยู่) → push upsert ไป FlowAccount `contactsApi`
 (pattern เดียวกับ `pushCustomerTaxId` ที่ส่งกลับ NOVA Sale) ต้องเก็บ `customers.flowaccount_contact_id`
@@ -221,3 +229,247 @@ endpoint แบบ bulk ครั้งเดียว (ไม่ใช่ manua
    ที่มีจริงในระบบ ไม่ต้องรอข้อมูลจากภายนอก
 
 ลำดับความสำคัญยังไม่ระบุระหว่าง 4 ข้อนี้ — ต้องคุยกับผู้ใช้อีกครั้งตอนเริ่มรอบถัดไปว่าจะทำอันไหนก่อน
+
+---
+---
+
+# M2 — FlowAccount credential ต่อลูกค้า (แผนละเอียด)
+
+M1 (ข้างบน) merge เข้า `main` แล้ว — โครง sync (`bill_entries.flowaccount_*`, `flowaccount_sync_log`,
+claim แบบ atomic, client/mapper/orchestration) ใช้ต่อได้เลยทั้งหมด **M2 นี้ไม่แตะ business logic การสร้าง
+เอกสาร/การ claim/การ map เลย** — แก้แค่ "credential มาจากไหน" จาก env กลางตัวเดียว (1 บริษัท) →
+เก็บเข้ารหัสต่อลูกค้าแต่ละราย (หลายบริษัทพร้อมกันได้จริง) ตามที่ analyst วิเคราะห์ไว้แล้ว (สรุปซ้ำเป็น decision
+ล็อกไว้ในหมวด 0 ด้านล่าง — ไม่วิเคราะห์ซ้ำ)
+
+เลขงาน: **ต่อจาก M1 (T0–T11) → เริ่มที่ T12**
+
+---
+
+## 0) การตัดสินใจที่ล็อกไว้ก่อนเริ่มโค้ด (จาก input วิเคราะห์ + ตัดสินใจเพิ่มของ planner)
+
+### 0.1 encryption — ใช้ `lib/crypto/field.ts` เดิม ไม่สร้างใหม่
+`encryptField()`/`decryptField()`/`hasEncKey()` (AES-256-GCM, token `v1:<iv>.<tag>.<ciphertext>`,
+derive จาก `CREDENTIAL_ENC_KEY`) ใช้เข้ารหัส/ถอดรหัส `flowaccount_client_secret_enc` ได้ตรง ๆ
+
+### 0.2 schema — เพิ่ม 2 คอลัมน์บน `customers` แบบ non-destructive (pattern 0058/0059)
+- `flowaccount_client_id text` — เก็บเป็น **plain text** (เทียบเท่า "username"/public identifier ไม่ใช่ secret)
+- `flowaccount_client_secret_enc text` — เก็บเป็น **ciphertext** (`encryptField()` แล้วเท่านั้น — ห้ามมี
+  plaintext ลงคอลัมน์นี้เด็ดขาดในทุก code path)
+- ทั้งคู่ nullable — ลูกค้าที่ยังไม่กรอก = ยังไม่เปิดใช้การเชื่อมต่อ (ไม่กระทบลูกค้ารายอื่น)
+
+### 0.3 credential ไหลจาก DB → client เป็นพารามิเตอร์ (ไม่ใช่ module อ่าน env เอง)
+เปลี่ยน `lib/env.ts::getFlowAccountConfig()` (เดิมอ่าน clientId/secret จาก env รวมกับ
+tokenUrl/apiBaseUrl/scope) → แยกเป็น 2 ส่วน:
+- **`getFlowAccountSharedConfig()`** (env กลาง — เหมือนกันทุกบริษัท): `tokenUrl` / `apiBaseUrl` / `scope`
+- **`FlowAccountCredential`** (`{ clientId, clientSecret }`) — มาจาก DB ต่อลูกค้า ไม่ใช่ env อีกต่อไป —
+  ประกาศ type นี้ใน `lib/integrations/flowaccount.ts` (ไม่ใช่ `env.ts` เพราะไม่ได้มาจาก env)
+
+`getAccessToken()` / `createSalesDocument()` **ต้องรับ `credential` เป็นพารามิเตอร์** แทนที่จะดึงเอง —
+caller (`flowaccount-sync.ts`) เป็นคนโหลด+ถอดรหัส credential ของลูกค้ารายนั้นแล้วส่งเข้ามา
+
+### 0.4 ⚠️ token cache ต้อง keyed by `clientId` — จุดเสี่ยงบั๊ก cross-tenant ที่ร้ายแรงที่สุดของ M2
+เดิม M1 มี `cachedToken` เป็นตัวแปร module-level ตัวเดียว (สมมติว่ามีลูกค้าเดียวทั้งระบบ) — ถ้าไม่แก้จุดนี้
+พอมี 2 บริษัทพร้อมกัน **token ของลูกค้า A จะถูกนำไปยิงสร้างเอกสารให้ลูกค้า B โดยไม่ตั้งใจ** (เอกสารไปโผล่ผิด
+บัญชี FlowAccount ของลูกค้า) — เปลี่ยนเป็น `Map<clientId, {accessToken, expiresAtMs}>` และมี **unit test พิสูจน์
+ตรง ๆ ว่า credential 2 ตัวไม่ปนกัน** (ดูหมวด 4 — เป็นเทสต์บังคับ ไม่ใช่ nice-to-have)
+
+### 0.5 ลบ `FLOWACCOUNT_CUSTOMER_ID` allowlist ทิ้งทั้งหมด (ไม่จำเป็นอีกต่อไป)
+เมื่อ credential แยกตามลูกค้าโดยธรรมชาติแล้ว (ลูกค้าไม่มี credential = sync ไม่ได้เอง) allowlist เดิมที่จำกัด
+"1 บริษัทเท่านั้น" ไม่มีประโยชน์อีกต่อไป — ลบ:
+- `getFlowAccountAllowedCustomerId()` ออกจาก `lib/env.ts`
+- allowlist block ทั้งก้อนใน `app/chat-audit/accounting/flowaccount-actions.ts`
+- `FLOWACCOUNT_CUSTOMER_ID` ออกจาก `.env.example`
+- `FLOWACCOUNT_CLIENT_ID` / `FLOWACCOUNT_CLIENT_SECRET` (env กลาง) ออกจาก `.env.example` ด้วย —
+  ย้ายไปกรอกต่อลูกค้าในหน้าเว็บแทน (เหลือแค่ `FLOWACCOUNT_TOKEN_URL`/`FLOWACCOUNT_API_BASE_URL`/`FLOWACCOUNT_SCOPE`
+  เป็น env กลาง)
+
+### 0.6 สิทธิ์แก้ credential — ใช้ guard เดิมของ `updateCustomerFieldsAction` (ผู้ใช้ยืนยันแล้ว 2026-08-07)
+นักบัญชี/หัวหน้าที่ดูแลลูกค้ารายนั้น (`assertCustomerInScope`) แก้ได้ ไม่ใช่ admin-only — **ไม่แยก server
+action ใหม่** เพิ่มเป็นฟิลด์ใน `UpdateCustomerFieldsInput` ของ action เดิมเลย (เหมือน address/phone)
+
+### 0.7 UI: client_secret ห้ามโชว์ค่ากลับมาเด็ดขาด — "แก้ไข" = พิมพ์ค่าใหม่ทับ ไม่ใช่แก้ค่าเดิม
+`flowaccount_client_secret_enc` เทียบเท่ารหัสผ่านเข้าบัญชี FlowAccount ของลูกค้า:
+- server **ไม่เคย** ส่ง `decryptField()` แล้วออกไปให้ browser (ไม่ผ่าน props/JSON/console เด็ดขาด)
+- ฟอร์มส่งแค่ **`hasSecret: boolean`** (มี/ไม่มี ciphertext อยู่) ให้ client component โชว์สถานะ
+  ("ตั้งค่าไว้แล้ว" / "ยังไม่ตั้งค่า") — ช่อง input ของ secret **เริ่มต้นว่างเสมอ** ไม่ prefill
+- ผลตามมา: ต้องแยกความหมาย "เว้นว่างไว้ = ไม่แตะ" ออกจาก "ต้องการล้างค่า" อย่างชัดเจน (ต่างจาก
+  address/phone ที่ `""` = ล้างได้เลยเพราะ prefill ค่าจริงไว้ในฟอร์ม) — ดูรายละเอียดการออกแบบใน T21
+
+---
+
+## 1) โครงสร้างไฟล์ (ใหม่/แก้) — M2
+
+```
+supabase/migrations/
+  0062_customers_flowaccount_credential.sql   [ใหม่] customers.flowaccount_client_id (text)
+                                                       + customers.flowaccount_client_secret_enc (text)
+
+lib/
+  env.ts                                       [แก้] ลบ getFlowAccountConfig()/getFlowAccountAllowedCustomerId()
+                                                       เพิ่ม getFlowAccountSharedConfig()
+  integrations/
+    flowaccount.ts                             [แก้] getAccessToken(credential)/createSalesDocument(payload, credential)
+                                                       รับ credential เป็นพารามิเตอร์ + token cache → Map keyed by clientId
+  accounting/
+    flowaccount-sync.ts                        [แก้] โหลด+ถอดรหัส credential ของลูกค้า → ส่งต่อให้ client
+                                                       เพิ่ม reason ใหม่ customer_not_configured
+
+app/chat-audit/accounting/
+  flowaccount-actions.ts                       [แก้] ลบ allowlist FLOWACCOUNT_CUSTOMER_ID ทั้งก้อน
+  customer-admin-actions.ts                    [แก้] เพิ่มฟิลด์ flowaccountClientId/flowaccountClientSecret
+                                                       ใน updateCustomerFieldsAction (ไม่ใช่ action ใหม่)
+  CustomerAdminControls.tsx                    [แก้] เพิ่ม UI กรอก client id/secret (secret มี "ล้างรหัสลับ" แยก)
+  page.tsx                                     [แก้] เพิ่ม fetchCustomerFlowAccountStatus() + ส่ง prop
+
+tests/
+  integrations/flowaccount.test.ts             [แก้ทั้งไฟล์] อัปเดต signature ทุกเทสต์เดิม + เพิ่มเทสต์ cache แยกตาม clientId
+  accounting/flowaccount-sync.test.ts          [แก้] เพิ่มเคส customer_not_configured / ถอดรหัสล้มเหลว / ส่ง credential ถูกต้อง
+  accounting/flowaccount-actions.test.ts       [แก้] ลบเทสต์ allowlist เดิม + เพิ่มเคส customer_not_configured
+  accounting/customer-admin-actions.test.ts    [ใหม่] ครอบ encrypt/clear/no-op/ไม่มี CREDENTIAL_ENC_KEY
+
+.env.example                                   [แก้] ลบ FLOWACCOUNT_CUSTOMER_ID/FLOWACCOUNT_CLIENT_ID/
+                                                       FLOWACCOUNT_CLIENT_SECRET · อัปเดตคอมเมนต์อธิบายว่า
+                                                       credential ย้ายไปกรอกต่อลูกค้าในหน้าเว็บแล้ว
+```
+
+### 1.1 Schema ใหม่ (migration 0062) — ร่าง SQL
+
+```sql
+alter table public.customers
+  add column if not exists flowaccount_client_id text,
+  add column if not exists flowaccount_client_secret_enc text;
+
+comment on column public.customers.flowaccount_client_id is
+  'FlowAccount OAuth client_id ของลูกค้ารายนี้ (plain — ไม่ใช่ secret)';
+comment on column public.customers.flowaccount_client_secret_enc is
+  'FlowAccount OAuth client_secret — เข้ารหัสด้วย lib/crypto/field.ts (encryptField) เท่านั้น ห้าม plaintext';
+
+notify pgrst, 'reload schema';
+```
+(ไม่มี RLS ใหม่ — ใช้ policy เดิมของ `customers` เหมือน 0058/0059; ดูหมายเหตุความเสี่ยงเรื่อง RLS ในหมวด 5)
+
+---
+
+## 2) งานย่อยเรียงลำดับ (M2)
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T12** | Migration 0062 — เพิ่ม `flowaccount_client_id` (text) + `flowaccount_client_secret_enc` (text) บน `customers` | `supabase/migrations/0062_customers_flowaccount_credential.sql` | - | apply บน sandbox DB ไม่ error; `notify pgrst,'reload schema'`; รันเทสต์เดิมทั้งหมดผ่าน (ไม่กระทบ query/flow เดิมของ `customers`) |
+| **T13** | `lib/env.ts` — ลบ `getFlowAccountConfig()`/`getFlowAccountAllowedCustomerId()` เพิ่ม `getFlowAccountSharedConfig()` (คืน `null` ถ้าขาด tokenUrl/apiBaseUrl/scope ตัวใดตัวหนึ่ง) | `lib/env.ts` | T12 | unit test ใหม่ครอบ `getFlowAccountSharedConfig` (ครบ/ขาด); `grep -rn "getFlowAccountConfig\|getFlowAccountAllowedCustomerId"` ในโค้ด production (นอกเทสต์) ต้องว่างเปล่า; typecheck ผ่าน |
+| **T14** | `lib/integrations/flowaccount.ts` — เปลี่ยน `getAccessToken(credential)` / `createSalesDocument(payload, credential)` ให้รับ `FlowAccountCredential` เป็นพารามิเตอร์; ดึง shared config เองจาก `getFlowAccountSharedConfig()`; **token cache: `cachedToken` (ตัวแปรเดี่ยว) → `Map<string, {accessToken, expiresAtMs}>` keyed by `credential.clientId`**; `__resetFlowAccountTokenCacheForTests()` ล้างทั้ง map | `lib/integrations/flowaccount.ts` | T13 | ไม่ตั้ง shared config → `not_configured` แม้ credential ครบ (ไม่ยิง fetch); credential ต่างกัน → cache แยกกันจริง (ดู T-test บังคับในหมวด 4); ไม่ log `clientSecret`/`accessToken` เต็มค่า (log แค่ status/reason เหมือนเดิม) |
+| **T15** | `lib/accounting/flowaccount-sync.ts` — select เพิ่ม `flowaccount_client_id, flowaccount_client_secret_enc` จาก `customers`; ถอดรหัสด้วย `decryptField` (จับ throw ทุกกรณี — คีย์ไม่ตั้ง/ciphertext เพี้ยน/ไม่มี client_id หรือ secret); ไม่ครบ → reason ใหม่ `customer_not_configured`; ส่ง credential ต่อให้ `createSalesDocument(payload, credential)` | `lib/accounting/flowaccount-sync.ts` | T12, T14 | เพิ่ม `customer_not_configured` ใน `SyncRejectReason` + `REASON_LABEL` ("ลูกค้ารายนี้ยังไม่เปิดใช้การเชื่อมต่อ FlowAccount"); เช็ค credential เกิด**หลัง claim** (สอดคล้อง pattern เดิมที่ business guard บนคอลัมน์ `bill_entries` เช็คก่อน claim ส่วน guard ที่ต้องโหลด `customers` เช็คหลัง claim) → เขียน `failed` + insert log เหมือน mapper reject เดิม; ไม่ log ciphertext/plaintext ของ secret ที่ใดเลย |
+| **T16** | `app/chat-audit/accounting/flowaccount-actions.ts` — ลบ import `getFlowAccountAllowedCustomerId` + ลบ allowlist block ทั้งก้อน; เพิ่มข้อความ `customer_not_configured` ใน `REASON_MESSAGE` | `flowaccount-actions.ts` | T15 | ปุ่มส่งได้ตามสโคปนักบัญชีอย่างเดียว (ไม่มี allowlist เพิ่มอีกชั้น); ข้อความ error สุภาพ ไม่หลุด reason ดิบ |
+| **T17** | `.env.example` — ลบ `FLOWACCOUNT_CUSTOMER_ID`/`FLOWACCOUNT_CLIENT_ID`/`FLOWACCOUNT_CLIENT_SECRET`; แก้คอมเมนต์หมวด FlowAccount อธิบายว่า credential ย้ายไปกรอกต่อลูกค้าที่หน้า `/chat-audit/accounting` แล้ว (เหลือ `FLOWACCOUNT_TOKEN_URL`/`FLOWACCOUNT_API_BASE_URL`/`FLOWACCOUNT_SCOPE` เป็น env กลาง) | `.env.example` | T13 | ตรวจด้วยตา — ไม่มี env credential ต่อบริษัทหลงเหลือ; ไม่ลบ `CREDENTIAL_ENC_KEY` (ยังใช้อยู่) |
+| **T18** | อัปเดตเทสต์เดิมที่พังจากเปลี่ยน signature — `tests/integrations/flowaccount.test.ts` (เขียนใหม่ทั้งไฟล์ตาม signature ใหม่) + `tests/accounting/flowaccount-sync.test.ts` (เพิ่มเคส) + `tests/accounting/flowaccount-actions.test.ts` (ลบเคส allowlist, เพิ่ม `customer_not_configured`) | 3 ไฟล์เทสต์ข้างต้น | T14, T15, T16 | ทุกไฟล์ผ่าน `npm run test`; **มี unit test พิสูจน์ token cache แยกตาม clientId ตรง ๆ** (รายละเอียด test case บังคับในหมวด 4) — ถือเป็นเกณฑ์เสร็จเดี่ยว ๆ ของ task นี้ ขาดไม่ได้ |
+| **T19** | `app/chat-audit/accounting/customer-admin-actions.ts` — เพิ่ม `flowaccountClientId?: string \| null` และ `flowaccountClientSecret?: string \| null` ใน `UpdateCustomerFieldsInput`; clientId เขียนแบบ best-effort เหมือน address/phone (`""` = ล้าง, `undefined` = ไม่แตะ); secret: `""` = ล้าง (`null`), ค่าไม่ว่าง = ต้อง `hasEncKey()` ก่อน ถ้าไม่มี key → คืน `{ok:false}` พร้อมข้อความชัดเจน **ห้าม fallback เขียน plaintext เด็ดขาด**, มี key → `encryptField()` แล้วค่อยเขียน; response message ไม่มี plaintext/ciphertext ของ secret ปนอยู่ | `customer-admin-actions.ts` | T12 | เพิ่ม `tests/accounting/customer-admin-actions.test.ts` (ใหม่) ครอบ: ตั้ง secret ใหม่ → เขียน ciphertext ที่ `decryptField()` กลับมาได้ค่าตรงกับที่กรอก, ล้าง secret (`""`) → เขียน `null`, ไม่ส่ง field มา → ไม่แตะคอลัมน์เลย, ตั้ง secret ตอนไม่มี `CREDENTIAL_ENC_KEY` → `ok:false` + **DB ไม่ถูกเขียนเลย** (ยืนยันด้วย mock ops ว่าไม่มี update ที่มี plaintext), migration ยังไม่ apply (คอลัมน์ไม่มี) → degrade เหมือน address/phone (save ช่องอื่นสำเร็จ + note เตือน) |
+| **T20** | `app/chat-audit/accounting/page.tsx` — เพิ่ม `fetchCustomerFlowAccountStatus(service, tenantId, ids)` (best-effort try/catch แบบ `fetchCustomerAddresses`) คืน `Map<string, {clientId: string \| null; hasSecret: boolean}>` — select `id, flowaccount_client_id, flowaccount_client_secret_enc` แต่ **map ต้องไม่เก็บค่า secret_enc ดิบไว้ที่ไหนเลยนอกฟังก์ชันนี้** (แปลงเป็น boolean ทันที) → wire เข้า `Promise.all` เดิม + ส่ง prop ให้ `CustomerAdminControls` | `page.tsx` | T12 | คอลัมน์ยังไม่ apply migration → คืน map ว่าง ไม่ crash หน้า (เหมือน address/phone); ciphertext ไม่หลุดออกไปใน props ที่ serialize ไป client component (ตรวจด้วย grep และอ่าน rendered HTML/JSON ตอน dev ว่าไม่มี `v1:` ciphertext token โผล่) |
+| **T21** | `CustomerAdminControls.tsx` — เพิ่มช่อง "FlowAccount Client ID" (prefill ได้เหมือน phone, `""`=ล้าง) + ช่อง "FlowAccount Client Secret" **เริ่มว่างเสมอ** พร้อม checkbox/ปุ่ม "ล้างรหัสลับ" แยกต่างหาก + ข้อความสถานะ ("เชื่อมต่อไว้แล้ว"/"ยังไม่ได้ตั้งค่า" จาก `hasSecret`); ตอน submit: ส่ง key `flowaccountClientSecret` เฉพาะเมื่อผู้ใช้พิมพ์ค่าใหม่ หรือกด "ล้างรหัสลับ" เท่านั้น — ถ้าเว้นว่างไว้เฉย ๆ **ห้ามส่ง key นี้ไปเลย** (ไม่ใช่ส่ง `undefined`/`""` เข้าใจผิดเป็นล้าง) | `CustomerAdminControls.tsx` | T19, T20 | ทดสอบมือ: กรอก secret ใหม่ + บันทึก → รีเฟรชหน้า → ช่อง secret ต้องว่างอีกครั้ง (ไม่โชว์ค่าเดิม) + สถานะขึ้น "เชื่อมต่อไว้แล้ว"; เว้นว่าง secret ไว้แล้วกดบันทึก (แก้แค่ client id) → secret เดิมไม่หาย (ทดสอบด้วย sync จริงว่ายังส่งได้); กดล้างรหัสลับ → `hasSecret=false`; typecheck+lint ผ่าน; **grep โค้ดหน้านี้ + devtools network tab ต้องไม่มี ciphertext/plaintext ของ secret หลุดออกมาเลย** |
+
+**Milestone**:
+- **M2-A (backend, headless)**: T12–T18 — รองรับหลายบริษัทได้สมบูรณ์ระดับ data layer + client แล้ว
+  ทดสอบผ่าน unit/integration test ล้วน (ยังไม่มี UI ให้กรอก credential จริง — ทดสอบผ่าน DB ตรงหรือ script ได้)
+- **M2-B (UI ใช้งานจริง)**: T19–T21 — นักบัญชีกรอก credential ผ่านหน้าเว็บได้เอง ไม่ต้องพึ่ง env/admin เข้า DB ตรง
+- **M2-C (verify + rollout)**: T22 (ด้านล่าง)
+
+| **T22** | รันชุดตรวจสอบเต็ม + ทดสอบมือ multi-customer จริง + ขั้นตอน rollout (ดูหมวด 5 เรื่อง cutover จาก env เดิม) | ทั้งหมดข้างบน | T12–T21 | `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด (ไม่มี error/warning ใหม่); ทดสอบมือหัวข้อ 4.2 ครบทุกข้อ; ยืนยันว่าไม่มีลูกค้ารายเดิม (ถ้ามีที่ใช้งานจริงผ่าน env M1) ตกค้างไม่มี credential ใน DB ก่อนปิดการอ่าน env เดิม |
+
+---
+
+## 3) Definition of Done (M2 รวม)
+
+- [ ] นักบัญชี/หัวหน้าที่ดูแลลูกค้า (หรือ admin) กรอก FlowAccount client id/secret ต่อลูกค้าแต่ละรายได้เองผ่าน
+      หน้า `/chat-audit/accounting` ไม่ต้องพึ่งผู้ดูแลระบบตั้ง env
+- [ ] ลูกค้า 2 บริษัทขึ้นไป กด "ส่งไป FlowAccount" **พร้อมกัน/ใกล้เคียงกัน** → เอกสารของแต่ละบริษัทไปลง
+      บัญชี FlowAccount ที่ถูกต้องตรงกับ credential ของบริษัทนั้นเสมอ — **ไม่มีการปนกันข้ามลูกค้าแม้แต่ครั้งเดียว**
+- [ ] ลูกค้าที่ยังไม่กรอก credential → กดปุ่มส่งได้ผลลัพธ์ชัดเจน "ลูกค้ารายนี้ยังไม่เปิดใช้การเชื่อมต่อ FlowAccount"
+      ไม่ crash ไม่ทำให้ลูกค้ารายอื่นกระทบ
+- [ ] `flowaccount_client_secret_enc` ไม่เคยปรากฏเป็น plaintext ที่ใดเลย: ไม่อยู่ใน log, ไม่อยู่ใน response ของ
+      server action ใด ๆ, ไม่ถูกส่งไป client component (ตรวจด้วย grep + manual devtools check)
+- [ ] ตั้ง secret ใหม่โดยไม่มี `CREDENTIAL_ENC_KEY` → ปฏิเสธชัดเจน **ไม่มี fallback เขียน plaintext ลง DB เด็ดขาด**
+- [ ] แก้ credential ได้ตามสโคปเดิม (`assertCustomerInScope`) — นักบัญชีแก้ credential ลูกค้านอกสโคปไม่ได้
+- [ ] ลบ `FLOWACCOUNT_CUSTOMER_ID` allowlist logic ออกจากโค้ดจริงหมดแล้ว (ไม่ใช่แค่ comment out)
+- [ ] `.env.example` ไม่มี `FLOWACCOUNT_CLIENT_ID`/`FLOWACCOUNT_CLIENT_SECRET`/`FLOWACCOUNT_CUSTOMER_ID` หลงเหลือ
+- [ ] ไม่มี `console.log`/log ใดที่มี client_secret (plaintext หรือ ciphertext), เลขภาษี, ยอดเงิน, ชื่อลูกค้า (PDPA)
+- [ ] ไม่มี mock/stub ปนอยู่ใน critical flow ของโค้ด production (mock ใช้ในเทสต์เท่านั้น)
+- [ ] `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด ไม่มี error/warning ใหม่
+- [ ] ก่อนปิดการอ่าน env credential เดิม (ถ้ามีลูกค้าที่ใช้งานจริงผ่าน M1 env-based อยู่ก่อนแล้ว) ต้องกรอก
+      credential ของลูกค้ารายนั้นเข้า DB ให้เรียบร้อยก่อน/ทันทีตอน deploy (ดูหมวด 5)
+
+---
+
+## 4) แนวทางการทดสอบ (สำหรับ tester)
+
+### 4.1 Unit test — จุดที่ต้องครอบ (ต่อ T14–T19)
+
+**`flowaccount.ts` (T14, T18) — สำคัญที่สุดของ M2:**
+- ไม่ตั้ง `getFlowAccountSharedConfig()` (env กลางขาด) → `not_configured` แม้ `credential` ที่ส่งเข้ามาครบ
+- **★ เทสต์บังคับ — token cache แยกตาม clientId (พิสูจน์ cross-tenant ไม่ปนกัน)**:
+  1. `getAccessToken(credentialA)` → คืน `tokenA`, ยิง fetch 1 ครั้ง
+  2. `getAccessToken(credentialA)` ซ้ำ (ก่อนหมดอายุ) → คืน `tokenA` จาก cache, **ไม่ยิง fetch เพิ่ม**
+  3. `getAccessToken(credentialB)` (clientId ต่างกัน) → ต้อง**ยิง fetch ใหม่** (ไม่ใช้ cache ของ A) และคืน `tokenB`
+     (mock fetch แยกผลตามค่า `client_id` ใน form body ของแต่ละ request — ไม่ใช่แยกตามลำดับเรียกเฉย ๆ)
+  4. `getAccessToken(credentialA)` เรียกอีกครั้งหลังจากขอ B ไปแล้ว → ยังได้ `tokenA` ที่ถูกต้อง (ไม่ใช่ `tokenB`
+     รั่วมาทับ cache ของ A)
+- **★ เทสต์บังคับ — `createSalesDocument` ยิง concurrent สองลูกค้าแล้ว Bearer token ต้องไม่สลับกัน**:
+  ยิง `Promise.all([createSalesDocument(payloadA, credentialA), createSalesDocument(payloadB, credentialB)])`
+  พร้อมกัน (mock fetch คืนค่าตาม body/URL ที่ส่งมาจริง ไม่ใช่ตามลำดับ call) → ตรวจ header
+  `Authorization` ของ request ที่ยิงไป endpoint ของ A ต้องเป็น `Bearer tokenA` เท่านั้น (และของ B เป็น
+  `Bearer tokenB` เท่านั้น) — ทดสอบนี้จำลองสถานการณ์ 2 นักบัญชีกดส่งบิลคนละบริษัทพร้อมกันจริงบน instance เดียวกัน
+- ย้ายเคสเดิมทั้งหมดของ M1 (401/403/4xx/5xx/timeout/network/response ไม่มี id) มาปรับ signature ให้ส่ง
+  `credential` เข้าไปด้วย — ผลลัพธ์ยังต้องเหมือนเดิมทุกเคส
+
+**`flowaccount-sync.ts` (T15, T18):**
+- ลูกค้าไม่มี `flowaccount_client_id`/`flowaccount_client_secret_enc` (เป็น `null` ทั้งคู่) → `customer_not_configured`
+  หลัง claim, เขียน `failed` + insert log, **ไม่เรียก `createSalesDocument`**
+- ลูกค้ามี `client_id` แต่ `client_secret_enc` เป็น `null` (กรอกไม่ครบ) → `customer_not_configured` เช่นกัน
+- `client_secret_enc` เป็น ciphertext ที่ decrypt ไม่ได้ (คนละคีย์/เพี้ยน — จำลองด้วยสตริงมั่ว) → จับ throw จาก
+  `decryptField` ได้ → `customer_not_configured` (ไม่ throw ทะลุขึ้นไปทำให้ทั้ง request 500)
+- success path: mock `createSalesDocument` แล้วตรวจว่าถูกเรียกด้วย `credential.clientId`/`clientSecret`
+  ที่ตรงกับค่าที่ decrypt ได้จริงจากแถวลูกค้านั้น (ไม่ใช่ credential ของลูกค้าอื่นที่ mock ไว้ในเคสอื่น)
+- ย้ายเคสเดิมของ M1 ทั้งหมด (not_found/not_sale/not_confirmed/missing_customer/already_syncing/mapper reject
+  ทั้ง 3 แบบ/success/failure) ให้ยังผ่านเหมือนเดิม (เพิ่มแค่ mock ลูกค้าให้มี credential ครบในเคสที่ต้องไปถึง client)
+
+**`flowaccount-actions.ts` (T16, T18):**
+- ลบเคส allowlist เดิมทั้งหมด (`FLOWACCOUNT_CUSTOMER_ID`)
+- เพิ่มเคส `customer_not_configured` → ข้อความ "ลูกค้ารายนี้ยังไม่เปิดใช้การเชื่อมต่อ FlowAccount"
+- เคสสโคปนักบัญชี (in-scope/out-of-scope) ของ M1 ยังต้องผ่านเหมือนเดิมทุกเคส
+
+**`customer-admin-actions.ts` (T19 — ไฟล์ใหม่):**
+- ตั้ง `flowaccountClientSecret` ค่าใหม่ (มี `CREDENTIAL_ENC_KEY` ใน test env) → เขียนคอลัมน์ด้วยค่าที่
+  `decryptField()` แล้วตรงกับ plaintext ที่ส่งเข้าไป (round-trip จริง ไม่ mock `encryptField`/`decryptField`)
+- ตั้ง `flowaccountClientSecret: ""` → เขียน `null` (ล้าง)
+- ไม่ส่ง `flowaccountClientSecret` มาเลย (`undefined`) → ไม่มี `update` เรียกคอลัมน์นี้เลย
+- ลบ `process.env.CREDENTIAL_ENC_KEY` ก่อนเทสต์ แล้วส่งค่าใหม่ที่ไม่ว่าง → คืน `{ok:false}` +
+  **ยืนยันด้วย mock ops ว่าไม่มีการ `update` คอลัมน์ secret เกิดขึ้นเลย** (กันเขียน plaintext หลุด)
+- migration ยังไม่ apply (จำลอง error จาก update คอลัมน์ client_id/secret) → save ช่องอื่น (ชื่อ/เลขภาษี) ยัง
+  สำเร็จตามปกติ (degrade เหมือน address/phone)
+- สโคป: นักบัญชีนอกสโคปแก้ credential ลูกค้าไม่ได้ (`assertCustomerInScope` throw)
+
+### 4.2 Integration/manual (บน sandbox จริง หรือ credential ปลอมที่ควบคุมผลได้)
+
+1. สร้างลูกค้า A + กรอก credential จริง (sandbox) ผ่านหน้าเว็บ → กดส่งบิลขาย confirmed 1 ใบ → เอกสารโผล่ใน
+   FlowAccount ของบัญชี A จริง
+2. สร้างลูกค้า B + กรอก credential **คนละชุด** (เช่น sandbox account อื่น หรือค่าผิดโดยตั้งใจ) → กดส่งบิลของ B
+   → ต้องไม่โผล่ในบัญชี A และถ้า credential ผิดจริงต้องเห็น `auth_failed` ของ B เท่านั้น ไม่กระทบ A
+3. **ทดสอบ concurrency จริง**: เปิด 2 browser session (นักบัญชีคนละคนหรือ tab คนละลูกค้า) กดส่งบิลของ A และ B
+   พร้อมกันในเวลาไล่เลี่ยกัน (ภายใน 1-2 วินาที) → ตรวจใน FlowAccount ทั้งสองบัญชีว่าได้เอกสารถูกบัญชีตรงคนละใบ
+   ไม่มีใบไหนไปโผล่ผิดบัญชี
+4. ลูกค้า C ยังไม่กรอก credential เลย → กดส่ง → เห็นข้อความ "ยังไม่เปิดใช้การเชื่อมต่อ FlowAccount" ทันที
+5. กรอก client secret ใหม่ให้ลูกค้า A แล้วบันทึก → รีเฟรชหน้า → ช่อง secret ต้องว่าง (ไม่โชว์ค่าเดิม) —
+   เปิด devtools Network tab ตรวจ response ของ server action ว่าไม่มี ciphertext/plaintext ของ secret
+6. staff นักบัญชีที่ไม่ได้ดูแลลูกค้า A → เปิดฟอร์มแก้ลูกค้า A ไม่ได้/แก้ credential ไม่ได้ (สโคปเดิม)
+7. ปิด `CREDENTIAL_ENC_KEY` ชั่วคราวใน env ทดสอบ (dev เท่านั้น) → ลองตั้ง client secret ใหม่ → ต้องเห็น error
+   ชัดเจน ไม่เงียบเขียน plaintext ลง DB (เช็คใน DB ตรง ๆ ว่าคอลัมน์ยังเป็นค่าก่อนหน้า/null)
+
+---
+
+## 5) ความเสี่ยงของแผน & แผนสำรอง
+
+| ความเสี่ยง | แผนสำรอง |
+|---|---|
+| **Token cache ปนกันข้ามลูกค้า** (ความเสี่ยงหลักของ M2 ทั้งแผน) — ถ้า refactor พลาดจุดใดจุดหนึ่งใน T14 เอกสารของลูกค้า A อาจไปสร้างผิดบัญชี FlowAccount ของลูกค้า B โดยไม่มีใครรู้ทันที (ไม่ error ให้เห็น) | บังคับมี unit test พิสูจน์ตรง ๆ ตามหมวด 4.1 (เทสต์ concurrent สองเครดิต) เป็นเกณฑ์เสร็จของ T18 ที่ขาดไม่ได้ + manual concurrency test จริงในหมวด 4.2 ข้อ 3 ก่อนถือว่า M2 เสร็จ; code review เน้นจุดเดียว: ไม่มี module-level state ตัวเดียวเหลืออยู่ใน `flowaccount.ts` เลย (grep หา `let cachedToken` ต้องไม่เจอ) |
+| **Rollout/cutover จาก env เดิม** — ถ้ามีลูกค้าที่ใช้งานจริงผ่าน M1 (`FLOWACCOUNT_CLIENT_ID/SECRET` env + `FLOWACCOUNT_CUSTOMER_ID` allowlist) อยู่ก่อน deploy M2 → พอ deploy เสร็จ ลูกค้ารายนั้นจะ**หยุดส่งได้ทันที**จนกว่าจะมีคนกรอก credential เดิมเข้า DB ให้ (เพราะ env ถูกลบไม่อ่านอีกแล้ว) | ก่อน deploy M2 เช็คว่ามี `FLOWACCOUNT_CUSTOMER_ID` ตั้งอยู่จริงใน production หรือไม่ ถ้ามี → เตรียม copy ค่า `FLOWACCOUNT_CLIENT_ID`/`FLOWACCOUNT_CLIENT_SECRET` เดิมไว้ แล้วกรอกให้ลูกค้ารายนั้นผ่านหน้าเว็บทันทีในนาทีที่ deploy เสร็จ (ก่อนนักบัญชีกดส่งบิลถัดไป) — ถือเป็นขั้นตอน manual รวมอยู่ใน T22 |
+| **RLS ของ `customers`** อนุญาต `authenticated` (admin/executive Supabase Auth) select แถวที่ `can_access_customer(id)` ผ่าน — แปลว่า `flowaccount_client_secret_enc` (ciphertext) selectable ได้ตรงถ้ามีคน query ตารางนี้ตรงผ่าน client ฝั่ง browser (ปกติแอปไม่ทำแบบนี้ แต่เป็นช่องโหว่เชิงทฤษฎี) | ciphertext เข้ารหัสอยู่แล้ว (AES-256-GCM) ต่อให้ select ออกไปได้ก็ยังถอดไม่ได้ถ้าไม่มี `CREDENTIAL_ENC_KEY`; ระยะสั้นยอมรับความเสี่ยงนี้ (เท่ากับ pattern เดิมของ `chat_messages.content_enc`); ถ้าต้องการเข้มกว่านี้ ให้พิจารณาย้ายคอลัมน์ credential ไปตารางแยก `customer_flowaccount_credentials` ที่ RLS ปิดสนิทสำหรับ `authenticated` (select เฉพาะ service_role) — เกินขอบเขต M2 นี้ ระบุเป็น backlog ถ้า reviewer เห็นว่าจำเป็น |
+| **UI เข้าใจผิดระหว่าง "เว้นว่าง=ไม่แตะ" กับ "เว้นว่าง=ล้าง"** สำหรับช่อง secret (ต่างจาก address/phone ที่ `""`=ล้างได้ตรง ๆ) — ถ้า developer ทำตาม pattern เดิมเป๊ะโดยไม่อ่าน 0.7 อาจเผลอส่ง `""` ทุกครั้งที่ฟอร์ม submit แล้วลบ secret ที่ตั้งไว้ทิ้งโดยไม่ตั้งใจ | ระบุ design ไว้ชัดในหมวด 0.7 และ T21: client component ต้องไม่ใส่ key `flowaccountClientSecret` ในอ็อบเจกต์ที่ส่งเลยถ้าผู้ใช้ไม่ได้พิมพ์/ไม่ได้กดล้าง (ไม่ใช่ส่ง `""`); เพิ่ม unit test T19 กรณี `undefined` ยืนยันว่าไม่มี `update` เรียกคอลัมน์เลย เป็นเกณฑ์เสร็จบังคับ |
+| **หลายลูกค้าพร้อมกันทำให้ token cache โตเรื่อย ๆ ไม่มีการเคลียร์** (memory เพิ่มตามจำนวนลูกค้าที่เคย sync) | scope เล็ก (คลิกครั้งต่อครั้ง ไม่ auto-sync) ทำให้จำนวน entry ใน map เท่ากับจำนวนลูกค้าที่เปิดใช้จริงเท่านั้น (ไม่ใช่ต่อ request) — ยอมรับได้ในระดับ M2 นี้ ไม่ต้องทำ eviction; ถ้าจำนวนลูกค้าโตมากในอนาคตค่อยพิจารณา LRU/TTL sweep |
+| Endpoint/mapper/claim logic ของ M1 มีบั๊กแฝงที่ยังไม่เจอ แล้วมาปนกับงาน M2 ทำให้ debug สับสนว่าใหม่หรือเก่า | M2 ไม่แตะ `flowaccount-mapper.ts`/claim SQL/`bill_entries` schema เลย (เฉพาะจุดที่ระบุใน T13–T21 เท่านั้น) — ถ้าเจอบั๊กใน mapper/claim ระหว่างทดสอบ M2 ให้แยกเป็นงานอื่น ไม่ผูกรวมกับ M2 |
