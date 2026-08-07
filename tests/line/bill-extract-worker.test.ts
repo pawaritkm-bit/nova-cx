@@ -11,7 +11,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 //   extractMock       = extractBillData (รูปบิลไลน์)
 //   extractBillsMock  = extractBillsData (PDF/ไฟล์เอกสาร) — default คืน [] (อ่านไม่ได้ → draft ว่าง)
 const extractMock = vi.fn();
-const extractBillsMock = vi.fn(() => [] as unknown[]);
+const extractBillsMock = vi.fn((..._args: unknown[]) => [] as unknown[]);
 vi.mock("@/lib/ai/bill-extract", () => ({
   extractBillData: (...a: unknown[]) => extractMock(...a),
   extractBillsData: (...a: unknown[]) => extractBillsMock(...a),
