@@ -164,6 +164,41 @@
 .nova-dash .acc-rowmsg { font-size: 11px; }
 .nova-dash .acc-rowmsg.err { color: #b91c1c; }
 
+/* ปุ่ม/ป้ายสถานะ "ส่งไป FlowAccount" ต่อแถวบิลขาย (FlowAccountSyncButton.tsx) */
+.nova-dash .fa-sync { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.nova-dash .fa-sync-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(30, 41, 59, 0.25);
+  border-top-color: var(--navy-800);
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+  animation: fa-sync-spin 0.7s linear infinite;
+}
+@keyframes fa-sync-spin { to { transform: rotate(360deg); } }
+.nova-dash .fa-sync-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+.nova-dash .fa-sync-badge-ok { background: var(--green-bg); color: #15803d; }
+.nova-dash .fa-sync-badge-warn { background: var(--amber-bg); color: #b45309; }
+.nova-dash .fa-sync-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+.nova-dash .fa-sync-error { font-size: 11px; color: #b91c1c; text-align: center; max-width: 120px; }
+
 /* ============================================================
    หน้าต่างตรวจ/แก้ (verify modal)
    ============================================================ */
@@ -238,18 +273,32 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  align-items: center;
+  align-items: stretch;
   max-height: 78vh;
+  overflow: hidden;
+}
+/* เวทีรูป: scroll แยก ปุ่มด้านบนไม่ถูกรูปหมุนทับ */
+.nova-dash .acc-bill-stage {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  display: grid;
+  place-items: center;
+  width: 100%;
 }
 .nova-dash .acc-bill-img {
   max-width: 100%;
+  max-height: 68vh;
   border-radius: 8px;
   cursor: zoom-in;
   background: #fff;
+  transition: transform .15s ease;
 }
-.nova-dash .acc-bill-img.zoom { cursor: zoom-out; max-width: none; width: auto; }
-.nova-dash .acc-bill-tools { display: flex; gap: 8px; }
+/* หมุนตั้ง (90/270): ด้าน "กว้างเดิม" กลายเป็นสูง → จำกัดด้วยความสูงเวทีให้พอดี ไม่ล้น */
+.nova-dash .acc-bill-stage.rot .acc-bill-img { max-width: 68vh; max-height: 100%; }
+.nova-dash .acc-bill-img.zoom { cursor: zoom-out; max-width: none; max-height: none; width: auto; }
+.nova-dash .acc-bill-stage.rot .acc-bill-img.zoom { max-width: none; max-height: none; }
+.nova-dash .acc-bill-tools { display: flex; gap: 8px; flex: none; }
 .nova-dash .acc-bill-empty {
   color: #cbd5e1;
   font-size: 13px;
@@ -290,7 +339,7 @@
 .nova-dash .acc-lines-head,
 .nova-dash .acc-line {
   display: grid;
-  grid-template-columns: minmax(160px, 2fr) 92px 84px 70px 92px 96px 28px;
+  grid-template-columns: minmax(200px, 2.4fr) 92px 84px 70px 92px 96px 28px;
   gap: 6px;
   align-items: center;
 }
@@ -317,6 +366,150 @@
 .nova-dash .acc-line-desc { display: flex; gap: 6px; align-items: center; }
 .nova-dash .acc-vat-sel { flex: 0 0 76px; }
 .nova-dash .acc-desc-inp { flex: 1 1 auto; }
+
+/* ---- ตัวเลือกบัญชี (ผังบัญชี) ต่อบรรทัด ---- */
+.nova-dash .acc-acct {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.nova-dash .acc-acct-combo { position: relative; }
+.nova-dash .acc-acct-search { width: 100%; }
+/* รหัสบัญชีล็อก (badge อ่านอย่างเดียว) */
+.nova-dash .acc-acct-code {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--navy-50, #eef4ff);
+  color: var(--navy-800);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.nova-dash .acc-acct-name { flex: 1 1 auto; min-width: 0; }
+.nova-dash .acc-acct-change {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.nova-dash .acc-acct-change:hover { border-color: var(--navy-700); color: var(--navy-800); }
+/* เลือกแล้ว: แยกเป็น 2 แถวชัด ๆ ไม่ทับกัน — บน=รหัส(ล็อก)+เปลี่ยน · ล่าง=ชื่อ(แก้ได้) */
+.nova-dash .acc-acct-picked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.nova-dash .acc-acct-toprow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+}
+.nova-dash .acc-acct-picked .acc-acct-name {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 12.5px;
+  background: #fff;
+}
+.nova-dash .acc-acct-picked .acc-acct-name:focus {
+  outline: none;
+  border-color: var(--navy-700);
+}
+/* โหมดอ่านอย่างเดียว (ยืนยันแล้ว) */
+.nova-dash .acc-acct-ro { gap: 8px; }
+.nova-dash .acc-acct-name-ro { font-size: 12.5px; color: var(--navy-800); }
+/* dropdown รายการบัญชี — กว้างกว่าช่องบัญชีที่แคบ ให้หัวข้อกลุ่ม+ชื่อบัญชีอยู่บรรทัดเดียวอ่านง่าย */
+.nova-dash .acc-acct-list {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 2px);
+  left: 0;
+  right: auto;
+  min-width: 320px;
+  width: max-content;
+  max-width: 420px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  padding: 4px;
+}
+.nova-dash .acc-acct-opt {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--navy-800);
+  cursor: pointer;
+  white-space: nowrap; /* รหัส+ชื่อ อยู่บรรทัดเดียว ไม่ตกบรรทัด */
+}
+.nova-dash .acc-acct-opt:hover { background: var(--navy-50, #eef4ff); }
+.nova-dash .acc-acct-opt-code {
+  flex: 0 0 52px;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.nova-dash .acc-acct-opt-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis; /* ชื่อยาวเกิน → ตัด … แทน wrap */
+}
+.nova-dash .acc-acct-empty { padding: 8px; font-size: 12px; color: var(--muted); }
+/* คั่นหมวดในดรอปดาวน์ผังบัญชี (จัดกลุ่มตามหมวด 1–6) */
+.nova-dash .acc-acct-cat + .acc-acct-cat { margin-top: 4px; border-top: 1px dashed var(--line); }
+
+/* ============================================================
+   ป้ายช่วยตรวจ (AI ลงให้ก่อน — นักบัญชีตรวจ)
+   ============================================================ */
+/* ป้าย 🤖 AI บนช่องหัวที่ AI เติม (ประเภท/วันที่/คู่ค้า/เลขภาษี) */
+.nova-dash .acc-ai-tag {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #3730a3;
+  background: #eef2ff;
+  border: 1px solid #e0e7ff;
+  border-radius: 999px;
+  padding: 0 6px;
+  vertical-align: middle;
+}
+/* ป้าย 🟢/🟡 ต่อบรรทัด (compact — ข้อความเต็มอยู่ใน title) */
+.nova-dash .acc-line-flag {
+  flex: 0 0 auto;
+  font-size: 13px;
+  line-height: 1;
+  cursor: default;
+}
+/* ตัวนับ "รอตรวจ N" บนการ์ดลูกค้า (โทน amber เหมือนงานค้าง) */
+.nova-dash .kind-badge.k-review { background: var(--amber-bg); color: #b45309; }
 .nova-dash .acc-net { font-weight: 700; color: var(--navy-800); text-align: right; font-variant-numeric: tabular-nums; }
 .nova-dash .acc-line-del {
   border: 1px solid var(--red);
@@ -549,6 +742,54 @@
   color: rgba(0, 0, 0, 0.55);
 }
 
+/* ===== การ์ดนักบัญชีในทีม (หน้าแรกหัวหน้าทีม) ===== */
+.acc-team-card.needs {
+  border-color: rgba(180, 83, 9, 0.4);
+}
+.acc-team-self {
+  font-weight: 500;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+.acc-team-flag {
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: #b45309;
+  background: var(--amber-bg, #fef3c7);
+}
+.acc-team-flag.clear {
+  color: #0f9d63;
+  background: #e4f6ee;
+}
+.acc-team-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: center;
+}
+.acc-team-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.05);
+  color: rgba(0, 0, 0, 0.6);
+}
+.acc-team-pill.ok {
+  color: #0f9d63;
+  background: #e4f6ee;
+}
+.acc-team-pill.draft {
+  color: #5c6a8c;
+  background: #eef1f7;
+}
+.acc-team-pill.un {
+  color: #b45309;
+  background: var(--amber-bg, #fef3c7);
+}
+
 /* ===== แถบสโคป (นักบัญชีที่กำลังดู) ===== */
 .acc-scopebar {
   display: flex;
@@ -643,3 +884,403 @@
   line-height: 1.7;
 }
 .nova-dash .acc-review-warn-list strong { color: #b45309; }
+
+/* ============================================================
+   ตัดงานรายเดือน — แถบเลือกเดือน + คอลัมน์ซื้อ/ขาย + กล่องยังไม่ลงวันที่
+   ============================================================ */
+
+/* ---- แถบเลือกเดือน (month rail) ---- */
+.nova-dash .acc-rail-card { padding: 12px; }
+.nova-dash .acc-rail {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.nova-dash .acc-mtab {
+  flex: none;
+  min-width: 150px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: #fff;
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color .15s, background .15s;
+}
+.nova-dash .acc-mtab:hover { border-color: var(--blue-600); }
+.nova-dash .acc-mtab.active {
+  border-color: var(--navy-800);
+  background: var(--blue-bg);
+  box-shadow: inset 0 0 0 1px var(--navy-800);
+}
+.nova-dash .acc-mtab-warn {
+  border-color: var(--amber);
+  background: var(--amber-bg);
+}
+.nova-dash .acc-mtab-warn.active { box-shadow: inset 0 0 0 1px var(--amber); }
+.nova-dash .acc-mo { display: block; font-weight: 800; font-size: 15px; }
+.nova-dash .acc-mc {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 5px;
+}
+.nova-dash .acc-mc .b { color: var(--blue-600); font-weight: 700; }
+.nova-dash .acc-mc .s { color: var(--green); font-weight: 700; }
+.nova-dash .acc-done { display: block; font-size: 11px; font-weight: 700; color: var(--green); margin-top: 6px; }
+.nova-dash .acc-pend { display: block; font-size: 11px; font-weight: 700; color: #b45309; margin-top: 6px; }
+
+/* ---- KPI สรุปเดือน ---- */
+.nova-dash .acc-mkpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 4px 0 16px;
+}
+.nova-dash .acc-mkpi {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 13px 15px;
+  background: #f8fafc;
+}
+.nova-dash .acc-mkpi .v { font-size: 21px; font-weight: 800; }
+.nova-dash .acc-mkpi .lbl { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.nova-dash .acc-mkpi.buy { background: var(--blue-bg); }
+.nova-dash .acc-mkpi.buy .v { color: var(--blue-600); }
+.nova-dash .acc-mkpi.sell { background: var(--green-bg); }
+.nova-dash .acc-mkpi.sell .v { color: var(--green); }
+
+/* ---- 2 คอลัมน์ ซื้อ/ขาย ---- */
+.nova-dash .acc-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.nova-dash .acc-col {
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  overflow: hidden;
+}
+.nova-dash .acc-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 15px;
+  font-weight: 800;
+  font-size: 14.5px;
+}
+.nova-dash .acc-col.buy .acc-col-head { background: var(--blue-bg); color: var(--blue-600); }
+.nova-dash .acc-col.sell .acc-col-head { background: var(--green-bg); color: var(--green); }
+.nova-dash .acc-col-sum { font-size: 12.5px; font-weight: 700; }
+.nova-dash .acc-crow {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--text);
+}
+.nova-dash .acc-crow:hover { background: #f5f9ff; }
+.nova-dash .acc-crow.open { background: var(--blue-bg); }
+.nova-dash .acc-cc {
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--navy-800);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 0;
+  text-align: center;
+}
+.nova-dash .acc-cn { display: flex; flex-direction: column; min-width: 0; }
+.nova-dash .acc-cn .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nova-dash .acc-cn .sub { font-size: 11.5px; color: var(--muted); }
+.nova-dash .acc-flag { color: #b45309; font-weight: 700; }
+.nova-dash .acc-camt { font-weight: 700; }
+.nova-dash .acc-col-foot {
+  padding: 11px 14px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.nova-dash .btn.acc-btn-buy { background: var(--blue-600); border-color: var(--blue-600); color: #fff; }
+.nova-dash .btn.acc-btn-sell { background: var(--green); border-color: var(--green); color: #fff; }
+
+.nova-dash .acc-month-hint { font-size: 12.5px; color: var(--muted); margin: 14px 2px 0; }
+.nova-dash .acc-detail .section-title { margin-bottom: 4px; }
+
+/* ---- กล่อง "บิลยังไม่ลงวันที่" ---- */
+.nova-dash .acc-undated { border: 1px solid var(--amber); background: var(--amber-bg); }
+.nova-dash .acc-ud-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  font-size: 14.5px;
+  color: #b45309;
+  margin-bottom: 10px;
+}
+.nova-dash .acc-ud-cnt { margin-left: auto; font-size: 12.5px; font-weight: 600; }
+.nova-dash .acc-ud-row {
+  display: grid;
+  grid-template-columns: 48px 1fr auto auto;
+  gap: 11px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid rgba(217, 119, 6, .25);
+  font-size: 13px;
+}
+.nova-dash .acc-ud-thumb {
+  width: 40px;
+  height: 50px;
+  border-radius: 7px;
+  background: #fff;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+}
+.nova-dash .acc-ud-info { display: flex; flex-direction: column; min-width: 0; }
+.nova-dash .acc-ud-info .nm { font-weight: 700; }
+.nova-dash .acc-ud-info .sub { font-size: 11.5px; color: var(--muted); }
+.nova-dash .acc-udate { display: flex; flex-direction: column; gap: 3px; }
+.nova-dash .acc-udate-input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  background: #fff;
+  color: var(--text);
+}
+.nova-dash .acc-udate-msg { font-size: 11px; }
+.nova-dash .acc-udate-msg.ok { color: var(--green); }
+.nova-dash .acc-udate-msg.err { color: var(--red); }
+.nova-dash .acc-ud-note { font-size: 12px; color: #92600a; margin: 10px 0 0; }
+
+/* ตัวเลือก "ยื่นภาษีในเดือน" ในแถวบิลซื้อ (list) — เล็ก อยู่ใต้/หลังป้าย VAT */
+.nova-dash .acc-itm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.nova-dash .acc-itm-label { font-size: 11px; color: var(--muted); }
+.nova-dash .acc-itm-select {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 4px;
+  font: inherit;
+  font-size: 11.5px;
+  background: #fff;
+  color: var(--text);
+  max-width: 128px;
+}
+.nova-dash .acc-itm-select:disabled { opacity: 0.55; }
+.nova-dash .acc-itm-msg.err { font-size: 11px; color: var(--red); }
+
+@media (max-width: 720px) {
+  .nova-dash .acc-mkpis { grid-template-columns: repeat(2, 1fr); }
+  .nova-dash .acc-cols { grid-template-columns: 1fr; }
+  .nova-dash .acc-ud-row { grid-template-columns: 40px 1fr; }
+  .nova-dash .acc-ud-row .acc-udate,
+  .nova-dash .acc-ud-row .btn { grid-column: 2; }
+}
+
+/* ============================================================
+   บัญชีเงินฝากธนาคาร "ต่อลูกค้า" (แยกเลขบัญชีต่อบริษัท)
+   - ปุ่ม ⚙️ บนหัว modal ตรวจบิล
+   - กลุ่ม/ปุ่มในดรอปดาวน์เลือกบัญชี (AccountCell)
+   - แผงจัดการ (BankAccountsPanel)
+   ============================================================ */
+/* ปุ่ม ⚙️ บนหัว modal (โทนเดียวกับ nav บนแถบสีเข้ม) */
+.nova-dash .acc-modal-gear {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nova-dash .acc-modal-gear:hover { background: rgba(255, 255, 255, 0.24); }
+
+/* หัวข้อกลุ่มในดรอปดาวน์เลือกบัญชี (แถบเล็กตัวหนาสีจาง — แยกจาก options) */
+.nova-dash .acc-acct-group {
+  padding: 6px 8px 3px;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0.01em;
+  white-space: nowrap; /* หัวข้อกลุ่มยาว (เช่น "🏦 เงินฝากธนาคาร — ของลูกค้านี้") ห้ามตกบรรทัด */
+}
+.nova-dash .acc-acct-group + .acc-acct-group { margin-top: 4px; border-top: 1px dashed var(--line); }
+/* generic bank (ยังไม่ตั้งเลขบัญชีจริง) — จางลงเล็กน้อย */
+.nova-dash .acc-acct-opt-generic { opacity: 0.72; font-style: italic; }
+/* ＋ เพิ่มบัญชีธนาคารของลูกค้านี้ */
+.nova-dash .acc-acct-add {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px dashed var(--navy-700);
+  background: #f5f9ff;
+  color: var(--navy-800);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 8px;
+  border-radius: 7px;
+  margin: 4px 0;
+  cursor: pointer;
+}
+.nova-dash .acc-acct-add:hover { background: #e8f0ff; }
+
+/* แผงจัดการบัญชีธนาคารของลูกค้า */
+.nova-dash .acc-bank-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+}
+.nova-dash .acc-bank-hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+.nova-dash .acc-bank-empty {
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+}
+.nova-dash .acc-bank-list { display: flex; flex-direction: column; gap: 8px; }
+.nova-dash .acc-bank-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1.2fr) minmax(110px, 1fr) auto auto;
+  gap: 6px;
+  align-items: center;
+}
+.nova-dash .acc-bank-row select,
+.nova-dash .acc-bank-row input {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12.5px;
+  background: #fff;
+  min-width: 0;
+}
+.nova-dash .acc-bank-save { white-space: nowrap; }
+
+@media (max-width: 620px) {
+  .nova-dash .acc-bank-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .nova-dash .acc-bank-code { grid-column: 1 / -1; }
+  .nova-dash .acc-bank-name { grid-column: 1 / -1; }
+}
+
+/* ---- วิธีจ่าย/รับเงิน: hint บัญชีคู่ (เครดิต) ---- */
+.nova-dash .acc-contra-hint {
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  background: #f1f5f9;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  align-self: center;
+}
+.nova-dash .acc-contra-hint b { color: var(--ink, #0f172a); }
+
+/* ---- ยอดยกมาต่อบัญชี (opening balances) ---- */
+.nova-dash .acc-opening { display: flex; flex-direction: column; gap: 12px; }
+.nova-dash .acc-opening-cust { display: flex; align-items: center; gap: 8px; }
+.nova-dash .acc-opening-cust select {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12.5px;
+  background: #fff;
+}
+.nova-dash .acc-opening-cust-label { font-weight: 600; margin-bottom: 10px; }
+.nova-dash .acc-opening-upload { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nova-dash .acc-opening-upload-hint { font-size: 11.5px; color: var(--muted, #64748b); }
+.nova-dash .acc-opening-preview {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #f8fafc;
+}
+.nova-dash .acc-opening-preview-head { font-weight: 600; margin-bottom: 6px; }
+.nova-dash .acc-opening-preview-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow: auto; }
+.nova-dash .acc-opening-preview-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 120px;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 2px 0;
+}
+.nova-dash .acc-opening-preview-more { font-size: 11.5px; color: var(--muted, #64748b); padding-top: 4px; }
+.nova-dash .acc-opening-list { display: flex; flex-direction: column; gap: 6px; }
+.nova-dash .acc-opening-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 130px auto;
+  gap: 8px;
+  align-items: center;
+}
+.nova-dash .acc-opening-head { font-size: 11.5px; color: var(--muted, #64748b); font-weight: 600; }
+.nova-dash .acc-opening-total { padding-top: 6px; border-top: 1px solid var(--line); }
+.nova-dash .acc-opening-row input {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12.5px;
+  background: #fff;
+  min-width: 0;
+}
+.nova-dash .acc-opening-row-actions { display: flex; align-items: center; gap: 6px; }
+
+@media (max-width: 620px) {
+  .nova-dash .acc-opening-row { grid-template-columns: 1fr 1fr; }
+  .nova-dash .acc-opening-preview-row { grid-template-columns: 70px 1fr 90px; }
+}
+
+/* ---- งบการเงิน (reports) ---- */
+.nova-dash .acc-jrow-sep td { border-top: 2px solid #e2e8f0; background: #f8fafc; }
+.nova-dash .acc-jr-credit { padding-left: 22px; color: #475569; }
+.nova-dash .acc-ledger-acct { margin-bottom: 20px; }
+.nova-dash .acc-ledger-head {
+  font-weight: 600;
+  padding: 8px 10px;
+  background: #f1f5f9;
+  border-radius: 8px 8px 0 0;
+  margin-bottom: 2px;
+}
+.nova-dash .acc-ledger-head .muted { font-weight: 500; font-size: 12px; }
+.nova-dash .v-red { color: #dc2626; }
+
+/* บัญชีแยกประเภทแบบ per-account (B/F ยอดยกมา · C/F ยอดยกไป) */
+.nova-dash .acc-ledger-bf > td { background: #f8fafc; color: #475569; }
+.nova-dash table.acc-ledger-table td.num,
+.nova-dash table.acc-ledger-table th.num { font-variant-numeric: tabular-nums; }
+
+/* ให้พิมพ์ออก PDF สวย: ไม่ตัดกลางบัญชี + เส้นชัด */
+@media print {
+  .nova-dash .acc-ledger-acct { break-inside: avoid; page-break-inside: avoid; margin-bottom: 14px; }
+  .nova-dash table.acc-ledger-table { font-size: 12px; }
+  .nova-dash table.acc-ledger-table th,
+  .nova-dash table.acc-ledger-table td { border-color: #94a3b8; }
+}

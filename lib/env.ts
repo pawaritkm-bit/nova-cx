@@ -55,6 +55,68 @@ export function getNovaSalesTenantId(): string | undefined {
   return process.env.NOVA_SALES_TENANT_ID || undefined;
 }
 
+/**
+ * base URL ของ NOVA Sales External API v1 (read-only) สำหรับ "ดึงข้อมูลลูกค้า" มาเติมในฟอร์ม
+ *   เช่น https://nova-sales.vercel.app/api/v1  (ไม่ต้องมี / ปิดท้าย)
+ *   คืน undefined ถ้ายังไม่ตั้ง → ปุ่ม "ดึงจาก NOVA Sales" จะแจ้งว่ายังไม่เปิดการเชื่อม (ไม่ error)
+ *   ★ ทิศทาง CX → NOVA Sales (query) — คนละตัวกับ inbound (NOVA_SALES_API_KEY) และ
+ *     outbound push tax_id (NOVA_SALES_OUTBOUND_URL)
+ */
+export function getNovaSalesQueryUrl(): string | undefined {
+  const v = process.env.NOVA_SALES_QUERY_URL || undefined;
+  // ตัด / ปิดท้ายให้เรียบร้อย (กันต่อ path ซ้ำ //)
+  return v ? v.replace(/\/+$/, "") : undefined;
+}
+
+/**
+ * API key (Bearer) สำหรับเรียก NOVA Sales External API v1 — คีย์ฝั่ง NOVA Sales ขึ้นต้น nova_acc_
+ *   ส่งเป็น header `Authorization: Bearer <key>` (ตามสเปก External API v1 = env NOVA_API_KEYS ฝั่งเขา)
+ *   คืน undefined ถ้ายังไม่ตั้ง → query client จะรายงานว่ายังไม่ตั้งค่า (ไม่ยิง)
+ */
+export function getNovaSalesQueryApiKey(): string | undefined {
+  return process.env.NOVA_SALES_QUERY_API_KEY || undefined;
+}
+
+export type FlowAccountConfig = {
+  /** endpoint ขอ token (OAuth2 client_credentials) เช่น https://openapi.flowaccount.com/test/token */
+  tokenUrl: string;
+  /** base URL ของ resource API (ไม่มี / ปิดท้าย) เช่น https://openapi.flowaccount.com/test */
+  apiBaseUrl: string;
+  clientId: string;
+  clientSecret: string;
+  scope: string;
+};
+
+/**
+ * config FlowAccount OpenAPI (docs/05-flowaccount-integration.md) — คืน null ถ้าตั้งไม่ครบสักตัว
+ * (TOKEN_URL/API_BASE_URL/CLIENT_ID/CLIENT_SECRET/SCOPE) → ปิดปุ่ม "ส่งไป FlowAccount" แบบนุ่มนวล
+ * (เหมือน nova-sales-query — ไม่ throw, ไม่ error หน้าเว็บ)
+ */
+export function getFlowAccountConfig(): FlowAccountConfig | null {
+  const tokenUrl = process.env.FLOWACCOUNT_TOKEN_URL;
+  const apiBaseUrl = process.env.FLOWACCOUNT_API_BASE_URL;
+  const clientId = process.env.FLOWACCOUNT_CLIENT_ID;
+  const clientSecret = process.env.FLOWACCOUNT_CLIENT_SECRET;
+  const scope = process.env.FLOWACCOUNT_SCOPE;
+  if (!tokenUrl || !apiBaseUrl || !clientId || !clientSecret || !scope) return null;
+
+  return {
+    tokenUrl: tokenUrl.replace(/\/+$/, ""),
+    apiBaseUrl: apiBaseUrl.replace(/\/+$/, ""),
+    clientId,
+    clientSecret,
+    scope,
+  };
+}
+
+/**
+ * allowlist ลูกค้ารายเดียวที่อนุญาตให้ส่งไป FlowAccount (M1 — 1 credential ต่อ 1 บริษัท ดู decision 0.3
+ * ใน docs/05-flowaccount-integration.md) คืน undefined ถ้าไม่ตั้ง = dev mode (ไม่บังคับ — ควรตั้งใน prod)
+ */
+export function getFlowAccountAllowedCustomerId(): string | undefined {
+  return process.env.FLOWACCOUNT_CUSTOMER_ID || undefined;
+}
+
 export type LineOa = "care" | "sale";
 
 /**

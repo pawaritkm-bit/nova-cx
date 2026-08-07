@@ -1,5 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { extractBillData } from "@/lib/ai/bill-extract";
+import { extractBillData, extractBillsData, type ExtractedBill, type ExtractedLine } from "@/lib/ai/bill-extract";
+import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
+import { suggestWhtRate } from "@/lib/accounting/wht";
+import { calcVat } from "@/lib/accounting/calc";
+import { suggestPaymentMethod } from "@/lib/accounting/payment";
+import { getCustomerShareCircleFlag } from "@/lib/share-circles/queries";
+import { classifyShareCircleImage } from "@/lib/ai/bill-classify";
 
 /**
  * Bill extract worker — ไล่บิลที่เก็บแล้วแต่ยังไม่มี bill_entries → AI สกัด → สร้าง draft
@@ -17,8 +23,9 @@ import { extractBillData } from "@/lib/ai/bill-extract";
  *     ลูกค้าเรา = ผู้ซื้อ → 'purchase' (counterparty = ผู้ขาย)
  *     จับคู่ไม่ชัด/ไม่มีข้อมูลลูกค้า → 'unspecified' (รอคนเลือกในหน้า UI) — ไม่เดา
  *   เก็บ seller และ buyer ที่ AI อ่านไว้ทั้งคู่ ให้ UI โชว์ตอน unspecified
- * ★ ไฟล์ PDF (attachment_type='file'): vision อ่านไม่ได้ตรง ๆ →
- *   สร้าง "draft ว่าง" (unspecified) ให้คนคีย์ (ปลอดภัยกว่าข้าม — ไม่ให้บิลตกหล่นจากคิว)
+ * ★ ไฟล์เอกสาร (attachment_type='file', doc_kind='file'): ดึงมาสร้าง bill_entry ด้วย —
+ *   PDF → ให้ AI อ่าน (extractBillsData/gpt-5-mini อ่าน PDF ได้) · Excel/doc/อ่านไม่ได้ →
+ *   "draft ว่าง" ให้คนคีย์ (ไฟล์แนบเปิด/ดาวน์โหลดได้เหมือนบิลรูป — ไม่ให้บิลตกหล่นจากคิว)
  * ★ degrade: ไม่มี OpenAI key → extractBillData คืน null → ยังสร้าง draft ว่างให้คนคีย์
  * ★ PDPA: ไม่ log objectPath/เนื้อบิล/ตัวเลข — log แค่ error สั้น ๆ
  */
@@ -27,6 +34,16 @@ const BILLS_BUCKET = "bills";
 
 /** doc_kind ที่ถือเป็นบิลต้องลงบัญชี */
 const BILL_DOC_KINDS = ["sale", "purchase", "handwritten", "cash"];
+
+/**
+ * doc_kind ที่ eligible เข้าคิวสกัด = บิลรูป (BILL_DOC_KINDS) + 'file' (ไฟล์เอกสาร PDF/Excel/doc)
+ *   ★ ไฟล์เอกสารได้ doc_kind='file' ตอน fetch (attachments.ts) — ไม่คัด AI → ต้อง eligible เองที่นี่
+ *     เพื่อสร้าง bill_entry (draft): PDF ให้ AI อ่าน, เอกสารอื่น = draft ว่างพร้อมไฟล์แนบ
+ */
+const EXTRACT_ELIGIBLE_DOC_KINDS = [...BILL_DOC_KINDS, "file"];
+
+/** doc_kind ที่ "ไม่ใช่ใบกำกับภาษี" → ไม่มี VAT แน่นอน (บังคับ novat ทุก line ไม่ต้องเดา) */
+const NONVAT_DOC_KINDS = new Set(["handwritten", "cash", "slip"]);
 
 export type ExtractWorkerResult = {
   /** จำนวนบิลที่หยิบมาพิจารณา */
@@ -52,7 +69,7 @@ type QueueRow = {
 };
 
 /** เดา mime จากนามสกุลไฟล์ (fallback image/jpeg) */
-function mimeFromPath(path: string): string {
+export function mimeFromPath(path: string): string {
   const m = path.toLowerCase();
   if (m.endsWith(".png")) return "image/png";
   if (m.endsWith(".gif")) return "image/gif";
@@ -66,6 +83,112 @@ function mimeFromPath(path: string): string {
 /** true = ไฟล์ที่ vision อ่านไม่ได้ (PDF/เอกสาร) → สร้าง draft ว่าง */
 function isNonImage(attachmentType: string | null, mime: string): boolean {
   return attachmentType === "file" || mime === "application/pdf" || !mime.startsWith("image/");
+}
+
+/** ปัดทศนิยม 2 ตำแหน่ง (ยอดเงิน) */
+export function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * คำนวณหัก ณ ที่จ่ายต่อบรรทัด (pure — เทสต์ได้) — ★ เป็น "ค่าแนะนำ ไม่ล็อก" นักบัญชีแก้ได้
+ *   - อัตรา (rate): ใช้ค่าที่ AI อ่านจากบิลก่อน (aiRate) · ไม่มี → แนะนำจากประเภทบัญชี suggestWhtRate
+ *   - ยอดหัก (amount): ใช้ค่าที่ AI อ่านก่อน (aiAmount) · ไม่มี → auto-คำนวณ round2(amount*rate/100)
+ *     เฉพาะเมื่อมีทั้งอัตรา (>0) และฐาน amount (>0) — ไม่มีฐาน = 0 (ไม่เดา)
+ */
+export function resolveLineWht(
+  aiRate: number | null | undefined,
+  aiAmount: number | null | undefined,
+  amount: number,
+  accountCode: string | null
+): { wht_rate: number; wht_amount: number } {
+  const rate = aiRate ?? suggestWhtRate(accountCode);
+  let whtAmount: number;
+  if (aiAmount != null) whtAmount = aiAmount;
+  else if (rate > 0 && amount > 0) whtAmount = round2((amount * rate) / 100);
+  else whtAmount = 0;
+  return { wht_rate: rate, wht_amount: whtAmount };
+}
+
+/**
+ * สร้างแถว bill_entry_lines จากผลสกัด (ใช้ร่วมทั้งสกัดใหม่ + re-extract) — ★ ที่เดียวคุม WHT/บัญชี
+ *   - ชื่อบัญชี: ดึงจากผังกลางเสมอ (ไม่เชื่อชื่อจากโมเดล)
+ *   - WHT: AI อ่านได้ใช้เลย · ไม่มี → แนะนำจากบัญชี (resolveLineWht)
+ *   - forceNoVat: เอกสารเขียนมือ/เงินสด/สลิป บังคับ novat
+ *   - aiUsed: true เมื่อสกัดด้วย AI สำเร็จ (ใช้ตั้ง ai_filled — PDF/degrade = false)
+ *   ไม่มี line เลย → สร้าง 1 บรรทัดว่างให้คนคีย์ (ไม่ทิ้งทั้งใบ)
+ */
+export function buildEntryLineRows(
+  lines: ExtractedLine[] | null | undefined,
+  ctx: { entryId: string; tenantId: string; forceNoVat: boolean; aiUsed: boolean }
+): Record<string, unknown>[] {
+  const src: ExtractedLine[] =
+    lines && lines.length > 0
+      ? lines
+      : [
+          {
+            vat_type: "vat",
+            description: null,
+            amount: null,
+            vat_amount: null,
+            account_code: null,
+            wht_rate: null,
+            wht_amount: null,
+            low_confidence: false,
+          },
+        ];
+  return src.map((l, i) => {
+    const accountCode = l.account_code ?? null;
+    const accountName = accountCode ? CHART_BY_CODE[accountCode]?.name ?? null : null;
+    const amount = l.amount ?? 0;
+    const vatType = ctx.forceNoVat ? ("novat" as const) : l.vat_type;
+    // ★ VAT: AI อ่านได้ใช้เลย · ไม่มี → auto-คำนวณจากยอด×7% "เฉพาะ line ที่เป็น VAT"
+    //   (calcVat: novat=0 เสมอ → บิลไม่มี VAT ยังเป็น 0) — เป็นค่าคำนวณ ไม่ล็อก นักบัญชีแก้ได้
+    const vatAmount = l.vat_amount ?? calcVat(amount, vatType);
+    const { wht_rate, wht_amount } = resolveLineWht(l.wht_rate, l.wht_amount, amount, accountCode);
+    const aiFilled = ctx.aiUsed && (l.amount !== null || l.vat_amount !== null || accountCode !== null);
+    // ★ true เมื่อ AI "เดาเติม" ช่องเสี่ยง (amount/vat/บัญชี conf ต่ำ) → UI ติดป้าย "AI เดา — ตรวจ"
+    const aiLowConfidence = ctx.aiUsed && !!l.low_confidence;
+    return {
+      entry_id: ctx.entryId,
+      tenant_id: ctx.tenantId,
+      line_no: i + 1,
+      vat_type: vatType,
+      description: l.description,
+      account_code: accountCode,
+      account_name: accountName,
+      amount,
+      vat_amount: vatAmount,
+      wht_rate,
+      wht_amount,
+      ai_filled: aiFilled,
+      ai_low_confidence: aiLowConfidence,
+    };
+  });
+}
+
+/** บรรทัดขั้นต่ำที่ใช้ตัดสิน "ว่าง/ไม่ครบจริง" (สำหรับ re-extract) */
+export type ReextractableLine = {
+  amount: number | null;
+  vat_amount: number | null;
+  account_code: string | null;
+  description: string | null;
+};
+
+/**
+ * entry นี้ "ว่าง/ไม่ครบจริง" (ยังไม่มีใครคีย์) ไหม? (pure — เทสต์ได้)
+ *   ว่างจริง = ไม่มี line เลย หรือ "ทุก" line ไม่มีข้อมูลเลย
+ *     (amount=0 และ vat_amount=0 และ account_code null และ description ว่าง)
+ *   ★ มี line ใดมีข้อมูลแม้ช่องเดียว = "คนอาจคีย์แล้ว" → false (ห้ามแตะ/สกัดทับ)
+ */
+export function isEmptyReextractable(lines: ReextractableLine[]): boolean {
+  return lines.every(
+    (l) =>
+      (l.amount ?? 0) === 0 &&
+      (l.vat_amount ?? 0) === 0 &&
+      l.account_code == null &&
+      (l.description == null || String(l.description).trim() === "")
+  );
 }
 
 export type EntryType = "purchase" | "sale" | "unspecified";
@@ -285,6 +408,50 @@ const CANDIDATE_SCAN_LIMIT = 2000;
 const DONE_SCAN_LIMIT = 50000;
 
 /**
+ * ★ pagination สำหรับ reextract/backfill — entry เป้าหมาย (ว่าง/ไม่ครบ) กระจายทั่วกอง
+ *   ไม่ได้อยู่แค่ N ใบเก่าสุด → ต้องไล่เป็นหน้าจนเจอครบ limit (ไม่พึ่งชุดแรกชุดเดียว)
+ */
+/** entry ต่อหน้า — โหลด line ≤ 200 ids/หน้า (กัน .in() ยาวชน URL limit ของ PostgREST) */
+const REEXTRACT_PAGE_SIZE = 200;
+/** เพดานจำนวนหน้า/รอบ (30×200 = 6000 entry) — bounded กันวนไม่จบ */
+const REEXTRACT_MAX_PAGES = 30;
+
+/**
+ * ไล่ entry เป็นหน้า (cursor pagination บน created_at asc) จนสะสม "เป้าหมาย" ครบ limit — bounded/เทสต์ได้
+ *   ★ ทำไม cursor: entry ที่ต้องทำกระจายทั่วกอง — ถ้าดึงแค่ N ใบเก่าสุดแล้วกรอง อาจเจอ 0 (คิวค้าง)
+ *   - fetchPage(cursor,pageSize): ดึง entry หน้าถัดไป (created_at > cursor) เรียง asc — ต้อง select created_at
+ *   - filterTargets(page): โหลด line ของหน้านี้ (≤pageSize ids) + กรองเฉพาะเป้าหมาย → คืน targets
+ *   หยุดเมื่อ: ครบ limit / หน้าว่างหรือไม่เต็ม (หมดกอง) / ครบ maxPages
+ *   ★ cursor เดินตาม "ทุก entry ในหน้า" (ไม่ใช่เฉพาะเป้าหมาย) → เดินข้ามใบที่เติมแล้วไปเรื่อย ๆ
+ */
+export async function collectTargetEntries<T extends { created_at: string | null }>(args: {
+  limit: number;
+  fetchPage: (cursor: string | null, pageSize: number) => Promise<T[]>;
+  filterTargets: (page: T[]) => Promise<T[]>;
+  pageSize?: number;
+  maxPages?: number;
+}): Promise<T[]> {
+  const pageSize = args.pageSize ?? REEXTRACT_PAGE_SIZE;
+  const maxPages = args.maxPages ?? REEXTRACT_MAX_PAGES;
+  const targets: T[] = [];
+  let cursor: string | null = null;
+  for (let p = 0; p < maxPages; p += 1) {
+    const page = await args.fetchPage(cursor, pageSize);
+    if (page.length === 0) break; // ไม่มี entry เหลือ
+    const hits = await args.filterTargets(page);
+    for (const h of hits) {
+      targets.push(h);
+      if (targets.length >= args.limit) return targets; // ครบ limit → พอ
+    }
+    if (page.length < pageSize) break; // หน้าไม่เต็ม = ใบสุดท้ายของกองแล้ว
+    const last = page[page.length - 1].created_at;
+    if (last == null) break; // created_at ว่าง → เลื่อน cursor ต่อไม่ได้ (กันวนไม่จบ)
+    cursor = last;
+  }
+  return targets;
+}
+
+/**
  * เลือกบิลที่ยังไม่มี entry (subtract-done + เรียงเก่า→ใหม่) — แยกออกมาให้เทสต์ได้
  *   1) done set = attachment_id ที่มี bill_entries (ยังไม่ลบ) ทั้งหมด
  *   2) eligible = message_attachments (stored + เอกสารการเงิน + มีไฟล์) เรียง created_at asc
@@ -295,10 +462,12 @@ export async function selectExtractionCandidates(
   limit: number
 ): Promise<QueueRow[]> {
   // 1) done set (ทุก tenant — cron เป็น service-role สแกนรวม)
+  //    ★ นับรวม entry ที่ถูกลบ (soft-delete) ด้วย — ไม่กรอง deleted_at
+  //      บิลที่นักบัญชีลบทิ้ง = "ทำแล้ว" ไม่ต้องสกัดซ้ำ (กัน cron ปลุกบิลที่ลบกลับมา)
+  //      → ทำให้ "ลบ" กู้คืนได้จริง (soft-delete เฉย ๆ ไม่ต้องทำลายไฟล์/มาร์ค attachment)
   const { data: doneData, error: doneErr } = await db
     .from("bill_entries")
     .select("attachment_id")
-    .is("deleted_at", null)
     .not("attachment_id", "is", null)
     .limit(DONE_SCAN_LIMIT);
   if (doneErr) {
@@ -317,7 +486,7 @@ export async function selectExtractionCandidates(
     .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id")
     .eq("fetch_status", "stored")
     .in("attachment_type", ["image", "file"])
-    .in("doc_kind", BILL_DOC_KINDS)
+    .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
     .not("drive_file_id", "is", null)
     .order("created_at", { ascending: true })
     .limit(CANDIDATE_SCAN_LIMIT);
@@ -361,36 +530,102 @@ export async function processBillExtraction(
     const objectPath = row.drive_file_id;
     if (!objectPath) continue;
 
-    const mime = mimeFromPath(objectPath);
-    const nonImage = isNonImage(row.attachment_type, mime);
+    // ★ ชนิดไฟล์ (จากนามสกุลบน storage) — ตัดสินว่า AI อ่านได้ไหม
+    //   - รูป (image / นามสกุลรูป): vision อ่านได้ (extractBillData, gpt-4o-mini)
+    //   - PDF: file input อ่านได้ (extractBillsData, gpt-5-mini อ่าน PDF ได้)
+    //   - ไฟล์เอกสารอื่น (Excel/doc/csv): อ่านไม่ได้ → สร้าง draft ว่างพร้อมไฟล์แนบ
+    const lowerPath = objectPath.toLowerCase();
+    const isPdf = lowerPath.endsWith(".pdf");
+    const isImageExt = /\.(jpe?g|png|gif|webp|heic|heif)$/.test(lowerPath);
+    const isImage = row.attachment_type === "image" || isImageExt;
+    const isDocumentFile = !isImage; // ไฟล์ที่ไม่ใช่รูป (PDF/Excel/doc/…)
+    const aiReadable = isImage || isPdf;
+    const mime = isPdf ? "application/pdf" : mimeFromPath(objectPath);
 
-    // 3) รูป → ดาวน์โหลด + สกัด · PDF/เอกสาร → ข้ามการสกัด (draft ว่าง)
-    let bill = null as Awaited<ReturnType<typeof extractBillData>> | null;
-    if (!nonImage) {
-      let buf: Buffer | null = null;
-      try {
-        const { data: blob, error: dlErr } = await db.storage
-          .from(BILLS_BUCKET)
-          .download(objectPath);
-        if (dlErr || !blob) {
-          console.warn("[bill-extract-worker] download failed");
-          continue; // ดาวน์โหลดไม่ได้ → ข้าม (รอบหน้าลองใหม่ ไม่สร้าง entry)
-        }
-        buf = Buffer.from(await blob.arrayBuffer());
-      } catch {
-        console.warn("[bill-extract-worker] download error");
+    // 3) จับคู่ลูกค้าเราจาก chat_group (best-effort) — ทำก่อนดาวน์โหลด/AI เพื่อเช็คธงท้าวแชร์
+    const customer = await resolveCustomer(db, row.chat_message_id);
+    const shareFlag = customer.id
+      ? await getCustomerShareCircleFlag(db, row.tenant_id, customer.id)
+      : false;
+
+    // ★ ลูกค้าท้าวแชร์ (is_share_circle=true) — guard เดิมต้องไม่พัง:
+    //   - ไฟล์เอกสาร/PDF (ไม่ใช่รูป): "ข้ามการสร้างบิล" เหมือนพฤติกรรมเดิม (วงแชร์ไม่เคยได้บิลจากไฟล์
+    //     เพราะเดิมไม่ดึงไฟล์เลย) → มาร์ก doc_kind='share_circle' ให้ออกจากคิว (กันวนสแกน/starve)
+    //   - รูป: "แยกเนื้อหา" ด้วย AI (ลิสต์วงแชร์ vs บิลจริง) เหมือนเดิม — บิลจริงยังสร้าง
+    //   ★ gate false-positive: ทำเฉพาะลูกค้า is_share_circle (flag=false → ลูกค้าปกติ flow เดิม 100%)
+    //   preBuf: buf รูปที่ดาวน์โหลดแล้ว (ถ้าเป็นบิล) ให้ extract ใช้ต่อ — ไม่ดาวน์โหลดซ้ำ
+    let preBuf: Buffer | null = null;
+    if (shareFlag) {
+      if (isDocumentFile) {
+        // วงแชร์ + ไฟล์เอกสาร → ไม่สร้างบิล (guard เดิม) · มาร์กออกจากคิว
+        await db
+          .from("message_attachments")
+          .update({ doc_kind: "share_circle" })
+          .eq("id", row.id)
+          .eq("tenant_id", row.tenant_id);
         continue;
       }
-      bill = await extractBillData(buf, mime);
+      // วงแชร์ + รูป → ดาวน์โหลด + classify ลิสต์วง/บิลจริง (เหมือนเดิม)
+      try {
+        const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(objectPath);
+        if (dlErr || !blob) {
+          console.warn("[bill-extract-worker] share download failed");
+          continue; // ดาวน์โหลดไม่ได้ → ข้ามรอบนี้ (ยังไม่สร้างบิล ลองใหม่รอบหน้า)
+        }
+        preBuf = Buffer.from(await blob.arrayBuffer());
+      } catch {
+        console.warn("[bill-extract-worker] share download error");
+        continue;
+      }
+      const sc = await classifyShareCircleImage(preBuf, mime);
+      if (sc && sc.isShareList) {
+        // ★ ลิสต์วงแชร์ (มั่นใจ) → ไม่สร้างบิล · มาร์ก doc_kind ให้ออกจาก eligible (กันวนสแกน/starve คิว)
+        await db
+          .from("message_attachments")
+          .update({ doc_kind: "share_circle" })
+          .eq("id", row.id)
+          .eq("tenant_id", row.tenant_id);
+        continue;
+      }
+      // ไม่ใช่ลิสต์วง (หรือ classify ไม่ได้/ไม่มั่นใจ) → สร้างบิลตามปกติ (keep-if-unsure: บิลจริงไม่หาย)
     }
 
-    // 4) จับคู่ลูกค้าเราจาก chat_group (best-effort) + ตัดสินฝั่งซื้อ/ขาย
-    const customer = await resolveCustomer(db, row.chat_message_id);
+    // 4) รูป/PDF → ดาวน์โหลด + AI สกัด · เอกสารอื่น (Excel/doc) → draft ว่าง (มีไฟล์แนบให้เปิด/ดาวน์โหลด)
+    let bill = null as ExtractedBill | null;
+    if (aiReadable) {
+      let buf: Buffer | null = preBuf; // ★ reuse ถ้าดาวน์โหลดไปแล้ว (share-circle image branch)
+      if (!buf) {
+        try {
+          const { data: blob, error: dlErr } = await db.storage
+            .from(BILLS_BUCKET)
+            .download(objectPath);
+          if (dlErr || !blob) {
+            console.warn("[bill-extract-worker] download failed");
+            continue; // ดาวน์โหลดไม่ได้ → ข้าม (รอบหน้าลองใหม่ ไม่สร้าง entry)
+          }
+          buf = Buffer.from(await blob.arrayBuffer());
+        } catch {
+          console.warn("[bill-extract-worker] download error");
+          continue;
+        }
+      }
+      if (isPdf) {
+        // ★ PDF: ใช้ extractBillsData (gpt-5-mini อ่าน PDF ได้) แล้วเอา "บิลแรก"
+        //   (1 attachment = 1 entry เพราะ attachment_id unique) · อ่านไม่ได้ = [] → bill=null (draft ว่าง)
+        const bills = await extractBillsData(buf, mime);
+        bill = bills[0] ?? null;
+      } else {
+        // รูปบิลไลน์ = gpt-4o-mini (ประหยัด · ปริมาณมากทุกวันผ่าน cron)
+        bill = await extractBillData(buf, mime);
+      }
+    }
+
+    // 5) ตัดสินฝั่งซื้อ/ขาย จากลูกค้าเรา (resolve แล้วด้านบน)
     const seller: BillParty = { name: bill?.seller_name ?? null, taxId: bill?.seller_tax_id ?? null };
     const buyer: BillParty = { name: bill?.buyer_name ?? null, taxId: bill?.buyer_tax_id ?? null };
     const decision = decideEntrySide(customer, seller, buyer);
 
-    // 5) สร้าง bill_entries (draft) — attachment_id unique กันซ้ำ (ถ้าชนก็ข้าม)
+    // 6) สร้าง bill_entries (draft) — attachment_id unique กันซ้ำ (ถ้าชนก็ข้าม)
     const { data: entryIns, error: entryErr } = await db
       .from("bill_entries")
       .insert({
@@ -406,6 +641,8 @@ export async function processBillExtraction(
         seller_tax_id: seller.taxId,
         buyer_name: buyer.name,
         buyer_tax_id: buyer.taxId,
+        // ค่าแนะนำวิธีจ่าย/รับเงิน จาก doc_kind (เงินสด/สลิป=โอน/ใบกำกับ=เชื่อ) — นักบัญชีแก้ได้
+        payment_method: suggestPaymentMethod(row.doc_kind, decision.entryType),
         status: "draft",
         source: "ai",
         ai_confidence: bill?.overall_confidence ?? null,
@@ -424,25 +661,16 @@ export async function processBillExtraction(
     const entryId = (entryIns as { id?: string } | null)?.id;
     if (!entryId) continue;
 
-    // 6) สร้าง bill_entry_lines — ช่องที่ AI เว้น null = ไม่เติม (ค่า 0 ตาม default DB)
-    //    ai_filled=true เฉพาะ line ที่ AI เติม amount/vat จริง (รู้ที่มา)
-    const lines = bill?.lines ?? [
-      { vat_type: "vat" as const, description: null, amount: null, vat_amount: null },
-    ];
-    const lineRows = lines.map((l, i) => {
-      const aiFilled = !!bill && (l.amount !== null || l.vat_amount !== null);
-      return {
-        entry_id: entryId,
-        tenant_id: row.tenant_id,
-        line_no: i + 1,
-        vat_type: l.vat_type,
-        description: l.description,
-        amount: l.amount ?? 0,
-        vat_amount: l.vat_amount ?? 0,
-        wht_rate: 0,
-        wht_amount: 0,
-        ai_filled: aiFilled,
-      };
+    // 7) สร้าง bill_entry_lines — ช่องที่ AI เว้น null = ไม่เติม (ค่า 0 ตาม default DB)
+    //    ai_filled=true เฉพาะ line ที่ AI เติม amount/vat/บัญชี จริง (รู้ที่มา)
+    // ★ เอกสารเขียนมือ/เงินสด/สลิป = ไม่ใช่ใบกำกับภาษี → บังคับ novat แน่นอน (ไม่ต้องเดา)
+    //   เฉพาะ purchase/sale (ใบกำกับ) ค่อยใช้ vat_type ที่ AI ตัดสิน
+    const forceNoVat = NONVAT_DOC_KINDS.has((row.doc_kind ?? "").trim().toLowerCase());
+    const lineRows = buildEntryLineRows(bill?.lines, {
+      entryId,
+      tenantId: row.tenant_id,
+      forceNoVat,
+      aiUsed: !!bill,
     });
     const { error: lineErr } = await db.from("bill_entry_lines").insert(lineRows);
     if (lineErr) {
@@ -457,12 +685,132 @@ export async function processBillExtraction(
         !!bill.doc_date ||
         !!bill.seller_name ||
         !!bill.buyer_name ||
-        lineRows.some((l) => l.amount > 0));
+        lineRows.some((l) => Number(l.amount) > 0));
     if (gotSomething) extracted++;
     else blank++;
   }
 
   return { scanned, created, extracted, blank };
+}
+
+/**
+ * สกัดข้อมูลบิลจาก "ไฟล์ที่อัปโหลดเอง" (upload_path) → เติมหัว/บรรทัดให้ entry ที่มีอยู่แล้ว
+ *
+ *   ใช้ตอนนักบัญชีอัปไฟล์เอง (รูป/PDF) → AI อ่านแล้วลงบัญชีให้ นักบัญชีแค่ตรวจ
+ *   (ต่างจาก processBillExtraction ที่ทำงานกับบิลจากไลน์ผ่าน message_attachments)
+ *
+ * ★ เคารพประเภทที่ผู้ใช้เลือกตอนอัป (entry.entry_type) — counterparty ตามฝั่งนั้น
+ * ★ อ่านได้เฉพาะ รูป + PDF (OpenAI file input) · excel/csv ข้าม → คืน extracted:false (คีย์เอง)
+ * ★ ปลอดภัย: สกัดเฉพาะ entry ที่ยัง "ว่างจริง" (ยังไม่มีใครคีย์) — ไม่ทับงานคน
+ * ★ degrade: ไม่มี key / ดาวน์โหลดพลาด / อ่านไม่ได้ → extracted:false (คง draft ว่างให้คีย์เอง)
+ * ★ PDPA: ไม่ log path/เนื้อบิล/ตัวเลข
+ */
+/** สร้าง object หัวเอกสารจากบิลที่สกัดได้ · counterparty ตามฝั่งที่ผู้ใช้เลือก (ซื้อ→ผู้ขาย, ขาย→ผู้ซื้อ) */
+function billHeadFields(bill: ExtractedBill, entryType: string | null): Record<string, unknown> {
+  const seller = { name: bill.seller_name ?? null, taxId: bill.seller_tax_id ?? null };
+  const buyer = { name: bill.buyer_name ?? null, taxId: bill.buyer_tax_id ?? null };
+  const counterparty =
+    entryType === "sale" ? buyer : entryType === "purchase" ? seller : { name: null, taxId: null };
+  return {
+    doc_date: bill.doc_date ?? null,
+    doc_no: bill.doc_no ?? null,
+    counterparty_name: counterparty.name,
+    counterparty_tax_id: counterparty.taxId,
+    seller_name: seller.name,
+    seller_tax_id: seller.taxId,
+    buyer_name: buyer.name,
+    buyer_tax_id: buyer.taxId,
+    source: "ai",
+    ai_confidence: bill.overall_confidence ?? null,
+  };
+}
+
+export async function extractUploadedEntry(
+  db: SupabaseClient,
+  tenantId: string,
+  entryId: string
+): Promise<{ extracted: boolean; count: number }> {
+  const NONE = { extracted: false, count: 0 };
+
+  // 1) โหลดหัว entry (scope tenant)
+  const { data: e } = await db
+    .from("bill_entries")
+    .select("entry_type, status, customer_id, upload_path, upload_name, upload_mime")
+    .eq("id", entryId)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!e) return NONE;
+  const entry = e as {
+    entry_type: string | null;
+    status: string | null;
+    customer_id: string | null;
+    upload_path: string | null;
+    upload_name: string | null;
+    upload_mime: string | null;
+  };
+  if (entry.status === "confirmed" || !entry.upload_path) return NONE;
+
+  // 2) อ่านได้เฉพาะรูป + PDF
+  const mime = (entry.upload_mime || mimeFromPath(entry.upload_path)).toLowerCase();
+  const isImage = mime.startsWith("image/");
+  const isPdf = mime.includes("pdf");
+  if (!isImage && !isPdf) return NONE;
+
+  // 3) กันทับงานคน — สกัดเฉพาะ entry ที่ยัง "ว่างจริง"
+  const { data: curLines } = await db
+    .from("bill_entry_lines")
+    .select("amount, vat_amount, account_code, description")
+    .eq("entry_id", entryId)
+    .eq("tenant_id", tenantId);
+  const existing = (curLines ?? []) as ReextractableLine[];
+  if (existing.length > 0 && !isEmptyReextractable(existing)) return NONE;
+
+  // 4) ดาวน์โหลดไฟล์ + สกัด "ทุกบิล" (เอกสารอาจรวมหลายใบ)
+  let buf: Buffer;
+  try {
+    const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(entry.upload_path);
+    if (dlErr || !blob) return NONE;
+    buf = Buffer.from(await blob.arrayBuffer());
+  } catch {
+    return NONE;
+  }
+  const bills = await extractBillsData(buf, mime);
+  if (bills.length === 0) return NONE;
+
+  const entryType = entry.entry_type;
+
+  // 5) บิลแรก → เติมลง entry เดิม (แทนบรรทัดว่าง)
+  await db.from("bill_entries").update(billHeadFields(bills[0], entryType)).eq("id", entryId).eq("tenant_id", tenantId);
+  await db.from("bill_entry_lines").delete().eq("entry_id", entryId).eq("tenant_id", tenantId);
+  await db
+    .from("bill_entry_lines")
+    .insert(buildEntryLineRows(bills[0].lines, { entryId, tenantId, forceNoVat: false, aiUsed: true }));
+
+  // 6) บิลที่ 2..N → สร้าง entry ใหม่ (ลูกค้า/ประเภท/ไฟล์เดียวกัน) ให้นักบัญชีตรวจแยกใบ
+  for (let i = 1; i < bills.length; i++) {
+    const { data: ins } = await db
+      .from("bill_entries")
+      .insert({
+        tenant_id: tenantId,
+        customer_id: entry.customer_id,
+        entry_type: entryType,
+        status: "draft",
+        upload_path: entry.upload_path,
+        upload_name: entry.upload_name,
+        upload_mime: entry.upload_mime,
+        ...billHeadFields(bills[i], entryType),
+      })
+      .select("id")
+      .maybeSingle();
+    const newId = (ins as { id?: string } | null)?.id;
+    if (!newId) continue;
+    await db
+      .from("bill_entry_lines")
+      .insert(buildEntryLineRows(bills[i].lines, { entryId: newId, tenantId, forceNoVat: false, aiUsed: true }));
+  }
+
+  return { extracted: true, count: bills.length };
 }
 
 export type RedecideResult = {
@@ -573,4 +921,398 @@ export async function redecideExistingEntries(
   }
 
   return { scanned, updated };
+}
+
+export type BackfillAccountsResult = {
+  /** จำนวน entry (ai draft) ที่ยิง AI เพื่อเติมบัญชีในรอบนี้ */
+  scanned: number;
+  /** จำนวน entry ที่เติมบัญชีได้อย่างน้อย 1 บรรทัด */
+  entriesFilled: number;
+  /** จำนวนบรรทัดที่เติม account_code สำเร็จ */
+  linesFilled: number;
+};
+
+/**
+ * Backfill บัญชีให้บิลเดิม — เติม account_code/account_name ให้ bill_entry_lines ของ entry ที่
+ *   AI สร้างไว้ก่อนมีฟีเจอร์แนะนำบัญชี (มีบรรทัดที่ account_code ยังว่าง)
+ *   ★ ยิง AI ใหม่จากรูปบิล เอา "เฉพาะบัญชี" มาเติม — ไม่แตะ amount/vat/หัก (คนอาจแก้ไว้แล้ว)
+ *   ★ เฉพาะ source='ai' + status='draft' (ยังไม่ยืนยัน) + มีไฟล์รูป (PDF ข้าม vision อ่านไม่ได้)
+ *   ★ guard: update เฉพาะบรรทัดที่ account_code ยัง null (กัน race/คนเพิ่งเลือก) · idempotent
+ *   ★ จำกัด limit = จำนวน entry ที่ยิง AI จริงต่อรอบ (คุมค่าใช้จ่าย) · เรียกผ่าน cron mode=accounts
+ *   ★ PDPA: log แค่ตัวเลขสรุป ไม่มี path/เนื้อบิล
+ */
+export async function backfillEntryAccounts(
+  db: SupabaseClient,
+  opts: { limit?: number } = {}
+): Promise<BackfillAccountsResult> {
+  const limit = opts.limit ?? 10;
+  const empty: BackfillAccountsResult = { scanned: 0, entriesFilled: 0, linesFilled: 0 };
+
+  // ★ ไล่หา entry เป้าหมาย "ทั่วทั้งกอง" (cursor pagination) — เดิมดึงแค่ limit*5 ใบเก่าสุด
+  //   แล้วกรอง → ถ้าใบเก่าถูกเติมหมด = เจอ 0 (คิวค้าง ไม่ลด). เป้าหมาย = ai draft + มีไฟล์รูป +
+  //   "มีบรรทัด account_code ว่าง" (กระจายทั่วกอง). สะสม nullLines/path ระหว่างไล่ ใช้ต่อในลูป
+  const nullLinesByEntry = new Map<string, { id: string; lineNo: number }[]>();
+  const pathByAtt = new Map<string, string | null>();
+  type BackfillEntry = { id: string; tenant_id: string; attachment_id: string | null; created_at: string | null };
+
+  const entries = await collectTargetEntries<BackfillEntry>({
+    limit,
+    fetchPage: async (cursor, pageSize) => {
+      let q = db
+        .from("bill_entries")
+        .select("id, tenant_id, attachment_id, created_at")
+        .eq("source", "ai")
+        .eq("status", "draft")
+        .is("deleted_at", null)
+        .not("attachment_id", "is", null);
+      if (cursor) q = q.gt("created_at", cursor); // ★ gt ต้องอยู่ก่อน order/limit (filter builder)
+      const { data, error } = await q.order("created_at", { ascending: true }).limit(pageSize);
+      if (error) {
+        console.warn(`[bill-extract-worker] backfill select entries error code=${(error as { code?: string }).code ?? "?"}`);
+        return [];
+      }
+      return (data ?? []) as BackfillEntry[];
+    },
+    filterTargets: async (page) => {
+      // บรรทัด account_code ว่าง ของ entry ในหน้านี้ (≤ pageSize ids)
+      const ids = page.map((e) => e.id);
+      const { data: lineData } = await db
+        .from("bill_entry_lines")
+        .select("id, entry_id, line_no, account_code")
+        .in("entry_id", ids)
+        .is("account_code", null)
+        .order("line_no", { ascending: true });
+      const pageNull = new Map<string, { id: string; lineNo: number }[]>();
+      for (const l of (lineData ?? []) as { id: string; entry_id: string; line_no: number }[]) {
+        const arr = pageNull.get(l.entry_id) ?? [];
+        arr.push({ id: l.id, lineNo: l.line_no });
+        pageNull.set(l.entry_id, arr);
+      }
+      const candidates = page.filter((e) => (pageNull.get(e.id)?.length ?? 0) > 0);
+      if (candidates.length === 0) return [];
+
+      // ต้องมีไฟล์ "รูป" (PDF ข้าม vision) — ★ กัน PDF ว่างค้างหัวกอง วนเจอทุกรอบ = ไม่ลด
+      const attIds = [...new Set(candidates.map((e) => e.attachment_id).filter((x): x is string => !!x))];
+      const localPath = new Map<string, string | null>();
+      if (attIds.length > 0) {
+        const { data: attData } = await db
+          .from("message_attachments")
+          .select("id, drive_file_id")
+          .in("id", attIds);
+        for (const a of (attData ?? []) as { id: string; drive_file_id: string | null }[]) {
+          localPath.set(a.id, a.drive_file_id);
+        }
+      }
+      const hits = candidates.filter((e) => {
+        const p = e.attachment_id ? localPath.get(e.attachment_id) ?? null : null;
+        return !!p && !isNonImage(null, mimeFromPath(p));
+      });
+      // เก็บ nullLines/path ของเป้าหมายที่ผ่านลง map ถาวร (ใช้ต่อในลูปประมวลผล — ไม่ query ซ้ำ)
+      for (const e of hits) {
+        nullLinesByEntry.set(e.id, pageNull.get(e.id) ?? []);
+        if (e.attachment_id) pathByAtt.set(e.attachment_id, localPath.get(e.attachment_id) ?? null);
+      }
+      return hits;
+    },
+  });
+  if (entries.length === 0) return empty;
+
+  let scanned = 0;
+  let entriesFilled = 0;
+  let linesFilled = 0;
+
+  for (const e of entries) {
+    if (scanned >= limit) break; // คุมจำนวน AI call ต่อรอบ
+    const nullLines = nullLinesByEntry.get(e.id);
+    if (!nullLines || nullLines.length === 0) continue; // ไม่มีบรรทัดที่ต้องเติม
+    const objectPath = e.attachment_id ? pathByAtt.get(e.attachment_id) ?? null : null;
+    if (!objectPath) continue;
+    const mime = mimeFromPath(objectPath);
+    if (isNonImage(null, mime)) continue; // PDF/เอกสาร — vision อ่านไม่ได้ ข้าม
+
+    scanned++;
+
+    // ดาวน์โหลด + สกัดใหม่ (เอาเฉพาะ account_code)
+    let buf: Buffer;
+    try {
+      const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(objectPath);
+      if (dlErr || !blob) continue;
+      buf = Buffer.from(await blob.arrayBuffer());
+    } catch {
+      continue;
+    }
+    const bill = await extractBillData(buf, mime);
+    if (!bill) continue;
+
+    // จับคู่บรรทัดเดิม (เรียง line_no) กับบรรทัดที่ AI สกัดใหม่ (ตามลำดับ) → เติมเฉพาะบัญชี
+    let filledThisEntry = 0;
+    for (let i = 0; i < nullLines.length; i += 1) {
+      const code = bill.lines[i]?.account_code ?? null;
+      if (!code) continue;
+      const name = CHART_BY_CODE[code]?.name ?? null;
+      const { error: updErr } = await db
+        .from("bill_entry_lines")
+        .update({ account_code: code, account_name: name, ai_filled: true })
+        .eq("id", nullLines[i].id)
+        .is("account_code", null); // guard: เติมเฉพาะที่ยังว่าง
+      if (updErr) continue;
+      filledThisEntry += 1;
+      linesFilled += 1;
+    }
+    if (filledThisEntry > 0) entriesFilled += 1;
+  }
+
+  console.log(
+    `[bill-extract-worker] backfill accounts scanned=${scanned} entriesFilled=${entriesFilled} linesFilled=${linesFilled}`
+  );
+  return { scanned, entriesFilled, linesFilled };
+}
+
+export type ReExtractResult = {
+  /** จำนวน entry "ว่างจริง + มีไฟล์รูป" ที่ยิง AI สกัดใหม่ในรอบนี้ */
+  scanned: number;
+  /** จำนวน entry ที่สกัดใหม่แล้วอัปเดตในที่เดิมสำเร็จ (ได้ข้อมูลอย่างน้อย 1) */
+  updated: number;
+  /** จำนวน entry ที่สกัดแล้วยังว่าง (AI อ่านไม่ออก) — อัปเดตในที่เดิมแต่ยังไม่มีข้อมูล */
+  stillEmpty: number;
+};
+
+/**
+ * mark entry ว่า "ลองสกัดใหม่แล้ว" (reextract_attempted_at = now) — เขียนผ่าน service-role
+ *   ★ กัน reextract วนบิลหน้าคิวเดิมที่ AI อ่านไม่ออก (null/ว่าง) ซ้ำทุกรอบ:
+ *     selection กรอง reextract_attempted_at is null → mark แล้ว = รอบหน้าข้ามไปใบใหม่
+ *   ★ guard (source=ai, status=draft, ยังไม่ลบ): ไม่ mark/ไม่แตะ entry ที่คนยืนยัน/ลบแล้ว
+ *   ★ PDPA: log แค่ error code ไม่มี id/เนื้อบิล
+ */
+export async function markReextractAttempted(db: SupabaseClient, entryId: string): Promise<void> {
+  const { error } = await db
+    .from("bill_entries")
+    .update({ reextract_attempted_at: new Date().toISOString() })
+    .eq("id", entryId)
+    .eq("source", "ai")
+    .eq("status", "draft")
+    .is("deleted_at", null);
+  if (error) {
+    console.warn(
+      `[bill-extract-worker] reextract mark attempted error code=${(error as { code?: string }).code ?? "?"}`
+    );
+  }
+}
+
+/** entry ที่รอสกัดใหม่ (ว่าง/ไม่ครบ) — created_at ใช้เป็น cursor ไล่หน้า */
+type ReExtractEntryRow = {
+  id: string;
+  tenant_id: string;
+  attachment_id: string | null;
+  customer_id: string | null;
+  created_at: string | null;
+};
+
+/**
+ * ไล่สกัดใหม่ให้บิล "ว่าง/ไม่ครบจริง" ที่ AI สร้างไว้ (draft) โดย "ไม่ทับงานคน"
+ *   ★ เลือกเฉพาะ entry ปลอดภัย: source='ai' + status='draft' + ยังไม่ลบ + มีไฟล์รูป
+ *     และ "ว่างจริง" (isEmptyReextractable: ทุก line ไม่มีข้อมูล / ไม่มี line เลย)
+ *   ★ กันชนรอบทับ: ก่อนแตะ re-read line ปัจจุบันของ entry แล้วเช็คว่ายังว่างอยู่จริง
+ *     (คนอาจเพิ่งคีย์ระหว่างรอบ) — ไม่ว่างแล้ว = ข้าม ไม่แตะ
+ *   ★ อัปเดต "ในที่เดิม": update หัว entry (doc/seller/buyer + re-decide side) +
+ *     ลบ line ว่างเก่า → insert line ใหม่ (พร้อมบัญชี/WHT ตามงาน A + บังคับ novat ถ้า doc_kind ไม่ใช่ใบกำกับ)
+ *   ★ ยิง AI แพง → limit = จำนวน entry ที่สกัดจริงต่อรอบ (แยก cron mode=reextract)
+ *   ★ PDPA: log แค่ตัวเลขสรุป ไม่มี path/ชื่อ/เลขภาษี
+ */
+export async function reExtractIncompleteEntries(
+  db: SupabaseClient,
+  opts: { limit?: number } = {}
+): Promise<ReExtractResult> {
+  const limit = opts.limit ?? 10;
+  const empty: ReExtractResult = { scanned: 0, updated: 0, stillEmpty: 0 };
+
+  // 1) ★ ไล่หา entry "ว่างจริง + มีไฟล์รูป" ทั่วทั้งกอง (cursor pagination) — เดิมดึงแค่ limit*10
+  //    ใบเก่าสุดแล้วกรอง → ถ้าใบเก่าถูกเติมหมด = เจอ 0 (คิว 281 ใบว่างไม่ลด). เป้าหมายกระจายทั่วกอง
+  //    เก็บ att (path/doc_kind) ของเป้าหมายระหว่างไล่ ใช้ต่อในลูปประมวลผล (ไม่ query ซ้ำ)
+  const attById = new Map<string, { path: string | null; docKind: string | null }>();
+  const emptyEntries = await collectTargetEntries<ReExtractEntryRow>({
+    limit,
+    fetchPage: async (cursor, pageSize) => {
+      let q = db
+        .from("bill_entries")
+        .select("id, tenant_id, attachment_id, customer_id, created_at")
+        .eq("source", "ai")
+        .eq("status", "draft")
+        .is("deleted_at", null)
+        // ★ ข้าม entry ที่ "ลองสกัดใหม่แล้ว" (0052) — กันวนบิลหน้าคิวเดิมที่ AI อ่านไม่ออกซ้ำ
+        //   เฉพาะเส้น reextract เท่านั้น (backfill ใช้ query แยก ไม่กรองคอลัมน์นี้)
+        .is("reextract_attempted_at", null)
+        .not("attachment_id", "is", null);
+      if (cursor) q = q.gt("created_at", cursor); // ★ gt ต้องอยู่ก่อน order/limit (filter builder)
+      const { data, error } = await q.order("created_at", { ascending: true }).limit(pageSize);
+      if (error) {
+        console.warn(`[bill-extract-worker] reextract select entries error code=${(error as { code?: string }).code ?? "?"}`);
+        return [];
+      }
+      return (data ?? []) as ReExtractEntryRow[];
+    },
+    filterTargets: async (page) => {
+      // โหลด line ของหน้านี้ (≤ pageSize ids) → คัด "ว่างจริง" (ไม่มีใครคีย์)
+      const ids = page.map((e) => e.id);
+      const { data: lineData } = await db
+        .from("bill_entry_lines")
+        .select("entry_id, amount, vat_amount, account_code, description")
+        .in("entry_id", ids);
+      const linesByEntry = new Map<string, ReextractableLine[]>();
+      for (const l of (lineData ?? []) as (ReextractableLine & { entry_id: string })[]) {
+        const arr = linesByEntry.get(l.entry_id) ?? [];
+        arr.push({ amount: l.amount, vat_amount: l.vat_amount, account_code: l.account_code, description: l.description });
+        linesByEntry.set(l.entry_id, arr);
+      }
+      const candidates = page.filter((e) => isEmptyReextractable(linesByEntry.get(e.id) ?? []));
+      if (candidates.length === 0) return [];
+
+      // ต้องมีไฟล์ "รูป" (PDF ข้าม vision) — ★ กัน PDF ว่างค้างหัวกอง วนเจอทุกรอบ = ไม่ลด
+      const attIds = [...new Set(candidates.map((e) => e.attachment_id).filter((x): x is string => !!x))];
+      if (attIds.length > 0) {
+        const { data: attData } = await db
+          .from("message_attachments")
+          .select("id, drive_file_id, doc_kind")
+          .in("id", attIds);
+        for (const a of (attData ?? []) as { id: string; drive_file_id: string | null; doc_kind: string | null }[]) {
+          attById.set(a.id, { path: a.drive_file_id, docKind: a.doc_kind });
+        }
+      }
+      return candidates.filter((e) => {
+        const p = e.attachment_id ? attById.get(e.attachment_id)?.path ?? null : null;
+        return !!p && !isNonImage(null, mimeFromPath(p));
+      });
+    },
+  });
+  if (emptyEntries.length === 0) return empty;
+
+  // 2) ตัวตนลูกค้า (เพื่อ re-decide ฝั่งซื้อ/ขาย) — โหลดครั้งเดียว
+  const custIds = [...new Set(emptyEntries.map((e) => e.customer_id).filter((x): x is string => !!x))];
+  const custById = new Map<string, CustomerIdentity>();
+  if (custIds.length > 0) {
+    const { data: custData } = await db
+      .from("customers")
+      .select("id, name, business_name, tax_id")
+      .in("id", custIds);
+    for (const c of (custData ?? []) as {
+      id: string;
+      name: string | null;
+      business_name: string | null;
+      tax_id: string | null;
+    }[]) {
+      custById.set(c.id, { name: c.name, businessName: c.business_name, taxId: c.tax_id });
+    }
+  }
+
+  let scanned = 0;
+  let updated = 0;
+  let stillEmpty = 0;
+
+  for (const e of emptyEntries) {
+    if (scanned >= limit) break; // คุมจำนวน AI call ต่อรอบ
+    const att = e.attachment_id ? attById.get(e.attachment_id) : null;
+    const objectPath = att?.path ?? null;
+    if (!objectPath) continue;
+    const mime = mimeFromPath(objectPath);
+    if (isNonImage(null, mime)) continue; // PDF/เอกสาร — vision อ่านไม่ได้ ข้าม
+
+    scanned++;
+
+    // ดาวน์โหลด + สกัดใหม่
+    let buf: Buffer;
+    try {
+      const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(objectPath);
+      if (dlErr || !blob) continue;
+      buf = Buffer.from(await blob.arrayBuffer());
+    } catch {
+      continue;
+    }
+    const bill = await extractBillData(buf, mime);
+    // ★ mark "ลองสกัดใหม่แล้ว" ทันทีหลังยิง AI จริง (ครอบทุกผล: null/stillEmpty/updated)
+    //   → รอบหน้า selection ข้ามใบนี้ ไม่วนซ้ำบิลหน้าคิวเดิม (guard ai+draft: ไม่แตะที่คนยืนยันแล้ว)
+    await markReextractAttempted(db, e.id);
+    if (!bill) continue; // สกัดไม่ได้ → คงว่างไว้ (mark แล้ว รอบหน้าไม่วนซ้ำ)
+
+    // ★ กันชนรอบทับ: re-read line ปัจจุบัน ตรวจว่ายัง "ว่างจริง" อยู่ (คนอาจเพิ่งคีย์)
+    const { data: freshData } = await db
+      .from("bill_entry_lines")
+      .select("id, amount, vat_amount, account_code, description")
+      .eq("entry_id", e.id);
+    const fresh = (freshData ?? []) as (ReextractableLine & { id: string })[];
+    if (!isEmptyReextractable(fresh)) continue; // มีคนคีย์แล้ว → ไม่แตะ
+
+    // re-decide ฝั่งซื้อ/ขายจากตัวตนลูกค้า + ชื่อ/เลขที่ AI อ่านใหม่
+    const customer = (e.customer_id ? custById.get(e.customer_id) : null) ?? {
+      name: null,
+      businessName: null,
+      taxId: null,
+    };
+    const seller: BillParty = { name: bill.seller_name, taxId: bill.seller_tax_id };
+    const buyer: BillParty = { name: bill.buyer_name, taxId: bill.buyer_tax_id };
+    const decision = decideEntrySide(customer, seller, buyer);
+
+    // อัปเดตหัว entry ในที่เดิม (guard: ยังเป็น ai draft — กัน race กับการยืนยัน/ลบ)
+    const { data: updData, error: updErr } = await db
+      .from("bill_entries")
+      .update({
+        entry_type: decision.entryType,
+        doc_date: bill.doc_date,
+        doc_no: bill.doc_no,
+        counterparty_name: decision.counterpartyName,
+        counterparty_tax_id: decision.counterpartyTaxId,
+        seller_name: seller.name,
+        seller_tax_id: seller.taxId,
+        buyer_name: buyer.name,
+        buyer_tax_id: buyer.taxId,
+        // ค่าแนะนำวิธีจ่าย/รับเงิน จาก doc_kind (re-suggest — entry นี้ยังเป็น draft ว่าง)
+        payment_method: suggestPaymentMethod(att?.docKind, decision.entryType),
+        ai_confidence: bill.overall_confidence,
+      })
+      .eq("id", e.id)
+      .eq("source", "ai")
+      .eq("status", "draft")
+      .is("deleted_at", null)
+      .select("id")
+      .maybeSingle();
+    if (updErr) {
+      console.warn(`[bill-extract-worker] reextract update entry error code=${(updErr as { code?: string }).code ?? "?"}`);
+      continue;
+    }
+    if (!updData) continue; // entry เปลี่ยนสถานะไปแล้ว (ยืนยัน/ลบ) → ไม่แตะต่อ
+
+    // ลบ line ว่างเก่า (เฉพาะ id ที่ re-check แล้วว่าว่าง) แล้ว insert line ใหม่
+    const oldIds = fresh.map((l) => l.id);
+    if (oldIds.length > 0) {
+      const { error: delErr } = await db.from("bill_entry_lines").delete().in("id", oldIds);
+      if (delErr) {
+        console.warn(`[bill-extract-worker] reextract delete lines error code=${(delErr as { code?: string }).code ?? "?"}`);
+        continue; // ลบไม่ได้ → ไม่ insert (กันบรรทัดซ้อน)
+      }
+    }
+    const forceNoVat = NONVAT_DOC_KINDS.has((att?.docKind ?? "").trim().toLowerCase());
+    const lineRows = buildEntryLineRows(bill.lines, {
+      entryId: e.id,
+      tenantId: e.tenant_id,
+      forceNoVat,
+      aiUsed: true,
+    });
+    const { error: insErr } = await db.from("bill_entry_lines").insert(lineRows);
+    if (insErr) {
+      console.warn(`[bill-extract-worker] reextract insert lines error code=${(insErr as { code?: string }).code ?? "?"}`);
+    }
+
+    const got =
+      !!bill.doc_no ||
+      !!bill.doc_date ||
+      !!bill.seller_name ||
+      !!bill.buyer_name ||
+      lineRows.some((l) => Number(l.amount) > 0);
+    if (got) updated++;
+    else stillEmpty++;
+  }
+
+  console.log(
+    `[bill-extract-worker] reextract scanned=${scanned} updated=${updated} stillEmpty=${stillEmpty}`
+  );
+  return { scanned, updated, stillEmpty };
 }

@@ -1,0 +1,263 @@
+/* ============================================================
+   รายงานภาษีซื้อ / รายงานภาษีขาย (ฟอร์มราชการ) — พิมพ์/บันทึก PDF
+   ★ .no-print = ซ่อนตอนพิมพ์ (แถบเครื่องมือ)
+   ★ prefix vr-* กันชนสไตล์เดิม (acc-* / rcv-* / bills / dashboard)
+   ★ พิมพ์แนวนอน (landscape) เพราะตารางกว้าง 10 คอลัมน์
+   ============================================================ */
+
+.vr-shell {
+  min-height: 100vh;
+  background: #eef1f5;
+  padding: 20px 12px 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: "Sarabun", "TH Sarabun New", system-ui, -apple-system, sans-serif;
+  color: #1a1a1a;
+}
+
+/* ---- แถบเครื่องมือ ---- */
+.vr-toolbar {
+  width: 100%;
+  max-width: 1100px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-bottom: 16px;
+}
+/* ข้อความแนะนำ = อยู่บรรทัดของตัวเอง (กันถูกบีบจนคำไทยแตกเป็นแนวตั้ง) */
+.vr-toolbar-hint { color: #667; font-size: 13px; flex: 1 1 100%; margin: 0; order: 99; }
+
+/* ตัวเลือกเดือน (ประจำเดือน) บนแถบเครื่องมือ */
+.vr-month-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: #334;
+}
+.vr-select {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd2dc;
+  background: #fff;
+  color: #1a1a1a;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.vr-date-in {
+  font-variant-numeric: tabular-nums;
+  min-width: 140px;
+}
+.vr-btn-sm { padding: 5px 12px; font-size: 13px; }
+
+/* แถวปุ่ม "บันทึกที่อยู่ให้ลูกค้า" (ใต้หัว, ซ่อนตอนพิมพ์) */
+.vr-addr-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -6px 0 12px;
+}
+.vr-save-ok { color: #1a7f37; font-size: 13px; }
+.vr-save-err { color: #cf222e; font-size: 13px; }
+
+.vr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #cbd2dc;
+  background: #fff;
+  color: #1a1a1a;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.vr-btn:hover { background: #f4f6f9; }
+.vr-btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.vr-btn-primary:hover { background: #195ecb; }
+.vr-btn-ghost { background: transparent; }
+
+/* ---- ตัวเอกสาร ---- */
+.vr-page {
+  width: 100%;
+  max-width: 1100px;
+  background: #fff;
+  padding: 32px 36px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+/* ---- หัวรายงาน (3 คอลัมน์) ---- */
+.vr-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
+  gap: 16px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.vr-head-left { text-align: left; }
+.vr-head-right { text-align: right; }
+.vr-head-center { text-align: center; }
+.vr-title { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+.vr-month { font-size: 14px; }
+
+/* ---- ช่องแก้ได้ inline ในหัวรายงาน (ชื่อ/ที่อยู่/เลขภาษี) ---- */
+.vr-in {
+  font-family: inherit;
+  color: #1a1a1a;
+  border: none;
+  border-bottom: 1px dotted #b9c2cf; /* เส้นบางบอกว่าแก้ได้ */
+  background: transparent;
+  outline: none;
+  padding: 1px 2px;
+}
+.vr-in:focus { border-bottom-color: #1f6feb; background: #f6f9ff; }
+.vr-in::placeholder { color: #aab2be; font-weight: 400; }
+
+.vr-company-in {
+  font-size: 15px;
+  font-weight: 700;
+  text-align: center;
+  width: 100%;
+  max-width: 460px;
+}
+.vr-address-in {
+  font-size: 13px;
+  color: #333;
+  text-align: center;
+  display: block;
+  width: 100%;
+  max-width: 620px;
+  margin: 2px auto 4px;
+  /* ★ textarea: ตัดบรรทัดเอง + สูงตามเนื้อหา กันที่อยู่ยาวตกขอบ */
+  resize: none;
+  field-sizing: content;
+  min-height: 1.5em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow: hidden;
+}
+.vr-taxid-line { display: inline; }
+.vr-taxid-in {
+  font-size: 13px;
+  width: 130px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- ตาราง ---- */
+.vr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.vr-table th,
+.vr-table td {
+  border: 1px solid #333;
+  padding: 4px 6px;
+  vertical-align: middle;
+}
+.vr-table th { background: #f0f3f7; font-weight: 700; text-align: center; }
+
+.vr-col-seq { width: 44px; }
+.vr-col-date { width: 78px; }
+.vr-col-no { width: 90px; }
+.vr-col-tax { width: 120px; }
+.vr-col-ho, .vr-col-branch { width: 56px; }
+.vr-col-money { width: 108px; }
+
+.vr-c-seq { text-align: center; }
+.vr-c-date { text-align: center; }
+.vr-c-no { text-align: center; }
+.vr-c-party { text-align: left; }
+.vr-c-tax { text-align: center; font-variant-numeric: tabular-nums; }
+.vr-c-ho, .vr-c-branch { text-align: center; }
+.vr-c-money { text-align: right; font-variant-numeric: tabular-nums; }
+
+.vr-empty { text-align: center; color: #777; padding: 20px; }
+
+.vr-total td { font-weight: 700; background: #f7f9fc; }
+.vr-total-label { text-align: right; }
+
+/* ---- ช่องแก้ได้ในตาราง (input ต่อ cell) ---- */
+.vr-cell {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;          /* ใช้เส้นของ cell แทน */
+  border-bottom: none;
+  background: transparent;
+  padding: 1px 2px;
+  font-size: 12px;
+}
+.vr-cell:focus { background: #f2f7ff; }
+.vr-cell-money { text-align: right; font-variant-numeric: tabular-nums; }
+.vr-cell-center { text-align: center; }
+
+/* คอลัมน์ปุ่มลบ (ซ่อนตอนพิมพ์) */
+.vr-col-del { width: 34px; text-align: center; border: none !important; }
+.vr-row-del {
+  border: none;
+  background: transparent;
+  color: #c0392b;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.vr-row-del:hover { color: #922b21; }
+
+/* แถวปุ่มเพิ่ม + ข้อความเตือน (ใต้ตาราง, ซ่อนตอนพิมพ์) */
+.vr-addrow-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 10px 0 4px;
+}
+.vr-editnote { color: #8a6d3b; font-size: 12.5px; }
+
+/* ============================================================
+   PRINT — เอกสารสะอาด, แนวนอน, ซ่อนแถบเครื่องมือ, แบ่งหน้าไม่ตัดกลางแถว
+   ============================================================ */
+@media print {
+  .no-print { display: none !important; }
+  .nav-progress { display: none !important; }
+
+  .vr-shell { background: #fff; padding: 0; display: block; }
+  .vr-page {
+    max-width: none;
+    width: 100%;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 0;
+  }
+  .vr-table th { background: transparent !important; }
+  .vr-table th,
+  .vr-table td { border-color: #000 !important; }
+  .vr-total td { background: transparent !important; }
+
+  /* ช่องแก้ได้ในหัว: พิมพ์ให้สะอาด (ไม่มีเส้น/พื้นหลัง/เคอร์เซอร์) */
+  .vr-in {
+    border: none !important;
+    background: transparent !important;
+    color: #000 !important;
+  }
+  .vr-in::placeholder { color: transparent !important; }
+
+  /* หัวตารางซ้ำทุกหน้า + ไม่ตัดกลางแถว */
+  .vr-table thead { display: table-header-group; }
+  .vr-table tfoot { display: table-footer-group; }
+  .vr-table tr { page-break-inside: avoid; }
+
+  @page { size: A4 landscape; margin: 12mm; }
+}

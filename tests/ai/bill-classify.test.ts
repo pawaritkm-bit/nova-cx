@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { normalizeClassification, classifyBillImage } from "@/lib/ai/bill-classify";
+import {
+  normalizeClassification,
+  classifyBillImage,
+  normalizeShareCircleClassification,
+} from "@/lib/ai/bill-classify";
 
 /**
  * bill-classify — คัดกรองรูปเอกสารการเงินด้วย AI vision
@@ -125,5 +129,23 @@ describe("classifyBillImage — degrade & error → null (caller keep)", () => {
     );
     const res = await classifyBillImage(Buffer.from("IMG"), "image/jpeg");
     expect(res?.keep).toBe(true);
+  });
+});
+
+describe("normalizeShareCircleClassification — แยกลิสต์วงแชร์/บิลจริง (keep-if-unsure)", () => {
+  it("share_list=true + มั่นใจสูง → isShareList=true (ข้ามบิลได้)", () => {
+    const r = normalizeShareCircleClassification({ share_list: true, confidence: 0.9 });
+    expect(r.isShareList).toBe(true);
+  });
+  it("share_list=true แต่มั่นใจต่ำ (<0.7) → isShareList=false (ถือเป็นบิล บิลไม่หาย)", () => {
+    const r = normalizeShareCircleClassification({ share_list: true, confidence: 0.5 });
+    expect(r.isShareList).toBe(false);
+  });
+  it("share_list=false → isShareList=false (เป็นบิลจริง)", () => {
+    expect(normalizeShareCircleClassification({ share_list: false, confidence: 0.95 }).isShareList).toBe(false);
+  });
+  it("parse ไม่ได้ / null → isShareList=false (keep-if-unsure: ไม่ข้าม)", () => {
+    expect(normalizeShareCircleClassification(null).isShareList).toBe(false);
+    expect(normalizeShareCircleClassification({}).isShareList).toBe(false);
   });
 });

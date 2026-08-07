@@ -1,0 +1,147 @@
+/* สไตล์แผง "AI แยกสเตทเมนต์ ขาเข้า-ขาออก" (Phase 1) */
+
+.stmt-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.stmt-upload-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.stmt-upload-cust {
+  font-weight: 600;
+  margin-right: auto;
+}
+.stmt-fname {
+  font-size: 0.85rem;
+  color: #555;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.stmt-reading {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #eef4ff;
+  color: #1c4bb3;
+  font-size: 0.9rem;
+}
+
+.stmt-section {
+  border-top: 1px solid #eee;
+  padding-top: 14px;
+}
+.stmt-h {
+  margin: 0 0 10px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+/* การ์ดสรุปรายเดือน */
+.stmt-month-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.stmt-month-card {
+  border: 1px solid #e6e6e6;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff;
+}
+.stmt-month-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.stmt-month-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  padding: 2px 0;
+}
+.stmt-month-row.in b { color: #157347; }
+.stmt-month-row.out b { color: #b02a37; }
+.stmt-month-net {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px dashed #ddd;
+  margin-top: 6px;
+  padding-top: 6px;
+  font-size: 0.92rem;
+}
+
+/* คนโอนซ้ำ */
+.stmt-repeat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.stmt-repeat-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.stmt-repeat-title.in { color: #157347; }
+.stmt-repeat-title.out { color: #b02a37; }
+
+/* ตาราง */
+.stmt-table-wrap {
+  overflow-x: auto;
+  max-height: 520px;
+  overflow-y: auto;
+  border: 1px solid #eee;
+  border-radius: 8px;
+}
+.stmt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.stmt-table th,
+.stmt-table td {
+  border-bottom: 1px solid #f0f0f0;
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: middle;
+}
+.stmt-table thead th {
+  position: sticky;
+  top: 0;
+  background: #fafafa;
+  z-index: 1;
+}
+.stmt-table td.num,
+.stmt-table th.num {
+  text-align: right;
+}
+.stmt-table tr.in td:first-child { border-left: 3px solid #157347; }
+.stmt-table tr.out td:first-child { border-left: 3px solid #b02a37; }
+.stmt-table input,
+.stmt-table select {
+  width: 100%;
+  min-width: 70px;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 3px 4px;
+  border-radius: 4px;
+  font: inherit;
+}
+.stmt-table input:focus,
+.stmt-table select:focus {
+  border-color: #9ab8ff;
+  background: #fff;
+  outline: none;
+}
+.stmt-table td.num input {
+  text-align: right;
+}
+
+.stmt-note {
+  font-size: 0.82rem;
+  color: #888;
+  margin-top: 8px;
+}

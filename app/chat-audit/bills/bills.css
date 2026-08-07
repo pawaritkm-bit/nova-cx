@@ -332,3 +332,246 @@
     grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   }
 }
+
+/* ============================================================
+   อัลบั้มบิล — แถบสโคป / chip กรองประเภท / เลือกหลายรูป / viewer
+   ============================================================ */
+
+/* แถบบอกสโคป (นักบัญชีเห็นเฉพาะลูกค้าตัวเอง) */
+.nova-dash .acc-scopebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.nova-dash .acc-scope-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--navy-800, #1e3a8a);
+}
+
+/* chip กรองประเภท (ลิงก์) */
+.nova-dash .album-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.nova-dash .album-chip {
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 999px;
+  padding: 7px 14px;
+  background: #fff;
+  color: var(--muted, #52607f);
+  text-decoration: none;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.nova-dash .album-chip:hover {
+  border-color: var(--navy-700, #1e40af);
+}
+.nova-dash .album-chip.on {
+  background: var(--navy-800, #1e3a8a);
+  border-color: var(--navy-800, #1e3a8a);
+  color: #fff;
+}
+
+/* แถบเครื่องมือด้านบนอัลบั้ม */
+.nova-dash .album-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+}
+.nova-dash .album-count {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy-800, #1e3a8a);
+}
+.nova-dash .album-spacer {
+  flex: 1 1 auto;
+}
+.nova-dash .album-dl-all,
+.nova-dash .album-dl-sel {
+  background: var(--navy-800, #1e3a8a);
+  color: #fff;
+  border-color: var(--navy-800, #1e3a8a);
+}
+.nova-dash .album-dl-all:disabled,
+.nova-dash .album-dl-sel:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.nova-dash .album-note {
+  font-size: 12.5px;
+  color: #b45309;
+  background: var(--amber-bg, #fef3c7);
+  border: 1px solid var(--amber, #d97706);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 4px 0 10px;
+}
+.nova-dash .album-progress {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-800, #1e3a8a);
+  margin: 0 0 10px;
+}
+.nova-dash .album-error {
+  font-size: 13px;
+  color: var(--red, #dc2626);
+  margin: 0 0 10px;
+}
+
+/* checkbox เลือกรูป (มุมขวาบน — ไม่ทับปุ่มลบเมื่อไม่มีปุ่มลบ) */
+.nova-dash .bill-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  margin: 0;
+  cursor: pointer;
+}
+.nova-dash .bill-check input {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: var(--navy-800, #1e3a8a);
+}
+/* ถ้ามีทั้งปุ่มลบ (ขวาบน) และ checkbox → เลื่อน checkbox ลงมา */
+.nova-dash .bill-delete-form + .bill-check,
+.nova-dash .bill-check ~ .bill-delete-form {
+  top: 40px;
+}
+.nova-dash .bill-selected {
+  outline: 2px solid var(--navy-800, #1e3a8a);
+  outline-offset: -2px;
+}
+
+/* ปุ่ม thumbnail (คลิกเปิด viewer) — รีเซ็ตสไตล์ปุ่ม */
+.nova-dash .bill-thumb-btn {
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  width: 100%;
+}
+
+/* แถบ "เลือกไว้ N รูป" (sticky ท้ายอัลบั้ม) */
+.nova-dash .album-selbar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--navy-700, #1e40af);
+  border-radius: var(--radius-sm);
+  background: #eef2ff;
+  box-shadow: var(--shadow-sm);
+}
+.nova-dash .album-seltxt {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy-800, #1e3a8a);
+  margin-right: auto;
+}
+
+/* ---- viewer รูปใหญ่ (overlay) ---- */
+.nova-dash .album-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(15, 23, 42, 0.72);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.nova-dash .album-viewer {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  max-width: 960px;
+  width: 100%;
+  max-height: 88vh;
+  background: #fff;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+.nova-dash .album-viewer-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 0;
+  background: rgba(15, 23, 42, 0.6);
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+}
+.nova-dash .album-viewer-img {
+  background: #0f172a;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+}
+.nova-dash .album-viewer-img img {
+  max-width: 100%;
+  max-height: 88vh;
+  object-fit: contain;
+  display: block;
+}
+.nova-dash .album-viewer-empty {
+  color: #94a3b8;
+  font-size: 14px;
+}
+.nova-dash .album-viewer-side {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-left: 1px solid var(--line);
+}
+.nova-dash .album-viewer-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.nova-dash .album-viewer-meta b {
+  font-size: 14.5px;
+  color: var(--navy-800, #1e3a8a);
+}
+.nova-dash .album-viewer-nav {
+  display: flex;
+  gap: 8px;
+}
+.nova-dash .album-viewer-nav .btn {
+  flex: 1;
+}
+.nova-dash .album-viewer-dl {
+  margin-top: auto;
+  text-align: center;
+  background: var(--navy-800, #1e3a8a);
+  color: #fff;
+  border-color: var(--navy-800, #1e3a8a);
+}
+
+@media (max-width: 680px) {
+  .nova-dash .album-viewer {
+    grid-template-columns: 1fr;
+    max-height: 92vh;
+  }
+  .nova-dash .album-viewer-img img {
+    max-height: 60vh;
+  }
+}

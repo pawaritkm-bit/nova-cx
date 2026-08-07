@@ -69,11 +69,11 @@ describe("validateUpload", () => {
     const r = validateUpload({ mime: "application/pdf", name: "a.pdf", size: 0 });
     expect(r.ok).toBe(false);
   });
-  it("ใหญ่เกิน 15MB → error", () => {
+  it("ใหญ่เกิน 50MB → error", () => {
     const r = validateUpload({ mime: "application/pdf", name: "a.pdf", size: MAX_UPLOAD_BYTES + 1 });
-    expect(r).toEqual({ ok: false, error: "ไฟล์ใหญ่เกิน 15MB" });
+    expect(r).toEqual({ ok: false, error: "ไฟล์ใหญ่เกิน 50MB" });
   });
-  it("พอดี 15MB → ok", () => {
+  it("พอดี 50MB → ok", () => {
     const r = validateUpload({ mime: "application/pdf", name: "a.pdf", size: MAX_UPLOAD_BYTES });
     expect(r.ok).toBe(true);
   });

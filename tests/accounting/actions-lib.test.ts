@@ -4,6 +4,7 @@ import {
   upsertEntry,
   addLine,
   updateLine,
+  deleteLine,
   confirmEntry,
   deleteEntry,
 } from "@/lib/accounting/actions-lib";
@@ -101,6 +102,22 @@ describe("upsertEntry", () => {
     const res = await upsertEntry(db, "t1", { id: "missing", entryType: "sale" });
     expect(res).toEqual({ ok: false, error: "not_found" });
   });
+
+  it("allowConfirmed → แก้บิล confirmed ได้ + คงสถานะ confirmed (payload ไม่แตะ status)", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "confirmed" } });
+    const res = await upsertEntry(
+      db,
+      "t1",
+      { id: "e1", entryType: "sale", counterpartyName: "แก้ชื่อที่ AI อ่านผิด" },
+      { allowConfirmed: true }
+    );
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update")!;
+    // ★ ต้องไม่เขียน status กลับ (คงสถานะยืนยันไว้ตามเดิม)
+    expect("status" in (upd.payload ?? {})).toBe(false);
+    expect(upd.payload!.counterparty_name).toBe("แก้ชื่อที่ AI อ่านผิด");
+    expect(upd.filters.tenant_id).toBe("t1");
+  });
 });
 
 describe("addLine — auto-calc WHT", () => {
@@ -118,6 +135,14 @@ describe("addLine — auto-calc WHT", () => {
     const { db } = makeDb({ bill_entries: { status: "confirmed" } });
     const res = await addLine(db, "t1", "e1", { amount: 100 });
     expect(res).toEqual({ ok: false, error: "entry_confirmed" });
+  });
+
+  it("entry confirmed + allowConfirmed → เพิ่ม line ได้", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "confirmed" } });
+    const res = await addLine(db, "t1", "e1", { amount: 100 }, { allowConfirmed: true });
+    expect(res.ok).toBe(true);
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
+    expect(ins.payload!.amount).toBe(100);
   });
 });
 
@@ -139,6 +164,48 @@ describe("updateLine", () => {
     const { db } = makeDb({ bill_entry_lines: null });
     const res = await updateLine(db, "t1", "lx", { amount: 1 });
     expect(res).toEqual({ ok: false, error: "not_found" });
+  });
+
+  it("entry confirmed → ปกติห้ามแก้ line", async () => {
+    const { db } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "confirmed" },
+    });
+    const res = await updateLine(db, "t1", "l1", { amount: 500 });
+    expect(res).toEqual({ ok: false, error: "entry_confirmed" });
+  });
+
+  it("entry confirmed + allowConfirmed → แก้ line ได้", async () => {
+    const { db, ops } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "confirmed" },
+    });
+    const res = await updateLine(db, "t1", "l1", { amount: 500 }, { allowConfirmed: true });
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
+    expect(upd.payload!.amount).toBe(500);
+  });
+});
+
+describe("deleteLine — allowConfirmed", () => {
+  it("entry confirmed → ปกติห้ามลบ line", async () => {
+    const { db } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "confirmed" },
+    });
+    const res = await deleteLine(db, "t1", "l1");
+    expect(res).toEqual({ ok: false, error: "entry_confirmed" });
+  });
+
+  it("entry confirmed + allowConfirmed → ลบ line ได้", async () => {
+    const { db, ops } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "confirmed" },
+    });
+    const res = await deleteLine(db, "t1", "l1", { allowConfirmed: true });
+    expect(res.ok).toBe(true);
+    const del = ops.find((o) => o.kind === "delete" && o.table === "bill_entry_lines")!;
+    expect(del.filters.tenant_id).toBe("t1");
   });
 });
 

@@ -101,6 +101,7 @@ export async function POST(request: NextRequest) {
       nickname: parsed.data.nickname ?? null,
       teamName: parsed.data.teamName ?? null,
       teamId: parsed.data.teamId ?? null,
+      employeeId: parsed.data.employeeId ?? null,
     });
 
     // userId ย่อ (ให้เทียบกับ chat_members ตอนทดสอบ provider ได้ โดยไม่โชว์เต็ม)

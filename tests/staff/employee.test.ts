@@ -19,6 +19,15 @@ function db(row: unknown) {
   }).db;
 }
 
+/** db ที่มีทั้ง employees row + teams (คุมว่า emp นี้เป็นหัวหน้าทีมบัญชีไหม) */
+function dbWithTeam(row: unknown, teamRows: unknown[]) {
+  return makeFakeDb((q: ResolverArg) => {
+    if (q.table === "employees") return { data: row };
+    if (q.table === "teams") return { data: teamRows };
+    return { data: null };
+  }).db;
+}
+
 const base = {
   id: "emp-1",
   tenant_id: "t-1",
@@ -71,5 +80,34 @@ describe("resolveStaffEmployeeByLineUserId", () => {
 
   it("userId ว่าง → null (ไม่ query)", async () => {
     expect(await resolveStaffEmployeeByLineUserId(db(base), "")).toBeNull();
+  });
+
+  it("ไม่ใช่ accountant แต่เป็นหัวหน้าทีมบัญชี (teams) → login ได้ role lead", async () => {
+    const res = await resolveStaffEmployeeByLineUserId(
+      dbWithTeam({ ...base, employee_type: "manager", nickname: "สวย" }, [{ id: "team-1" }]),
+      "Ulead2"
+    );
+    expect(res).toEqual({
+      employeeId: "emp-1",
+      tenantId: "t-1",
+      role: "lead",
+      name: "สวย",
+    });
+  });
+
+  it("ไม่ใช่ accountant และไม่เป็นหัวหน้าทีม → null (default-deny)", async () => {
+    const res = await resolveStaffEmployeeByLineUserId(
+      dbWithTeam({ ...base, employee_type: "manager" }, []),
+      "Uoutsider"
+    );
+    expect(res).toBeNull();
+  });
+
+  it("accountant ที่เป็นหัวหน้าทีมด้วย → role lead (ทีม override position)", async () => {
+    const res = await resolveStaffEmployeeByLineUserId(
+      dbWithTeam({ ...base, position: null }, [{ id: "team-1" }]),
+      "Uacclead"
+    );
+    expect(res?.role).toBe("lead");
   });
 });

@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveEntryAction, deleteEntryAction, type SaveEntryInput } from "./actions";
+import { searchChartNonBankGrouped } from "@/lib/accounting/chart-of-accounts";
+import { lineBadge } from "@/lib/accounting/line-status";
 import {
   parseAmountInput,
   calcVat,
@@ -10,8 +12,10 @@ import {
   calcNet,
   formatMoney,
 } from "@/lib/accounting/calc";
-import type { BillEntry, EntryType, VatType, WhtForm } from "@/lib/accounting/queries";
+import type { BillEntry, EntryType, VatType, WhtForm, PaymentMethod } from "@/lib/accounting/queries";
 import { resolveEntryNav } from "@/lib/accounting/entry-nav";
+import { contraAccountFor, paymentMethodLabel } from "@/lib/accounting/payment";
+import { taxMonthOptions, taxMonthLabel } from "@/lib/accounting/tax-month";
 
 /**
  * EntryEditor — หน้าต่างตรวจ/แก้บิล (verify panel)
@@ -24,18 +28,28 @@ import { resolveEntryNav } from "@/lib/accounting/entry-nav";
  *     - "พิมพ์ทับได้ทุกช่อง" — แก้ VAT/หักเองได้ (ไม่ถูก override กลับ)
  * ★ เปลี่ยนประเภท ซื้อ↔ขาย (แก้ AI ผิด) ในฟอร์ม → บันทึกแล้วย้ายแท็บเอง
  * ★ ทุกการเขียนผ่าน server action (guard admin + service-role) — client แค่ช่วยแสดง/กรอก
- * ★ entry ที่ยืนยันแล้ว = อ่านอย่างเดียว (ปิดการแก้) เหลือแค่ปุ่มลบ
+ * ★ entry ที่ยืนยันแล้ว = เริ่มต้นอ่านอย่างเดียว (กันแก้พลาด) — กดปุ่ม "✏️ แก้ไข" เพื่อ
+ *   ปลดล็อกทั้งใบ (unlocked) แล้วแก้ทุกช่องได้ · บันทึกแล้วยัง "คงสถานะยืนยัน" (ไม่ปลดเป็นร่าง)
  */
 
 type LineRow = {
   key: string;
   id?: string;
   vatType: VatType;
+  /** รายละเอียดเดิม (คงไว้เพื่อความเข้ากันได้ย้อนหลัง — ตอนบันทึก sync = accountName) */
   description: string;
+  /** รหัสบัญชีจากผังบัญชี (ล็อกเมื่อเลือกแล้ว) · "" = ยังไม่เลือก */
+  accountCode: string;
+  /** ชื่อบัญชี (prefill จากผัง แก้ได้ต่อบรรทัด) */
+  accountName: string;
   amount: string;
   vatAmount: string;
   whtRate: string;
   whtAmount: string;
+  /** AI เติมค่าบรรทัดนี้ไหม (จากผลสกัด) — ใช้ทำป้าย 🟢/🟡 ช่วยตรวจ · บรรทัดที่คนเพิ่ม = false */
+  aiFilled: boolean;
+  /** AI "เดาเติม" ช่องเสี่ยง (conf ต่ำ) — แยกป้าย "AI เดา — ตรวจ" (🟡) ออกจาก "มั่นใจ" (🟢) */
+  aiLowConfidence: boolean;
 };
 
 let keySeq = 0;
@@ -49,10 +63,31 @@ function numToInput(n: number): string {
   return n ? String(n) : "";
 }
 
+/** ISO (2026-06-01) → ไทย วว/ดด/ปปปป พ.ศ. (01/06/2569) สำหรับแสดง/แก้ */
+function isoToThai(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? "");
+  return m ? `${m[3]}/${m[2]}/${Number(m[1]) + 543}` : iso ?? "";
+}
+
+/** ไทย วว/ดด/ปปปป (พ.ศ.) → ISO (2026-06-01) สำหรับเก็บ · รูปผิด/ยังพิมพ์ไม่ครบ = "" */
+function thaiToIso(s: string): string {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((s ?? "").trim());
+  if (!m) return "";
+  const d = Number(m[1]);
+  const mo = Number(m[2]);
+  let year = Number(m[3]);
+  if (d < 1 || d > 31 || mo < 1 || mo > 12) return "";
+  // ปี >= 2500 = พ.ศ. → แปลงเป็น ค.ศ. (เผื่อกรอก ค.ศ. มาก็ยังรับได้)
+  if (year >= 2500) year -= 543;
+  return `${year}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+// ตัวเลือก/ป้าย "เดือนที่ใช้ภาษีซื้อ" — ย้ายไป lib/accounting/tax-month.ts (ใช้ร่วมกับ list/รายงาน)
+
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
     return [
-      { key: newKey(), vatType: "vat", description: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "" },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ];
   }
   return entry.lines.map((l) => ({
@@ -60,10 +95,14 @@ function initLines(entry: BillEntry): LineRow[] {
     id: l.id,
     vatType: l.vatType,
     description: l.description ?? "",
+    accountCode: l.accountCode ?? "",
+    accountName: l.accountName ?? "",
     amount: numToInput(l.amount),
     vatAmount: numToInput(l.vatAmount),
     whtRate: numToInput(l.whtRate),
     whtAmount: numToInput(l.whtAmount),
+    aiFilled: l.aiFilled,
+    aiLowConfidence: l.aiLowConfidence,
   }));
 }
 
@@ -75,6 +114,7 @@ export default function EntryEditor({
   customerLabel,
   closeHref,
   orderIds = [],
+  onNavigate,
 }: {
   entry: BillEntry;
   viewUrl: string | null;
@@ -89,10 +129,18 @@ export default function EntryEditor({
    *   — page.tsx (server) เป็นผู้ส่งมา เพื่อทำปุ่ม "ก่อนหน้า/ถัดไป" (กรอกต่อเนื่อง)
    */
   orderIds?: string[];
+  /** ★ ถ้าส่งมา (จาก pager) → prev/next เลื่อนแบบ client (ไม่โหลดหน้าใหม่ · รูป preload ไว้) แทน navigate */
+  onNavigate?: (id: string) => void;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // บิลยืนยันแล้ว = readOnly (เริ่มต้นล็อก) · กด "แก้ไข" → unlocked → ปลดล็อกทั้งใบ
+  //   locked = "ล็อกอยู่จริงตอนนี้" (ใช้คุม disabled/ซ่อนปุ่มทั้งฟอร์ม)
   const readOnly = entry.status === "confirmed";
+  const [unlocked, setUnlocked] = useState(false);
+  const locked = readOnly && !unlocked;
+  // บิลนี้ AI เป็นคนลงให้ (source='ai') → โชว์ป้าย 🤖 บนช่องหัวที่ AI เติม + ป้าย 🟢/🟡 ต่อบรรทัด
+  const aiSrc = entry.source === "ai";
 
   // ---- นำทาง ก่อนหน้า/ถัดไป ในบริบทนี้ ----
   const nav = resolveEntryNav(orderIds, entry.id);
@@ -104,21 +152,39 @@ export default function EntryEditor({
 
   // ---- header state ----
   const [entryType, setEntryType] = useState<EntryType>(entry.entryType);
-  const [docDate, setDocDate] = useState<string>(entry.docDate ?? "");
+  // ★ เก็บเป็นข้อความ วว/ดด/ปปปป (ไทย) เพื่อแสดง/แก้ตามที่ผู้ใช้ต้องการ — แปลงเป็น ISO ตอนบันทึก
+  const [docDate, setDocDate] = useState<string>(entry.docDate ? isoToThai(entry.docDate) : "");
   const [docNo, setDocNo] = useState<string>(entry.docNo ?? "");
+  // เดือนที่ใช้ภาษีซื้อ (เฉพาะบิลซื้อ) — 'YYYY-MM' ค.ศ. · default = เดือนของ doc_date
+  const [inputTaxMonth, setInputTaxMonth] = useState<string>(
+    entry.inputTaxMonth || (entry.docDate ? entry.docDate.slice(0, 7) : "")
+  );
   const [partyName, setPartyName] = useState<string>(entry.counterpartyName ?? "");
   const [partyTaxId, setPartyTaxId] = useState<string>(entry.counterpartyTaxId ?? "");
   const [whtForm, setWhtForm] = useState<WhtForm | "">(entry.whtForm ?? "");
+  // วิธีจ่าย/รับเงิน (บัญชีคู่ฝั่งเครดิต)
+  //   ★ บัญชีเงินฝาก (transfer) ใช้ default 1020 — เลิก UI เลือกบัญชีธนาคารต่อลูกค้าแล้ว
+  //     แต่คง entry.paymentBankAccountId เดิมไว้ตอนบันทึก (กันข้อมูลเดิมหาย)
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | "">(entry.paymentMethod ?? "");
 
   // ---- lines state ----
   const [lines, setLines] = useState<LineRow[]>(() => initLines(entry));
   const [deletedLineIds, setDeletedLineIds] = useState<string[]>([]);
   const [zoom, setZoom] = useState(false);
+  const [rotation, setRotation] = useState(0); // องศาหมุนรูปบิล (0/90/180/270) — บิลถ่ายตะแคง
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // สแนปช็อตค่าเริ่มต้น (ครั้งแรกที่ mount) — ใช้เช็ค "แก้ไขหรือยัง"
+  //   ★ เลื่อนบิล (ก่อนหน้า/ถัดไป) ถ้ายังไม่ได้แก้ → ข้าม auto-save (ไม่ยิง DB) = เลื่อนเร็วขึ้นมาก
+  const initialInputRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (initialInputRef.current === null) initialInputRef.current = JSON.stringify(buildInput(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const close = useCallback(() => {
+    // ★ perf: force-dynamic → push ดึงข้อมูลสดอยู่แล้ว ไม่ต้อง refresh ซ้ำ (ปิดเร็วขึ้น)
     router.push(closeHref);
-    router.refresh();
   }, [router, closeHref]);
 
   // ปิดด้วย Esc
@@ -148,6 +214,24 @@ export default function EntryEditor({
     patchLine(l.key, { vatType, vatAmount: numToInput(calcVat(amt, vatType)) });
   };
 
+  /**
+   * เลือกชนิด VAT จากดรอปดาวน์ 3 ตัวเลือก:
+   *   'vat'    = VAT นอก (ยอด=ฐานก่อน VAT · VAT = ยอด×7% บวกเพิ่ม)
+   *   'vat_in' = VAT ใน (บิลรวม VAT แล้ว) → ★ ถอด VAT: ยอดปัจจุบัน=รวม VAT → ฐาน + VAT
+   *              แล้วตั้ง vat_type='vat' (เก็บเป็น "ฐาน+VAT" เหมือนกัน · ตัวเลือกนี้เป็น "การกระทำ")
+   *   'novat'  = ไม่มี VAT
+   */
+  const onVatSelect = (l: LineRow, val: string) => {
+    if (val === "vat_in") {
+      const incl = parseAmountInput(l.amount);
+      const base = incl > 0 ? Math.round((incl / 1.07) * 100) / 100 : 0;
+      const vat = incl > 0 ? Math.round((incl - base) * 100) / 100 : 0;
+      patchLine(l.key, { vatType: "vat", amount: numToInput(base), vatAmount: numToInput(vat) });
+      return;
+    }
+    onVatTypeChange(l, val === "novat" ? "novat" : "vat");
+  };
+
   // wht_rate เปลี่ยน → คำนวณ wht_amount ใหม่
   const onWhtRateChange = (l: LineRow, raw: string) => {
     const amt = parseAmountInput(l.amount);
@@ -157,7 +241,7 @@ export default function EntryEditor({
   const addLine = () => {
     setLines((prev) => [
       ...prev,
-      { key: newKey(), vatType: "vat", description: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "" },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ]);
   };
 
@@ -179,21 +263,36 @@ export default function EntryEditor({
     return { amount, vat, wht, net: calcNet(amount, vat, wht) };
   }, [lines]);
 
+  // hint บัญชีคู่ (เครดิต) — transfer ใช้บัญชีเงินฝากเดิมถ้าผูกไว้ (paymentBankAccountCode) มิฉะนั้น default 1020
+  const contraHint = useMemo(() => {
+    if (!paymentMethod) return null;
+    return contraAccountFor(paymentMethod, entryType, entry.paymentBankAccountCode);
+  }, [paymentMethod, entryType, entry.paymentBankAccountCode]);
+
   function buildInput(confirm: boolean): SaveEntryInput {
     return {
       id: entry.id,
       entryType,
       customerId: entry.customerId,
       attachmentId: entry.attachmentId,
-      docDate: docDate || null,
+      docDate: thaiToIso(docDate) || null,
       docNo: docNo || null,
       counterpartyName: partyName || null,
       counterpartyTaxId: partyTaxId || null,
       whtForm: whtForm || null,
+      paymentMethod: paymentMethod || null,
+      // คงบัญชีเงินฝากที่ผูกไว้เดิม (ถ้ามี) — เลิก UI เลือกแล้ว แต่ไม่ล้างข้อมูลเดิม
+      paymentBankAccountId: entry.paymentBankAccountId ?? null,
+      // เดือนที่ใช้ภาษีซื้อ — เฉพาะบิลซื้อ (ขาย/รอระบุ = null)
+      inputTaxMonth: entryType === "purchase" ? (inputTaxMonth || null) : null,
       lines: lines.map((l) => ({
         id: l.id,
         vatType: l.vatType,
-        description: l.description || null,
+        // ★ sync description = ชื่อบัญชี (ถ้าเลือกบัญชี) เพื่อให้ Excel/รายงานเดิม (คอลัมน์ "รายการ")
+        //   ยังมีข้อความ · ถ้ายังไม่เลือกบัญชี คงรายละเอียดเดิมไว้
+        description: (l.accountName.trim() || l.description) || null,
+        accountCode: l.accountCode.trim() || null,
+        accountName: l.accountName.trim() || null,
         amount: parseAmountInput(l.amount),
         vatAmount: parseAmountInput(l.vatAmount),
         whtRate: parseAmountInput(l.whtRate),
@@ -220,18 +319,29 @@ export default function EntryEditor({
   // บันทึกร่างใบปัจจุบันอัตโนมัติก่อน แล้วเด้งไปบิลที่ href (ใช้กับ ก่อนหน้า/ถัดไป)
   //   - ยืนยันแล้ว (readOnly): แก้ไม่ได้ → ไปเลยไม่ต้องบันทึก
   //   - บันทึกไม่ผ่าน (validate ฯลฯ): ค้างที่ใบเดิม โชว์ error ให้แก้ก่อน
-  function saveThenGo(href: string) {
-    if (readOnly) {
-      router.push(href);
-      router.refresh();
+  function saveThenGo(id: string) {
+    // ★ เลื่อนไปบิล id: ถ้ามี onNavigate (pager) → เลื่อนแบบ client (instant · รูป preload ไว้)
+    //   ไม่มี → navigate ตามเดิม (SSR)
+    const go = () => {
+      if (onNavigate) {
+        onNavigate(id);
+      } else {
+        router.push(editHrefFor(id));
+        router.refresh();
+      }
+    };
+    // ล็อกอยู่ (ยืนยันแล้วยังไม่กดแก้) หรือ "ยังไม่ได้แก้อะไร" → เลื่อนเลย ไม่ต้อง save (เร็วขึ้น)
+    const unchanged =
+      initialInputRef.current !== null && initialInputRef.current === JSON.stringify(buildInput(false));
+    if (locked || unchanged) {
+      go();
       return;
     }
     setMsg(null);
     startTransition(async () => {
       const res = await saveEntryAction(buildInput(false));
       if (res.ok) {
-        router.push(href);
-        router.refresh();
+        go();
       } else {
         setMsg({ ok: false, text: res.message });
         router.refresh();
@@ -240,12 +350,18 @@ export default function EntryEditor({
   }
 
   function remove() {
-    if (!window.confirm("ลบบิลนี้ถาวร? (ไม่ใช่บิล — จะลบรูปออกด้วย)")) return;
+    if (!window.confirm("ลบบิลนี้? (กดผิดกู้คืนได้ด้วยปุ่ม “เลิกทำ”)")) return;
     setMsg(null);
     startTransition(async () => {
       const res = await deleteEntryAction(entry.id);
-      if (res.ok) close();
-      else setMsg({ ok: false, text: res.message });
+      if (res.ok) {
+        // เด้งกลับหน้ารายการพร้อม ?undo=<id> → โชว์แถบ "เลิกทำ" ให้กู้คืนได้ทันที
+        const sep = closeHref.includes("?") ? "&" : "?";
+        router.push(`${closeHref}${sep}undo=${entry.id}`);
+        router.refresh();
+      } else {
+        setMsg({ ok: false, text: res.message });
+      }
     });
   }
 
@@ -267,7 +383,7 @@ export default function EntryEditor({
               <button
                 type="button"
                 className="btn btn-ghost acc-nav-btn"
-                onClick={() => nav.prevId && saveThenGo(editHrefFor(nav.prevId))}
+                onClick={() => nav.prevId && saveThenGo(nav.prevId)}
                 disabled={pending || !nav.prevId}
                 aria-label="บิลก่อนหน้า"
                 title="บันทึกร่างแล้วไปบิลก่อนหน้า"
@@ -280,7 +396,7 @@ export default function EntryEditor({
               <button
                 type="button"
                 className="btn btn-ghost acc-nav-btn"
-                onClick={() => nav.nextId && saveThenGo(editHrefFor(nav.nextId))}
+                onClick={() => nav.nextId && saveThenGo(nav.nextId)}
                 disabled={pending || !nav.nextId}
                 aria-label="บิลถัดไป"
                 title="บันทึกร่างแล้วไปบิลถัดไป"
@@ -293,8 +409,11 @@ export default function EntryEditor({
           <button type="button" className="acc-modal-close" onClick={close} aria-label="ปิด">✕</button>
         </div>
 
-        {readOnly ? (
-          <div className="acc-note">รายการนี้ยืนยันแล้ว — แก้ไขไม่ได้ (ลบได้)</div>
+        {readOnly && !unlocked ? (
+          <div className="acc-note">รายการนี้ยืนยันแล้ว — กด “✏️ แก้ไข” เพื่อปรับแก้ (หรือลบได้)</div>
+        ) : null}
+        {readOnly && unlocked ? (
+          <div className="acc-note">กำลังแก้บิลที่ยืนยันแล้ว — บันทึกแล้วยัง “คงสถานะยืนยัน”</div>
         ) : null}
 
         <div className="acc-modal-body">
@@ -302,18 +421,33 @@ export default function EntryEditor({
           <div className="acc-bill-pane">
             {viewUrl && viewIsImage ? (
               <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={viewUrl}
-                  alt="รูปบิล"
-                  className={`acc-bill-img${zoom ? " zoom" : ""}`}
-                  onClick={() => setZoom((z) => !z)}
-                />
+                {/* แถวปุ่มอยู่บนสุดเสมอ — กันรูปที่หมุนแล้วสูงล้นมาทับ (ปุ่มหาย) */}
                 <div className="acc-bill-tools">
                   <button type="button" className="btn btn-ghost" onClick={() => setZoom((z) => !z)}>
                     {zoom ? "ย่อ" : "ซูม"}
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setRotation((r) => (r + 90) % 360)}
+                    title="หมุนรูป 90°"
+                  >
+                    ↻ หมุน
+                  </button>
                   <a href={viewUrl} target="_blank" rel="noopener noreferrer" className="btn btn-ghost">เปิดรูปเต็ม</a>
+                </div>
+                <div className={`acc-bill-stage${rotation % 180 ? " rot" : ""}`}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={viewUrl}
+                    alt="รูปบิล"
+                    // ★ perf: โหลดรูปบิลก่อนสิ่งอื่น (priority สูง) + decode แบบ async — เลื่อนเปลี่ยนบิลเห็นรูปไวขึ้น
+                    fetchPriority="high"
+                    decoding="async"
+                    className={`acc-bill-img${zoom ? " zoom" : ""}`}
+                    style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
+                    onClick={() => setZoom((z) => !z)}
+                  />
                 </div>
               </>
             ) : viewUrl ? (
@@ -335,40 +469,92 @@ export default function EntryEditor({
           <div className="acc-form-pane">
             <div className="acc-field-grid">
               <label className="acc-field">
-                <span>ประเภท</span>
+                <span>ประเภท {aiSrc && entry.entryType !== "unspecified" ? <AiTag /> : null}</span>
                 <select
                   value={entryType}
                   onChange={(e) => setEntryType(e.target.value as EntryType)}
-                  disabled={readOnly}
+                  disabled={locked}
                 >
-                  <option value="purchase">ภาษีซื้อ</option>
-                  <option value="sale">ภาษีขาย</option>
+                  <option value="purchase">บิลซื้อ</option>
+                  <option value="sale">บิลขาย</option>
                   <option value="unspecified">รอระบุ</option>
                 </select>
               </label>
               <label className="acc-field">
-                <span>วันที่เอกสาร</span>
-                <input type="date" value={docDate} onChange={(e) => setDocDate(e.target.value)} disabled={readOnly} />
+                <span>วันที่เอกสาร (วว/ดด/ปปปป) {aiSrc && entry.docDate ? <AiTag /> : null}</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={docDate}
+                  onChange={(e) => setDocDate(e.target.value)}
+                  disabled={locked}
+                  placeholder="วว/ดด/ปปปป เช่น 01/06/2569"
+                />
               </label>
               <label className="acc-field">
-                <span>เลขที่เอกสาร</span>
-                <input type="text" value={docNo} onChange={(e) => setDocNo(e.target.value)} disabled={readOnly} placeholder="เช่น INV-001" />
+                <span>เลขที่เอกสาร {aiSrc && entry.docNo ? <AiTag /> : null}</span>
+                <input type="text" value={docNo} onChange={(e) => setDocNo(e.target.value)} disabled={locked} placeholder="เช่น INV-001" />
               </label>
+              {/* ยื่นภาษีในเดือน — เฉพาะบิลซื้อ (ยกภาษีซื้อไปยื่นเดือนอื่นได้ ตามกฎหมาย ≤ 6 เดือน) */}
+              {entryType === "purchase" ? (
+                <label className="acc-field">
+                  <span>ยื่นภาษีในเดือน</span>
+                  {(() => {
+                    const docIso = thaiToIso(docDate);
+                    const baseYm = docIso ? docIso.slice(0, 7) : entry.docDate ? entry.docDate.slice(0, 7) : inputTaxMonth;
+                    const opts = taxMonthOptions(baseYm);
+                    if (inputTaxMonth && !opts.includes(inputTaxMonth)) opts.unshift(inputTaxMonth);
+                    return (
+                      <select value={inputTaxMonth} onChange={(e) => setInputTaxMonth(e.target.value)} disabled={locked}>
+                        {opts.length === 0 ? <option value="">— ตามวันที่บิล —</option> : null}
+                        {opts.map((ym) => (
+                          <option key={ym} value={ym}>{taxMonthLabel(ym)}</option>
+                        ))}
+                      </select>
+                    );
+                  })()}
+                </label>
+              ) : null}
               <label className="acc-field">
                 <span>ภ.ง.ด.</span>
-                <select value={whtForm} onChange={(e) => setWhtForm(e.target.value as WhtForm | "")} disabled={readOnly}>
+                <select value={whtForm} onChange={(e) => setWhtForm(e.target.value as WhtForm | "")} disabled={locked}>
                   <option value="">— ไม่มี —</option>
                   <option value="pnd3">ภ.ง.ด.3</option>
                   <option value="pnd53">ภ.ง.ด.53</option>
                 </select>
               </label>
+
+              {/* วิธีจ่าย/รับเงิน → บัญชีคู่ (เครดิต) สำหรับ double-entry
+                  ★ 4 ตัวเลือก · label ตามฝั่งบิล (credit = ลูกหนี้ เมื่อขาย / เจ้าหนี้ เมื่อซื้อ) */}
+              <label className="acc-field">
+                <span>วิธีจ่าย/รับเงิน</span>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod | "")}
+                  disabled={locked}
+                >
+                  <option value="">— ยังไม่ระบุ —</option>
+                  <option value="cash">{paymentMethodLabel("cash", entryType)}</option>
+                  <option value="cheque">{paymentMethodLabel("cheque", entryType)}</option>
+                  <option value="transfer">{paymentMethodLabel("transfer", entryType)}</option>
+                  <option value="credit">{paymentMethodLabel("credit", entryType)}</option>
+                </select>
+              </label>
+
+              {/* hint บัญชีคู่ที่จะเป็นเครดิต (ช่วยตรวจ — ยังไม่ลงจริง แค่บอกให้เห็น)
+                  เงินโอน → บัญชีคู่ = เงินฝากธนาคาร (default 1020) */}
+              {contraHint ? (
+                <div className="acc-field acc-field-wide acc-contra-hint">
+                  บัญชีคู่ (เครดิต): {contraHint.code ? <b>{contraHint.code}</b> : null} {contraHint.name}
+                </div>
+              ) : null}
               <label className="acc-field acc-field-wide">
-                <span>คู่ค้า</span>
-                <input type="text" value={partyName} onChange={(e) => setPartyName(e.target.value)} disabled={readOnly} placeholder="ชื่อผู้ขาย/ผู้ซื้อ" />
+                <span>คู่ค้า {aiSrc && entry.counterpartyName ? <AiTag /> : null}</span>
+                <input type="text" value={partyName} onChange={(e) => setPartyName(e.target.value)} disabled={locked} placeholder="ชื่อผู้ขาย/ผู้ซื้อ" />
               </label>
               <label className="acc-field">
-                <span>เลขผู้เสียภาษี</span>
-                <input type="text" value={partyTaxId} onChange={(e) => setPartyTaxId(e.target.value)} disabled={readOnly} placeholder="13 หลัก" />
+                <span>เลขผู้เสียภาษี {aiSrc && entry.counterpartyTaxId ? <AiTag /> : null}</span>
+                <input type="text" value={partyTaxId} onChange={(e) => setPartyTaxId(e.target.value)} disabled={locked} placeholder="13 หลัก" />
               </label>
             </div>
 
@@ -389,34 +575,60 @@ export default function EntryEditor({
                 const vat = parseAmountInput(l.vatAmount);
                 const wht = parseAmountInput(l.whtAmount);
                 const net = calcNet(amt, vat, wht);
+                // ป้ายช่วยตรวจ 3 สถานะ (เฉพาะบิล AI ที่ยังแก้ได้):
+                //   🟢 มั่นใจ (confident) · 🟡 AI เดา—ตรวจ (guess) · 🟡 โปรดตรวจ/เติม (check)
+                const badge = !locked
+                  ? lineBadge(
+                      { accountCode: l.accountCode, amount: amt, aiFilled: l.aiFilled, aiLowConfidence: l.aiLowConfidence },
+                      entry.source
+                    )
+                  : null;
                 return (
                   <div className="acc-line" key={l.key}>
                     <div className="acc-line-desc">
+                      {badge ? (
+                        <span
+                          className={`acc-line-flag ${badge === "confident" ? "ok" : badge === "guess" ? "guess" : "warn"}`}
+                          title={
+                            badge === "confident"
+                              ? "AI เติมครบ (บัญชี + ยอด) มั่นใจสูง — ช่วยตรวจให้ถูก"
+                              : badge === "guess"
+                                ? "AI เดา (ความมั่นใจต่ำ) — โปรดตรวจให้ถูกก่อนยืนยัน"
+                                : "โปรดตรวจ: ยังมีช่องสำคัญว่าง (ยอด/บัญชี)"
+                          }
+                          aria-label={
+                            badge === "confident" ? "AI มั่นใจ" : badge === "guess" ? "AI เดา ตรวจ" : "โปรดตรวจ"
+                          }
+                        >
+                          {badge === "confident" ? "🟢" : "🟡"}
+                        </span>
+                      ) : null}
                       <select
                         value={l.vatType}
-                        onChange={(e) => onVatTypeChange(l, e.target.value as VatType)}
-                        disabled={readOnly}
+                        onChange={(e) => onVatSelect(l, e.target.value)}
+                        disabled={locked}
                         aria-label="ประเภท VAT"
+                        title="VAT นอก = บวก 7% เพิ่ม · VAT ใน = บิลรวม VAT แล้ว (เลือกเพื่อถอด VAT ออกจากยอด)"
                         className="acc-vat-sel"
                       >
-                        <option value="vat">VAT</option>
+                        <option value="vat">VAT นอก</option>
+                        <option value="vat_in">VAT ใน (ถอด)</option>
                         <option value="novat">ไม่ VAT</option>
                       </select>
-                      <input
-                        type="text"
-                        value={l.description}
-                        onChange={(e) => patchLine(l.key, { description: e.target.value })}
-                        disabled={readOnly}
-                        placeholder="รายละเอียด"
-                        className="acc-desc-inp"
+                      <AccountCell
+                        line={l}
+                        readOnly={locked}
+                        onSelect={(code, name) => patchLine(l.key, { accountCode: code, accountName: name })}
+                        onNameChange={(name) => patchLine(l.key, { accountName: name })}
+                        onClear={() => patchLine(l.key, { accountCode: "", accountName: "" })}
                       />
                     </div>
-                    <input className="num" inputMode="decimal" value={l.amount} onChange={(e) => onAmountChange(l, e.target.value)} disabled={readOnly} placeholder="0.00" aria-label="มูลค่า" />
-                    <input className="num" inputMode="decimal" value={l.vatAmount} onChange={(e) => patchLine(l.key, { vatAmount: e.target.value })} disabled={readOnly} placeholder="0.00" aria-label="VAT" />
-                    <input className="num" inputMode="decimal" value={l.whtRate} onChange={(e) => onWhtRateChange(l, e.target.value)} disabled={readOnly} placeholder="0" aria-label="อัตราหัก %" />
-                    <input className="num" inputMode="decimal" value={l.whtAmount} onChange={(e) => patchLine(l.key, { whtAmount: e.target.value })} disabled={readOnly} placeholder="0.00" aria-label="หัก ณ ที่จ่าย" />
+                    <input className="num" inputMode="decimal" value={l.amount} onChange={(e) => onAmountChange(l, e.target.value)} disabled={locked} placeholder="0.00" aria-label="มูลค่า" />
+                    <input className="num" inputMode="decimal" value={l.vatAmount} onChange={(e) => patchLine(l.key, { vatAmount: e.target.value })} disabled={locked} placeholder="0.00" aria-label="VAT" />
+                    <input className="num" inputMode="decimal" value={l.whtRate} onChange={(e) => onWhtRateChange(l, e.target.value)} disabled={locked} placeholder="0" aria-label="อัตราหัก %" />
+                    <input className="num" inputMode="decimal" value={l.whtAmount} onChange={(e) => patchLine(l.key, { whtAmount: e.target.value })} disabled={locked} placeholder="0.00" aria-label="หัก ณ ที่จ่าย" />
                     <span className="num acc-net">{formatMoney(net)}</span>
-                    {!readOnly ? (
+                    {!locked ? (
                       <button type="button" className="acc-line-del" onClick={() => removeLine(l)} aria-label="ลบบรรทัด" title="ลบบรรทัด">✕</button>
                     ) : (
                       <span />
@@ -425,7 +637,7 @@ export default function EntryEditor({
                 );
               })}
 
-              {!readOnly ? (
+              {!locked ? (
                 <button type="button" className="acc-add-line" onClick={addLine}>+ เพิ่มบรรทัด</button>
               ) : null}
 
@@ -446,6 +658,7 @@ export default function EntryEditor({
             {/* ---- ปุ่ม ---- */}
             <div className="acc-modal-actions">
               {!readOnly ? (
+                /* บิลร่าง — บันทึกร่าง / ยืนยัน (flow เดิม) */
                 <>
                   <button type="button" className="btn" onClick={() => save(false)} disabled={pending}>
                     {pending ? "กำลังบันทึก…" : "บันทึกร่าง"}
@@ -454,7 +667,22 @@ export default function EntryEditor({
                     ยืนยัน
                   </button>
                 </>
-              ) : null}
+              ) : !unlocked ? (
+                /* บิลยืนยันแล้ว (ล็อก) — กดเพื่อปลดล็อกทั้งใบ */
+                <button type="button" className="btn" onClick={() => { setUnlocked(true); setMsg(null); }} disabled={pending}>
+                  ✏️ แก้ไข
+                </button>
+              ) : (
+                /* บิลยืนยันแล้ว + ปลดล็อก — บันทึกการแก้ไข (คงสถานะยืนยัน) / ยกเลิก (กลับไปล็อก) */
+                <>
+                  <button type="button" className="btn green" onClick={() => save(false)} disabled={pending}>
+                    {pending ? "กำลังบันทึก…" : "บันทึกการแก้ไข"}
+                  </button>
+                  <button type="button" className="btn btn-ghost" onClick={() => { setUnlocked(false); setMsg(null); }} disabled={pending}>
+                    ยกเลิก
+                  </button>
+                </>
+              )}
               <button type="button" className="btn danger" onClick={remove} disabled={pending}>ลบ</button>
               <span className="acc-toolbar-spacer" />
               <button type="button" className="btn btn-ghost" onClick={close} disabled={pending}>ปิด</button>
@@ -462,6 +690,156 @@ export default function EntryEditor({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** ป้ายเล็ก "🤖 AI" — บอกว่าช่องหัวนี้ AI เป็นคนเติมให้ (นักบัญชีตรวจ/แก้ได้) */
+function AiTag() {
+  return (
+    <span className="acc-ai-tag" title="AI เติมให้ — ช่วยตรวจ">
+      🤖 AI
+    </span>
+  );
+}
+
+/**
+ * AccountCell — ตัวเลือก "บัญชี" จากผังบัญชีมาตรฐานกลาง ต่อ 1 บรรทัด
+ *   3 โหมด:
+ *     - readOnly (ยืนยันแล้ว) : แสดงรหัส + ชื่อ อ่านอย่างเดียว
+ *     - ยังไม่เลือก           : combobox ค้นหา (พิมพ์กรอง → คลิก/Enter เลือก · Esc ปิด)
+ *     - เลือกแล้ว             : รหัส (badge ล็อก อ่านอย่างเดียว) + ชื่อบัญชี (แก้ได้) + ปุ่ม "เปลี่ยน"
+ *   ★ รหัสล็อกเสมอ — เปลี่ยนได้เฉพาะกด "เปลี่ยน" (ล้าง code+name) แล้วเลือกใหม่
+ *   ★ เขียน combobox เองด้วย state (ไม่พึ่งไลบรารีนอก)
+ */
+function AccountCell({
+  line,
+  readOnly,
+  onSelect,
+  onNameChange,
+  onClear,
+}: {
+  line: LineRow;
+  readOnly: boolean;
+  onSelect: (code: string, name: string) => void;
+  onNameChange: (name: string) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const boxRef = useRef<HTMLDivElement>(null);
+  // ผังกลางจัดกลุ่มตามหมวด (รวมบัญชีเงินฝากธนาคารในหมวด 1 แล้ว)
+  //   ★ พิมพ์เลข 1–6 = เด้งทั้งหมวดนั้นมาให้เลื่อนเลือก · อย่างอื่น = ค้น substring ตามเดิม
+  const chartGroups = useMemo(() => searchChartNonBankGrouped(q), [q]);
+  const selected = !!line.accountCode;
+
+  // ปิด dropdown เมื่อคลิกนอกกล่อง
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const pick = (code: string, name: string) => {
+    onSelect(code, name);
+    setOpen(false);
+    setQ("");
+  };
+
+  // ยืนยันแล้ว → อ่านอย่างเดียว
+  if (readOnly) {
+    return (
+      <div className="acc-acct acc-acct-ro">
+        {line.accountCode ? <span className="acc-acct-code">{line.accountCode}</span> : null}
+        <span className="acc-acct-name-ro">{line.accountName || line.description || "—"}</span>
+      </div>
+    );
+  }
+
+  // เลือกแล้ว → 2 ช่องแยกไม่ชนกัน: แถวบน = รหัส (ล็อก) + ปุ่มเปลี่ยน · แถวล่าง = ชื่อ (แก้ได้)
+  if (selected) {
+    return (
+      <div className="acc-acct acc-acct-picked">
+        <div className="acc-acct-toprow">
+          <span className="acc-acct-code" title="รหัสบัญชี (ล็อก — กด 'เปลี่ยน' เพื่อเลือกใหม่)">
+            🔒 {line.accountCode}
+          </span>
+          <button type="button" className="acc-acct-change" onClick={onClear} title="เลือกบัญชีใหม่">
+            เปลี่ยน
+          </button>
+        </div>
+        <input
+          type="text"
+          className="acc-acct-name"
+          value={line.accountName}
+          onChange={(e) => onNameChange(e.target.value)}
+          placeholder="ชื่อบัญชี (แก้ได้)"
+          aria-label="ชื่อบัญชี"
+        />
+      </div>
+    );
+  }
+
+  // ยังไม่เลือก → combobox ค้นหา
+  return (
+    <div className="acc-acct acc-acct-combo" ref={boxRef}>
+      <input
+        type="text"
+        className="acc-acct-search"
+        value={q}
+        onChange={(e) => {
+          setQ(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            // เลือกรายการแรกในผลค้นด้วย Enter
+            const firstChart = chartGroups[0]?.accounts[0];
+            if (firstChart) pick(firstChart.code, firstChart.name);
+          } else if (e.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+        placeholder="เลือก/ค้นหาบัญชี…"
+        aria-label="ค้นหาบัญชีจากผังบัญชี"
+      />
+      {open ? (
+        <div className="acc-acct-list" role="listbox">
+          {/* ผังบัญชีกลาง จัดตามหมวด (พิมพ์เลข 1–6 = เด้งทั้งหมวด) — เงินฝากธนาคารอยู่ในหมวด 1 */}
+          {chartGroups.length === 0 ? (
+            <>
+              <div className="acc-acct-group">ผังบัญชี</div>
+              <div className="acc-acct-empty">ไม่พบบัญชีที่ค้นหา</div>
+            </>
+          ) : (
+            chartGroups.map((grp) => (
+              <div key={grp.digit} className="acc-acct-cat">
+                <div className="acc-acct-group">
+                  {grp.digit} {grp.category}
+                </div>
+                {grp.accounts.map((a) => (
+                  <button
+                    key={a.code}
+                    type="button"
+                    role="option"
+                    aria-selected={false}
+                    className="acc-acct-opt"
+                    onClick={() => pick(a.code, a.name)}
+                  >
+                    <span className="acc-acct-opt-code">{a.code}</span>
+                    <span className="acc-acct-opt-name">{a.name}</span>
+                  </button>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

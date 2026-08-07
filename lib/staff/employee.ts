@@ -3,9 +3,11 @@
  *
  * ★ ไม่เชื่อ userId จาก client: ตัวเรียก (callback route) ต้อง verify idToken กับ LINE ก่อน
  *   จนได้ userId จริง แล้วค่อยส่งเข้ามา resolve เป็น employee
- * ★ default-deny: อนุญาตเฉพาะ employee_type='accountant' + is_active + ยังไม่ถูกลบ
- *   (เซลล์/คนอื่นที่บังเอิญมี line_user_id จะ login เข้าหน้าบัญชีไม่ได้)
- * ★ role: position = 'หัวหน้านักบัญชี' → 'lead' (เห็นกว้าง) ไม่งั้น 'accountant'
+ * ★ default-deny: อนุญาตเฉพาะ (employee_type='accountant') _หรือ_ (เป็นหัวหน้าทีมบัญชี =
+ *   teams.lead_employee_id ของทีม type='accounting' ทีมใดทีมหนึ่ง) + is_active + ยังไม่ถูกลบ
+ *   (เซลล์/คนอื่นที่ไม่เข้าเงื่อนไขทั้งสองจะ login เข้าหน้าบัญชีไม่ได้)
+ * ★ role: เป็นหัวหน้าทีม → 'lead' เสมอ (ไม่พึ่ง position) · ไม่งั้นดูจาก position
+ *   (position = 'หัวหน้านักบัญชี' → 'lead', อื่น ๆ → 'accountant')
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { StaffRole } from "@/lib/staff/session";
@@ -16,6 +18,29 @@ export const ACC_LEAD_POSITION = "หัวหน้านักบัญชี"
 /** map ตำแหน่ง → StaffRole */
 export function roleFromPosition(position: string | null | undefined): StaffRole {
   return (position ?? "").trim() === ACC_LEAD_POSITION ? "lead" : "accountant";
+}
+
+/** ประเภททีมของบัญชี (จำกัดการ detect หัวหน้าให้เป็นหัวหน้า "ทีมบัญชี" เท่านั้น) */
+export const ACCOUNTING_TEAM_TYPE = "accounting";
+
+/**
+ * เป็นหัวหน้าทีมบัญชีไหม — เป็น teams.lead_employee_id ของทีม type='accounting'
+ *   (ทีมใดทีมหนึ่งที่ยังไม่ถูกลบ) → true
+ */
+export async function isAccountingTeamLead(
+  db: SupabaseClient,
+  tenantId: string,
+  employeeId: string
+): Promise<boolean> {
+  const { data } = await db
+    .from("teams")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("lead_employee_id", employeeId)
+    .eq("type", ACCOUNTING_TEAM_TYPE)
+    .is("deleted_at", null)
+    .limit(1);
+  return ((data ?? []) as { id: string }[]).length > 0;
 }
 
 export type ResolvedStaffEmployee = {
@@ -62,14 +87,18 @@ export async function resolveStaffEmployeeByLineUserId(
   const row = (data ?? null) as RawEmployee | null;
   if (!row) return null;
 
-  // default-deny: เฉพาะนักบัญชีเท่านั้นที่ login เข้าหน้าบัญชีได้
-  if (row.employee_type !== "accountant") return null;
+  // default-deny: นักบัญชี _หรือ_ หัวหน้าทีมบัญชี เท่านั้นที่ login เข้าหน้าบัญชีได้
+  const isAccountant = row.employee_type === "accountant";
+  // หัวหน้าที่อาจไม่ใช่ type accountant (เช่น manager) → เช็คจากตาราง teams
+  const isLead = await isAccountingTeamLead(db, row.tenant_id, row.id);
+  if (!isAccountant && !isLead) return null;
 
   const name = row.nickname?.trim() || row.first_name?.trim() || "นักบัญชี";
   return {
     employeeId: row.id,
     tenantId: row.tenant_id,
-    role: roleFromPosition(row.position),
+    // เป็นหัวหน้าทีม → lead เสมอ (ไม่พึ่ง position) ไม่งั้นดูจาก position
+    role: isLead ? "lead" : roleFromPosition(row.position),
     name,
   };
 }

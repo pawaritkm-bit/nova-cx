@@ -3,12 +3,17 @@
  *
  * ★ ใช้ทั้งฝั่ง server action (validate + สร้าง object path) และ client (accept/แสดงผล)
  * ★ ไม่มี dependency ภายนอก — รับ/คืน plain value เท่านั้น (ทดสอบได้)
- * ★ ความปลอดภัย: จำกัดชนิดไฟล์ (รูป/PDF/Excel/CSV) + ขนาด ≤ 15MB
+ * ★ ความปลอดภัย: จำกัดชนิดไฟล์ (รูป/PDF/Excel/CSV) + ขนาด ≤ 50MB
  *   + sanitize ชื่อไฟล์เป็น ASCII (Supabase Storage key ไม่รับอักขระไทย → 400)
  */
 
-/** เพดานขนาดไฟล์ที่อัปได้ = 15MB */
-export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+/**
+ * เพดานขนาดไฟล์ที่อัปได้ = 50MB
+ *   ★ อัปตรงเข้า Supabase Storage (signed URL) เลยไม่ชนเพดาน Vercel 4.5MB แล้ว
+ *   ★ 50MB = เพดาน global upload ของ Supabase project (ทดสอบแล้ว: 50MB ผ่าน / 80MB ไม่ผ่าน)
+ *     ถ้าต้องการมากกว่านี้ ต้องขยาย global upload limit ใน Supabase dashboard + ใช้ resumable upload
+ */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 /** ชนิดไฟล์ที่รองรับ (สำหรับตัดสินวิธีแสดง: image=inline, อื่น=ปุ่มเปิด/ดาวน์โหลด) */
 export type UploadKind = "image" | "pdf" | "excel" | "csv";
@@ -57,14 +62,14 @@ export function classifyUpload(mime: string, name: string): UploadKind | null {
 export type UploadValidation = { ok: true; kind: UploadKind } | { ok: false; error: string };
 
 /**
- * ตรวจไฟล์ที่อัป: ต้องมีชื่อ + ไม่ว่าง + ≤ 15MB + ชนิดที่รองรับ
+ * ตรวจไฟล์ที่อัป: ต้องมีชื่อ + ไม่ว่าง + ≤ 50MB + ชนิดที่รองรับ
  *   error เป็นข้อความไทยสุภาพ (โชว์ผู้ใช้ได้ตรง)
  */
 export function validateUpload(params: { mime: string; name: string; size: number }): UploadValidation {
   const name = (params.name ?? "").trim();
   if (!name) return { ok: false, error: "ไม่พบไฟล์ที่เลือก" };
   if (!(params.size > 0)) return { ok: false, error: "ไฟล์ว่างเปล่า" };
-  if (params.size > MAX_UPLOAD_BYTES) return { ok: false, error: "ไฟล์ใหญ่เกิน 15MB" };
+  if (params.size > MAX_UPLOAD_BYTES) return { ok: false, error: "ไฟล์ใหญ่เกิน 50MB" };
   const kind = classifyUpload(params.mime, name);
   if (!kind) return { ok: false, error: "รองรับเฉพาะรูปภาพ, PDF, Excel (.xlsx/.xls) และ CSV" };
   return { ok: true, kind };

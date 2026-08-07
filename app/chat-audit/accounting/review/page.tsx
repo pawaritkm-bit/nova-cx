@@ -16,12 +16,16 @@ export const dynamic = "force-dynamic";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** วันที่แบบไทยสั้น (YYYY-MM-DD → 1 ก.ค. 2569) */
+/** วันที่บิลแบบไทย วว/ดด/ปปปป (พ.ศ.) — YYYY-MM-DD → 01/07/2569 */
 function formatDate(iso: string | null): string {
   if (!iso) return "-";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (m) return `${m[3]}/${m[2]}/${Number(m[1]) + 543}`;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("th-TH", { year: "numeric", month: "short", day: "numeric" });
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear() + 543}`;
 }
 
 /** ป้าย ภ.ง.ด. */
@@ -59,7 +63,7 @@ function buildQuery(params: {
 function TotalRow({ label, t }: { label: string; t: ReviewTypeTotal }) {
   return (
     <tr className="acc-total">
-      <td colSpan={5} className="strong">
+      <td colSpan={7} className="strong">
         {label} · {t.count.toLocaleString("th-TH")} บิล
       </td>
       <td className="num strong">{formatMoney(t.amount)}</td>
@@ -100,6 +104,8 @@ function ReviewSection({
                 <th>เลขที่</th>
                 <th>คู่ค้า / เลขภาษี</th>
                 <th>รายการ</th>
+                <th>รหัสบัญชี</th>
+                <th>ชื่อบัญชี</th>
                 <th className="center">VAT</th>
                 <th className="num">มูลค่า</th>
                 <th className="num">VAT</th>
@@ -121,6 +127,8 @@ function ReviewSection({
                     <span className="acc-desc">{r.description || "—"}</span>
                     {r.whtForm ? <span className="acc-pnd">{whtFormLabel(r.whtForm)}</span> : null}
                   </td>
+                  <td className="mono">{r.accountCode || "—"}</td>
+                  <td>{r.accountName || "—"}</td>
                   <td className="center">
                     {r.vatType ? (
                       <span className={`vat-badge ${r.vatType === "novat" ? "no" : "yes"}`}>

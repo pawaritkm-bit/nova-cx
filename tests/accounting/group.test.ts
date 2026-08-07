@@ -6,6 +6,7 @@ import {
   countOfType,
 } from "@/lib/accounting/group";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
+import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 
 /**
  * accounting/group — จัดกลุ่มตามลูกค้า + สรุปยอดแยกประเภท (pure)
@@ -18,11 +19,14 @@ function line(p: Partial<BillEntryLine>): BillEntryLine {
     lineNo: p.lineNo ?? 1,
     vatType: p.vatType ?? "vat",
     description: p.description ?? null,
+    accountCode: p.accountCode ?? null,
+    accountName: p.accountName ?? null,
     amount: p.amount ?? 0,
     vatAmount: p.vatAmount ?? 0,
     whtRate: p.whtRate ?? 0,
     whtAmount: p.whtAmount ?? 0,
     aiFilled: p.aiFilled ?? false,
+    aiLowConfidence: p.aiLowConfidence ?? false,
   };
 }
 
@@ -47,12 +51,17 @@ function entry(p: Partial<BillEntry>): BillEntry {
     buyerName: null,
     buyerTaxId: null,
     whtForm: null,
+    paymentMethod: null,
+    paymentBankAccountId: null,
+    paymentBankAccountCode: null,
     status: p.status ?? "draft",
     source: p.source ?? "ai",
     aiConfidence: null,
     notes: null,
     createdAt: p.createdAt ?? "2026-07-01T00:00:00Z",
     confirmedAt: null,
+    inputTaxMonth: null,
+    flowaccountSync: defaultFlowAccountSync(),
     lines: p.lines ?? [],
   };
 }
