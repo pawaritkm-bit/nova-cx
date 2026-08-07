@@ -47,6 +47,7 @@ import { createEntryAction } from "./actions";
 import ChatAuditFrame from "../_Frame";
 import EntryEditor from "./EntryEditor";
 import RowActions from "./RowActions";
+import FlowAccountSyncButton from "./FlowAccountSyncButton";
 import InputTaxMonthCell from "./InputTaxMonthCell";
 import CustomerTaxIdField from "./CustomerTaxIdField";
 import EntryDateField from "./EntryDateField";
@@ -479,6 +480,10 @@ function EntryTable({
     return <p className="empty">ยังไม่มีรายการในประเภทนี้</p>;
   }
 
+  // คอลัมน์ FlowAccount มีผลแค่บิลขาย (FlowAccountSyncButton ก็ self-gate เหมือนกัน) —
+  // ซ่อนคอลัมน์ทั้งเส้นในตารางบิลซื้อ/รอระบุ กัน column เปล่าโล่ง ๆ ทั้งตาราง
+  const showFlowAccountCol = entries.some((e) => e.entryType === "sale");
+
   // ยอดรวมท้ายตาราง
   let tAmount = 0;
   let tVat = 0;
@@ -501,6 +506,7 @@ function EntryTable({
             <th className="num">รวมจ่ายจริง</th>
             <th className="center">สถานะ</th>
             <th className="center">จัดการ</th>
+            {showFlowAccountCol ? <th className="center">FlowAccount</th> : null}
           </tr>
         </thead>
         {/* หมายเหตุ: 1 entry = 1 <tbody> (docrow + sub-lines) — table มีหลาย tbody ได้ */}
@@ -618,6 +624,17 @@ function EntryTable({
                       customerId={e.customerId}
                     />
                   </td>
+                  {showFlowAccountCol ? (
+                    <td className="center">
+                      <FlowAccountSyncButton
+                        entryId={e.id}
+                        entryType={e.entryType}
+                        status={e.status}
+                        customerId={e.customerId}
+                        sync={e.flowaccountSync}
+                      />
+                    </td>
+                  ) : null}
                 </tr>
 
                 {/* ---- sub-lines (บิลผสม) ---- */}
@@ -637,7 +654,7 @@ function EntryTable({
                         <td className="num">{formatMoney(l.vatAmount)}</td>
                         <td className="num">{formatMoney(l.whtAmount)}</td>
                         <td className="num">{formatMoney(lineNet(l))}</td>
-                        <td colSpan={2} />
+                        <td colSpan={showFlowAccountCol ? 3 : 2} />
                       </tr>
                     ))
                   : null}
@@ -653,7 +670,7 @@ function EntryTable({
               <td className="num strong">{formatMoney(tVat)}</td>
               <td className="num strong">{formatMoney(tWht)}</td>
               <td className="num strong">{formatMoney(tNet)}</td>
-              <td colSpan={2} />
+              <td colSpan={showFlowAccountCol ? 3 : 2} />
             </tr>
           </tbody>
       </table>

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
+import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import {
   splitEntryVat,
   toVatReportRow,
@@ -25,7 +26,9 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     whtForm: null, paymentMethod: "cash",
     paymentBankAccountId: null, paymentBankAccountCode: null,
     status: p.status ?? "confirmed", source: "ai", aiConfidence: null, notes: null,
-    createdAt: "2026-07-01T00:00:00Z", confirmedAt: null, lines: p.lines ?? [],
+    createdAt: "2026-07-01T00:00:00Z", confirmedAt: null,
+    inputTaxMonth: null, flowaccountSync: defaultFlowAccountSync(),
+    lines: p.lines ?? [],
   };
 }
 

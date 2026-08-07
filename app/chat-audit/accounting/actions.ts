@@ -294,6 +294,32 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
       if (!res.ok) return { ok: false, message: friendlyError(res.error) };
     }
 
+    // ★ แก้บิลที่ส่งไป FlowAccount แล้ว (synced) → เตือน "ควรส่งใหม่" (flowaccount_needs_resync=true)
+    //   เฉพาะแก้ของเดิม (input.id) — บิลใหม่ยังไม่มีทางถูก sync มาก่อน · best-effort:
+    //   คอลัมน์เพิ่ง add ใน migration 0061 → ถ้ายังไม่ apply select/update จะ error (ไม่ throw)
+    //   → ข้ามเงียบ ไม่ให้การบันทึกบิลทั้งใบล้ม (degrade เหมือน input_tax_month ข้างบน)
+    if (input.id) {
+      try {
+        const { data: faRow, error: faSelErr } = await service
+          .from("bill_entries")
+          .select("flowaccount_sync_status")
+          .eq("id", entryId)
+          .eq("tenant_id", ctx.tenantId)
+          .maybeSingle();
+        const status = !faSelErr && faRow ? (faRow as { flowaccount_sync_status: string | null }).flowaccount_sync_status : null;
+        if (status === "synced") {
+          const { error: faUpdErr } = await service
+            .from("bill_entries")
+            .update({ flowaccount_needs_resync: true })
+            .eq("id", entryId)
+            .eq("tenant_id", ctx.tenantId);
+          void faUpdErr; // คอลัมน์ยังไม่ apply 0061 → เพิกเฉย
+        }
+      } catch {
+        // คอลัมน์ยังไม่ apply migration 0061 → ข้ามเงียบ
+      }
+    }
+
     // 4) ยืนยัน (ถ้าขอ) — reject ถ้ายัง unspecified / ไม่มีมูลค่า
     if (input.confirm) {
       const conf = await confirmEntry(service, ctx.tenantId, entryId);

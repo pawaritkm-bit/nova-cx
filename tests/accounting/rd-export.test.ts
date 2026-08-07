@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import ExcelJS from "exceljs";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
+import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import {
   toThaiDate,
   buildPndReport,
@@ -38,7 +39,9 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     whtForm: p.whtForm ?? null, paymentMethod: "cash",
     paymentBankAccountId: null, paymentBankAccountCode: null,
     status: p.status ?? "confirmed", source: "ai", aiConfidence: null, notes: null,
-    createdAt: "2026-07-01T00:00:00Z", confirmedAt: null, lines: p.lines ?? [],
+    createdAt: "2026-07-01T00:00:00Z", confirmedAt: null,
+    inputTaxMonth: null, flowaccountSync: defaultFlowAccountSync(),
+    lines: p.lines ?? [],
   };
 }
 

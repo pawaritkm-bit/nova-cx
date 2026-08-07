@@ -5,6 +5,7 @@ import {
   validMonth,
 } from "@/lib/accounting/report-filter";
 import type { BillEntry } from "@/lib/accounting/queries";
+import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 
 /** สร้าง BillEntry ขั้นต่ำสำหรับทดสอบตัวกรอง (สนใจแค่ docDate + status) */
 function e(id: string, docDate: string | null, status: "draft" | "confirmed"): BillEntry {
@@ -37,6 +38,8 @@ function e(id: string, docDate: string | null, status: "draft" | "confirmed"): B
     notes: null,
     createdAt: "2026-07-01T00:00:00Z",
     confirmedAt: null,
+    inputTaxMonth: null,
+    flowaccountSync: defaultFlowAccountSync(),
     lines: [],
   };
 }
