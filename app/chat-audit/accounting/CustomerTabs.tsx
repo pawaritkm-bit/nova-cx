@@ -29,11 +29,21 @@ export default function CustomerTabs({
   reviewHref,
   openingHref,
   reportsHref,
+  financialStatementsHref,
   vatPurchaseHref,
   vatSaleHref,
   sbtHref,
   journalBooksHref,
+  journalEntryHref,
+  paymentsHref,
+  agingHref,
+  creditDebitNotesHref,
+  salesDocumentsHref,
   statementHref,
+  flowaccountMapHref,
+  recurringJournalHref,
+  budgetHref,
+  bankReconciliationHref,
   tables,
   shareCircle,
   shareCircleCount,
@@ -46,6 +56,8 @@ export default function CustomerTabs({
   reviewHref?: string;
   openingHref?: string;
   reportsHref?: string;
+  /** งบการเงินฉบับทางการ (เฟส 4 ส่วน N) — กำไรขาดทุน/ฐานะการเงิน เทียบงวดได้ พิมพ์/export เป็นทางการ */
+  financialStatementsHref?: string;
   /** รายงานภาษีซื้อ (ฟอร์มราชการ) — เปิดแท็บใหม่พิมพ์/PDF */
   vatPurchaseHref?: string;
   /** รายงานภาษีขาย (ฟอร์มราชการ) */
@@ -54,8 +66,26 @@ export default function CustomerTabs({
   sbtHref?: string;
   /** สมุดรายวัน 5 เล่ม */
   journalBooksHref?: string;
+  /** ลงบันทึกบัญชีเอง (Manual Journal Entry: JV/PV/RV — เฟส 1 ส่วน C) */
+  journalEntryHref?: string;
+  /** รายการบันทึกซ้ำ (Recurring JE — เฟส 6 ส่วน R) */
+  recurringJournalHref?: string;
+  /** บันทึกรับ/จ่ายเงินแยกจากบิล (เฟส 2 ส่วน F) */
+  paymentsHref?: string;
+  /** รายงานลูกหนี้/เจ้าหนี้ค้างชำระตามอายุหนี้ (เฟส 2 ส่วน G) */
+  agingHref?: string;
+  /** ใบลดหนี้/ใบเพิ่มหนี้ (เฟส 3 ส่วน J) */
+  creditDebitNotesHref?: string;
+  /** ใบเสนอราคา/ใบสั่งซื้อ/ใบวางบิล (เฟส 3 ส่วน K) */
+  salesDocumentsHref?: string;
   /** AI แยกสเตทเมนต์ เข้า-ออก */
   statementHref?: string;
+  /** mapping ผังบัญชี/สินค้า nova-cx ↔ FlowAccount ต่อลูกค้า (เฟส 5 ส่วน Q) */
+  flowaccountMapHref?: string;
+  /** งบประมาณ — ตั้งงบต่อรหัสบัญชี/เดือน/ปี เทียบกับยอดจริง (เฟส 6 ส่วน S) */
+  budgetHref?: string;
+  /** กระทบยอดธนาคาร — เทียบยอดบัญชีเงินฝากกับ statement ธนาคารจริง (เฟส 6 ส่วน T) */
+  bankReconciliationHref?: string;
   tables: Record<EntryType, ReactNode>;
   /** เนื้อในแท็บ "วงแชร์" — undefined = ลูกค้ารายนี้ไม่ใช่ท้าวแชร์ (ไม่โชว์แท็บ) */
   shareCircle?: ReactNode;
@@ -150,11 +180,57 @@ export default function CustomerTabs({
             {openingHref ? (
               <a href={openingHref} className="btn btn-ghost">ยอดยกมา</a>
             ) : null}
+            {/* ลงบันทึกบัญชีเอง (JV/PV/RV — เฟส 1 ส่วน C) */}
+            {journalEntryHref ? (
+              <a href={journalEntryHref} className="btn btn-ghost">ลงบันทึกบัญชีเอง</a>
+            ) : null}
+            {/* รายการบันทึกซ้ำ (เฟส 6 ส่วน R) — ตั้ง JV/PV/RV ให้สร้างซ้ำอัตโนมัติทุกเดือน/ไตรมาส/ปี */}
+            {recurringJournalHref ? (
+              <a href={recurringJournalHref} className="btn btn-ghost">รายการบันทึกซ้ำ</a>
+            ) : null}
+            {/* บันทึกรับ/จ่ายเงินแยกจากบิล (เฟส 2 ส่วน F) */}
+            {paymentsHref ? (
+              <a href={paymentsHref} className="btn btn-ghost">รับ/จ่ายเงิน</a>
+            ) : null}
+            {/* รายงานลูกหนี้/เจ้าหนี้ค้างชำระตามอายุหนี้ (เฟส 2 ส่วน G) */}
+            {agingHref ? (
+              <a href={agingHref} className="btn btn-ghost" target="_blank" rel="noopener">
+                ลูกหนี้/เจ้าหนี้ค้างชำระ
+              </a>
+            ) : null}
+            {/* ใบลดหนี้/ใบเพิ่มหนี้ (เฟส 3 ส่วน J) */}
+            {creditDebitNotesHref ? (
+              <a href={creditDebitNotesHref} className="btn btn-ghost">
+                ใบลดหนี้/เพิ่มหนี้
+              </a>
+            ) : null}
+            {/* ใบเสนอราคา/ใบสั่งซื้อ/ใบวางบิล (เฟส 3 ส่วน K) */}
+            {salesDocumentsHref ? (
+              <a href={salesDocumentsHref} className="btn btn-ghost">
+                ใบเสนอราคา/PO/วางบิล
+              </a>
+            ) : null}
             {reportsHref ? (
               <a href={reportsHref} className="btn btn-ghost">งบการเงิน</a>
             ) : null}
+            {/* งบการเงินฉบับทางการ (เฟส 4 ส่วน N) — คนละหน้ากับ "งบการเงิน" ด้านบน (ป้ายต่างกันชัดเจน) */}
+            {financialStatementsHref ? (
+              <a href={financialStatementsHref} className="btn btn-ghost">งบการเงินฉบับทางการ</a>
+            ) : null}
             {statementHref ? (
               <a href={statementHref} className="btn btn-ghost">แยกสเตทเมนต์</a>
+            ) : null}
+            {/* mapping ผังบัญชี/สินค้า nova-cx ↔ FlowAccount ต่อลูกค้า (เฟส 5 ส่วน Q) */}
+            {flowaccountMapHref ? (
+              <a href={flowaccountMapHref} className="btn btn-ghost">mapping FlowAccount</a>
+            ) : null}
+            {/* งบประมาณ — ตั้งงบต่อรหัสบัญชี/เดือน/ปี เทียบกับยอดจริง (เฟส 6 ส่วน S) */}
+            {budgetHref ? (
+              <a href={budgetHref} className="btn btn-ghost">งบประมาณ</a>
+            ) : null}
+            {/* กระทบยอดธนาคาร — เทียบยอดบัญชีเงินฝากกับ statement ธนาคารจริง (เฟส 6 ส่วน T) */}
+            {bankReconciliationHref ? (
+              <a href={bankReconciliationHref} className="btn btn-ghost">กระทบยอดธนาคาร</a>
             ) : null}
           </>
         ) : null}

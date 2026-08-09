@@ -9,7 +9,7 @@
  * ★ normal balance (ด้านปกติของบัญชี) ตามเลขหลักแรก: 1,5,6 = เดบิต · 2,3,4 = เครดิต
  */
 import {
-  CHART_BY_CODE,
+  type ChartByCode,
   categoryDigitOf,
   CATEGORY_BY_DIGIT,
 } from "@/lib/accounting/chart-of-accounts";
@@ -59,9 +59,9 @@ export function normalSideOf(code: string): "debit" | "credit" {
   return d === "1" || d === "5" || d === "6" ? "debit" : "credit";
 }
 
-/** ชื่อหมวดของบัญชี (ผังกลางก่อน → หมวดตามเลขหลักแรก) */
-function categoryOf(code: string): string {
-  return CHART_BY_CODE[code]?.category ?? CATEGORY_BY_DIGIT[categoryDigitOf(code)] ?? "อื่น ๆ";
+/** ชื่อหมวดของบัญชี (ผังก่อน → หมวดตามเลขหลักแรก) */
+function categoryOf(chartByCode: ChartByCode, code: string): string {
+  return chartByCode[code]?.category ?? CATEGORY_BY_DIGIT[categoryDigitOf(code)] ?? "อื่น ๆ";
 }
 
 /** คีย์เรียงตามวันที่ (null = ท้ายสุด) */
@@ -76,7 +76,8 @@ function dateKey(d: string | null): string {
  */
 export function buildLedger(
   journalLines: JournalLine[],
-  openingBalances: Pick<OpeningBalance, "accountCode" | "accountName" | "openingBalance">[] = []
+  openingBalances: Pick<OpeningBalance, "accountCode" | "accountName" | "openingBalance">[] = [],
+  chartByCode: ChartByCode = {}
 ): Ledger {
   const map = new Map<string, LedgerAccount>();
 
@@ -85,8 +86,8 @@ export function buildLedger(
     if (!a) {
       a = {
         code,
-        name: CHART_BY_CODE[code]?.name ?? (name && name.trim() ? name.trim() : code),
-        category: categoryOf(code),
+        name: chartByCode[code]?.name ?? (name && name.trim() ? name.trim() : code),
+        category: categoryOf(chartByCode, code),
         digit: categoryDigitOf(code),
         normalSide: normalSideOf(code),
         opening: 0,
@@ -96,7 +97,7 @@ export function buildLedger(
         txns: [],
       };
       map.set(code, a);
-    } else if (a.name === code && name && name.trim() && !CHART_BY_CODE[code]) {
+    } else if (a.name === code && name && name.trim() && !chartByCode[code]) {
       // เติมชื่อถ้าก่อนหน้ายังไม่มีชื่อจริง
       a.name = name.trim();
     }

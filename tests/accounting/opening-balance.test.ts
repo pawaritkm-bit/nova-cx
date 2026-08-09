@@ -7,13 +7,17 @@ import {
   ACCOUNT_CODE_MAX,
 } from "@/lib/accounting/opening-balance";
 import { customerInScope, type AccountingAccess } from "@/lib/accounting/access";
+import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
+import { TEST_CHART } from "@/tests/accounting/fixtures/chart";
 
 /**
  * เทสต์ helper pure ของ "ยอดยกมาต่อบัญชี":
  *   1) parseMoney: comma / วงเล็บติดลบ / เลขไทย
- *   2) parseOpeningBalanceRows: จับคอลัมน์ยืดหยุ่น (ไทย/อังกฤษ) + validate
+ *   2) parseOpeningBalanceRows: จับคอลัมน์ยืดหยุ่น (ไทย/อังกฤษ) + validate — รับ chartByCode เป็นพารามิเตอร์
  *   3) guard scope: customerInScope (นักบัญชีเห็นเฉพาะลูกค้าตัวเอง)
  */
+
+const TEST_CHART_BY_CODE = buildChartByCode(TEST_CHART);
 
 describe("opening-balance — parseMoney", () => {
   it("เลขปกติ / comma / ทศนิยม", () => {
@@ -46,7 +50,7 @@ describe("opening-balance — parseOpeningBalanceRows (จับคอลัม�
       ["1010", "เงินสด", "5,000"],
       ["2010", "เจ้าหนี้การค้า", "(3,000)"],
     ];
-    const rows = parseOpeningBalanceRows(grid);
+    const rows = parseOpeningBalanceRows(TEST_CHART_BY_CODE, grid);
     expect(rows).toEqual([
       { accountCode: "1010", accountName: "เงินสด", openingBalance: 5000 },
       { accountCode: "2010", accountName: "เจ้าหนี้การค้า", openingBalance: -3000 },
@@ -58,7 +62,7 @@ describe("opening-balance — parseOpeningBalanceRows (จับคอลัม�
       ["code", "name", "opening"],
       ["1140", "ลูกหนี้", "12000"],
     ];
-    const rows = parseOpeningBalanceRows(grid);
+    const rows = parseOpeningBalanceRows(TEST_CHART_BY_CODE, grid);
     expect(rows).toEqual([{ accountCode: "1140", accountName: "ลูกหนี้", openingBalance: 12000 }]);
   });
 
@@ -68,7 +72,7 @@ describe("opening-balance — parseOpeningBalanceRows (จับคอลัม�
       ["1010", "1000"],
       ["9999", "500"], // นอกผัง → ชื่อ null
     ];
-    const rows = parseOpeningBalanceRows(grid);
+    const rows = parseOpeningBalanceRows(TEST_CHART_BY_CODE, grid);
     expect(rows[0]).toEqual({ accountCode: "1010", accountName: "เงินสด", openingBalance: 1000 });
     expect(rows[1]).toEqual({ accountCode: "9999", accountName: null, openingBalance: 500 });
   });
@@ -81,7 +85,7 @@ describe("opening-balance — parseOpeningBalanceRows (จับคอลัม�
       ["รวม", "1000"],
       ["total", "1000"],
     ];
-    const rows = parseOpeningBalanceRows(grid);
+    const rows = parseOpeningBalanceRows(TEST_CHART_BY_CODE, grid);
     expect(rows).toHaveLength(1);
     expect(rows[0].accountCode).toBe("1010");
   });
@@ -93,7 +97,7 @@ describe("opening-balance — parseOpeningBalanceRows (จับคอลัม�
       ["รหัสบัญชี", "ชื่อบัญชี", "ยอดยกมา"],
       ["1010", "เงินสด", "100"],
     ];
-    const rows = parseOpeningBalanceRows(grid);
+    const rows = parseOpeningBalanceRows(TEST_CHART_BY_CODE, grid);
     expect(rows).toEqual([{ accountCode: "1010", accountName: "เงินสด", openingBalance: 100 }]);
   });
 
@@ -102,8 +106,8 @@ describe("opening-balance — parseOpeningBalanceRows (จับคอลัม�
       ["ก", "ข", "ค"],
       ["1", "2", "3"],
     ];
-    expect(parseOpeningBalanceRows(grid)).toEqual([]);
-    expect(parseOpeningBalanceRows([])).toEqual([]);
+    expect(parseOpeningBalanceRows(TEST_CHART_BY_CODE, grid)).toEqual([]);
+    expect(parseOpeningBalanceRows(TEST_CHART_BY_CODE, [])).toEqual([]);
   });
 
   it("รหัสซ้ำในไฟล์ → แถวหลังทับก่อน", () => {
@@ -112,7 +116,7 @@ describe("opening-balance — parseOpeningBalanceRows (จับคอลัม�
       ["1010", "100"],
       ["1010", "200"],
     ];
-    const rows = parseOpeningBalanceRows(grid);
+    const rows = parseOpeningBalanceRows(TEST_CHART_BY_CODE, grid);
     expect(rows).toHaveLength(1);
     expect(rows[0].openingBalance).toBe(200);
   });

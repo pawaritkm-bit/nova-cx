@@ -78,6 +78,7 @@ function entry(p: Partial<BillEntry>): BillEntry {
     paymentMethod: null,
     paymentBankAccountId: null,
     paymentBankAccountCode: null,
+    dueDate: p.dueDate ?? null,
     status: p.status ?? "draft",
     source: p.source ?? "ai",
     aiConfidence: p.aiConfidence ?? null,
@@ -261,6 +262,8 @@ function makeListEntriesDb(spec: {
   entries: RawEntryRow[];
   flowaccount?: Record<string, unknown>[] | "error";
   inputTaxMonth?: Record<string, unknown>[] | "error";
+  /** แถวดิบ bill_entry_lines (เฟส 1 ส่วน B: ทดสอบ mapping product_id) — ไม่ส่ง = [] (ไม่มี line) */
+  lines?: Record<string, unknown>[];
 }): SupabaseClient {
   const callCount: Record<string, number> = {};
   function qb(table: string) {
@@ -288,6 +291,8 @@ function makeListEntriesDb(spec: {
               ? { data: null, error: { code: "42703" } }
               : { data: spec.flowaccount ?? [], error: null };
         }
+      } else if (table === "bill_entry_lines") {
+        result = { data: spec.lines ?? [], error: null };
       }
       return Promise.resolve(result).then(onFulfilled);
     };
@@ -375,5 +380,72 @@ describe("listEntries — flowaccountSync (T7)", () => {
     const res = await listEntries(db, "t1", {});
     expect(res.entries[0]!.flowaccountSync.status).toBe("failed");
     expect(res.entries[0]!.flowaccountSync.lastError).toBe("เชื่อมต่อ FlowAccount หมดเวลา");
+  });
+});
+
+describe("listEntries — dueDate mapping (เฟส 2 ส่วน E, migration 0067)", () => {
+  it("มีค่า due_date → map เป็น dueDate ตรง ๆ", async () => {
+    const db = makeListEntriesDb({ entries: [rawEntryRow({ id: "e1", due_date: "2026-08-31" })] });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.dueDate).toBe("2026-08-31");
+  });
+
+  it("ไม่มี due_date (บิลเก่าก่อนเฟสนี้ — ไม่ backfill) → dueDate เป็น null", async () => {
+    const db = makeListEntriesDb({ entries: [rawEntryRow({ id: "e1", due_date: null })] });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.dueDate).toBeNull();
+  });
+});
+
+describe("listEntries — lines mapping product_id (เฟส 1 ส่วน B, docs/06 หมวด B)", () => {
+  function rawLineRow(p: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+    return {
+      id: "l1",
+      entry_id: "e1",
+      line_no: 1,
+      vat_type: "vat",
+      description: "ค่าสินค้า",
+      account_code: "4010",
+      account_name: "ขายสินค้า",
+      product_id: null,
+      amount: 1000,
+      vat_amount: 70,
+      wht_rate: 0,
+      wht_amount: 0,
+      ai_filled: false,
+      ai_low_confidence: false,
+      ...p,
+    };
+  }
+
+  it("line ผูกสินค้า (product_id มีค่า) → map เป็น productId ตรง ๆ", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      lines: [rawLineRow({ product_id: "prod-1" })],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.lines[0]!.productId).toBe("prod-1");
+  });
+
+  it("line ไม่ผูกสินค้า (product_id เป็น null) → productId เป็น null", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      lines: [rawLineRow({ product_id: null })],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.lines[0]!.productId).toBeNull();
+  });
+
+  it("★ ไม่กระทบฟิลด์อื่นของ line (amount/account_code/description ยังตรงเหมือนเดิม)", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      lines: [rawLineRow({ product_id: "prod-2", amount: 2500, account_code: "5300" })],
+    });
+    const res = await listEntries(db, "t1", {});
+    const line = res.entries[0]!.lines[0]!;
+    expect(line.productId).toBe("prod-2");
+    expect(line.amount).toBe(2500);
+    expect(line.accountCode).toBe("5300");
+    expect(line.description).toBe("ค่าสินค้า");
   });
 });

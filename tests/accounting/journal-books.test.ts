@@ -9,6 +9,8 @@ import {
   BOOK_ORDER,
   type JournalPosting,
 } from "@/lib/accounting/journal-books";
+import { toJournalPosting, type ManualJournalEntry } from "@/lib/accounting/manual-journal";
+import { toJournalPosting as toNoteJournalPosting, type CreditDebitNote } from "@/lib/accounting/credit-debit-notes";
 
 function mkLine(p: Partial<BillEntryLine>): BillEntryLine {
   return {
@@ -26,6 +28,7 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     sellerName: null, sellerTaxId: null, buyerName: null, buyerTaxId: null,
     whtForm: null, paymentMethod: p.paymentMethod ?? "credit",
     paymentBankAccountId: null, paymentBankAccountCode: null,
+    dueDate: p.dueDate ?? null,
     status: "confirmed", source: "ai", aiConfidence: null, notes: null,
     createdAt: "2026-07-01T00:00:00Z", confirmedAt: null,
     inputTaxMonth: null, flowaccountSync: defaultFlowAccountSync(),
@@ -129,6 +132,144 @@ describe("journal-books: buildJournalBooks (post เข้าเล่ม + เ�
     const { books, skipped } = buildJournalBooks(entries);
     expect(skipped.length).toBe(1);
     for (const k of BOOK_ORDER) expect(books[k].postings).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------
+// เฟส 1 ส่วน C (0.8, ⚠️ FLAG): manual JE (JV/PV/RV) merge เข้าเล่มตาม doc_type
+//   ★ แก้ TODO เดิม: เล่มรับ/จ่ายเงินเคยว่างเปล่าเพราะบิลไม่มีแนวคิด receipt/payment voucher ของตัวเอง
+function mkManualEntry(p: Partial<ManualJournalEntry> & { id: string }): ManualJournalEntry {
+  return {
+    id: p.id,
+    tenantId: "t",
+    customerId: "c1",
+    docType: p.docType ?? "JV",
+    docDate: p.docDate ?? "2026-07-15",
+    docNo: p.docNo ?? null,
+    memo: p.memo ?? null,
+    status: p.status ?? "confirmed",
+    createdAt: "2026-07-15T00:00:00Z",
+    confirmedAt: "2026-07-15T00:00:00Z",
+    lines: p.lines ?? [
+      { id: "l1", lineNo: 1, accountCode: "5370", accountName: "ค่าเสื่อมราคา-อาคาร", description: null, debit: 500, credit: 0 },
+      { id: "l2", lineNo: 2, accountCode: "1615.1", accountName: "ค่าเสื่อมสะสม-อาคาร", description: null, debit: 0, credit: 500 },
+    ],
+  };
+}
+
+describe("journal-books: buildJournalBooks + manualPostings (0.8 — เล่มรับ/จ่ายเงินไม่ว่างเปล่าอีกต่อไป)", () => {
+  it("manual JE doc_type='PV' → โผล่ในเล่ม \"สมุดรายวันจ่ายเงิน\" (ที่เคยว่างเปล่า)", () => {
+    const manual = toJournalPosting(mkManualEntry({ id: "pv1", docType: "PV" }));
+    const { books } = buildJournalBooks([], {}, [manual]);
+    expect(books.payment.postings).toHaveLength(1);
+    expect(books.payment.totalDebit).toBe(500);
+    expect(books.payment.totalCredit).toBe(500);
+  });
+
+  it("manual JE doc_type='RV' → โผล่ในเล่ม \"สมุดรายวันรับเงิน\"", () => {
+    const manual = toJournalPosting(mkManualEntry({ id: "rv1", docType: "RV" }));
+    const { books } = buildJournalBooks([], {}, [manual]);
+    expect(books.receipt.postings).toHaveLength(1);
+    expect(books.receipt.totalDebit).toBe(500);
+    expect(books.receipt.totalCredit).toBe(500);
+  });
+
+  it("manual JE doc_type='JV' → โผล่ในเล่ม \"สมุดรายวันทั่วไป\"", () => {
+    const manual = toJournalPosting(mkManualEntry({ id: "jv1", docType: "JV" }));
+    const { books } = buildJournalBooks([], {}, [manual]);
+    expect(books.general.postings).toHaveLength(1);
+  });
+
+  it("ผสมบิลจริง + manual JE ในเล่มเดียวกัน → ยอดรวมยังสมดุล (เดบิต=เครดิต ทุกเล่ม)", () => {
+    const entries = [
+      mkEntry({
+        id: "p1",
+        entryType: "purchase",
+        paymentMethod: "credit",
+        lines: [mkLine({ accountCode: "5010", amount: 1000, vatAmount: 70 })],
+      }),
+    ];
+    const manualPv = toJournalPosting(mkManualEntry({ id: "pv1", docType: "PV" }));
+    const manualJv = toJournalPosting(mkManualEntry({ id: "jv1", docType: "JV" }));
+    const { books } = buildJournalBooks(entries, {}, [manualPv, manualJv]);
+    for (const k of BOOK_ORDER) {
+      expect(books[k].totalDebit).toBe(books[k].totalCredit);
+    }
+    // เล่มซื้อยังมีแค่บิลจริง (manual ไม่ปนเข้าเล่มซื้อ)
+    expect(books.purchase.postings).toHaveLength(1);
+    expect(books.payment.postings).toHaveLength(1);
+    expect(books.general.postings).toHaveLength(1);
+  });
+
+  it("ไม่ส่ง manualPostings (default []) → behavior เดิมทุกอย่าง (เล่มรับ/จ่ายยังว่างถ้าไม่มี manual)", () => {
+    const entries = [
+      mkEntry({ id: "p1", entryType: "purchase", paymentMethod: "cash",
+        lines: [mkLine({ accountCode: "5010", amount: 500 })] }),
+    ];
+    const { books } = buildJournalBooks(entries);
+    expect(books.payment.postings).toHaveLength(0);
+    expect(books.receipt.postings).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------
+// เฟส 3 ส่วน J (0.7, J10) — notePostings (CN/DN) ผสมเข้าเล่ม sale/purchase ตามฝั่งบิลเดิม
+// ---------------------------------------------------------------------
+function mkNote(p: Partial<CreditDebitNote> & { id: string }): CreditDebitNote {
+  return {
+    id: p.id,
+    tenantId: "t",
+    entryId: p.id,
+    customerId: "c1",
+    docType: p.docType ?? "credit_note",
+    docDate: p.docDate ?? "2026-07-20",
+    docNo: p.docNo ?? null,
+    reason: p.reason ?? "สินค้าชำรุด",
+    status: p.status ?? "confirmed",
+    createdAt: "2026-07-20T00:00:00Z",
+    confirmedAt: "2026-07-20T00:00:00Z",
+    lines: p.lines ?? [{ lineNo: 1, description: null, accountCode: "4010", accountName: "ขายสินค้า", amount: 500, vatAmount: 35 }],
+  };
+}
+
+describe("journal-books: buildJournalBooks + notePostings (เฟส 3 ส่วน J, 0.7 — CN/DN เข้าเล่ม sale/purchase ไม่ใช่ receipt/payment)", () => {
+  it("CN ของบิลขาย → โผล่ในเล่ม \"สมุดรายวันขาย\" (ไม่ใช่เล่มรับเงิน)", () => {
+    const note = toNoteJournalPosting(mkNote({ id: "cn1" }), { entryType: "sale", docNo: "INV-1", customerId: "c1", counterpartyName: "ลูกค้า A" }, {});
+    const { books } = buildJournalBooks([], {}, [note]);
+    expect(books.sale.postings).toHaveLength(1);
+    expect(books.receipt.postings).toHaveLength(0);
+    expect(books.sale.totalDebit).toBe(books.sale.totalCredit);
+  });
+
+  it("DN ของบิลซื้อ → โผล่ในเล่ม \"สมุดรายวันซื้อ\" (ไม่ใช่เล่มจ่ายเงิน)", () => {
+    const note = toNoteJournalPosting(
+      mkNote({ id: "dn1", docType: "debit_note", lines: [{ lineNo: 1, description: null, accountCode: "5010", accountName: "ซื้อสินค้า", amount: 500, vatAmount: 35 }] }),
+      { entryType: "purchase", docNo: "PO-1", customerId: "c1", counterpartyName: "ผู้ขาย B" },
+      {}
+    );
+    const { books } = buildJournalBooks([], {}, [note]);
+    expect(books.purchase.postings).toHaveLength(1);
+    expect(books.payment.postings).toHaveLength(0);
+    expect(books.purchase.totalDebit).toBe(books.purchase.totalCredit);
+  });
+
+  it("ผสมบิลจริง + manual JE + CN ในเล่มเดียวกัน (ขาย) → ยอดรวมทุกเล่มยังสมดุล", () => {
+    const entries = [
+      mkEntry({
+        id: "s1",
+        entryType: "sale",
+        paymentMethod: "credit",
+        lines: [mkLine({ accountCode: "4010", amount: 2000, vatAmount: 140 })],
+      }),
+    ];
+    const manualJv = toJournalPosting(mkManualEntry({ id: "jv1", docType: "JV" }));
+    const cn = toNoteJournalPosting(mkNote({ id: "cn1" }), { entryType: "sale", docNo: "INV-1", customerId: "c1", counterpartyName: "ลูกค้า A" }, {});
+    const { books } = buildJournalBooks(entries, {}, [manualJv, cn]);
+    for (const k of BOOK_ORDER) {
+      expect(books[k].totalDebit).toBe(books[k].totalCredit);
+    }
+    // เล่มขายมีทั้งบิลจริงและ CN (2 posting)
+    expect(books.sale.postings).toHaveLength(2);
   });
 });
 

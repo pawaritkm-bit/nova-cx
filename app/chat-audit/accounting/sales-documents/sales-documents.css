@@ -1,0 +1,252 @@
+/* ============================================================
+   ใบเสนอราคา/ใบสั่งซื้อ/ใบวางบิล (เฟส 3 ส่วน K)
+   ★ prefix sd- กันชนสไตล์เดิม (rcv- / whtc- / acc- / bills / dashboard)
+   ส่วนที่ 1: ฟอร์มสร้าง/แก้ไข draft ในหน้า list (ใช้ร่วมกับ .acc-je/.acc-je-form/.acc-field-grid เดิม
+              จาก accounting.css — เพิ่มเฉพาะ class ใหม่ที่ accounting.css ยังไม่มี)
+   ส่วนที่ 2: เอกสารพิมพ์ (mirror wht-cert.css/receipt-cert.css — จำลอง A4)
+   ============================================================ */
+
+/* ---- ปุ่ม "ดึงจากบิลค้างชำระ" (เฉพาะ billing_note) ---- */
+.nova-dash .sd-candidates {
+  margin-top: 8px;
+  border: 1px solid var(--line, #d9dee6);
+  border-radius: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: #fff;
+}
+.nova-dash .sd-candidates-empty {
+  padding: 12px;
+  color: var(--muted, #667);
+  font-size: 13px;
+}
+.nova-dash .sd-candidate-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid var(--line, #eef1f5);
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+.nova-dash .sd-candidate-item:last-child { border-bottom: none; }
+.nova-dash .sd-candidate-item:hover { background: var(--navy-50, #eef4ff); }
+.nova-dash .sd-candidate-item .num { font-variant-numeric: tabular-nums; font-weight: 700; }
+
+/* ---- บรรทัดรายการเอกสาร (desc / qty / unit / unitPrice / amount / vat / delete) ---- */
+.nova-dash .sd-lines-head,
+.nova-dash .sd-line {
+  display: grid;
+  grid-template-columns: minmax(200px, 2fr) 72px 84px 104px 104px 96px 28px;
+  gap: 6px;
+  align-items: center;
+}
+.nova-dash .sd-lines-head {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted, #667);
+  padding: 0 2px;
+}
+.nova-dash .sd-lines-head .num { text-align: right; }
+.nova-dash .sd-line-desc { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.nova-dash .sd-line-desc input { flex: 1 1 auto; min-width: 0; }
+.nova-dash .sd-line input {
+  padding: 6px 8px;
+  border: 1px solid var(--line, #d9dee6);
+  border-radius: 7px;
+  font-size: 13px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.nova-dash .sd-line input.num { text-align: right; font-variant-numeric: tabular-nums; }
+.nova-dash .sd-line input:focus { outline: none; border-color: var(--navy-800, #1f6feb); }
+.nova-dash .sd-line-amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  padding: 6px 8px;
+  color: var(--navy-800, #1f2a44);
+}
+.nova-dash .sd-form-total {
+  text-align: right;
+  font-size: 15px;
+  padding: 8px 0;
+  border-top: 1px dashed var(--line, #d9dee6);
+  margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .nova-dash .sd-lines-head { display: none; }
+  .nova-dash .sd-line {
+    grid-template-columns: 1fr 1fr;
+    grid-auto-rows: auto;
+    border-bottom: 1px dashed var(--line, #d9dee6);
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+  }
+  .nova-dash .sd-line-desc { grid-column: 1 / -1; }
+}
+
+/* ============================================================
+   เอกสารพิมพ์ (จำลอง A4) — mirror wht-cert.css
+   ============================================================ */
+.sd-shell {
+  min-height: 100vh;
+  background: #eef1f5;
+  padding: 20px 12px 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: "Sarabun", "TH Sarabun New", system-ui, -apple-system, sans-serif;
+  color: #1a1a1a;
+}
+
+.sd-toolbar {
+  width: 100%;
+  max-width: 800px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.sd-toolbar-hint { color: #667; font-size: 14px; flex: 1; }
+
+.sd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #cbd2dc;
+  background: #fff;
+  color: #1a1a1a;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.sd-btn:hover { background: #f4f6f9; }
+.sd-btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.sd-btn-primary:hover { background: #195ecb; }
+.sd-btn-ghost { background: transparent; }
+
+.sd-page {
+  width: 100%;
+  max-width: 800px;
+  background: #fff;
+  padding: 44px 56px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  box-sizing: border-box;
+  font-size: 15px;
+}
+
+.sd-topmeta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 18px;
+  margin-bottom: 6px;
+}
+.sd-meta-item { display: flex; align-items: baseline; gap: 6px; }
+.sd-label { color: #445; font-weight: 600; font-size: 15px; }
+.sd-value { font-size: 15px; }
+.sd-docno { font-weight: 700; }
+
+.sd-title {
+  text-align: center;
+  font-size: 22px;
+  font-weight: 700;
+  margin: 6px 0 18px;
+  text-decoration: underline;
+  text-underline-offset: 6px;
+}
+
+.sd-parties {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 10px 0;
+  border-top: 1px dashed #cbd2dc;
+  border-bottom: 1px dashed #cbd2dc;
+}
+.sd-party-title { font-weight: 700; font-size: 13px; color: #667; margin-bottom: 4px; }
+.sd-party-name { font-weight: 700; font-size: 16px; margin-bottom: 2px; }
+.sd-party-sub { font-size: 14px; color: #333; }
+
+.sd-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+.sd-table th,
+.sd-table td {
+  border: 1px solid #333;
+  padding: 5px 8px;
+  font-size: 14px;
+}
+.sd-table th { background: #f0f3f7; font-weight: 700; text-align: center; }
+.sd-col-no { width: 46px; text-align: center; }
+.sd-col-qty { width: 70px; text-align: right; }
+.sd-col-unit { width: 70px; text-align: center; }
+.sd-col-amt { width: 110px; text-align: right; }
+
+.sd-total-label { text-align: right; font-weight: 700; }
+.sd-total-amt { font-weight: 700; }
+
+.sd-amount-text {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 16px;
+  margin: 4px 0 20px;
+  flex-wrap: wrap;
+}
+.sd-amount-words { font-weight: 700; }
+
+.sd-notes { font-size: 14px; margin: 8px 0 20px; }
+
+.sd-sign { display: flex; justify-content: center; gap: 24px; margin-top: 28px; flex-wrap: wrap; }
+.sd-sign-box { text-align: center; width: 45%; max-width: 280px; }
+.sd-sign-line { border-bottom: 1px dotted #333; height: 40px; margin-bottom: 6px; }
+.sd-sign-label { font-size: 15px; color: #333; }
+
+.sd-error {
+  background: #fff;
+  padding: 32px 40px;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  text-align: center;
+  max-width: 520px;
+  margin-top: 40px;
+}
+.sd-error p { font-size: 16px; margin-bottom: 20px; color: #333; }
+
+/* ============================================================
+   PRINT — เอกสารสะอาด (ซ่อนแถบเครื่องมือ, เต็มหน้า A4)
+   ============================================================ */
+@media print {
+  .no-print { display: none !important; }
+  .nav-progress { display: none !important; }
+
+  .sd-shell { background: #fff; padding: 0; display: block; }
+  .sd-page {
+    max-width: none;
+    width: 100%;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 24px 28px;
+  }
+
+  .sd-table th { background: transparent !important; }
+  .sd-table th,
+  .sd-table td { border-color: #000 !important; }
+
+  @page { size: A4; margin: 14mm; }
+}

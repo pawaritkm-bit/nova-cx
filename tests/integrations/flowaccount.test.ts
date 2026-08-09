@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   getAccessToken,
   createSalesDocument,
+  createPurchaseDocument,
   __resetFlowAccountTokenCacheForTests,
   type FlowAccountCredential,
 } from "@/lib/integrations/flowaccount";
@@ -372,6 +373,205 @@ describe("flowaccount — getAccessToken / createSalesDocument", () => {
 
       expect(resA).toEqual({ ok: true, docId: "doc-A", docNo: "made-with:Bearer tok-A" });
       expect(resB).toEqual({ ok: true, docId: "doc-B", docNo: "made-with:Bearer tok-B" });
+    });
+  });
+
+  /**
+   * เฟส 5 ส่วน P (T31, docs/06-accounting-features-roadmap.md) — createPurchaseDocument
+   *   ⚠️ endpoint /purchases, /expenses ยังไม่ยืนยันสเปกจริง — ครอบทุก branch เหมือน createSalesDocument
+   */
+  describe("createPurchaseDocument", () => {
+    it("ไม่ตั้ง env กลาง → not_configured (ไม่ยิง fetch) แม้ credential ครบ", async () => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      const res = await createPurchaseDocument({ docType: "purchase_bill", body: { foo: "bar" } }, credentialA);
+      expect(res).toEqual({ ok: false, reason: "not_configured" });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("token ล้ม → ส่งต่อ reason เดียวกัน ไม่ยิง create", async () => {
+      setEnv();
+      const fetchSpy = vi.fn().mockResolvedValue(tokenRes(401));
+      vi.stubGlobal("fetch", fetchSpy);
+      const res = await createPurchaseDocument({ docType: "purchase_bill", body: {} }, credentialA);
+      expect(res).toEqual({ ok: false, reason: "auth_failed" });
+      expect(fetchSpy).toHaveBeenCalledTimes(1); // แค่ token ไม่ยิง create ต่อ
+    });
+
+    it("สำเร็จ (purchase_bill) → ยิง POST /purchases พร้อม Bearer + คืน docId/docNo", async () => {
+      setEnv();
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+        .mockResolvedValueOnce(docRes(200, { recordId: 12345, documentSerial: "PB-0001" }));
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const res = await createPurchaseDocument({ docType: "purchase_bill", body: { subTotal: 100 } }, credentialA);
+      expect(res).toEqual({ ok: true, docId: "12345", docNo: "PB-0001" });
+
+      const [url, init] = fetchSpy.mock.calls[1];
+      expect(url).toBe("https://fa.example/test/purchases");
+      expect(init.method).toBe("POST");
+      expect(init.headers.Authorization).toBe("Bearer tok-1");
+      expect(init.headers["Content-Type"]).toBe("application/json");
+      expect(JSON.parse(init.body as string)).toEqual({ subTotal: 100 });
+    });
+
+    it("สำเร็จ (ทรง response จริง — ห่อด้วย {status,message,code,data}) → unwrap data ถูกต้อง", async () => {
+      setEnv();
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+          .mockResolvedValueOnce(
+            docRes(200, {
+              status: true,
+              message: "",
+              code: 0,
+              data: { recordId: 555, documentSerial: "PB-2026-0055" },
+            })
+          )
+      );
+      const res = await createPurchaseDocument({ docType: "purchase_bill", body: {} }, credentialA);
+      expect(res).toEqual({ ok: true, docId: "555", docNo: "PB-2026-0055" });
+    });
+
+    it("สำเร็จ (cash_expense) → ยิง POST /expenses", async () => {
+      setEnv();
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+        .mockResolvedValueOnce(docRes(200, { id: "999" }));
+      vi.stubGlobal("fetch", fetchSpy);
+      const res = await createPurchaseDocument({ docType: "cash_expense", body: {} }, credentialA);
+      expect(res).toEqual({ ok: true, docId: "999", docNo: null });
+
+      const [url] = fetchSpy.mock.calls[1];
+      expect(url).toBe("https://fa.example/test/expenses");
+    });
+
+    it("ยิง create 2 ครั้ง (credential เดิม) → ขอ token แค่ครั้งเดียว (cache)", async () => {
+      setEnv();
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+        .mockResolvedValueOnce(docRes(200, { recordId: 1 }))
+        .mockResolvedValueOnce(docRes(200, { recordId: 2 }));
+      vi.stubGlobal("fetch", fetchSpy);
+
+      await createPurchaseDocument({ docType: "purchase_bill", body: {} }, credentialA);
+      await createPurchaseDocument({ docType: "cash_expense", body: {} }, credentialA);
+      expect(fetchSpy).toHaveBeenCalledTimes(3); // 1 token + 2 create
+    });
+
+    it("401/403 → auth_failed", async () => {
+      setEnv();
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+          .mockResolvedValueOnce(docRes(403))
+      );
+      expect(await createPurchaseDocument({ docType: "purchase_bill", body: {} }, credentialA)).toEqual({
+        ok: false,
+        reason: "auth_failed",
+      });
+    });
+
+    it("4xx (ไม่ใช่ 401/403) → validation_error", async () => {
+      setEnv();
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+          .mockResolvedValueOnce(docRes(422))
+      );
+      expect(await createPurchaseDocument({ docType: "purchase_bill", body: {} }, credentialA)).toEqual({
+        ok: false,
+        reason: "validation_error",
+      });
+    });
+
+    it("5xx → server_error", async () => {
+      setEnv();
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+          .mockResolvedValueOnce(docRes(500))
+      );
+      expect(await createPurchaseDocument({ docType: "purchase_bill", body: {} }, credentialA)).toEqual({
+        ok: false,
+        reason: "server_error",
+      });
+    });
+
+    it("response สำเร็จแต่ไม่มี id → server_error", async () => {
+      setEnv();
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+          .mockResolvedValueOnce(docRes(200, {}))
+      );
+      expect(await createPurchaseDocument({ docType: "purchase_bill", body: {} }, credentialA)).toEqual({
+        ok: false,
+        reason: "server_error",
+      });
+    });
+
+    it("timeout (AbortError) → timeout", async () => {
+      setEnv();
+      const abortErr = new Error("aborted");
+      abortErr.name = "AbortError";
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+          .mockRejectedValueOnce(abortErr)
+      );
+      expect(await createPurchaseDocument({ docType: "purchase_bill", body: {} }, credentialA)).toEqual({
+        ok: false,
+        reason: "timeout",
+      });
+    });
+
+    it("network error → network", async () => {
+      setEnv();
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+          .mockRejectedValueOnce(new Error("boom"))
+      );
+      expect(await createPurchaseDocument({ docType: "purchase_bill", body: {} }, credentialA)).toEqual({
+        ok: false,
+        reason: "network",
+      });
+    });
+
+    it("★ เทสต์บังคับ — token cache ใช้ร่วมกับฝั่งขาย (ยิงบิลขาย+ซื้อของลูกค้าเดียวกันติดกัน ไม่ขอ token ซ้ำ)", async () => {
+      setEnv();
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(tokenRes(200, { access_token: "tok-1", expires_in: 3600 }))
+        .mockResolvedValueOnce(docRes(200, { recordId: "sale-1" }))
+        .mockResolvedValueOnce(docRes(200, { recordId: "purchase-1" }));
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const saleRes = await createSalesDocument({ docType: "tax_invoice", body: {} }, credentialA);
+      const purchaseRes = await createPurchaseDocument({ docType: "purchase_bill", body: {} }, credentialA);
+
+      expect(saleRes).toEqual({ ok: true, docId: "sale-1", docNo: null });
+      expect(purchaseRes).toEqual({ ok: true, docId: "purchase-1", docNo: null });
+      expect(fetchSpy).toHaveBeenCalledTimes(3); // 1 token (ใช้ร่วมกัน) + 2 create (ขาย 1 + ซื้อ 1)
     });
   });
 });

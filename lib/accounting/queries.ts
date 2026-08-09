@@ -34,6 +34,14 @@ export type BillEntryLine = {
   accountCode: string | null;
   /** ชื่อบัญชี (prefill จากผัง แก้ต่อบรรทัดได้) · null = ยังไม่เลือก */
   accountName: string | null;
+  /**
+   * สินค้า/บริการที่เลือกไว้ (เฟส 1 ส่วน B, migration 0065) — ใช้แค่ prefill/อ้างอิงย้อนหลัง
+   *   ★ ไม่กระทบการคำนวณของ engine เลย — amount/vat/wht ต่อบรรทัดยังเป็นของจริงเหมือนเดิม
+   *   null/undefined = ยังไม่เลือกสินค้า (คีย์เอง/AI สกัด ไม่ผูกสินค้า)
+   *   ★ optional (ไม่ใช่ required เหมือนฟิลด์เดิม) — กันกระทบ fixture เทสต์เดิมจำนวนมากที่ยังไม่รู้จักฟิลด์นี้
+   *     (mapLine() ของจริงจาก DB จะเซ็ตให้เสมอ — ไม่มีทางเป็น undefined จากข้อมูลจริง)
+   */
+  productId?: string | null;
   amount: number;
   vatAmount: number;
   whtRate: number;
@@ -75,6 +83,11 @@ export type BillEntry = {
   paymentBankAccountId: string | null;
   /** รหัสผังบัญชีเงินฝากของบัญชีที่เลือก (1020/1025/1030) — join มาให้ hint บัญชีคู่ · null = ไม่มี */
   paymentBankAccountCode: string | null;
+  /**
+   * วันครบกำหนดชำระ (เฟส 2 ส่วน E, migration 0067) — YYYY-MM-DD · null = ยังไม่ระบุ
+   *   ★ มีผลเชิงความหมายเฉพาะบิลเชื่อ (paymentMethod='credit') — บิลเก่าก่อนเฟสนี้ = null เสมอ (ไม่ backfill)
+   */
+  dueDate: string | null;
   status: EntryStatus;
   source: EntrySource;
   aiConfidence: number | null;
@@ -204,8 +217,14 @@ export function effectiveTaxMonth(
   return monthOf(entry.docDate);
 }
 
-/** สรุปยอดของ 1 entry (รวมทุก line) */
-export function summarizeEntry(lines: BillEntryLine[]): EntrySummary {
+/**
+ * สรุปยอดของ 1 entry (รวมทุก line)
+ *   ★ รับแค่ 3 ฟิลด์ที่ใช้จริง (Pick) — ให้ที่อื่น (เช่น bill-payments.ts::billNetTotal, เฟส 2 ส่วน E)
+ *     เรียกใช้สูตรเดียวกันนี้ได้โดยไม่ต้องประกอบ BillEntryLine เต็มรูป (กันสูตรคู่ขนาน ตาม 0.3)
+ */
+export function summarizeEntry(
+  lines: Pick<BillEntryLine, "amount" | "vatAmount" | "whtAmount">[]
+): EntrySummary {
   let amount = 0;
   let vat = 0;
   let wht = 0;
@@ -255,6 +274,7 @@ type RawLine = {
   description: string | null;
   account_code: string | null;
   account_name: string | null;
+  product_id: string | null;
   amount: number | string | null;
   vat_amount: number | string | null;
   wht_rate: number | string | null;
@@ -283,6 +303,7 @@ type RawEntry = {
   wht_form: string | null;
   payment_method: string | null;
   payment_bank_account_id: string | null;
+  due_date: string | null;
   status: string;
   source: string;
   ai_confidence: number | null;
@@ -342,6 +363,7 @@ function mapLine(r: RawLine): BillEntryLine {
     description: r.description,
     accountCode: r.account_code,
     accountName: r.account_name,
+    productId: r.product_id,
     amount: num(r.amount),
     vatAmount: num(r.vat_amount),
     whtRate: num(r.wht_rate),
@@ -412,7 +434,7 @@ export async function listEntries(
   let q = db
     .from("bill_entries")
     .select(
-      "id, tenant_id, attachment_id, customer_id, upload_path, upload_name, upload_mime, entry_type, doc_date, doc_no, counterparty_name, counterparty_tax_id, seller_name, seller_tax_id, buyer_name, buyer_tax_id, wht_form, payment_method, payment_bank_account_id, status, source, ai_confidence, notes, created_at, confirmed_at"
+      "id, tenant_id, attachment_id, customer_id, upload_path, upload_name, upload_mime, entry_type, doc_date, doc_no, counterparty_name, counterparty_tax_id, seller_name, seller_tax_id, buyer_name, buyer_tax_id, wht_form, payment_method, payment_bank_account_id, due_date, status, source, ai_confidence, notes, created_at, confirmed_at"
     )
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
@@ -488,7 +510,9 @@ export async function listEntries(
   // lines ของ entry เหล่านี้
   const { data: lineData } = await db
     .from("bill_entry_lines")
-    .select("id, entry_id, line_no, vat_type, description, account_code, account_name, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence")
+    .select(
+      "id, entry_id, line_no, vat_type, description, account_code, account_name, product_id, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence"
+    )
     .eq("tenant_id", tenantId)
     .in("entry_id", entryIds)
     .order("line_no", { ascending: true });
@@ -569,6 +593,7 @@ export async function listEntries(
     paymentBankAccountCode: e.payment_bank_account_id
       ? codeByBankAccount.get(e.payment_bank_account_id) ?? null
       : null,
+    dueDate: e.due_date,
     status: e.status === "confirmed" ? "confirmed" : "draft",
     source: e.source === "manual" ? "manual" : "ai",
     aiConfidence: e.ai_confidence,

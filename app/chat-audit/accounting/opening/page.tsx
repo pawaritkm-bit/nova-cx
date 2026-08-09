@@ -5,6 +5,7 @@ import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, type AccountingAccess } from "@/lib/accounting/access";
 import { listOpeningBalances } from "@/lib/accounting/opening-balance";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import OpeningBalancePanel from "../OpeningBalancePanel";
 import ChatAuditFrame from "../../_Frame";
 import "../../chat-admin.css";
@@ -80,6 +81,8 @@ export default async function OpeningBalancePage({
   const staffOnly = access.mode === "accountant" || access.mode === "lead";
 
   const customers = await fetchScopedCustomers(service, access);
+  // ผังบัญชีของ tenant — โหลดครั้งเดียว ส่งลง OpeningBalancePanel (auto-fill ชื่อบัญชี)
+  const chart = await listChartOfAccounts(service, access.tenantId);
 
   // ลูกค้าที่เลือก (validate uuid + ต้องอยู่ในสโคป)
   const rawCustomer = (sp.customerId ?? "").trim();
@@ -132,7 +135,7 @@ export default async function OpeningBalancePage({
         ) : (
           <div className="card">
             <div className="acc-opening-cust-label">{selectedLabel}</div>
-            <OpeningBalancePanel customerId={validCustomerId} initial={initial} />
+            <OpeningBalancePanel customerId={validCustomerId} initial={initial} chart={chart} />
           </div>
         )}
       </div>

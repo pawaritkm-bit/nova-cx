@@ -1,39 +1,44 @@
 import { describe, it, expect } from "vitest";
 import {
   isValidNonBankCode,
-  NONBANK_ACCOUNT_CODES,
+  nonBankAccountCodesOf,
   categoryDigitOf,
   searchChartNonBankGrouped,
-  BANK_ACCOUNT_CODES,
+  bankAccountCodesOf,
 } from "@/lib/accounting/chart-of-accounts";
+import { TEST_CHART } from "@/tests/accounting/fixtures/chart";
 
 /**
  * chart-of-accounts — validate รหัสบัญชีที่ AI แนะนำ + ค้นแบบจัดกลุ่มตามหมวด
+ *   ★ ทุกฟังก์ชัน pure รับ chart เป็นพารามิเตอร์ (ไม่มี module constant อีกต่อไป) — ใช้ TEST_CHART fixture
  */
 
-describe("isValidNonBankCode / NONBANK_ACCOUNT_CODES", () => {
+const NONBANK_ACCOUNT_CODES = nonBankAccountCodesOf(TEST_CHART);
+const BANK_ACCOUNT_CODES = bankAccountCodesOf(TEST_CHART);
+
+describe("isValidNonBankCode / nonBankAccountCodesOf", () => {
   it("รหัส non-bank ในผัง → true", () => {
-    expect(isValidNonBankCode("5340")).toBe(true);
-    expect(isValidNonBankCode("5010")).toBe(true);
-    expect(isValidNonBankCode("4010")).toBe(true);
+    expect(isValidNonBankCode(TEST_CHART, "5340")).toBe(true);
+    expect(isValidNonBankCode(TEST_CHART, "5010")).toBe(true);
+    expect(isValidNonBankCode(TEST_CHART, "4010")).toBe(true);
   });
 
   it("★ รหัสหมวดเงินฝากธนาคาร (bank) → false (ห้าม AI เลือก)", () => {
     for (const code of BANK_ACCOUNT_CODES) {
-      expect(isValidNonBankCode(code)).toBe(false);
+      expect(isValidNonBankCode(TEST_CHART, code)).toBe(false);
       expect(NONBANK_ACCOUNT_CODES.has(code)).toBe(false);
     }
   });
 
   it("รหัสนอกผัง / ว่าง / null → false", () => {
-    expect(isValidNonBankCode("9999")).toBe(false);
-    expect(isValidNonBankCode("")).toBe(false);
-    expect(isValidNonBankCode(null)).toBe(false);
-    expect(isValidNonBankCode(undefined)).toBe(false);
+    expect(isValidNonBankCode(TEST_CHART, "9999")).toBe(false);
+    expect(isValidNonBankCode(TEST_CHART, "")).toBe(false);
+    expect(isValidNonBankCode(TEST_CHART, null)).toBe(false);
+    expect(isValidNonBankCode(TEST_CHART, undefined)).toBe(false);
   });
 
   it("trim ช่องว่างก่อนตรวจ", () => {
-    expect(isValidNonBankCode(" 5340 ")).toBe(true);
+    expect(isValidNonBankCode(TEST_CHART, " 5340 ")).toBe(true);
   });
 });
 
@@ -52,7 +57,7 @@ describe("categoryDigitOf", () => {
 
 describe("searchChartNonBankGrouped — จัดกลุ่มตามหมวด + digit-filter", () => {
   it("★ พิมพ์เลขหลักเดียว (5) → เด้งเฉพาะหมวด 5 ทั้งหมด (code ขึ้นต้นด้วย 5)", () => {
-    const groups = searchChartNonBankGrouped("5");
+    const groups = searchChartNonBankGrouped(TEST_CHART, "5");
     expect(groups.length).toBe(1);
     expect(groups[0].digit).toBe("5");
     expect(groups[0].category).toBe("ค่าใช้จ่าย");
@@ -63,7 +68,7 @@ describe("searchChartNonBankGrouped — จัดกลุ่มตามหม�
   });
 
   it("★ พิมพ์เลข 1 → หมวดสินทรัพย์ และมีบัญชีเงินฝากธนาคาร (bank) รวมอยู่ด้วย", () => {
-    const groups = searchChartNonBankGrouped("1");
+    const groups = searchChartNonBankGrouped(TEST_CHART, "1");
     expect(groups.length).toBe(1);
     expect(groups[0].digit).toBe("1");
     // เงินฝากธนาคาร (bank:true) เป็นตัวเลือกปกติในหมวด 1 แล้ว
@@ -73,7 +78,7 @@ describe("searchChartNonBankGrouped — จัดกลุ่มตามหม�
   });
 
   it("ค้นด้วยชื่อ (substring) → กระจายได้หลายหมวด เรียง 1→6", () => {
-    const groups = searchChartNonBankGrouped("ภาษี");
+    const groups = searchChartNonBankGrouped(TEST_CHART, "ภาษี");
     expect(groups.length).toBeGreaterThan(0);
     // เรียงตามเลขหมวดจากน้อยไปมาก
     const digits = groups.map((g) => Number(g.digit));
@@ -81,14 +86,14 @@ describe("searchChartNonBankGrouped — จัดกลุ่มตามหม�
   });
 
   it("ค้นด้วยรหัสหลายหลัก (534) → substring ไม่ใช่ digit-filter", () => {
-    const groups = searchChartNonBankGrouped("534");
+    const groups = searchChartNonBankGrouped(TEST_CHART, "534");
     const all = groups.flatMap((g) => g.accounts);
     expect(all.every((a) => a.code.includes("534"))).toBe(true);
     expect(all.some((a) => a.code === "5340")).toBe(true);
   });
 
   it("ว่าง → คืนทุกหมวดที่มีบัญชี (รวมบัญชีเงินฝากธนาคารในหมวด 1)", () => {
-    const groups = searchChartNonBankGrouped("");
+    const groups = searchChartNonBankGrouped(TEST_CHART, "");
     expect(groups.length).toBeGreaterThanOrEqual(5);
     // รวมแล้วต้องมี bank code (เงินฝากธนาคารเป็นตัวเลือกปกติ)
     const all = groups.flatMap((g) => g.accounts);
@@ -98,12 +103,12 @@ describe("searchChartNonBankGrouped — จัดกลุ่มตามหม�
   });
 
   it("ค้นไม่เจอ → คืน [] (ไม่มีกลุ่ม)", () => {
-    expect(searchChartNonBankGrouped("zzzไม่มีจริง")).toEqual([]);
+    expect(searchChartNonBankGrouped(TEST_CHART, "zzzไม่มีจริง")).toEqual([]);
   });
 
   it("เลข 7–9 (ไม่ใช่ 1–6) → ถือเป็น substring ไม่ใช่ digit-filter", () => {
     // '7' ไม่เข้าเงื่อนไข digit-filter → ค้น substring: ทุกผลต้องมี '7' ในรหัส/ชื่อ
-    const all = searchChartNonBankGrouped("7").flatMap((g) => g.accounts);
+    const all = searchChartNonBankGrouped(TEST_CHART, "7").flatMap((g) => g.accounts);
     expect(all.length).toBeGreaterThan(0);
     expect(all.every((a) => a.code.includes("7") || a.name.includes("7"))).toBe(true);
     // และไม่มีทั้งหมวดที่ code ไม่มี 7 (เช่น 5010) หลุดมา

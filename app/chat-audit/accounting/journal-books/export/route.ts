@@ -13,6 +13,11 @@ import {
   type JournalBook,
   type BookKind,
 } from "@/lib/accounting/journal-books";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
+import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
+import { listManualEntries, toJournalPosting } from "@/lib/accounting/manual-journal";
+import { listBillPaymentsForEntries, toJournalPosting as toBillPaymentJournalPosting } from "@/lib/accounting/bill-payments";
+import { listNotesForEntries, toJournalPosting as toNoteJournalPosting } from "@/lib/accounting/credit-debit-notes";
 
 export const dynamic = "force-dynamic";
 
@@ -207,7 +212,44 @@ export async function GET(req: Request) {
     if (fromDate) filter.dateFrom = fromDate;
     if (toDate) filter.dateTo = toDate;
     const { entries } = await listEntries(service, tenantId, filter);
-    const { books } = buildJournalBooks(entries);
+    const chart = await listChartOfAccounts(service, tenantId);
+    const chartByCode = buildChartByCode(chart);
+
+    // เฟส 1/2 (0.6 — บั๊กเดิม): หน้าจอ (page.tsx) ผสม manual JE + bill payments เข้าเล่มแล้ว
+    //   ไฟล์ export (endpoint นี้) ต้องผสมเหมือนกันเป๊ะ ไม่งั้นจอกับไฟล์ export ไม่ตรงกัน
+    const manualEntries = await listManualEntries(service, tenantId, customerId);
+    const confirmedManual = manualEntries.filter(
+      (e) => e.status === "confirmed" && (!fromDate || e.docDate >= fromDate) && (!toDate || e.docDate <= toDate)
+    );
+    const manualPostings = confirmedManual.map(toJournalPosting);
+
+    const paymentsByEntry = await listBillPaymentsForEntries(service, tenantId, entries.map((e) => e.id));
+    const entryById = new Map(entries.map((e) => [e.id, e]));
+    const paymentsInPeriod = [...paymentsByEntry.values()]
+      .flat()
+      .filter((p) => (!fromDate || p.payDate >= fromDate) && (!toDate || p.payDate <= toDate));
+    const paymentPostings = paymentsInPeriod
+      .map((p) => {
+        const paymentEntry = entryById.get(p.entryId);
+        return paymentEntry ? toBillPaymentJournalPosting(p, paymentEntry, chartByCode) : null;
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    // เฟส 3 ส่วน J (0.7): CN/DN "confirmed" ในช่วงวันที่นี้ — export ต้องตรงกับที่จอเห็นทุกจุด
+    const notesByEntry = await listNotesForEntries(service, tenantId, entries.map((e) => e.id));
+    const confirmedNotesInPeriod = [...notesByEntry.values()]
+      .flat()
+      .filter((n) => n.status === "confirmed" && (!fromDate || n.docDate >= fromDate) && (!toDate || n.docDate <= toDate));
+    const notePostings = confirmedNotesInPeriod
+      .map((n) => {
+        const noteEntry = entryById.get(n.entryId);
+        const entryType = noteEntry?.entryType;
+        if (!noteEntry || (entryType !== "sale" && entryType !== "purchase")) return null;
+        return toNoteJournalPosting(n, { ...noteEntry, entryType }, chartByCode);
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    const { books } = buildJournalBooks(entries, chartByCode, [...manualPostings, ...paymentPostings, ...notePostings]);
 
     const wb = new ExcelJS.Workbook();
     wb.creator = "NOVA-CX";

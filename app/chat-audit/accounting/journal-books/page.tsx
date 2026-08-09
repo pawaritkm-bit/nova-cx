@@ -5,6 +5,11 @@ import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/acces
 import { listEntries, monthBounds, type ListEntriesFilter, type BillEntry } from "@/lib/accounting/queries";
 import { buildJournalBooks } from "@/lib/accounting/journal-books";
 import { purchaseFetchLowerBound, filterPurchaseByTaxMonth } from "@/lib/accounting/tax-month";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
+import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
+import { listManualEntries, toJournalPosting } from "@/lib/accounting/manual-journal";
+import { listBillPaymentsForEntries, toJournalPosting as toBillPaymentJournalPosting } from "@/lib/accounting/bill-payments";
+import { listNotesForEntries, toJournalPosting as toNoteJournalPosting } from "@/lib/accounting/credit-debit-notes";
 import JournalBooksDoc from "./JournalBooksDoc";
 import "../vat-report/vat-report.css";
 import "./journal-books.css";
@@ -189,7 +194,46 @@ export default async function JournalBooksPage({
     const purchaseInPeriod = filterPurchaseByTaxMonth(purchaseRes.entries, startMonth, endMonth);
     const nonPurchase = otherRes.entries.filter((e) => e.entryType !== "purchase");
     const entries: BillEntry[] = [...purchaseInPeriod, ...nonPurchase];
-    result = buildJournalBooks(entries);
+    const chart = await listChartOfAccounts(service, tenantId);
+    const chartByCode = buildChartByCode(chart);
+
+    // เฟส 1 ส่วน C (0.8): manual JE ที่ "ยืนยันแล้ว" ในช่วงวันที่นี้ → เข้าเล่มตาม doc_type
+    //   (JV→ทั่วไป, PV→จ่ายเงิน, RV→รับเงิน) — แก้ TODO เดิมที่เล่มรับ/จ่ายเงินว่างเปล่า
+    const manualEntries = await listManualEntries(service, tenantId, customerId);
+    const confirmedManual = manualEntries.filter(
+      (e) => e.status === "confirmed" && e.docDate >= fromDate && e.docDate <= toDate
+    );
+    const manualPostings = confirmedManual.map(toJournalPosting);
+
+    // เฟส 2 ส่วน F (0.5/0.6): การรับ/จ่ายเงินแยกจากบิล (bill_payments) ในช่วงวันที่นี้ → เข้าเล่ม
+    //   รับเงิน/จ่ายเงินตามฝั่งบิล (ขาย→receipt, ซื้อ→payment) — ผสมเข้า manualPostings เดิม (generic)
+    const paymentsByEntry = await listBillPaymentsForEntries(service, tenantId, entries.map((e) => e.id));
+    const entryById = new Map(entries.map((e) => [e.id, e]));
+    const paymentsInPeriod = [...paymentsByEntry.values()]
+      .flat()
+      .filter((p) => p.payDate >= fromDate && p.payDate <= toDate);
+    const paymentPostings = paymentsInPeriod
+      .map((p) => {
+        const paymentEntry = entryById.get(p.entryId);
+        return paymentEntry ? toBillPaymentJournalPosting(p, paymentEntry, chartByCode) : null;
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    // เฟส 3 ส่วน J (0.7): CN/DN "confirmed" ในช่วงวันที่นี้ → เข้าเล่มตามฝั่งบิลเดิม (sale→ขาย, purchase→ซื้อ)
+    const notesByEntry = await listNotesForEntries(service, tenantId, entries.map((e) => e.id));
+    const confirmedNotesInPeriod = [...notesByEntry.values()]
+      .flat()
+      .filter((n) => n.status === "confirmed" && n.docDate >= fromDate && n.docDate <= toDate);
+    const notePostings = confirmedNotesInPeriod
+      .map((n) => {
+        const noteEntry = entryById.get(n.entryId);
+        const entryType = noteEntry?.entryType;
+        if (!noteEntry || (entryType !== "sale" && entryType !== "purchase")) return null;
+        return toNoteJournalPosting(n, { ...noteEntry, entryType }, chartByCode);
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    result = buildJournalBooks(entries, chartByCode, [...manualPostings, ...paymentPostings, ...notePostings]);
   } catch {
     return <ErrorShell message="อ่านข้อมูลไม่สำเร็จ — ตรวจการตั้งค่า SUPABASE_SERVICE_ROLE_KEY และ migration" />;
   }

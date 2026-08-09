@@ -14,15 +14,25 @@ export type ResolverArg = {
 };
 export type Resolver = (q: ResolverArg) => { data?: unknown; error?: unknown };
 
-export type FilterCall = { table: string; kind: "eq" | "in" | "gte" | "lt"; column: string; value: unknown };
+export type FilterCall = { table: string; kind: "eq" | "in" | "gte" | "lt" | "lte"; column: string; value: unknown };
 export type Capture = {
   inserts: { table: string; payload: unknown }[];
   updates: { table: string; payload: unknown }[];
+  /**
+   * ★ เพิ่มทีหลัง (เฟส 1 ส่วน C) — เก็บ .delete() ที่เรียกจริง (แยกจาก updates)
+   *   optional เพื่อไม่พัง literal `Capture` เดิมที่สร้างตรง ๆ (ไม่ผ่าน makeCapture()) ในเทสต์อื่น
+   */
+  deletes?: { table: string }[];
   filters: FilterCall[];
+  /**
+   * ★ เพิ่มทีหลัง (เฟส 3 ส่วน K) — เก็บ .rpc(fn, params) ที่เรียกจริง (แยกจาก inserts/updates)
+   *   optional เพื่อไม่พัง literal `Capture` เดิมที่สร้างตรง ๆ ในเทสต์อื่น
+   */
+  rpcs?: { fn: string; params: unknown }[];
 };
 
 export function makeCapture(): Capture {
-  return { inserts: [], updates: [], filters: [] };
+  return { inserts: [], updates: [], deletes: [], filters: [], rpcs: [] };
 }
 
 export function makeFakeDb(resolver: Resolver, capture: Capture = makeCapture()): {
@@ -49,6 +59,11 @@ export function makeFakeDb(resolver: Resolver, capture: Capture = makeCapture())
       capture.updates.push({ table: this.table, payload: p });
       return this;
     }
+    delete() {
+      this.op = "delete";
+      (capture.deletes ??= []).push({ table: this.table });
+      return this;
+    }
     eq(column?: string, value?: unknown) {
       if (column) capture.filters.push({ table: this.table, kind: "eq", column, value });
       return this;
@@ -64,6 +79,10 @@ export function makeFakeDb(resolver: Resolver, capture: Capture = makeCapture())
     }
     lt(column?: string, value?: unknown) {
       if (column) capture.filters.push({ table: this.table, kind: "lt", column, value });
+      return this;
+    }
+    lte(column?: string, value?: unknown) {
+      if (column) capture.filters.push({ table: this.table, kind: "lte", column, value });
       return this;
     }
     order() { return this; }
@@ -83,6 +102,13 @@ export function makeFakeDb(resolver: Resolver, capture: Capture = makeCapture())
   const db = {
     from(table: string) {
       return new Query(table);
+    },
+    // ★ .rpc(fn, params) — ใช้ table แฝง "rpc:<fn>" ให้ resolver แยกแยะจาก .from() ปกติได้ง่าย
+    rpc(fn: string, params?: unknown) {
+      (capture.rpcs ??= []).push({ fn, params });
+      return Promise.resolve(
+        resolver({ table: `rpc:${fn}`, op: "rpc", terminal: "await", payload: params })
+      );
     },
   } as unknown as SupabaseClient;
   return { db, capture };

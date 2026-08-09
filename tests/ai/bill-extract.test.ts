@@ -1,10 +1,16 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { normalizeExtraction, extractBillData } from "@/lib/ai/bill-extract";
+import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
+import { TEST_CHART } from "@/tests/accounting/fixtures/chart";
 
 /**
  * bill-extract — สกัดข้อมูลบิลด้วย AI vision (★ high-confidence only)
  *   เน้นกฎ: ช่อง confidence < 0.8 → null (เว้นว่างให้คนคีย์) โดยเฉพาะตัวเลข
+ *   ★ normalizeExtraction รับ chartByCode เป็นพารามิเตอร์ (validate account_code) — ใช้ TEST_CHART fixture
+ *     เฉพาะเทสต์ account_code (เทสต์อื่นไม่เกี่ยว ใช้ default {} ได้)
  */
+
+const TEST_CHART_BY_CODE = buildChartByCode(TEST_CHART);
 
 describe("normalizeExtraction — high-confidence gating", () => {
   it("field confidence สูง (>=0.8) → เก็บค่า (seller+buyer แยกกัน)", () => {
@@ -138,61 +144,85 @@ describe("normalizeExtraction — high-confidence gating", () => {
 
 describe("normalizeExtraction — account_code (บัญชีที่ AI แนะนำ)", () => {
   it("code non-bank ในผัง + confidence สูง → เก็บ (เช่น 5340 ค่าน้ำมัน) + ไม่ mark เดา", () => {
-    const r = normalizeExtraction({
-      lines: [{ vat_type: "vat", amount: { value: 100, confidence: 0.9 }, account_code: { value: "5340", confidence: 0.9 } }],
-    });
+    const r = normalizeExtraction(
+      {
+        lines: [{ vat_type: "vat", amount: { value: 100, confidence: 0.9 }, account_code: { value: "5340", confidence: 0.9 } }],
+      },
+      TEST_CHART_BY_CODE
+    );
     expect(r?.lines[0].account_code).toBe("5340");
     expect(r?.lines[0].low_confidence).toBe(false);
   });
 
   it("★ code หมวดเงินฝากธนาคาร (bank:true เช่น 1020) → null (ห้าม AI เลือก)", () => {
-    const r = normalizeExtraction({
-      lines: [{ vat_type: "vat", account_code: { value: "1020", confidence: 0.99 } }],
-    });
+    const r = normalizeExtraction(
+      {
+        lines: [{ vat_type: "vat", account_code: { value: "1020", confidence: 0.99 } }],
+      },
+      TEST_CHART_BY_CODE
+    );
     expect(r?.lines[0].account_code).toBeNull();
   });
 
   it("★ code นอกผัง (มั่ว) → null", () => {
-    const r = normalizeExtraction({
-      lines: [{ vat_type: "vat", account_code: { value: "9999", confidence: 0.99 } }],
-    });
+    const r = normalizeExtraction(
+      {
+        lines: [{ vat_type: "vat", account_code: { value: "9999", confidence: 0.99 } }],
+      },
+      TEST_CHART_BY_CODE
+    );
     expect(r?.lines[0].account_code).toBeNull();
   });
 
   it("★ conf ปานกลาง (>=0.3, <0.7) → เติมบัญชี + mark low_confidence (เดา)", () => {
-    const r = normalizeExtraction({
-      lines: [{ vat_type: "vat", account_code: { value: "5340", confidence: 0.5 } }],
-    });
+    const r = normalizeExtraction(
+      {
+        lines: [{ vat_type: "vat", account_code: { value: "5340", confidence: 0.5 } }],
+      },
+      TEST_CHART_BY_CODE
+    );
     expect(r?.lines[0].account_code).toBe("5340");
     expect(r?.lines[0].low_confidence).toBe(true);
   });
 
   it("conf ต่ำมาก (<0.3) → null (ต่ำเกินจะเดา ให้คนเลือก)", () => {
-    const r = normalizeExtraction({
-      lines: [{ vat_type: "vat", account_code: { value: "5340", confidence: 0.2 } }],
-    });
+    const r = normalizeExtraction(
+      {
+        lines: [{ vat_type: "vat", account_code: { value: "5340", confidence: 0.2 } }],
+      },
+      TEST_CHART_BY_CODE
+    );
     expect(r?.lines[0].account_code).toBeNull();
     expect(r?.lines[0].low_confidence).toBe(false);
   });
 
   it("value=null → null", () => {
-    const r = normalizeExtraction({
-      lines: [{ vat_type: "vat", account_code: { value: null, confidence: 0.9 } }],
-    });
+    const r = normalizeExtraction(
+      {
+        lines: [{ vat_type: "vat", account_code: { value: null, confidence: 0.9 } }],
+      },
+      TEST_CHART_BY_CODE
+    );
     expect(r?.lines[0].account_code).toBeNull();
   });
 
   it("ไม่ส่ง account_code มาเลย → null (ไม่ล้ม)", () => {
-    const r = normalizeExtraction({
-      lines: [{ vat_type: "vat", amount: { value: 50, confidence: 0.9 } }],
-    });
+    const r = normalizeExtraction(
+      {
+        lines: [{ vat_type: "vat", amount: { value: 50, confidence: 0.9 } }],
+      },
+      TEST_CHART_BY_CODE
+    );
     expect(r?.lines[0].account_code).toBeNull();
   });
 
   it("code เป็น string ตรง ๆ (ไม่มี confidence) แต่อยู่ในผัง → เก็บ", () => {
-    const r = normalizeExtraction({
-      lines: [{ vat_type: "vat", account_code: "5010" }],
-    });
+    const r = normalizeExtraction(
+      {
+        lines: [{ vat_type: "vat", account_code: "5010" }],
+      },
+      TEST_CHART_BY_CODE
+    );
     expect(r?.lines[0].account_code).toBe("5010");
   });
 });

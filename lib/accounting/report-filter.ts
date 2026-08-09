@@ -6,6 +6,9 @@
  *   - บิลที่ยังไม่ลงวันที่ (docDate=null) จะถูกตัดออกเมื่อมีการเลือกช่วงงวด (จัดลงงวดไม่ได้)
  */
 import type { BillEntry } from "@/lib/accounting/queries";
+import type { ManualJournalEntry } from "@/lib/accounting/manual-journal";
+import type { BillPayment } from "@/lib/accounting/bill-payments";
+import type { CreditDebitNote } from "@/lib/accounting/credit-debit-notes";
 
 export type ReportPeriod = {
   /** YYYY-MM (ต้นช่วง) — ว่าง = ไม่จำกัดต้นช่วง */
@@ -44,6 +47,83 @@ export function filterEntriesForReport(entries: BillEntry[], period: ReportPerio
     if (!hasPeriod) return true;
     // มีช่วงงวด → ต้องมีวันที่ และอยู่ในช่วง
     const d = e.docDate;
+    if (!d) return false;
+    if (startBound && d < startBound) return false;
+    if (endBound && d >= endBound) return false;
+    return true;
+  });
+}
+
+/**
+ * กรอง manual JE ตามงวด + สถานะ — semantics เดียวกับ filterEntriesForReport เดิม (เฟส 1 ส่วน C)
+ *   ★ manual JE ไม่มี status='draft'|'confirmed' ปนกับ EntryStatus ของบิล แต่ค่าตรงกัน (draft/confirmed)
+ *     จึงใช้ includeDraft เกณฑ์เดียวกัน (false = เฉพาะ confirmed)
+ */
+export function filterManualEntriesForReport(
+  entries: ManualJournalEntry[],
+  period: ReportPeriod
+): ManualJournalEntry[] {
+  const from = validMonth(period.from);
+  const to = validMonth(period.to);
+  const startBound = from ? `${from}-01` : "";
+  const endBound = to ? `${nextMonth(to)}-01` : ""; // exclusive
+  const hasPeriod = !!(startBound || endBound);
+
+  return entries.filter((e) => {
+    if (!period.includeDraft && e.status !== "confirmed") return false;
+    if (!hasPeriod) return true;
+    const d = e.docDate;
+    if (!d) return false;
+    if (startBound && d < startBound) return false;
+    if (endBound && d >= endBound) return false;
+    return true;
+  });
+}
+
+/**
+ * กรองการรับ/จ่ายเงิน (bill_payments) ตามงวด — semantics เดียวกับ filterEntriesForReport เดิม
+ *   ★ เฟส 2 ส่วน E — กรองตาม pay_date เท่านั้น (ไม่มี includeDraft — bill_payments ไม่มีสถานะ
+ *     draft/confirmed ตาม 0.2 บันทึกแล้วถือว่าเงินเข้า/ออกจริงเสมอ)
+ */
+export function filterBillPaymentsForReport(
+  payments: BillPayment[],
+  period: Pick<ReportPeriod, "from" | "to">
+): BillPayment[] {
+  const from = validMonth(period.from);
+  const to = validMonth(period.to);
+  const startBound = from ? `${from}-01` : "";
+  const endBound = to ? `${nextMonth(to)}-01` : ""; // exclusive
+  const hasPeriod = !!(startBound || endBound);
+  if (!hasPeriod) return payments;
+
+  return payments.filter((p) => {
+    const d = p.payDate;
+    if (!d) return false;
+    if (startBound && d < startBound) return false;
+    if (endBound && d >= endBound) return false;
+    return true;
+  });
+}
+
+/**
+ * กรอง CN/DN (credit_debit_notes) ตามงวด — เฟส 3 ส่วน J (0.6/J7)
+ *   ★ mirror filterBillPaymentsForReport แต่กรอง status='confirmed' ด้วยเสมอ (ต่างจาก bill_payments —
+ *     CN/DN มีสถานะ draft/confirmed ตาม 0.4 ส่วน draft ไม่ควรเข้ารายงาน/สมุดรายวันเลย)
+ */
+export function filterCreditDebitNotesForReport(
+  notes: CreditDebitNote[],
+  period: Pick<ReportPeriod, "from" | "to">
+): CreditDebitNote[] {
+  const from = validMonth(period.from);
+  const to = validMonth(period.to);
+  const startBound = from ? `${from}-01` : "";
+  const endBound = to ? `${nextMonth(to)}-01` : ""; // exclusive
+  const hasPeriod = !!(startBound || endBound);
+
+  return notes.filter((n) => {
+    if (n.status !== "confirmed") return false;
+    if (!hasPeriod) return true;
+    const d = n.docDate;
     if (!d) return false;
     if (startBound && d < startBound) return false;
     if (endBound && d >= endBound) return false;

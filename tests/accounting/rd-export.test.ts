@@ -38,6 +38,7 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     buyerName: p.buyerName ?? null, buyerTaxId: p.buyerTaxId ?? null,
     whtForm: p.whtForm ?? null, paymentMethod: "cash",
     paymentBankAccountId: null, paymentBankAccountCode: null,
+    dueDate: p.dueDate ?? null,
     status: p.status ?? "confirmed", source: "ai", aiConfidence: null, notes: null,
     createdAt: "2026-07-01T00:00:00Z", confirmedAt: null,
     inputTaxMonth: null, flowaccountSync: defaultFlowAccountSync(),

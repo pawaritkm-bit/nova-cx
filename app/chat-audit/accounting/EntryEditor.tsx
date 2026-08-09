@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveEntryAction, deleteEntryAction, type SaveEntryInput } from "./actions";
-import { searchChartNonBankGrouped } from "@/lib/accounting/chart-of-accounts";
+import { buildChartByCode, type ChartAccount } from "@/lib/accounting/chart-of-accounts";
+import { searchProducts, type Product } from "@/lib/accounting/products";
+import AccountCombobox from "./AccountCombobox";
 import { lineBadge } from "@/lib/accounting/line-status";
 import {
   parseAmountInput,
@@ -42,6 +44,8 @@ type LineRow = {
   accountCode: string;
   /** ชื่อบัญชี (prefill จากผัง แก้ได้ต่อบรรทัด) */
   accountName: string;
+  /** สินค้า/บริการที่เลือกไว้ (เฟส 1 ส่วน B) — แค่ tag อ้างอิง เอาออกได้โดยไม่กระทบ description/accountCode ที่เติมไว้แล้ว */
+  productId: string | null;
   amount: string;
   vatAmount: string;
   whtRate: string;
@@ -87,7 +91,7 @@ function thaiToIso(s: string): string {
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
     return [
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ];
   }
   return entry.lines.map((l) => ({
@@ -97,6 +101,7 @@ function initLines(entry: BillEntry): LineRow[] {
     description: l.description ?? "",
     accountCode: l.accountCode ?? "",
     accountName: l.accountName ?? "",
+    productId: l.productId ?? null,
     amount: numToInput(l.amount),
     vatAmount: numToInput(l.vatAmount),
     whtRate: numToInput(l.whtRate),
@@ -115,6 +120,8 @@ export default function EntryEditor({
   closeHref,
   orderIds = [],
   onNavigate,
+  chart,
+  products,
 }: {
   entry: BillEntry;
   viewUrl: string | null;
@@ -131,6 +138,13 @@ export default function EntryEditor({
   orderIds?: string[];
   /** ★ ถ้าส่งมา (จาก pager) → prev/next เลื่อนแบบ client (ไม่โหลดหน้าใหม่ · รูป preload ไว้) แทน navigate */
   onNavigate?: (id: string) => void;
+  /** ผังบัญชีของ tenant (โหลดจาก DB ครั้งเดียวโดย page.tsx) — ใช้ทั้ง combobox เลือกบัญชี + hint บัญชีคู่ */
+  chart: ChartAccount[];
+  /**
+   * สินค้า/บริการของ tenant (เฟส 1 ส่วน B, โหลดจาก DB ครั้งเดียวโดย page.tsx) — ใช้ทำ picker เลือกสินค้า
+   *   ต่อบรรทัด (เลือกแล้ว prefill description+account_code/name ให้ — ไม่ auto-fill amount)
+   */
+  products: Product[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -166,6 +180,9 @@ export default function EntryEditor({
   //   ★ บัญชีเงินฝาก (transfer) ใช้ default 1020 — เลิก UI เลือกบัญชีธนาคารต่อลูกค้าแล้ว
   //     แต่คง entry.paymentBankAccountId เดิมไว้ตอนบันทึก (กันข้อมูลเดิมหาย)
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | "">(entry.paymentMethod ?? "");
+  // วันครบกำหนดชำระ (เฟส 2 ส่วน E/F) — เก็บเป็นข้อความไทย เหมือน docDate · แสดงเฉพาะบิลเชื่อ (payment_method='credit')
+  //   ★ ค่าไม่ถูกล้างเมื่อเปลี่ยนวิธีจ่ายไปมา (state คงอยู่ ซ่อน/โชว์แค่ UI เท่านั้น)
+  const [dueDate, setDueDate] = useState<string>(entry.dueDate ? isoToThai(entry.dueDate) : "");
 
   // ---- lines state ----
   const [lines, setLines] = useState<LineRow[]>(() => initLines(entry));
@@ -241,7 +258,7 @@ export default function EntryEditor({
   const addLine = () => {
     setLines((prev) => [
       ...prev,
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ]);
   };
 
@@ -263,11 +280,14 @@ export default function EntryEditor({
     return { amount, vat, wht, net: calcNet(amount, vat, wht) };
   }, [lines]);
 
+  // ผังบัญชีของ tenant (map รหัส→บัญชี) — คำนวณครั้งเดียวจาก prop chart
+  const chartByCode = useMemo(() => buildChartByCode(chart), [chart]);
+
   // hint บัญชีคู่ (เครดิต) — transfer ใช้บัญชีเงินฝากเดิมถ้าผูกไว้ (paymentBankAccountCode) มิฉะนั้น default 1020
   const contraHint = useMemo(() => {
     if (!paymentMethod) return null;
-    return contraAccountFor(paymentMethod, entryType, entry.paymentBankAccountCode);
-  }, [paymentMethod, entryType, entry.paymentBankAccountCode]);
+    return contraAccountFor(chartByCode, paymentMethod, entryType, entry.paymentBankAccountCode);
+  }, [chartByCode, paymentMethod, entryType, entry.paymentBankAccountCode]);
 
   function buildInput(confirm: boolean): SaveEntryInput {
     return {
@@ -283,6 +303,8 @@ export default function EntryEditor({
       paymentMethod: paymentMethod || null,
       // คงบัญชีเงินฝากที่ผูกไว้เดิม (ถ้ามี) — เลิก UI เลือกแล้ว แต่ไม่ล้างข้อมูลเดิม
       paymentBankAccountId: entry.paymentBankAccountId ?? null,
+      // วันครบกำหนดชำระ (เฟส 2 ส่วน E/F) — มีผลเชิงความหมายเฉพาะบิลเชื่อ แต่เก็บค่าที่กรอกไว้เสมอ
+      dueDate: thaiToIso(dueDate) || null,
       // เดือนที่ใช้ภาษีซื้อ — เฉพาะบิลซื้อ (ขาย/รอระบุ = null)
       inputTaxMonth: entryType === "purchase" ? (inputTaxMonth || null) : null,
       lines: lines.map((l) => ({
@@ -293,6 +315,7 @@ export default function EntryEditor({
         description: (l.accountName.trim() || l.description) || null,
         accountCode: l.accountCode.trim() || null,
         accountName: l.accountName.trim() || null,
+        productId: l.productId,
         amount: parseAmountInput(l.amount),
         vatAmount: parseAmountInput(l.vatAmount),
         whtRate: parseAmountInput(l.whtRate),
@@ -541,6 +564,22 @@ export default function EntryEditor({
                 </select>
               </label>
 
+              {/* วันครบกำหนดชำระ — เฉพาะบิลเชื่อ (payment_method='credit', เฟส 2 ส่วน E/F)
+                  ★ ไม่ auto-คำนวณเทอมเครดิต — นักบัญชีกรอกเองตามเงื่อนไขจริงของบิลนั้น (0.7) */}
+              {paymentMethod === "credit" ? (
+                <label className="acc-field">
+                  <span>วันครบกำหนดชำระ (วว/ดด/ปปปป)</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                    disabled={locked}
+                    placeholder="วว/ดด/ปปปป เช่น 01/07/2569"
+                  />
+                </label>
+              ) : null}
+
               {/* hint บัญชีคู่ที่จะเป็นเครดิต (ช่วยตรวจ — ยังไม่ลงจริง แค่บอกให้เห็น)
                   เงินโอน → บัญชีคู่ = เงินฝากธนาคาร (default 1020) */}
               {contraHint ? (
@@ -603,6 +642,25 @@ export default function EntryEditor({
                           {badge === "confident" ? "🟢" : "🟡"}
                         </span>
                       ) : null}
+                      {!locked ? (
+                        <ProductCell
+                          line={l}
+                          products={products}
+                          onPick={(p) => {
+                            // ★ เลือกสินค้า → prefill รายละเอียด + รหัส/ชื่อบัญชี (ถ้าสินค้ามี default_account_code)
+                            //   ★ ไม่ auto-fill amount (คนยังต้องกรอกยอดจริงเอง กันเผลอใช้ default_price ผิด)
+                            //   ★ ยังแก้ต่อได้ทุกช่องตามปกติ (ไม่ล็อก)
+                            const acct = p.defaultAccountCode ? chartByCode[p.defaultAccountCode] : undefined;
+                            patchLine(l.key, {
+                              productId: p.id,
+                              description: p.name,
+                              accountCode: p.defaultAccountCode || l.accountCode,
+                              accountName: acct ? acct.name : l.accountName,
+                            });
+                          }}
+                          onClear={() => patchLine(l.key, { productId: null })}
+                        />
+                      ) : null}
                       <select
                         value={l.vatType}
                         onChange={(e) => onVatSelect(l, e.target.value)}
@@ -615,8 +673,11 @@ export default function EntryEditor({
                         <option value="vat_in">VAT ใน (ถอด)</option>
                         <option value="novat">ไม่ VAT</option>
                       </select>
-                      <AccountCell
-                        line={l}
+                      <AccountCombobox
+                        accountCode={l.accountCode}
+                        accountName={l.accountName}
+                        fallbackLabel={l.description}
+                        chart={chart}
                         readOnly={locked}
                         onSelect={(code, name) => patchLine(l.key, { accountCode: code, accountName: name })}
                         onNameChange={(name) => patchLine(l.key, { accountName: name })}
@@ -704,36 +765,30 @@ function AiTag() {
 }
 
 /**
- * AccountCell — ตัวเลือก "บัญชี" จากผังบัญชีมาตรฐานกลาง ต่อ 1 บรรทัด
- *   3 โหมด:
- *     - readOnly (ยืนยันแล้ว) : แสดงรหัส + ชื่อ อ่านอย่างเดียว
- *     - ยังไม่เลือก           : combobox ค้นหา (พิมพ์กรอง → คลิก/Enter เลือก · Esc ปิด)
- *     - เลือกแล้ว             : รหัส (badge ล็อก อ่านอย่างเดียว) + ชื่อบัญชี (แก้ได้) + ปุ่ม "เปลี่ยน"
- *   ★ รหัสล็อกเสมอ — เปลี่ยนได้เฉพาะกด "เปลี่ยน" (ล้าง code+name) แล้วเลือกใหม่
- *   ★ เขียน combobox เองด้วย state (ไม่พึ่งไลบรารีนอก)
+ * ProductCell — ตัวเลือก "สินค้า/บริการ" ต่อ 1 บรรทัด (เฟส 1 ส่วน B, docs/06 หมวด B)
+ *   เลือกแล้ว prefill description + account_code/account_name (ถ้าสินค้ามี default_account_code) —
+ *   ★ ไม่ล็อกอะไร — เอาสินค้าออก (✕) ได้โดยไม่กระทบรายละเอียด/บัญชีที่เติมไว้แล้ว (แค่ล้าง tag อ้างอิง)
+ *   ★ ไม่มีสินค้าในระบบ (tenant ยังไม่เพิ่ม) และบรรทัดนี้ไม่ได้ผูกสินค้าไว้ → ไม่โชว์ปุ่ม (กันรก UI เปล่า ๆ)
  */
-function AccountCell({
+function ProductCell({
   line,
-  readOnly,
-  onSelect,
-  onNameChange,
+  products,
+  onPick,
   onClear,
 }: {
   line: LineRow;
-  readOnly: boolean;
-  onSelect: (code: string, name: string) => void;
-  onNameChange: (name: string) => void;
+  /** สินค้า/บริการของ tenant (โหลดจาก DB โดย page.tsx → EntryEditor → ที่นี่) */
+  products: Product[];
+  onPick: (product: Product) => void;
   onClear: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const boxRef = useRef<HTMLDivElement>(null);
-  // ผังกลางจัดกลุ่มตามหมวด (รวมบัญชีเงินฝากธนาคารในหมวด 1 แล้ว)
-  //   ★ พิมพ์เลข 1–6 = เด้งทั้งหมวดนั้นมาให้เลื่อนเลือก · อย่างอื่น = ค้น substring ตามเดิม
-  const chartGroups = useMemo(() => searchChartNonBankGrouped(q), [q]);
-  const selected = !!line.accountCode;
+  const results = useMemo(() => searchProducts(products, q).slice(0, 30), [products, q]);
+  // สินค้าที่เลือกไว้ — หาชื่อจาก products (ถ้าปิดใช้งาน/ถูกลบไปแล้ว จะหาไม่เจอ → โชว์ป้ายทั่วไปแทน)
+  const selected = line.productId ? products.find((p) => p.id === line.productId) ?? null : null;
 
-  // ปิด dropdown เมื่อคลิกนอกกล่อง
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
@@ -743,99 +798,62 @@ function AccountCell({
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
 
-  const pick = (code: string, name: string) => {
-    onSelect(code, name);
-    setOpen(false);
-    setQ("");
-  };
+  if (products.length === 0 && !line.productId) return null;
 
-  // ยืนยันแล้ว → อ่านอย่างเดียว
-  if (readOnly) {
+  if (line.productId) {
     return (
-      <div className="acc-acct acc-acct-ro">
-        {line.accountCode ? <span className="acc-acct-code">{line.accountCode}</span> : null}
-        <span className="acc-acct-name-ro">{line.accountName || line.description || "—"}</span>
-      </div>
+      <span
+        className="acc-product-tag"
+        title="สินค้าที่เลือกไว้ — เอาออกได้โดยไม่กระทบรายละเอียด/บัญชีที่เติมไว้แล้ว"
+      >
+        📦 {selected ? selected.name : "สินค้า (ไม่พบ/ปิดใช้งาน)"}
+        <button type="button" className="acc-product-clear" onClick={onClear} aria-label="เอาสินค้าออก">
+          ✕
+        </button>
+      </span>
     );
   }
 
-  // เลือกแล้ว → 2 ช่องแยกไม่ชนกัน: แถวบน = รหัส (ล็อก) + ปุ่มเปลี่ยน · แถวล่าง = ชื่อ (แก้ได้)
-  if (selected) {
-    return (
-      <div className="acc-acct acc-acct-picked">
-        <div className="acc-acct-toprow">
-          <span className="acc-acct-code" title="รหัสบัญชี (ล็อก — กด 'เปลี่ยน' เพื่อเลือกใหม่)">
-            🔒 {line.accountCode}
-          </span>
-          <button type="button" className="acc-acct-change" onClick={onClear} title="เลือกบัญชีใหม่">
-            เปลี่ยน
-          </button>
-        </div>
-        <input
-          type="text"
-          className="acc-acct-name"
-          value={line.accountName}
-          onChange={(e) => onNameChange(e.target.value)}
-          placeholder="ชื่อบัญชี (แก้ได้)"
-          aria-label="ชื่อบัญชี"
-        />
-      </div>
-    );
-  }
-
-  // ยังไม่เลือก → combobox ค้นหา
   return (
-    <div className="acc-acct acc-acct-combo" ref={boxRef}>
-      <input
-        type="text"
-        className="acc-acct-search"
-        value={q}
-        onChange={(e) => {
-          setQ(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            // เลือกรายการแรกในผลค้นด้วย Enter
-            const firstChart = chartGroups[0]?.accounts[0];
-            if (firstChart) pick(firstChart.code, firstChart.name);
-          } else if (e.key === "Escape") {
-            setOpen(false);
-          }
-        }}
-        placeholder="เลือก/ค้นหาบัญชี…"
-        aria-label="ค้นหาบัญชีจากผังบัญชี"
-      />
+    <div className="acc-product-combo" ref={boxRef}>
+      <button
+        type="button"
+        className="acc-product-pick-btn"
+        onClick={() => setOpen((o) => !o)}
+        title="เลือกสินค้า/บริการ (เติมรายละเอียด+บัญชีให้อัตโนมัติ)"
+      >
+        📦 เลือกสินค้า
+      </button>
       {open ? (
-        <div className="acc-acct-list" role="listbox">
-          {/* ผังบัญชีกลาง จัดตามหมวด (พิมพ์เลข 1–6 = เด้งทั้งหมวด) — เงินฝากธนาคารอยู่ในหมวด 1 */}
-          {chartGroups.length === 0 ? (
-            <>
-              <div className="acc-acct-group">ผังบัญชี</div>
-              <div className="acc-acct-empty">ไม่พบบัญชีที่ค้นหา</div>
-            </>
+        <div className="acc-acct-list acc-product-list" role="listbox">
+          <input
+            type="text"
+            className="acc-acct-search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="ค้นชื่อ/รหัสสินค้า…"
+            autoFocus
+            aria-label="ค้นหาสินค้า"
+          />
+          {results.length === 0 ? (
+            <div className="acc-acct-empty">ไม่พบสินค้าที่ค้นหา</div>
           ) : (
-            chartGroups.map((grp) => (
-              <div key={grp.digit} className="acc-acct-cat">
-                <div className="acc-acct-group">
-                  {grp.digit} {grp.category}
-                </div>
-                {grp.accounts.map((a) => (
-                  <button
-                    key={a.code}
-                    type="button"
-                    role="option"
-                    aria-selected={false}
-                    className="acc-acct-opt"
-                    onClick={() => pick(a.code, a.name)}
-                  >
-                    <span className="acc-acct-opt-code">{a.code}</span>
-                    <span className="acc-acct-opt-name">{a.name}</span>
-                  </button>
-                ))}
-              </div>
+            results.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                role="option"
+                aria-selected={false}
+                className="acc-acct-opt"
+                onClick={() => {
+                  onPick(p);
+                  setOpen(false);
+                  setQ("");
+                }}
+              >
+                <span className="acc-acct-opt-code">{p.sku || "—"}</span>
+                <span className="acc-acct-opt-name">{p.name}</span>
+              </button>
             ))
           )}
         </div>

@@ -7,6 +7,9 @@ import { listOpeningBalances } from "@/lib/accounting/opening-balance";
 import { buildStatements, asReportKey } from "@/lib/accounting/statements";
 import { buildStatementsWorkbook } from "@/lib/accounting/statements-excel";
 import { filterEntriesForReport, periodLabel, validMonth } from "@/lib/accounting/report-filter";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
+import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
+import { loadCombinedJournalLines, flattenCombinedJournalLines } from "@/lib/accounting/statement-inputs";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +56,20 @@ export async function GET(req: Request) {
     const { entries } = await listEntries(service, access.tenantId, { customerId });
     const filtered = filterEntriesForReport(entries, { from, to, includeDraft });
     const opening = await listOpeningBalances(service, access.tenantId, customerId);
-    const statements = buildStatements(filtered, opening);
+    const chart = await listChartOfAccounts(service, access.tenantId);
+    const chartByCode = buildChartByCode(chart);
+
+    // เฟส 1-3 (C/E-F/J, 0.13): manual JE + bill_payments (confirmed) + CN/DN (confirmed) — สกัดเป็น
+    // loadCombinedJournalLines() จุดเดียว (export ต้องตรงกับที่หน้าจอ reports/page.tsx เห็นเป๊ะ)
+    const combined = await loadCombinedJournalLines(
+      service,
+      access.tenantId,
+      entries,
+      { from, to, includeDraft },
+      chartByCode
+    );
+
+    const statements = buildStatements(filtered, opening, chartByCode, flattenCombinedJournalLines(combined));
 
     // ป้ายกิจการ (รหัส+ชื่อ) สำหรับหัวรายงาน + ชื่อไฟล์ (ใช้รหัสเท่านั้นในชื่อไฟล์ — PDPA)
     const { data: cust } = await service

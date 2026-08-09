@@ -26,7 +26,7 @@
  *   - ยังไม่ระบุวิธีรับ/จ่ายเงิน (คำนวณบัญชีคู่ไม่ได้) / โอนแต่ยังไม่เลือกบัญชีธนาคาร
  *   - บิลไม่มีจำนวนเงิน
  */
-import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
+import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { contraAccountFor } from "@/lib/accounting/payment";
 import { round2, type BillEntry } from "@/lib/accounting/queries";
 import {
@@ -71,10 +71,10 @@ export type JournalResult = {
   totalCredit: number;
 };
 
-/** ชื่อบัญชีมาตรฐานจากผังกลาง (fallback: ชื่อที่ลงในบิล → รหัส) */
-function accountName(code: string, fallback?: string | null): string {
+/** ชื่อบัญชีมาตรฐานจากผัง (fallback: ชื่อที่ลงในบิล → รหัส) */
+function accountName(chartByCode: ChartByCode, code: string, fallback?: string | null): string {
   const fb = fallback && fallback.trim() ? fallback.trim() : null;
-  return CHART_BY_CODE[code]?.name ?? fb ?? code;
+  return chartByCode[code]?.name ?? fb ?? code;
 }
 
 /** มีจำนวนเงินที่นับได้ (เกิน epsilon) ไหม */
@@ -85,8 +85,10 @@ function nonZero(n: number): boolean {
 /**
  * สร้างสมุดรายวันจากบิลทั้งชุด — ต่อ 1 บิลที่ผ่านเงื่อนไข จะได้หลายบรรทัดที่ "สมดุล"
  *   คืน { lines, skipped, totalDebit, totalCredit }
+ *   @param chartByCode ผังบัญชีของ tenant (map รหัส→บัญชี) — default {} เพื่อ backward-compat
+ *     ระดับ compile เท่านั้น (ผู้เรียกจริงต้องส่งของจริงมาเสมอ ไม่งั้นชื่อบัญชี fallback เป็นแค่รหัส)
  */
-export function buildJournalEntries(entries: BillEntry[]): JournalResult {
+export function buildJournalEntries(entries: BillEntry[], chartByCode: ChartByCode = {}): JournalResult {
   const lines: JournalLine[] = [];
   const skipped: SkippedEntry[] = [];
   let totalDebit = 0;
@@ -121,7 +123,7 @@ export function buildJournalEntries(entries: BillEntry[]): JournalResult {
     // 3) บัญชีคู่ (เครดิต/เดบิต) จากวิธีรับ/จ่ายเงิน
     //   ★ บิลที่ยังไม่ตั้งวิธีจ่าย/รับ → ถือเป็น "เชื่อ" (ตั้งเจ้าหนี้/ลูกหนี้) เพื่อให้เข้าสมุดรายวันเลย
     //     (นักบัญชีค่อยแก้วิธีจ่ายจริงทีหลัง) — กันบิลตกหล่นจากสมุดรายวัน
-    const contra = contraAccountFor(e.paymentMethod ?? "credit", e.entryType, e.paymentBankAccountCode);
+    const contra = contraAccountFor(chartByCode, e.paymentMethod ?? "credit", e.entryType, e.paymentBankAccountCode);
     if (!contra) {
       skip("ยังไม่ระบุวิธีรับ/จ่ายเงิน (คำนวณบัญชีคู่ไม่ได้)");
       continue;
@@ -165,17 +167,17 @@ export function buildJournalEntries(entries: BillEntry[]): JournalResult {
 
     if (e.entryType === "purchase") {
       for (const l of e.lines) {
-        pushDebit(l.accountCode as string, accountName(l.accountCode as string, l.accountName), l.amount);
+        pushDebit(l.accountCode as string, accountName(chartByCode, l.accountCode as string, l.accountName), l.amount);
       }
-      pushDebit(INPUT_VAT, accountName(INPUT_VAT), sumVat);
-      pushCredit(WHT_PAYABLE, accountName(WHT_PAYABLE), sumWht);
+      pushDebit(INPUT_VAT, accountName(chartByCode, INPUT_VAT), sumVat);
+      pushCredit(WHT_PAYABLE, accountName(chartByCode, WHT_PAYABLE), sumWht);
       pushCredit(contra.code, contra.name, contraAmount);
     } else {
       for (const l of e.lines) {
-        pushCredit(l.accountCode as string, accountName(l.accountCode as string, l.accountName), l.amount);
+        pushCredit(l.accountCode as string, accountName(chartByCode, l.accountCode as string, l.accountName), l.amount);
       }
-      pushCredit(OUTPUT_VAT, accountName(OUTPUT_VAT), sumVat);
-      pushDebit(WHT_RECEIVABLE, accountName(WHT_RECEIVABLE), sumWht);
+      pushCredit(OUTPUT_VAT, accountName(chartByCode, OUTPUT_VAT), sumVat);
+      pushDebit(WHT_RECEIVABLE, accountName(chartByCode, WHT_RECEIVABLE), sumWht);
       pushDebit(contra.code, contra.name, contraAmount);
     }
 

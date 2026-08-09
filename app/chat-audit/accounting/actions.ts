@@ -42,6 +42,7 @@ import { validateUpload, sanitizeUploadName, extOf } from "@/lib/accounting/uplo
 import { redecideExistingEntries } from "@/lib/line/bill-extract-worker";
 import { pushCustomerTaxId } from "@/lib/integrations/nova-sales-outbound";
 import { validateBankAccountInput } from "@/lib/accounting/bank-accounts";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 
 const PATH = "/chat-audit/accounting";
 /** bucket รูปบิล (private) — ตรงกับหน้า bills / lib/storage/bill-storage.ts */
@@ -106,6 +107,26 @@ function asNumber(v: unknown): number {
   return Math.max(0, Math.min(n, 1_000_000_000));
 }
 
+/**
+ * เซตของ productId ที่มีอยู่จริงใน tenant นี้ (ไม่ถูกลบ) — ใช้กัน productId ปลอม/ข้าม tenant
+ *   จาก client ก่อนผูกกับ bill_entry_lines.product_id (เฟส 1 ส่วน B)
+ *   ★ ไม่เช็ค is_active — สินค้าที่ปิดใช้งานแล้วยังผูกกับบรรทัดเก่าได้ตามปกติ (แค่ไม่โชว์ในตัวเลือกใหม่)
+ */
+async function validProductIdsOfTenant(
+  service: ReturnType<typeof createServiceRoleClient>,
+  tenantId: string,
+  ids: string[]
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const { data } = await service
+    .from("products")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .in("id", ids);
+  return new Set(((data ?? []) as { id: string }[]).map((r) => r.id));
+}
+
 /** แปลง error code จาก actions-lib → ข้อความไทยสุภาพ */
 function friendlyError(code: string): string {
   switch (code) {
@@ -136,6 +157,8 @@ export type EditableLineInput = {
   accountCode?: string | null;
   /** ชื่อบัญชี (แก้ต่อบรรทัดได้) */
   accountName?: string | null;
+  /** สินค้า/บริการที่เลือกไว้ (เฟส 1 ส่วน B) — null/undefined = ไม่ผูกสินค้า */
+  productId?: string | null;
   amount: number;
   vatAmount: number;
   whtRate: number;
@@ -156,6 +179,8 @@ export type SaveEntryInput = {
   paymentMethod?: PaymentMethod | null;
   /** บัญชีเงินฝากที่ใช้ (เฉพาะ transfer) — id ใน customer_bank_accounts */
   paymentBankAccountId?: string | null;
+  /** วันครบกำหนดชำระ (เฟส 2 ส่วน E/F, YYYY-MM-DD) — มีผลเชิงความหมายเฉพาะบิลเชื่อ · null = ยังไม่ระบุ */
+  dueDate?: string | null;
   notes?: string | null;
   /** เดือนที่ใช้ภาษีซื้อ 'YYYY-MM' (ค.ศ.) — เฉพาะบิลซื้อ · null = ใช้เดือน doc_date */
   inputTaxMonth?: string | null;
@@ -243,6 +268,7 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
       whtForm: asWhtForm(input.whtForm),
       paymentMethod,
       paymentBankAccountId,
+      dueDate: asDate(input.dueDate),
       notes: clampText(input.notes, 500),
     }, editOpts);
     if (!up.ok) return { ok: false, message: friendlyError(up.error) };
@@ -270,6 +296,13 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
       }
     }
 
+    // ★ สินค้า/บริการที่บรรทัดอ้างถึง (เฟส 1 ส่วน B) — ต้องเป็นสินค้าของ tenant นี้จริง (กันผูกข้าม tenant
+    //   ผ่าน productId ปลอมจาก client — ต่าง account_code ที่เป็นแค่ข้อความ product_id เป็น FK ของจริง)
+    const requestedProductIds = [
+      ...new Set(input.lines.map((l) => (isUuid(l.productId) ? l.productId : null)).filter((x): x is string => !!x)),
+    ];
+    const validProductIds = await validProductIdsOfTenant(service, ctx.tenantId, requestedProductIds);
+
     // 3) add/update แต่ละ line (เรียงลำดับ line_no ตามที่ส่งมา)
     let lineNo = 1;
     for (const l of input.lines) {
@@ -280,6 +313,8 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
         // ★ account_code = รหัสจากผังบัญชี (ตัดสั้น กันค่าปลอม) · account_name = ชื่อที่แก้ได้
         accountCode: clampText(l.accountCode, 20),
         accountName: clampText(l.accountName, 200),
+        // ★ สินค้า/บริการที่เลือก (เฟส 1 ส่วน B) — แค่ tag อ้างอิง ไม่กระทบการคำนวณ · ต้องอยู่ใน tenant นี้
+        productId: isUuid(l.productId) && validProductIds.has(l.productId) ? l.productId : null,
         amount: asNumber(l.amount),
         vatAmount: asNumber(l.vatAmount),
         whtRate: asNumber(l.whtRate),
@@ -918,7 +953,7 @@ export async function saveCustomerTaxIdAction(input: {
 // บัญชีเงินฝากธนาคาร "ต่อลูกค้า" (customer_bank_accounts)
 //   ★ เลขบัญชีจริงของแต่ละบริษัทเก็บที่นี่ (ผังกลางเก็บแค่ generic #1/#2/#3)
 //   ★ ทุก action guard: requireAccountingAccess + assertCustomerInScope(customerId)
-//     + validate accountCode ต้องเป็นรหัสเงินฝาก (BANK_ACCOUNT_CODES) + sanitize ชื่อ/เลข
+//     + validate accountCode ต้องเป็นรหัสเงินฝากในผังของ tenant (bankAccountCodesOf) + sanitize ชื่อ/เลข
 //   ★ เขียนผ่าน service-role + tenantId จาก session (ไม่เชื่อ scope จาก client)
 //   ★ PDPA: ไม่ log ชื่อธนาคาร/เลขบัญชี/ลูกค้า
 // ---------------------------------------------------------------------
@@ -951,8 +986,9 @@ export async function upsertCustomerBankAccountAction(input: {
       return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
     }
 
-    // validate + sanitize (accountCode ต้องเป็นรหัสเงินฝาก)
-    const v = validateBankAccountInput(input);
+    // validate + sanitize (accountCode ต้องเป็นรหัสเงินฝาก — เช็คกับผังของ tenant นี้จริง)
+    const chart = await listChartOfAccounts(service, ctx.tenantId);
+    const v = validateBankAccountInput(chart, input);
     if (!v) {
       return { ok: false, message: "รหัสบัญชีต้องเป็นบัญชีเงินฝากธนาคารในผังบัญชี" };
     }
