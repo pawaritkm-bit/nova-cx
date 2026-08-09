@@ -44,6 +44,9 @@ import {
   type MonthKpi,
 } from "@/lib/accounting/monthly";
 import { createEntryAction } from "./actions";
+import { isCreditEligibleForPayment } from "@/lib/accounting/bill-payments";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
+import { listProducts } from "@/lib/accounting/products";
 import ChatAuditFrame from "../_Frame";
 import EntryEditor from "./EntryEditor";
 import RowActions from "./RowActions";
@@ -521,9 +524,9 @@ function EntryTable({
     return <p className="empty">ยังไม่มีรายการในประเภทนี้</p>;
   }
 
-  // คอลัมน์ FlowAccount มีผลแค่บิลขาย (FlowAccountSyncButton ก็ self-gate เหมือนกัน) —
-  // ซ่อนคอลัมน์ทั้งเส้นในตารางบิลซื้อ/รอระบุ กัน column เปล่าโล่ง ๆ ทั้งตาราง
-  const showFlowAccountCol = entries.some((e) => e.entryType === "sale");
+  // คอลัมน์ FlowAccount มีผลแค่บิลขาย/บิลซื้อ (เฟส 5 ส่วน P) — FlowAccountSyncButton ก็ self-gate เหมือนกัน —
+  // ซ่อนคอลัมน์ทั้งเส้นในตารางรอระบุ กัน column เปล่าโล่ง ๆ ทั้งตาราง
+  const showFlowAccountCol = entries.some((e) => e.entryType === "sale" || e.entryType === "purchase");
 
   // ยอดรวมท้ายตาราง
   let tAmount = 0;
@@ -663,6 +666,8 @@ function EntryTable({
                       status={e.status}
                       editHref={editHref}
                       customerId={e.customerId}
+                      hasWht={e.lines.some((l) => l.whtAmount > 0)}
+                      isCreditEligible={isCreditEligibleForPayment(e)}
                     />
                   </td>
                   {showFlowAccountCol ? (
@@ -878,6 +883,10 @@ export default async function AccountingPage({
   if (!access) redirect("/login?redirect=/chat-audit/accounting");
 
   const tenantId = access.tenantId;
+  // ผังบัญชีของ tenant — โหลดครั้งเดียวต่อ request ส่งลง EntryEditor (combobox เลือกบัญชี + hint บัญชีคู่)
+  const chart = await listChartOfAccounts(service, tenantId);
+  // สินค้า/บริการของ tenant (เฟส 1 ส่วน B) — โหลดครั้งเดียวต่อ request ส่งลง EntryEditor (product picker ต่อบรรทัด)
+  const products = await listProducts(service, tenantId);
   const navRole = access.navRole;
   // staff (นักบัญชี/หัวหน้า LINE) → เมนูจำกัดเฉพาะบัญชีของตัวเอง
   const staffOnly = access.mode === "accountant" || access.mode === "lead";
@@ -1169,6 +1178,15 @@ export default async function AccountingPage({
           >
             ＋ ใบรับรองแทนใบเสร็จ
           </a>
+          {/* ออกหนังสือรับรองหัก ณ ที่จ่าย (ฟอร์มเปล่าของลูกค้ารายนี้ — หัวกระดาษดึงข้อมูลลูกค้าให้) */}
+          <a
+            href={`/chat-audit/accounting/wht-cert?customer=${g.customerId}`}
+            className="btn btn-ghost"
+            target="_blank"
+            rel="noopener"
+          >
+            ＋ หนังสือรับรองหัก ณ ที่จ่าย
+          </a>
         </div>
       ) : null}
 
@@ -1193,6 +1211,28 @@ export default async function AccountingPage({
         }
         openingHref={g.customerId ? `/chat-audit/accounting/opening?customerId=${g.customerId}` : undefined}
         reportsHref={g.customerId ? `/chat-audit/accounting/reports?customerId=${g.customerId}` : undefined}
+        flowaccountMapHref={
+          g.customerId ? `/chat-audit/accounting/flowaccount-map?customerId=${g.customerId}` : undefined
+        }
+        financialStatementsHref={
+          g.customerId ? `/chat-audit/accounting/financial-statements?customerId=${g.customerId}` : undefined
+        }
+        journalEntryHref={g.customerId ? `/chat-audit/accounting/journal-entry?customerId=${g.customerId}` : undefined}
+        recurringJournalHref={
+          g.customerId ? `/chat-audit/accounting/recurring-journal?customerId=${g.customerId}` : undefined
+        }
+        budgetHref={g.customerId ? `/chat-audit/accounting/budget?customerId=${g.customerId}` : undefined}
+        bankReconciliationHref={
+          g.customerId ? `/chat-audit/accounting/bank-reconciliation?customerId=${g.customerId}` : undefined
+        }
+        paymentsHref={g.customerId ? `/chat-audit/accounting/payments?customerId=${g.customerId}` : undefined}
+        agingHref={g.customerId ? `/chat-audit/accounting/ar-ap-aging?customer=${g.customerId}` : undefined}
+        creditDebitNotesHref={
+          g.customerId ? `/chat-audit/accounting/credit-debit-notes?customerId=${g.customerId}` : undefined
+        }
+        salesDocumentsHref={
+          g.customerId ? `/chat-audit/accounting/sales-documents?customerId=${g.customerId}` : undefined
+        }
         statementHref={g.customerId ? `/chat-audit/accounting/statement?customerId=${g.customerId}` : undefined}
         vatPurchaseHref={
           g.customerId
@@ -1485,6 +1525,8 @@ export default async function AccountingPage({
               open: sp.open && sp.open !== "" ? sp.open : undefined,
               type: selectedType,
             })}`}
+            chart={chart}
+            products={products}
           />
         ) : (
           /* fallback: บิลไม่อยู่ใน nav ของแท็บที่เปิด (แก้ข้ามบริบท) — ตัวเดียว navigate ตามเดิม */
@@ -1506,6 +1548,8 @@ export default async function AccountingPage({
               open: sp.open && sp.open !== "" ? sp.open : undefined,
               type: selectedType,
             })}`}
+            chart={chart}
+            products={products}
           />
         )
       ) : null}

@@ -1,44 +1,68 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   buildSalesDocumentPayload,
+  buildPurchaseDocumentPayload,
   type MapperRejectReason,
+  type PurchaseMapperRejectReason,
 } from "@/lib/integrations/flowaccount-mapper";
 import {
   createSalesDocument,
+  createPurchaseDocument,
   type FlowAccountCredential,
   type FlowAccountDocType,
+  type FlowAccountPurchaseDocType,
   type FlowAccountReason,
 } from "@/lib/integrations/flowaccount";
 import { decryptField } from "@/lib/crypto/field";
 import type { PaymentMethod, VatType } from "@/lib/accounting/queries";
+import {
+  listAccountMap,
+  listProductMap,
+  accountMapToRecord,
+  productMapToRecord,
+} from "@/lib/accounting/flowaccount-map";
 
 /**
- * orchestration: ส่งบิลขาย 1 ใบไป FlowAccount (manual trigger, ดู docs/05-flowaccount-integration.md)
- *   ลำดับ: guard ธุรกิจ (sale+confirmed+มีลูกค้า) → claim (atomic กันกดซ้ำ/สองแท็บ) →
- *          โหลดลูกค้า/lines → ถอดรหัส credential ต่อลูกค้า (M2) → map payload (pure) →
- *          เรียก client → เขียนผล + insert log เสมอ
+ * orchestration: ส่งบิล 1 ใบไป FlowAccount (manual trigger, ดู docs/05-flowaccount-integration.md +
+ *   docs/06-accounting-features-roadmap.md เฟส 5 ส่วน P)
+ *   ลำดับ: guard ธุรกิจ (entry_type รองรับ+confirmed+มีลูกค้า) → claim (atomic กันกดซ้ำ/สองแท็บ) →
+ *          โหลดลูกค้า/lines → ถอดรหัส credential ต่อลูกค้า (M2) → dispatch ตาม entry_type
+ *          (sale/purchase) → map payload (pure) → เรียก client → เขียนผล + insert log เสมอ
  *   ★ ทุก write scope ด้วย tenant_id (กัน cross-tenant แม้ client เป็น service_role)
  *   ★ PDPA: log สั้น ๆ ไม่มี payload/เลขภาษี/ยอดเงิน/client_secret (plaintext หรือ ciphertext)
  *
  * ★★ M2 — credential ต่อลูกค้า ★★ ลูกค้าที่ยังไม่กรอก flowaccount_client_id/flowaccount_client_secret_enc
  *   (หรือ ciphertext decrypt ไม่ได้) → reason `customer_not_configured` (เช็คหลัง claim เหมือน mapper reject
  *   เดิม เพราะต้องโหลดตาราง customers ก่อนถึงจะรู้)
+ *
+ * ★★ เฟส 5 ส่วน P (T33) — เดิมชื่อ `syncSaleEntryToFlowAccount` (ผูกกับ "sale" ตรงๆ) เปลี่ยนเป็น
+ *   `syncEntryToFlowAccount()` แล้ว dispatch ภายในตาม `entry.entry_type`:
+ *     - sale     → path เดิม (M1/M2) + mapping ผังบัญชี/สินค้าจาก Q (T28) — ไม่เปลี่ยนพฤติกรรม
+ *     - purchase → path ใหม่ (T32/T31) — contact ของเอกสารมาจาก `entry.counterpartyName/
+ *                  counterpartyTaxId` (ผู้ขายจริง — decision 0.6) ไม่ใช่ `customers`
+ *     - อื่น ๆ (เช่น 'unspecified') → reason `unsupported_entry_type` ก่อน claim (decision 0.5 — ไม่ขยาย
+ *       ไป unspecified นักบัญชีต้องเลือกซื้อ/ขายให้ชัดก่อนเสมอ)
+ *   credential/mapping ของบิลซื้อใช้ของลูกค้ารายเดียวกับบิลขาย (จาก customer_id — decision 0.7/0.9)
  */
 
 type DB = SupabaseClient;
 
+/** ชนิดเอกสารที่ sync สำเร็จ — รวมทั้งฝั่งขาย (M1/M2) และฝั่งซื้อ (เฟส 5 ส่วน P) */
+export type SyncDocType = FlowAccountDocType | FlowAccountPurchaseDocType;
+
 export type SyncRejectReason =
   | "not_found"
-  | "not_sale"
   | "not_confirmed"
   | "missing_customer"
   | "already_syncing"
   | "customer_not_configured"
+  | "unsupported_entry_type"
   | MapperRejectReason
+  | PurchaseMapperRejectReason
   | FlowAccountReason;
 
 export type SyncResult =
-  | { ok: true; docType: FlowAccountDocType; docId: string; docNo: string | null }
+  | { ok: true; docType: SyncDocType; docId: string; docNo: string | null }
   | { ok: false; reason: SyncRejectReason };
 
 type RawEntry = {
@@ -49,6 +73,9 @@ type RawEntry = {
   doc_date: string | null;
   doc_no: string | null;
   payment_method: string | null;
+  /** ผู้ขาย/vendor ของบิลซื้อ (decision 0.6) — เฉยๆ สำหรับบิลขาย (ไม่ใช้) */
+  counterparty_name: string | null;
+  counterparty_tax_id: string | null;
 };
 
 type RawCustomer = {
@@ -64,6 +91,9 @@ type RawLine = {
   amount: number | string | null;
   vat_amount: number | string | null;
   vat_type: string | null;
+  /** เฟส 5 ส่วน Q — ใช้จับคู่ maps.accountMap/maps.productMap (ดู flowaccount-mapper.ts) */
+  account_code?: string | null;
+  product_id?: string | null;
 };
 
 function num(v: unknown): number {
@@ -94,12 +124,13 @@ function resolveCustomerCredential(customer: RawCustomer): FlowAccountCredential
 /** ข้อความ error สั้น ๆ ให้นักบัญชีเห็นก่อนกดส่งใหม่ (ไม่มี payload/PII) */
 const REASON_LABEL: Partial<Record<SyncRejectReason, string>> = {
   not_found: "ไม่พบบิลนี้",
-  not_sale: "ไม่ใช่บิลขาย",
   not_confirmed: "บิลยังไม่ยืนยัน",
   missing_customer: "บิลยังไม่ผูกลูกค้า",
   already_syncing: "มีการส่งบิลนี้อยู่แล้ว",
   customer_not_configured: "ลูกค้ารายนี้ยังไม่เปิดใช้การเชื่อมต่อ FlowAccount",
+  unsupported_entry_type: "บิลประเภทนี้ยังไม่รองรับการส่ง FlowAccount",
   missing_customer_tax_id: "ลูกค้าไม่มีเลขประจำตัวผู้เสียภาษี",
+  missing_vendor_tax_id: "ผู้ขายไม่มีเลขประจำตัวผู้เสียภาษี",
   no_value_lines: "ไม่มีรายการที่มีมูลค่า",
   missing_doc_date: "ไม่มีวันที่เอกสาร",
   not_configured: "ยังไม่เปิดการเชื่อมต่อ FlowAccount",
@@ -146,7 +177,7 @@ async function writeFailure(
   db: DB,
   tenantId: string,
   entryId: string,
-  docType: FlowAccountDocType | null,
+  docType: SyncDocType | null,
   reason: string,
   requestedBy: string | null
 ): Promise<void> {
@@ -174,7 +205,7 @@ async function writeSuccess(
   db: DB,
   tenantId: string,
   entryId: string,
-  docType: FlowAccountDocType,
+  docType: SyncDocType,
   docId: string,
   docNo: string | null,
   requestedBy: string | null
@@ -204,10 +235,12 @@ async function writeSuccess(
 }
 
 /**
- * ส่งบิลขาย 1 ใบไป FlowAccount — ★ ไม่ throw ทุก error จับแล้วคืนผลตาม reason
- *   guard ธุรกิจ (sale/confirmed/มีลูกค้า) ทำก่อน claim เสมอ — กันเสีย claim ไปเปล่า ๆ กับบิลที่ส่งไม่ได้แน่ ๆ
+ * ส่งบิล 1 ใบไป FlowAccount — ★ ไม่ throw ทุก error จับแล้วคืนผลตาม reason
+ *   guard ธุรกิจ (entry_type รองรับ/confirmed/มีลูกค้า) ทำก่อน claim เสมอ — กันเสีย claim ไปเปล่า ๆ กับบิล
+ *   ที่ส่งไม่ได้แน่ ๆ · dispatch ตาม `entry.entry_type` หลัง claim+โหลด credential/lines/mapping สำเร็จ
+ *   (เฟส 5 ส่วน P, T33 — เดิมชื่อ `syncSaleEntryToFlowAccount` รองรับแค่ sale)
  */
-export async function syncSaleEntryToFlowAccount(
+export async function syncEntryToFlowAccount(
   db: DB,
   tenantId: string,
   entryId: string,
@@ -217,7 +250,9 @@ export async function syncSaleEntryToFlowAccount(
 
   const { data: entryData, error: entryErr } = await db
     .from("bill_entries")
-    .select("id, entry_type, status, customer_id, doc_date, doc_no, payment_method")
+    .select(
+      "id, entry_type, status, customer_id, doc_date, doc_no, payment_method, counterparty_name, counterparty_tax_id"
+    )
     .eq("id", entryId)
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
@@ -225,7 +260,10 @@ export async function syncSaleEntryToFlowAccount(
   if (entryErr || !entryData) return { ok: false, reason: "not_found" };
   const entry = entryData as unknown as RawEntry;
 
-  if (entry.entry_type !== "sale") return { ok: false, reason: "not_sale" };
+  // ★ เฟส 5 ส่วน P (decision 0.5): รองรับแค่ sale/purchase — 'unspecified' หรือค่าอื่น ๆ ปฏิเสธก่อน claim
+  if (entry.entry_type !== "sale" && entry.entry_type !== "purchase") {
+    return { ok: false, reason: "unsupported_entry_type" };
+  }
   if (entry.status !== "confirmed") return { ok: false, reason: "not_confirmed" };
   if (!entry.customer_id) return { ok: false, reason: "missing_customer" };
 
@@ -247,6 +285,7 @@ export async function syncSaleEntryToFlowAccount(
   };
 
   // ★ M2: credential ต่อลูกค้า — เช็คหลัง claim (ต้องโหลด customers ก่อนถึงจะรู้) ก่อนยิง fetch ใดๆ
+  //   ★ decision 0.7 — credential ชุดเดียวกันใช้ร่วมกันทั้งบิลขายและบิลซื้อของลูกค้ารายนี้
   const credential = resolveCustomerCredential(customer);
   if (!credential) {
     await writeFailure(db, tenantId, entryId, null, "customer_not_configured", requestedBy);
@@ -255,7 +294,7 @@ export async function syncSaleEntryToFlowAccount(
 
   const { data: lineData } = await db
     .from("bill_entry_lines")
-    .select("description, amount, vat_amount, vat_type")
+    .select("description, amount, vat_amount, vat_type, account_code, product_id")
     .eq("tenant_id", tenantId)
     .eq("entry_id", entryId)
     .order("line_no", { ascending: true });
@@ -264,23 +303,75 @@ export async function syncSaleEntryToFlowAccount(
     amount: num(l.amount),
     vatAmount: num(l.vat_amount),
     vatType: (l.vat_type === "novat" ? "novat" : "vat") as VatType,
+    accountCode: l.account_code ?? null,
+    productId: l.product_id ?? null,
   }));
 
-  const mapResult = buildSalesDocumentPayload(
-    {
-      docNo: entry.doc_no,
-      docDate: entry.doc_date,
-      paymentMethod: asPaymentMethod(entry.payment_method),
-    },
+  // ★ เฟส 5 ส่วน Q (decision 0.13)/P (decision 0.9): mapping ผังบัญชี/สินค้าของลูกค้ารายนี้ (ใช้ทั้ง
+  //   sale/purchase) — ไม่มี mapping ตั้งไว้เลยก็ยังส่งเอกสารได้ตามปกติ (เป็น enhancement ไม่ใช่ prerequisite)
+  //   degrade เป็น {} อัตโนมัติถ้ายังไม่มี migration 0071/ไม่มีแถว (listAccountMap/listProductMap ไม่ throw)
+  const [accountMapRows, productMapRows] = await Promise.all([
+    listAccountMap(db, tenantId, entry.customer_id),
+    listProductMap(db, tenantId, entry.customer_id),
+  ]);
+  const maps = {
+    accountMap: accountMapToRecord(accountMapRows),
+    productMap: productMapToRecord(productMapRows),
+  };
+
+  const mapperEntry = {
+    docNo: entry.doc_no,
+    docDate: entry.doc_date,
+    paymentMethod: asPaymentMethod(entry.payment_method),
+  };
+
+  if (entry.entry_type === "sale") {
+    const mapResult = buildSalesDocumentPayload(
+      mapperEntry,
+      lines,
+      { name: customer.name, taxId: customer.tax_id, address: customer.address },
+      maps
+    );
+    if (!mapResult.ok) {
+      await writeFailure(db, tenantId, entryId, null, mapResult.reason, requestedBy);
+      return { ok: false, reason: mapResult.reason };
+    }
+
+    const clientResult = await createSalesDocument(
+      { docType: mapResult.docType, body: mapResult.body },
+      credential
+    );
+    if (!clientResult.ok) {
+      await writeFailure(db, tenantId, entryId, mapResult.docType, clientResult.reason, requestedBy);
+      return { ok: false, reason: clientResult.reason };
+    }
+
+    await writeSuccess(
+      db,
+      tenantId,
+      entryId,
+      mapResult.docType,
+      clientResult.docId,
+      clientResult.docNo,
+      requestedBy
+    );
+    return { ok: true, docType: mapResult.docType, docId: clientResult.docId, docNo: clientResult.docNo };
+  }
+
+  // entry.entry_type === "purchase" — ★ decision 0.6: contact ของเอกสารมาจาก counterparty (ผู้ขายจริง)
+  //   ไม่ใช่ `customers` (ตัวลูกค้า NOVA-CX เอง — ใช้แค่ระบุ credential/mapping ด้านบนเท่านั้น)
+  const mapResult = buildPurchaseDocumentPayload(
+    mapperEntry,
     lines,
-    { name: customer.name, taxId: customer.tax_id, address: customer.address }
+    { name: entry.counterparty_name, taxId: entry.counterparty_tax_id },
+    maps
   );
   if (!mapResult.ok) {
     await writeFailure(db, tenantId, entryId, null, mapResult.reason, requestedBy);
     return { ok: false, reason: mapResult.reason };
   }
 
-  const clientResult = await createSalesDocument(
+  const clientResult = await createPurchaseDocument(
     { docType: mapResult.docType, body: mapResult.body },
     credential
   );

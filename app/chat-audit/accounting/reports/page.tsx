@@ -9,7 +9,10 @@ import { listEntries } from "@/lib/accounting/queries";
 import { listOpeningBalances } from "@/lib/accounting/opening-balance";
 import { buildStatements } from "@/lib/accounting/statements";
 import { buildLedgerStatements } from "@/lib/accounting/ledger-statement";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
+import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { filterEntriesForReport, periodLabel, validMonth } from "@/lib/accounting/report-filter";
+import { loadCombinedJournalLines, flattenCombinedJournalLines } from "@/lib/accounting/statement-inputs";
 import { buildPndReport, buildPp30Report } from "@/lib/accounting/rd-export";
 import { formatMoney } from "@/lib/accounting/calc";
 import { monthKeyOf, thaiMonthLabel } from "@/lib/accounting/monthly";
@@ -436,7 +439,22 @@ export default async function AccountingReportsPage({
       const filtered = filterEntriesForReport(entries, { from, to, includeDraft });
       draftCount = filtered.filter((e) => e.status !== "confirmed").length;
       const opening = await listOpeningBalances(service, access.tenantId, customerId);
-      statements = buildStatements(filtered, opening);
+      const chart = await listChartOfAccounts(service, access.tenantId);
+      const chartByCode = buildChartByCode(chart);
+
+      // เฟส 1-3 (C/E-F/J, 0.13): manual JE + bill_payments (confirmed) + CN/DN (confirmed) ของลูกค้ารายนี้
+      // — กรองงวด/สถานะเหมือนบิล แล้ว concat เข้า ledger/trial-balance/งบ (ไม่กระทบ journal.lines/skipped
+      // ของบิลเดิม — ดู statements.ts) สกัดเป็น loadCombinedJournalLines() จุดเดียว (0.13 — เดิมโค้ดซ้ำ
+      // 4 จุด: ที่นี่/export route/journal-books ทั้งสองไฟล์)
+      const combined = await loadCombinedJournalLines(
+        service,
+        access.tenantId,
+        entries,
+        { from, to, includeDraft },
+        chartByCode
+      );
+
+      statements = buildStatements(filtered, opening, chartByCode, flattenCombinedJournalLines(combined));
 
       const pnd3 = buildPndReport(filtered, "pnd3");
       const pnd53 = buildPndReport(filtered, "pnd53");

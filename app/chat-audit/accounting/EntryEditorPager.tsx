@@ -3,6 +3,8 @@
 import { useState } from "react";
 import EntryEditor from "./EntryEditor";
 import type { BillEntry } from "@/lib/accounting/queries";
+import type { ChartAccount } from "@/lib/accounting/chart-of-accounts";
+import type { Product } from "@/lib/accounting/products";
 
 /** 1 บิลใน nav (ข้อมูล + รูปที่ sign ย่อไว้แล้ว) */
 export type PagerBill = {
@@ -24,12 +26,18 @@ export default function EntryEditorPager({
   customerLabel,
   closeHref,
   orderIds,
+  chart,
+  products,
 }: {
   bills: PagerBill[];
   initialId: string;
   customerLabel: string;
   closeHref: string;
   orderIds: string[];
+  /** ผังบัญชีของ tenant (โหลดจาก DB ครั้งเดียวโดย page.tsx) — ส่งต่อให้ EntryEditor ทุกบิลใน pager */
+  chart: ChartAccount[];
+  /** สินค้า/บริการของ tenant (เฟส 1 ส่วน B) — ส่งต่อให้ EntryEditor ทุกบิลใน pager (product picker ต่อบรรทัด) */
+  products: Product[];
 }) {
   const [currentId, setCurrentId] = useState(initialId);
   const current = bills.find((b) => b.id === currentId) ?? bills.find((b) => b.id === initialId) ?? bills[0];
@@ -57,6 +65,8 @@ export default function EntryEditorPager({
         closeHref={closeHref}
         orderIds={orderIds}
         onNavigate={(id) => setCurrentId(id)}
+        chart={chart}
+        products={products}
       />
     </>
   );

@@ -6,12 +6,16 @@ import {
   paymentMethodLabel,
   PAYMENT_METHOD_LABELS,
 } from "@/lib/accounting/payment";
+import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
+import { TEST_CHART } from "@/tests/accounting/fixtures/chart";
 
 /**
  * เทสต์ helper pure ของ "วิธีจ่าย/รับเงิน → บัญชีคู่ (เครดิต)":
  *   1) suggestPaymentMethod: เดาจาก doc_kind (เงินสด/สลิป/ใบกำกับ)
- *   2) contraAccountFor: คำนวณบัญชีคู่ (เงินสด=1010 · โอน=บัญชีธนาคาร · เชื่อ=2010/1140)
+ *   2) contraAccountFor: คำนวณบัญชีคู่ (เงินสด=1010 · โอน=บัญชีธนาคาร · เชื่อ=2010/1140) — รับ chartByCode
  */
+
+const TEST_CHART_BY_CODE = buildChartByCode(TEST_CHART);
 
 describe("payment — suggestPaymentMethod (เดาจาก doc_kind)", () => {
   it("เงินสด/เขียนมือ → cash", () => {
@@ -40,48 +44,54 @@ describe("payment — suggestPaymentMethod (เดาจาก doc_kind)", () =>
 
 describe("payment — contraAccountFor (บัญชีคู่เครดิต)", () => {
   it("เงินสด → 1010 เงินสด", () => {
-    expect(contraAccountFor("cash", "purchase")).toEqual({ code: "1010", name: "เงินสด" });
-    expect(contraAccountFor("cash", "sale")).toEqual({ code: "1010", name: "เงินสด" });
+    expect(contraAccountFor(TEST_CHART_BY_CODE, "cash", "purchase")).toEqual({ code: "1010", name: "เงินสด" });
+    expect(contraAccountFor(TEST_CHART_BY_CODE, "cash", "sale")).toEqual({ code: "1010", name: "เงินสด" });
   });
 
   it("เช็ค + ขาย → 1155 เช็ครับล่วงหน้า", () => {
-    expect(contraAccountFor("cheque", "sale")).toEqual({ code: "1155", name: "เช็ครับล่วงหน้า" });
+    expect(contraAccountFor(TEST_CHART_BY_CODE, "cheque", "sale")).toEqual({ code: "1155", name: "เช็ครับล่วงหน้า" });
   });
 
   it("เช็ค + ซื้อ → 2220 เช็คสั่งจ่ายล่วงหน้า", () => {
-    expect(contraAccountFor("cheque", "purchase")).toEqual({ code: "2220", name: "เช็คสั่งจ่ายล่วงหน้า" });
+    expect(contraAccountFor(TEST_CHART_BY_CODE, "cheque", "purchase")).toEqual({
+      code: "2220",
+      name: "เช็คสั่งจ่ายล่วงหน้า",
+    });
   });
 
   it("เช็ค + รอระบุ → null (ยังตัดสินฝั่งไม่ได้)", () => {
-    expect(contraAccountFor("cheque", "unspecified")).toBeNull();
+    expect(contraAccountFor(TEST_CHART_BY_CODE, "cheque", "unspecified")).toBeNull();
   });
 
   it("โอน + ผูกบัญชีธนาคารเดิม → รหัสบัญชีนั้น", () => {
-    const r = contraAccountFor("transfer", "purchase", "1025");
+    const r = contraAccountFor(TEST_CHART_BY_CODE, "transfer", "purchase", "1025");
     expect(r?.code).toBe("1025");
     expect(r?.name).toContain("เงินฝากธนาคาร");
   });
 
   it("โอน + ไม่มีบัญชีผูก → default 1020 เงินฝากธนาคาร", () => {
-    const r = contraAccountFor("transfer", "sale", null);
+    const r = contraAccountFor(TEST_CHART_BY_CODE, "transfer", "sale", null);
     expect(r?.code).toBe("1020");
     expect(r?.name).toContain("เงินฝากธนาคาร");
   });
 
   it("เชื่อ + ซื้อ → 2010 เจ้าหนี้การค้า", () => {
-    expect(contraAccountFor("credit", "purchase")).toEqual({ code: "2010", name: "เจ้าหนี้การค้า" });
+    expect(contraAccountFor(TEST_CHART_BY_CODE, "credit", "purchase")).toEqual({
+      code: "2010",
+      name: "เจ้าหนี้การค้า",
+    });
   });
 
   it("เชื่อ + ขาย → 1140 ลูกหนี้การค้า", () => {
-    expect(contraAccountFor("credit", "sale")).toEqual({ code: "1140", name: "ลูกหนี้การค้า" });
+    expect(contraAccountFor(TEST_CHART_BY_CODE, "credit", "sale")).toEqual({ code: "1140", name: "ลูกหนี้การค้า" });
   });
 
   it("เชื่อ + รอระบุ → null (ยังตัดสินฝั่งไม่ได้)", () => {
-    expect(contraAccountFor("credit", "unspecified")).toBeNull();
+    expect(contraAccountFor(TEST_CHART_BY_CODE, "credit", "unspecified")).toBeNull();
   });
 
   it("ไม่ระบุวิธีจ่าย → null", () => {
-    expect(contraAccountFor(null, "purchase")).toBeNull();
+    expect(contraAccountFor(TEST_CHART_BY_CODE, null, "purchase")).toBeNull();
   });
 });
 

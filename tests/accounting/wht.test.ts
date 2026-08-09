@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { suggestWhtRate, WHT_RATE_BY_ACCOUNT } from "@/lib/accounting/wht";
-import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
+import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
+import { TEST_CHART } from "@/tests/accounting/fixtures/chart";
+
+const TEST_CHART_BY_CODE = buildChartByCode(TEST_CHART);
 
 /**
  * suggestWhtRate — อัตรา WHT แนะนำตามประเภทบัญชี (ค่าแนะนำ ไม่ล็อก)
@@ -46,7 +49,7 @@ describe("suggestWhtRate", () => {
 
   it("★ ทุกรหัสในตารางต้องมีอยู่จริงในผังบัญชีกลาง (กัน typo)", () => {
     for (const code of Object.keys(WHT_RATE_BY_ACCOUNT)) {
-      expect(CHART_BY_CODE[code], `รหัส ${code} ต้องมีในผัง`).toBeDefined();
+      expect(TEST_CHART_BY_CODE[code], `รหัส ${code} ต้องมีในผัง`).toBeDefined();
     }
   });
 });

@@ -1,0 +1,42 @@
+/* ============================================================
+   รายงานลูกหนี้/เจ้าหนี้ค้างชำระตามอายุหนี้ (AR/AP Aging) — เฟส 2 ส่วน G
+   ★ ใช้ .vr-shell/.vr-toolbar/.vr-page/.vr-head จาก ../vat-report/vat-report.css ร่วมกัน (mirror pattern)
+   ★ prefix ar-* กันชนสไตล์เดิม (vr-* / acc-*)
+   ============================================================ */
+
+.ar-section { margin-top: 18px; }
+.ar-section-title { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+
+.ar-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.ar-table th,
+.ar-table td {
+  border: 1px solid #333;
+  padding: 5px 8px;
+  vertical-align: middle;
+}
+.ar-table th { background: #f0f3f7; font-weight: 700; text-align: center; }
+
+.ar-col-party { width: 220px; text-align: left; }
+.ar-col-money { width: 100px; }
+
+.ar-c-party { text-align: left; }
+.ar-c-money { text-align: right; font-variant-numeric: tabular-nums; }
+
+.ar-empty { text-align: center; color: #777; padding: 16px; }
+
+.ar-total td { font-weight: 700; background: #f7f9fc; }
+.ar-total-label { text-align: right; }
+
+@media print {
+  .ar-table th { background: transparent !important; }
+  .ar-table th,
+  .ar-table td { border-color: #000 !important; }
+  .ar-total td { background: transparent !important; }
+  .ar-table thead { display: table-header-group; }
+  .ar-table tfoot { display: table-footer-group; }
+  .ar-table tr { page-break-inside: avoid; }
+}

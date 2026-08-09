@@ -20,13 +20,19 @@ export default function RowActions({
   status,
   editHref,
   customerId,
+  hasWht,
+  isCreditEligible,
 }: {
   entryId: string;
   entryType: EntryType;
   status: EntryStatus;
   editHref: string;
-  /** ลูกค้าเจ้าของบิล — ใช้สร้างลิงก์ "ใบรับรองแทนใบเสร็จ" (null = บิลไม่ผูกลูกค้า → ซ่อนปุ่ม) */
+  /** ลูกค้าเจ้าของบิล — ใช้สร้างลิงก์ "ใบรับรองแทนใบเสร็จ"/"ใบหัก ณ ที่จ่าย"/"ใบลดหนี้/เพิ่มหนี้" (null = บิลไม่ผูกลูกค้า → ซ่อนปุ่ม) */
   customerId?: string | null;
+  /** true = มีอย่างน้อย 1 บรรทัด whtAmount>0 — ใช้โชว์ปุ่ม "ใบหัก ณ ที่จ่าย" (เฉพาะบิลซื้อเท่านั้น, 0.2) */
+  hasWht?: boolean;
+  /** true = บิลเชื่อที่ยืนยันแล้ว (isCreditEligibleForPayment) — ใช้โชว์ปุ่ม "ใบลดหนี้/เพิ่มหนี้" (เฟส 3 ส่วน J, 0.3) */
+  isCreditEligible?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -85,6 +91,28 @@ export default function RowActions({
             title="ออกใบรับรองแทนใบเสร็จจากบิลนี้"
           >
             ใบรับรองฯ
+          </a>
+        ) : null}
+        {/* ออกหนังสือรับรองหัก ณ ที่จ่าย — เฉพาะบิลซื้อที่มีรายการ WHT (isWhtCertEligible ทั้ง 2 เงื่อนไข) */}
+        {customerId && entryType === "purchase" && hasWht ? (
+          <a
+            href={`/chat-audit/accounting/wht-cert?customer=${customerId}&bill=${entryId}`}
+            className="acc-mini-btn"
+            target="_blank"
+            rel="noopener"
+            title="ออกหนังสือรับรองหัก ณ ที่จ่ายจากบิลนี้"
+          >
+            ใบหัก ณ ที่จ่าย
+          </a>
+        ) : null}
+        {/* ใบลดหนี้/เพิ่มหนี้ — เฉพาะบิลเชื่อที่ยืนยันแล้ว (isCreditEligibleForPayment, เฟส 3 ส่วน J 0.3) */}
+        {customerId && isCreditEligible ? (
+          <a
+            href={`/chat-audit/accounting/credit-debit-notes?customerId=${customerId}&entryId=${entryId}`}
+            className="acc-mini-btn"
+            title="ออกใบลดหนี้/เพิ่มหนี้จากบิลนี้"
+          >
+            ใบลดหนี้/เพิ่มหนี้
           </a>
         ) : null}
         {!confirmed

@@ -1,14 +1,15 @@
 "use server";
 
 /**
- * server action ปุ่ม "ส่งไป FlowAccount" (M2 — credential ต่อลูกค้า, ดู docs/05-flowaccount-integration.md)
+ * server action ปุ่ม "ส่งไป FlowAccount" (M2 — credential ต่อลูกค้า, ดู docs/05-flowaccount-integration.md
+ *   + docs/06-accounting-features-roadmap.md เฟส 5 ส่วน P — รองรับบิลซื้อด้วย)
  *
  * flow ความปลอดภัย (ยึด pattern เดียวกับ actions.ts):
  *   1) requireAccountingAccess (admin/lead เห็นทุกลูกค้า · accountant เฉพาะลูกค้าที่ดูแล) + tenantId จาก session
  *   2) validate entryId (uuid)
  *   3) โหลด customer_id ของบิล (scope tenant) → assertCustomerInScope (ห้ามส่งบิลลูกค้านอกสโคป)
- *   4) เรียก syncSaleEntryToFlowAccount (claim atomic → โหลด+ถอดรหัส credential ต่อลูกค้า → map →
- *      เรียก client → เขียนผล+log)
+ *   4) เรียก syncEntryToFlowAccount (claim atomic → โหลด+ถอดรหัส credential ต่อลูกค้า → dispatch
+ *      ตาม entry_type (sale/purchase) → map → เรียก client → เขียนผล+log)
  *   5) revalidatePath หน้าบัญชี → คืนข้อความไทยสุภาพ (ไม่หลุด error ดิบ/payload/PII)
  *
  * ★ M2: ไม่มี allowlist FLOWACCOUNT_CUSTOMER_ID อีกต่อไป (ดู decision 0.5 ของ M2) — ลูกค้าที่ไม่มี
@@ -24,7 +25,7 @@ import {
   loadEntryCustomerId,
   AccountingAuthError,
 } from "@/lib/accounting/access";
-import { syncSaleEntryToFlowAccount, type SyncRejectReason } from "@/lib/accounting/flowaccount-sync";
+import { syncEntryToFlowAccount, type SyncRejectReason } from "@/lib/accounting/flowaccount-sync";
 
 const PATH = "/chat-audit/accounting";
 
@@ -42,11 +43,13 @@ export type SendToFlowAccountResult =
 /** ข้อความไทยสุภาพต่อ reason ที่ปฏิเสธ/ล้ม — ไม่มี payload/PII */
 const REASON_MESSAGE: Partial<Record<SyncRejectReason, string>> = {
   not_found: "ไม่พบบิลนี้ (อาจถูกลบไปแล้ว)",
-  not_sale: "ส่งได้เฉพาะบิลขาย",
   not_confirmed: "บิลต้องยืนยันก่อนถึงจะส่งได้",
   missing_customer: "บิลนี้ยังไม่ผูกลูกค้า",
   already_syncing: "มีการส่งบิลนี้อยู่แล้ว กรุณารอสักครู่แล้วรีเฟรชหน้า",
   customer_not_configured: "ลูกค้ารายนี้ยังไม่เปิดใช้การเชื่อมต่อ FlowAccount",
+  // เฟส 5 ส่วน P — บิลซื้อ/ค่าใช้จ่าย (docs/06-accounting-features-roadmap.md)
+  unsupported_entry_type: "บิลประเภทนี้ยังไม่รองรับการส่ง FlowAccount (ต้องเลือกซื้อ/ขายให้ชัดก่อน)",
+  missing_vendor_tax_id: "ผู้ขายยังไม่มีเลขประจำตัวผู้เสียภาษี กรุณาเพิ่มก่อนส่ง",
   missing_customer_tax_id: "ลูกค้ายังไม่มีเลขประจำตัวผู้เสียภาษี กรุณาเพิ่มก่อนส่ง",
   no_value_lines: "บิลนี้ไม่มีรายการที่มีมูลค่า",
   missing_doc_date: "บิลนี้ยังไม่มีวันที่เอกสาร",
@@ -63,7 +66,7 @@ function friendlyReason(reason: SyncRejectReason): string {
 }
 
 /**
- * ส่งบิลขาย 1 ใบไป FlowAccount (กดทีละใบ) — ★ ไม่ throw ทุก error จับแล้วคืนข้อความสุภาพ
+ * ส่งบิล 1 ใบไป FlowAccount (กดทีละใบ — ขาย/ซื้อ) — ★ ไม่ throw ทุก error จับแล้วคืนข้อความสุภาพ
  */
 export async function sendToFlowAccountAction(entryId: string): Promise<SendToFlowAccountResult> {
   if (!isUuid(entryId)) return { ok: false, message: "ไม่พบรายการที่เลือก" };
@@ -80,7 +83,7 @@ export async function sendToFlowAccountAction(entryId: string): Promise<SendToFl
     }
     assertCustomerInScope(ctx, customerId);
 
-    const result = await syncSaleEntryToFlowAccount(service, ctx.tenantId, entryId, {
+    const result = await syncEntryToFlowAccount(service, ctx.tenantId, entryId, {
       requestedBy: ctx.employeeId,
     });
 

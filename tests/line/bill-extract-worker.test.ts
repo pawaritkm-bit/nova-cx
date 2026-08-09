@@ -33,6 +33,15 @@ import {
   nameSimilarity,
   digitsOnly,
 } from "@/lib/line/bill-extract-worker";
+import { TEST_CHART } from "@/tests/accounting/fixtures/chart";
+
+/** แถว chart_of_accounts จำลอง (schema DB จริง: code/name/category/is_bank) — mock listChartOfAccounts */
+const CHART_ROWS = TEST_CHART.map((a) => ({
+  code: a.code,
+  name: a.name,
+  category: a.category,
+  is_bank: !!a.bank,
+}));
 
 /** เก็บ insert เพื่อ assert */
 type Captured = { table: string; rows: Record<string, unknown>[] };
@@ -94,6 +103,8 @@ function makeWorkerDb(opts: {
     function resolveList(): { data: unknown; error: unknown } {
       if (table === "message_attachments") return { data: opts.attachments, error: null };
       if (table === "bill_entries") return { data: opts.existingEntries ?? [], error: null };
+      // ★ chart_of_accounts — mock listChartOfAccounts (A6: worker โหลดผังต่อ tenant มาเติม account_name)
+      if (table === "chart_of_accounts") return { data: CHART_ROWS, error: null };
       return { data: [], error: null };
     }
     return api;
@@ -692,6 +703,8 @@ function makeBackfillDb(opts: {
       if (table === "bill_entries") data = opts.entries;
       else if (table === "bill_entry_lines") data = opts.nullLines;
       else if (table === "message_attachments") data = opts.attachments;
+      // ★ chart_of_accounts — mock listChartOfAccounts (A6: backfill โหลดผังต่อ tenant มาเติม account_name)
+      else if (table === "chart_of_accounts") data = CHART_ROWS;
       return Promise.resolve({ data, error: null }).then(onF);
     };
     return api;

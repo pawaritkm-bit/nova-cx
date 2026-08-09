@@ -3,8 +3,11 @@
  *   buildStatements(entries, openingBalances) → { journal, ledger, trialBalance, incomeStatement, balanceSheet }
  *
  * ★ pure (ไม่แตะ DB) — ใช้ทั้งหน้า reports (server component) และ export route
+ * ★ เฟส 1 ส่วน C (docs/06 หมวด 0.1/0.3): manualJournalLines (จาก manual-journal.ts::toJournalLines,
+ *   ของ manual JE ที่ "ยืนยันแล้ว" เท่านั้น — caller กรองก่อนส่งเข้ามา) concat เข้าก่อน buildLedger
+ *   ไม่แก้ตรรกะ ledger/trial-balance/financial-statements เลย (ฟังก์ชันเหล่านั้นรับ JournalLine[] ดิบอยู่แล้ว)
  */
-import { buildJournalEntries, type JournalResult } from "@/lib/accounting/journal";
+import { buildJournalEntries, type JournalResult, type JournalLine } from "@/lib/accounting/journal";
 import { buildLedger, type Ledger } from "@/lib/accounting/ledger";
 import { buildTrialBalance, type TrialBalance } from "@/lib/accounting/trial-balance";
 import {
@@ -15,6 +18,7 @@ import {
 } from "@/lib/accounting/financial-statements";
 import type { BillEntry } from "@/lib/accounting/queries";
 import type { OpeningBalance } from "@/lib/accounting/opening-balance";
+import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 
 export type Statements = {
   journal: JournalResult;
@@ -26,10 +30,13 @@ export type Statements = {
 
 export function buildStatements(
   entries: BillEntry[],
-  openingBalances: Pick<OpeningBalance, "accountCode" | "accountName" | "openingBalance">[] = []
+  openingBalances: Pick<OpeningBalance, "accountCode" | "accountName" | "openingBalance">[] = [],
+  chartByCode: ChartByCode = {},
+  manualJournalLines: JournalLine[] = []
 ): Statements {
-  const journal = buildJournalEntries(entries);
-  const ledger = buildLedger(journal.lines, openingBalances);
+  const journal = buildJournalEntries(entries, chartByCode);
+  const allLines = manualJournalLines.length > 0 ? [...journal.lines, ...manualJournalLines] : journal.lines;
+  const ledger = buildLedger(allLines, openingBalances, chartByCode);
   const trialBalance = buildTrialBalance(ledger);
   const incomeStatement = buildIncomeStatement(trialBalance);
   const balanceSheet = buildBalanceSheet(trialBalance);

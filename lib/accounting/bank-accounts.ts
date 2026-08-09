@@ -10,7 +10,7 @@
  * ★ PDPA: ไม่ log ชื่อธนาคาร/เลขบัญชี/ชื่อลูกค้า
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isBankAccountCode } from "@/lib/accounting/chart-of-accounts";
+import { type ChartAccount, isBankAccountCode } from "@/lib/accounting/chart-of-accounts";
 
 type DB = SupabaseClient;
 
@@ -56,16 +56,20 @@ export type ValidatedBankAccount = {
 
 /**
  * validate + sanitize input บัญชีลูกค้า — คืน null ถ้า accountCode ไม่ใช่รหัสเงินฝาก
- *   ★ อนุญาตเฉพาะรหัสที่ bank:true ในผังกลาง (ไม่ให้ผูกบัญชีเงินฝากกับรหัสมั่ว/รหัสอื่น)
- *     — ถ้าจะรองรับเงินฝากเกิน 3 บัญชี ให้เพิ่มรหัส bank:true ในผังกลางก่อน (ชุดนี้ขยายเอง)
+ *   ★ อนุญาตเฉพาะรหัสที่ bank:true ในผัง (ไม่ให้ผูกบัญชีเงินฝากกับรหัสมั่ว/รหัสอื่น)
+ *     — ถ้าจะรองรับเงินฝากเกิน 3 บัญชี ให้เพิ่มรหัส bank:true ในผังก่อน (ชุดนี้ขยายเอง)
+ *   @param chart ผังบัญชีของ tenant — ไม่มี default (ผู้เรียกต้องส่งเสมอ)
  */
-export function validateBankAccountInput(input: {
-  accountCode: unknown;
-  bankName?: unknown;
-  accountNo?: unknown;
-}): ValidatedBankAccount | null {
+export function validateBankAccountInput(
+  chart: ChartAccount[],
+  input: {
+    accountCode: unknown;
+    bankName?: unknown;
+    accountNo?: unknown;
+  }
+): ValidatedBankAccount | null {
   const code = typeof input.accountCode === "string" ? input.accountCode.trim() : "";
-  if (!isBankAccountCode(code)) return null;
+  if (!isBankAccountCode(chart, code)) return null;
   return {
     accountCode: code,
     bankName: clampBankText(input.bankName, BANK_NAME_MAX),

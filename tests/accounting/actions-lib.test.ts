@@ -120,6 +120,40 @@ describe("upsertEntry", () => {
   });
 });
 
+describe("upsertEntry — dueDate (เฟส 2 ส่วน E)", () => {
+  it("ไม่ส่ง dueDate (undefined) → ไม่แตะค่าเดิม (ไม่อยู่ใน payload)", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    const res = await upsertEntry(db, "t1", { id: "e1", entryType: "sale" });
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update")!;
+    expect("due_date" in (upd.payload ?? {})).toBe(false);
+  });
+
+  it("ส่ง dueDate ใหม่ → อัปเดตจริง", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    const res = await upsertEntry(db, "t1", { id: "e1", entryType: "sale", dueDate: "2026-08-31" });
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update")!;
+    expect(upd.payload!.due_date).toBe("2026-08-31");
+  });
+
+  it("ส่ง dueDate เป็น null → ล้างค่า", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    const res = await upsertEntry(db, "t1", { id: "e1", entryType: "sale", dueDate: null });
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update")!;
+    expect(upd.payload!.due_date).toBeNull();
+  });
+
+  it("insert ใหม่พร้อม dueDate → ติดใน payload insert", async () => {
+    const { db, ops } = makeDb({});
+    const res = await upsertEntry(db, "t1", { entryType: "sale", dueDate: "2026-09-15" });
+    expect(res.ok).toBe(true);
+    const ins = ops.find((o) => o.kind === "insert")!;
+    expect(ins.payload!.due_date).toBe("2026-09-15");
+  });
+});
+
 describe("addLine — auto-calc WHT", () => {
   it("ส่ง whtRate อย่างเดียว → คำนวณ wht_amount = amount*rate/100", async () => {
     const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
@@ -143,6 +177,21 @@ describe("addLine — auto-calc WHT", () => {
     expect(res.ok).toBe(true);
     const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
     expect(ins.payload!.amount).toBe(100);
+  });
+
+  it("ส่ง productId (เฟส 1 ส่วน B) → เก็บ product_id ตรง ๆ", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    const res = await addLine(db, "t1", "e1", { amount: 100, productId: "prod-1" });
+    expect(res.ok).toBe(true);
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
+    expect(ins.payload!.product_id).toBe("prod-1");
+  });
+
+  it("ไม่ส่ง productId → product_id เป็น null (ไม่ผูกสินค้า)", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    await addLine(db, "t1", "e1", { amount: 100 });
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
+    expect(ins.payload!.product_id).toBeNull();
   });
 });
 
@@ -184,6 +233,27 @@ describe("updateLine", () => {
     expect(res.ok).toBe(true);
     const upd = ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
     expect(upd.payload!.amount).toBe(500);
+  });
+
+  it("ส่ง productId (เฟส 1 ส่วน B) → แก้ product_id ด้วย", async () => {
+    const { db, ops } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "draft" },
+    });
+    const res = await updateLine(db, "t1", "l1", { productId: "prod-2" });
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
+    expect(upd.payload!.product_id).toBe("prod-2");
+  });
+
+  it("ไม่ส่ง productId → ไม่แตะ product_id เดิม (undefined = ไม่อยู่ใน patch)", async () => {
+    const { db, ops } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "draft" },
+    });
+    await updateLine(db, "t1", "l1", { amount: 500 });
+    const upd = ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
+    expect("product_id" in (upd.payload ?? {})).toBe(false);
   });
 });
 

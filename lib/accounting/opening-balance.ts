@@ -9,7 +9,7 @@
  * ★ PDPA: ไม่ log ตัวเลข/ชื่อบัญชี/ลูกค้า
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
+import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 
 type DB = SupabaseClient;
 
@@ -121,11 +121,12 @@ function detectColumns(header: unknown[]): { code: number; name: number; opening
  * parse แถวจากไฟล์อัปโหลด (array ของ array — จาก 2D grid ที่อ่านด้วย exceljs) → ParsedOpeningRow[]
  *   ★ แถวแรกที่มีหัวคอลัมน์ code+opening = header · แถวถัดไป = ข้อมูล
  *   ★ จับคอลัมน์ยืดหยุ่น (ไทย/อังกฤษ) · ไม่พบ header ที่จำเป็น → คืน []
- *   ★ ชื่อบัญชี: ใช้จากไฟล์ก่อน · ไม่มี → เติมจากผังกลาง (ถ้ารหัสอยู่ในผัง)
- *   ★ validate: รหัสต้องไม่ว่าง · รับ "รหัสอิสระ" นอกผังกลางได้ (ธุรกิจอาจมีบัญชีย่อยเอง)
+ *   ★ ชื่อบัญชี: ใช้จากไฟล์ก่อน · ไม่มี → เติมจากผัง (ถ้ารหัสอยู่ในผัง)
+ *   ★ validate: รหัสต้องไม่ว่าง · รับ "รหัสอิสระ" นอกผังได้ (ธุรกิจอาจมีบัญชีย่อยเอง)
  *   ★ ข้ามแถวที่รหัสว่าง / เป็นแถวรวม ("รวม"/"total")
+ *   @param chartByCode ผังบัญชีของ tenant (map รหัส→บัญชี) — ไม่มี default (ผู้เรียกต้องส่งเสมอ)
  */
-export function parseOpeningBalanceRows(rows: unknown[][]): ParsedOpeningRow[] {
+export function parseOpeningBalanceRows(chartByCode: ChartByCode, rows: unknown[][]): ParsedOpeningRow[] {
   if (!Array.isArray(rows) || rows.length === 0) return [];
 
   // หาแถว header (แถวแรกที่จับ code + opening ได้)
@@ -159,7 +160,7 @@ export function parseOpeningBalanceRows(rows: unknown[][]): ParsedOpeningRow[] {
     seen.add(rawCode);
 
     const fileName = cols.name >= 0 ? clampOpeningText(cellToString(r[cols.name]), ACCOUNT_NAME_MAX) : null;
-    const accountName = fileName ?? CHART_BY_CODE[rawCode]?.name ?? null;
+    const accountName = fileName ?? chartByCode[rawCode]?.name ?? null;
     const openingBalance = parseMoney(cellToString(r[cols.opening]) ?? r[cols.opening]);
 
     out.push({ accountCode: rawCode, accountName, openingBalance });

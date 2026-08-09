@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { extractBillData, extractBillsData, type ExtractedBill, type ExtractedLine } from "@/lib/ai/bill-extract";
-import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
+import { buildChartByCode, type ChartAccount, type ChartByCode } from "@/lib/accounting/chart-of-accounts";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import { suggestWhtRate } from "@/lib/accounting/wht";
 import { calcVat } from "@/lib/accounting/calc";
 import { suggestPaymentMethod } from "@/lib/accounting/payment";
@@ -85,6 +86,22 @@ function isNonImage(attachmentType: string | null, mime: string): boolean {
   return attachmentType === "file" || mime === "application/pdf" || !mime.startsWith("image/");
 }
 
+/**
+ * ★ cache ผังบัญชีต่อ tenant ภายในรอบ worker เดียว (docs/06 A6) — โหลดครั้งเดียวต่อ tenant
+ *   ไม่ query ซ้ำต่อบิล (cron อาจสแกนหลาย tenant ในรอบเดียว — cache key ตาม tenant_id)
+ */
+function createChartCache(db: SupabaseClient) {
+  const cache = new Map<string, Promise<ChartAccount[]>>();
+  return function getChart(tenantId: string): Promise<ChartAccount[]> {
+    let p = cache.get(tenantId);
+    if (!p) {
+      p = listChartOfAccounts(db, tenantId);
+      cache.set(tenantId, p);
+    }
+    return p;
+  };
+}
+
 /** ปัดทศนิยม 2 ตำแหน่ง (ยอดเงิน) */
 export function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -117,11 +134,14 @@ export function resolveLineWht(
  *   - forceNoVat: เอกสารเขียนมือ/เงินสด/สลิป บังคับ novat
  *   - aiUsed: true เมื่อสกัดด้วย AI สำเร็จ (ใช้ตั้ง ai_filled — PDF/degrade = false)
  *   ไม่มี line เลย → สร้าง 1 บรรทัดว่างให้คนคีย์ (ไม่ทิ้งทั้งใบ)
+ *   @param ctx.chartByCode ผังบัญชีของ tenant (map รหัส→บัญชี) — default {} เพื่อ backward-compat
+ *     ระดับ compile เท่านั้น (ผู้เรียกจริงต้องส่งผังจริงของ tenant มาเสมอ ไม่งั้น account_name จะว่าง)
  */
 export function buildEntryLineRows(
   lines: ExtractedLine[] | null | undefined,
-  ctx: { entryId: string; tenantId: string; forceNoVat: boolean; aiUsed: boolean }
+  ctx: { entryId: string; tenantId: string; forceNoVat: boolean; aiUsed: boolean; chartByCode?: ChartByCode }
 ): Record<string, unknown>[] {
+  const chartByCode = ctx.chartByCode ?? {};
   const src: ExtractedLine[] =
     lines && lines.length > 0
       ? lines
@@ -139,7 +159,7 @@ export function buildEntryLineRows(
         ];
   return src.map((l, i) => {
     const accountCode = l.account_code ?? null;
-    const accountName = accountCode ? CHART_BY_CODE[accountCode]?.name ?? null : null;
+    const accountName = accountCode ? chartByCode[accountCode]?.name ?? null : null;
     const amount = l.amount ?? 0;
     const vatType = ctx.forceNoVat ? ("novat" as const) : l.vat_type;
     // ★ VAT: AI อ่านได้ใช้เลย · ไม่มี → auto-คำนวณจากยอด×7% "เฉพาะ line ที่เป็น VAT"
@@ -520,6 +540,9 @@ export async function processBillExtraction(
   const rows = await selectExtractionCandidates(db, limit);
   if (rows.length === 0) return empty;
 
+  // ★ A6: cache ผังบัญชีต่อ tenant ในรอบนี้ (cron อาจสแกนหลาย tenant) — ไม่ query ซ้ำต่อบิล
+  const getChart = createChartCache(db);
+
   let scanned = 0;
   let created = 0;
   let extracted = 0;
@@ -609,14 +632,15 @@ export async function processBillExtraction(
           continue;
         }
       }
+      const chart = await getChart(row.tenant_id);
       if (isPdf) {
         // ★ PDF: ใช้ extractBillsData (gpt-5-mini อ่าน PDF ได้) แล้วเอา "บิลแรก"
         //   (1 attachment = 1 entry เพราะ attachment_id unique) · อ่านไม่ได้ = [] → bill=null (draft ว่าง)
-        const bills = await extractBillsData(buf, mime);
+        const bills = await extractBillsData(buf, mime, chart);
         bill = bills[0] ?? null;
       } else {
         // รูปบิลไลน์ = gpt-4o-mini (ประหยัด · ปริมาณมากทุกวันผ่าน cron)
-        bill = await extractBillData(buf, mime);
+        bill = await extractBillData(buf, mime, chart);
       }
     }
 
@@ -671,6 +695,7 @@ export async function processBillExtraction(
       tenantId: row.tenant_id,
       forceNoVat,
       aiUsed: !!bill,
+      chartByCode: buildChartByCode(await getChart(row.tenant_id)),
     });
     const { error: lineErr } = await db.from("bill_entry_lines").insert(lineRows);
     if (lineErr) {
@@ -775,8 +800,11 @@ export async function extractUploadedEntry(
   } catch {
     return NONE;
   }
-  const bills = await extractBillsData(buf, mime);
+  // ★ ผังบัญชีของ tenant นี้ — โหลดครั้งเดียว (entry เดี่ยว ไม่ loop หลาย tenant)
+  const chart = await listChartOfAccounts(db, tenantId);
+  const bills = await extractBillsData(buf, mime, chart);
   if (bills.length === 0) return NONE;
+  const chartByCode = buildChartByCode(chart);
 
   const entryType = entry.entry_type;
 
@@ -785,7 +813,7 @@ export async function extractUploadedEntry(
   await db.from("bill_entry_lines").delete().eq("entry_id", entryId).eq("tenant_id", tenantId);
   await db
     .from("bill_entry_lines")
-    .insert(buildEntryLineRows(bills[0].lines, { entryId, tenantId, forceNoVat: false, aiUsed: true }));
+    .insert(buildEntryLineRows(bills[0].lines, { entryId, tenantId, forceNoVat: false, aiUsed: true, chartByCode }));
 
   // 6) บิลที่ 2..N → สร้าง entry ใหม่ (ลูกค้า/ประเภท/ไฟล์เดียวกัน) ให้นักบัญชีตรวจแยกใบ
   for (let i = 1; i < bills.length; i++) {
@@ -807,7 +835,9 @@ export async function extractUploadedEntry(
     if (!newId) continue;
     await db
       .from("bill_entry_lines")
-      .insert(buildEntryLineRows(bills[i].lines, { entryId: newId, tenantId, forceNoVat: false, aiUsed: true }));
+      .insert(
+        buildEntryLineRows(bills[i].lines, { entryId: newId, tenantId, forceNoVat: false, aiUsed: true, chartByCode })
+      );
   }
 
   return { extracted: true, count: bills.length };
@@ -1017,6 +1047,9 @@ export async function backfillEntryAccounts(
   });
   if (entries.length === 0) return empty;
 
+  // ★ A6: cache ผังบัญชีต่อ tenant ในรอบนี้ (entry อาจกระจายหลาย tenant) — ไม่ query ซ้ำต่อบิล
+  const getChart = createChartCache(db);
+
   let scanned = 0;
   let entriesFilled = 0;
   let linesFilled = 0;
@@ -1041,15 +1074,17 @@ export async function backfillEntryAccounts(
     } catch {
       continue;
     }
-    const bill = await extractBillData(buf, mime);
+    const chart = await getChart(e.tenant_id);
+    const bill = await extractBillData(buf, mime, chart);
     if (!bill) continue;
+    const chartByCode = buildChartByCode(chart);
 
     // จับคู่บรรทัดเดิม (เรียง line_no) กับบรรทัดที่ AI สกัดใหม่ (ตามลำดับ) → เติมเฉพาะบัญชี
     let filledThisEntry = 0;
     for (let i = 0; i < nullLines.length; i += 1) {
       const code = bill.lines[i]?.account_code ?? null;
       if (!code) continue;
-      const name = CHART_BY_CODE[code]?.name ?? null;
+      const name = chartByCode[code]?.name ?? null;
       const { error: updErr } = await db
         .from("bill_entry_lines")
         .update({ account_code: code, account_name: name, ai_filled: true })
@@ -1204,6 +1239,9 @@ export async function reExtractIncompleteEntries(
     }
   }
 
+  // ★ A6: cache ผังบัญชีต่อ tenant ในรอบนี้ (entry อาจกระจายหลาย tenant) — ไม่ query ซ้ำต่อบิล
+  const getChart = createChartCache(db);
+
   let scanned = 0;
   let updated = 0;
   let stillEmpty = 0;
@@ -1227,7 +1265,8 @@ export async function reExtractIncompleteEntries(
     } catch {
       continue;
     }
-    const bill = await extractBillData(buf, mime);
+    const chart = await getChart(e.tenant_id);
+    const bill = await extractBillData(buf, mime, chart);
     // ★ mark "ลองสกัดใหม่แล้ว" ทันทีหลังยิง AI จริง (ครอบทุกผล: null/stillEmpty/updated)
     //   → รอบหน้า selection ข้ามใบนี้ ไม่วนซ้ำบิลหน้าคิวเดิม (guard ai+draft: ไม่แตะที่คนยืนยันแล้ว)
     await markReextractAttempted(db, e.id);
@@ -1295,6 +1334,7 @@ export async function reExtractIncompleteEntries(
       tenantId: e.tenant_id,
       forceNoVat,
       aiUsed: true,
+      chartByCode: buildChartByCode(chart),
     });
     const { error: insErr } = await db.from("bill_entry_lines").insert(lineRows);
     if (insErr) {

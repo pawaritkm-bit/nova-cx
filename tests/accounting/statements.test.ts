@@ -9,6 +9,9 @@ import {
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
 import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import type { OpeningBalance } from "@/lib/accounting/opening-balance";
+import { buildStatements } from "@/lib/accounting/statements";
+import { toJournalLines, type ManualJournalEntry } from "@/lib/accounting/manual-journal";
+import { toJournalLines as toNoteJournalLines, type CreditDebitNote } from "@/lib/accounting/credit-debit-notes";
 
 /**
  * เทสต์ engine ออกงบการเงิน (pure) — เน้น "พิสูจน์สมดุล double-entry" ด้วยตัวเลขที่คำนวณมือแล้ว:
@@ -62,6 +65,7 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     paymentMethod: p.paymentMethod ?? null,
     paymentBankAccountId: p.paymentBankAccountId ?? null,
     paymentBankAccountCode: p.paymentBankAccountCode ?? null,
+    dueDate: p.dueDate ?? null,
     status: p.status ?? "confirmed",
     source: p.source ?? "ai",
     aiConfidence: null,
@@ -302,5 +306,140 @@ describe("full book — ยอดยกมาไม่สมดุล → balanc
     expect(tb.balanced).toBe(false);
     expect(bs.balanced).toBe(false);
     expect(bs.difference).not.toBe(0);
+  });
+});
+
+// ===================================================================
+// E. buildStatements() facade — manual JE (เฟส 1 ส่วน C) concat เข้า ledger/trial-balance/งบ
+// ===================================================================
+describe("buildStatements — manualJournalLines concat ก่อน buildLedger (ไม่กระทบ journal.lines/skipped ของบิล)", () => {
+  const opening: OpeningBalance[] = [
+    { id: "o1", accountCode: "1010", accountName: "เงินสด", openingBalance: 5000, note: null },
+    { id: "o2", accountCode: "3010", accountName: "ทุนเรือนหุ้น", openingBalance: -5000, note: null },
+  ];
+
+  const billEntries: BillEntry[] = [
+    mkEntry({
+      id: "p1",
+      entryType: "purchase",
+      paymentMethod: "cash",
+      docDate: "2026-07-05",
+      lines: [mkLine({ accountCode: "5010", amount: 1000, vatAmount: 70, whtAmount: 30 })],
+    }),
+  ];
+
+  // manual JE: ปรับปรุงค่าเสื่อมราคา (JV) — Dr 5370 ค่าเสื่อม 500 / Cr 1615.1 ค่าเสื่อมสะสม 500 (สมดุล)
+  const manualEntry: ManualJournalEntry = {
+    id: "je1",
+    tenantId: "t",
+    customerId: "c1",
+    docType: "JV",
+    docDate: "2026-07-20",
+    docNo: "JV-001",
+    memo: "ปรับปรุงค่าเสื่อมราคา",
+    status: "confirmed",
+    createdAt: "2026-07-20T00:00:00Z",
+    confirmedAt: "2026-07-20T00:00:00Z",
+    lines: [
+      { id: "l1", lineNo: 1, accountCode: "5370", accountName: "ค่าเสื่อมราคา-อาคาร", description: null, debit: 500, credit: 0 },
+      { id: "l2", lineNo: 2, accountCode: "1615.1", accountName: "ค่าเสื่อมสะสม-อาคาร", description: null, debit: 0, credit: 500 },
+    ],
+  };
+  const manualLines = toJournalLines(manualEntry);
+
+  it("ไม่ส่ง manualJournalLines (default []) → behavior เดิมทุกอย่าง (ไม่มี manual accounts ปน)", () => {
+    const s = buildStatements(billEntries, opening);
+    expect(s.ledger.byCode.get("5370")).toBeUndefined();
+    expect(s.trialBalance.totalDebit).toBe(s.trialBalance.totalCredit);
+  });
+
+  it("ส่ง manualJournalLines → ปรากฏใน ledger ถูกต้อง (บัญชีค่าเสื่อม/ค่าเสื่อมสะสม)", () => {
+    const s = buildStatements(billEntries, opening, {}, manualLines);
+    expect(s.ledger.byCode.get("5370")?.balance).toBe(500);
+    expect(s.ledger.byCode.get("1615.1")?.balance).toBe(-500);
+  });
+
+  it("★ งบทดลอง: manual JE รวมเข้าสมดุลรวมทั้งระบบ (เดบิตรวม = เครดิตรวม)", () => {
+    const s = buildStatements(billEntries, opening, {}, manualLines);
+    // เดิม (ไม่มี manual): 1070 (จากบิลซื้อ) — บวก manual 500/500 เข้าไปอีก
+    expect(s.trialBalance.totalDebit).toBe(1070 + 500);
+    expect(s.trialBalance.totalCredit).toBe(1070 + 500);
+    expect(s.trialBalance.movementBalanced).toBe(true);
+  });
+
+  it("★ งบกำไรขาดทุน: ค่าเสื่อมราคาจาก manual JE รวมเป็นค่าใช้จ่ายด้วย", () => {
+    const s = buildStatements(billEntries, opening, {}, manualLines);
+    // ค่าใช้จ่ายเดิม 1000 (ซื้อ 5010) + ค่าเสื่อม manual 500 = 1500
+    expect(s.incomeStatement.totalExpense).toBe(1500);
+  });
+
+  it("journal.lines/skipped ของ statements.journal ไม่รวม manual JE (ตามสเปก C3 — concat แค่ก่อน buildLedger)", () => {
+    const s = buildStatements(billEntries, opening, {}, manualLines);
+    expect(s.journal.lines.some((l) => l.accountCode === "5370")).toBe(false);
+  });
+});
+
+// ===================================================================
+// F. buildStatements() + noteJournalLines (เฟส 3 ส่วน J, 0.7 — CN/DN concat เข้างบเดียวกับ manual JE)
+// ===================================================================
+describe("buildStatements — noteJournalLines (CN/DN) concat เข้า buildLedger แล้วงบทดลองยังสมดุล", () => {
+  const opening: OpeningBalance[] = [
+    { id: "o1", accountCode: "1010", accountName: "เงินสด", openingBalance: 5000, note: null },
+    { id: "o2", accountCode: "3010", accountName: "ทุนเรือนหุ้น", openingBalance: -5000, note: null },
+  ];
+
+  // บิลขายเชื่อ 2000+140(vat) = 2140 → ตั้ง AR (1140) ไว้
+  const billEntries: BillEntry[] = [
+    mkEntry({
+      id: "s1",
+      entryType: "sale",
+      paymentMethod: "credit",
+      docDate: "2026-07-10",
+      lines: [mkLine({ accountCode: "4010", amount: 2000, vatAmount: 140 })],
+    }),
+  ];
+
+  // ใบลดหนี้ (credit_note) ลดยอดขาย 500 + vat 35 = 535 — กลับทิศทั้งหมดของบิลขายปกติ (0.5)
+  const note: CreditDebitNote = {
+    id: "cn1",
+    tenantId: "t",
+    entryId: "s1",
+    customerId: "c1",
+    docType: "credit_note",
+    docDate: "2026-07-20",
+    docNo: "CN-001",
+    reason: "สินค้าชำรุด",
+    status: "confirmed",
+    createdAt: "2026-07-20T00:00:00Z",
+    confirmedAt: "2026-07-20T00:00:00Z",
+    lines: [{ lineNo: 1, description: null, accountCode: "4010", accountName: "ขายสินค้า", amount: 500, vatAmount: 35 }],
+  };
+  const noteLines = toNoteJournalLines(
+    note,
+    { entryType: "sale", docNo: "INV-001", customerId: "c1", counterpartyName: "ลูกค้า A" },
+    {}
+  );
+
+  it("ไม่ส่ง noteJournalLines (default []) → behavior เดิม (ไม่มี CN ปน)", () => {
+    const s = buildStatements(billEntries, opening);
+    expect(s.ledger.byCode.get("1140")?.balance).toBe(2140);
+  });
+
+  it("ส่ง noteJournalLines → AR (1140) ลดลงตามยอด CN, บัญชีขาย/VAT ขายลดลงตรงกัน", () => {
+    const s = buildStatements(billEntries, opening, {}, noteLines);
+    expect(s.ledger.byCode.get("1140")?.balance).toBe(2140 - 535); // ลูกหนี้ลดลงตามยอด CN
+    expect(s.ledger.byCode.get("4010")?.balance).toBe(-2000 + 500); // รายได้ลดลง (เดบิตเข้าไปหักเครดิตเดิม)
+    expect(s.ledger.byCode.get("2900")?.balance).toBe(-140 + 35); // ภาษีขายลดลง
+  });
+
+  it("★ งบทดลอง: CN รวมเข้าสมดุลรวมทั้งระบบ (เดบิตรวม = เครดิตรวม)", () => {
+    const s = buildStatements(billEntries, opening, {}, noteLines);
+    expect(s.trialBalance.totalDebit).toBe(s.trialBalance.totalCredit);
+    expect(s.trialBalance.movementBalanced).toBe(true);
+  });
+
+  it("journal.lines ของ statements.journal ไม่รวม CN (concat แค่ก่อน buildLedger เหมือน manual JE)", () => {
+    const s = buildStatements(billEntries, opening, {}, noteLines);
+    expect(s.journal.lines.some((l) => l.entryId === "cn1")).toBe(false);
   });
 });

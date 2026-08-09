@@ -12,7 +12,7 @@ import {
   type OpeningBalance,
   type ParsedOpeningRow,
 } from "@/lib/accounting/opening-balance";
-import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
+import { buildChartByCode, type ChartAccount } from "@/lib/accounting/chart-of-accounts";
 import { formatMoney } from "@/lib/accounting/calc";
 
 /**
@@ -106,15 +106,19 @@ function parseCsvLine(line: string): string[] {
 export default function OpeningBalancePanel({
   customerId,
   initial,
+  chart,
 }: {
   customerId: string;
   initial: OpeningBalance[];
+  /** ผังบัญชีของ tenant (โหลดจาก DB ครั้งเดียวโดย opening/page.tsx) — เติมชื่อบัญชีอัตโนมัติ */
+  chart: ChartAccount[];
 }) {
   const [rows, setRows] = useState<Row[]>(() => toRows(initial));
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [preview, setPreview] = useState<ParsedOpeningRow[] | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const chartByCode = useMemo(() => buildChartByCode(chart), [chart]);
 
   const patch = (key: string, p: Partial<Row>) =>
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...p } : r)));
@@ -133,7 +137,7 @@ export default function OpeningBalancePanel({
 
   // เติมชื่อบัญชีอัตโนมัติจากผังกลางเมื่อพิมพ์รหัสที่รู้จัก (ถ้ายังไม่มีชื่อ)
   const onCodeChange = (row: Row, code: string) => {
-    const name = !row.accountName && CHART_BY_CODE[code.trim()]?.name;
+    const name = !row.accountName && chartByCode[code.trim()]?.name;
     patch(row.key, name ? { accountCode: code, accountName: name } : { accountCode: code });
   };
 
@@ -175,7 +179,7 @@ export default function OpeningBalancePanel({
     setPreview(null);
     try {
       const grid = await fileToGrid(file);
-      const parsed = parseOpeningBalanceRows(grid);
+      const parsed = parseOpeningBalanceRows(chartByCode, grid);
       if (parsed.length === 0) {
         setMsg({
           ok: false,

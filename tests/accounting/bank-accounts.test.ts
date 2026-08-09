@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  BANK_ACCOUNT_CODES,
-  isBankAccountCode,
-  searchChartNonBank,
-  CHART_OF_ACCOUNTS,
-} from "@/lib/accounting/chart-of-accounts";
+import { bankAccountCodesOf, isBankAccountCode, searchChartNonBank } from "@/lib/accounting/chart-of-accounts";
 import {
   clampBankText,
   bankAccountDisplayName,
@@ -14,13 +9,17 @@ import {
   ACCOUNT_NO_MAX,
   type CustomerBankAccount,
 } from "@/lib/accounting/bank-accounts";
+import { TEST_CHART } from "@/tests/accounting/fixtures/chart";
 
 /**
  * เทสต์ helper pure ของฟีเจอร์ "บัญชีธนาคารต่อลูกค้า":
  *   1) ผังกลาง genericize — บัญชีเงินฝาก 1020/1025/1030 เป็น bank + ชื่อ generic
  *   2) validate accountCode (ต้องเป็นรหัสเงินฝาก) + sanitize ชื่อ/เลข
  *   3) merge/filter ตัวเลือก picker (บัญชีลูกค้า + ผังกลางที่ตัดหมวดเงินฝาก)
+ *   ★ ทุกฟังก์ชันรับ chart เป็นพารามิเตอร์ (ไม่มี module constant อีกต่อไป) — ใช้ TEST_CHART fixture
  */
+
+const BANK_ACCOUNT_CODES = bankAccountCodesOf(TEST_CHART);
 
 describe("chart-of-accounts — genericize หมวดเงินฝาก (bank:true)", () => {
   it("BANK_ACCOUNT_CODES = 1020/1025/1030 (คำนวณจาก bank:true)", () => {
@@ -29,7 +28,7 @@ describe("chart-of-accounts — genericize หมวดเงินฝาก (ba
 
   it("ชื่อบัญชีเงินฝากเป็น generic ไม่มีเลขบัญชีจริง (กัน PDPA)", () => {
     for (const code of BANK_ACCOUNT_CODES) {
-      const acct = CHART_OF_ACCOUNTS.find((a) => a.code === code)!;
+      const acct = TEST_CHART.find((a) => a.code === code)!;
       expect(acct.bank).toBe(true);
       expect(acct.name).toMatch(/^เงินฝากธนาคาร #\d$/);
       // ไม่มีเลขบัญชีจริงหลงเหลือ (เช่น 210-1-77368-2)
@@ -38,25 +37,25 @@ describe("chart-of-accounts — genericize หมวดเงินฝาก (ba
   });
 
   it("isBankAccountCode: จริงเฉพาะรหัสเงินฝาก", () => {
-    expect(isBankAccountCode("1020")).toBe(true);
-    expect(isBankAccountCode("1030")).toBe(true);
-    expect(isBankAccountCode("1010")).toBe(false); // เงินสด
-    expect(isBankAccountCode("5010")).toBe(false);
-    expect(isBankAccountCode("")).toBe(false);
-    expect(isBankAccountCode("9999")).toBe(false);
+    expect(isBankAccountCode(TEST_CHART, "1020")).toBe(true);
+    expect(isBankAccountCode(TEST_CHART, "1030")).toBe(true);
+    expect(isBankAccountCode(TEST_CHART, "1010")).toBe(false); // เงินสด
+    expect(isBankAccountCode(TEST_CHART, "5010")).toBe(false);
+    expect(isBankAccountCode(TEST_CHART, "")).toBe(false);
+    expect(isBankAccountCode(TEST_CHART, "9999")).toBe(false);
   });
 
   it("★ searchChartNonBank: รวมบัญชีเงินฝาก (bank:true) เข้าตัวเลือกปกติแล้ว", () => {
-    const all = searchChartNonBank("");
+    const all = searchChartNonBank(TEST_CHART, "");
     expect(all.some((a) => a.bank)).toBe(true);
     // 1010 เงินสด และ 1020 เงินฝาก อยู่ครบ (เลือกได้เหมือนบัญชีอื่น)
     expect(all.some((a) => a.code === "1010")).toBe(true);
     expect(all.some((a) => a.code === "1020")).toBe(true);
-    expect(all.length).toBe(CHART_OF_ACCOUNTS.length);
+    expect(all.length).toBe(TEST_CHART.length);
   });
 
   it("searchChartNonBank: ค้น 'เงินฝาก' คืน generic bank ด้วย (รวมเข้าหมวด 1 แล้ว)", () => {
-    const r = searchChartNonBank("เงินฝากธนาคาร");
+    const r = searchChartNonBank(TEST_CHART, "เงินฝากธนาคาร");
     expect(r.some((a) => a.bank)).toBe(true);
     // เจอทั้งเงินฝากธนาคาร (bank) และ 4210 ดอกเบี้ยเงินฝากธนาคาร (ไม่ใช่ bank)
     expect(r.some((a) => a.code === "4210")).toBe(true);
@@ -91,14 +90,14 @@ describe("bank-accounts — bankAccountDisplayName", () => {
 
 describe("bank-accounts — validateBankAccountInput", () => {
   it("accountCode ไม่ใช่รหัสเงินฝาก → null (ปฏิเสธ)", () => {
-    expect(validateBankAccountInput({ accountCode: "1010" })).toBeNull(); // เงินสด
-    expect(validateBankAccountInput({ accountCode: "9999" })).toBeNull();
-    expect(validateBankAccountInput({ accountCode: "" })).toBeNull();
-    expect(validateBankAccountInput({ accountCode: 1020 as unknown })).toBeNull();
+    expect(validateBankAccountInput(TEST_CHART, { accountCode: "1010" })).toBeNull(); // เงินสด
+    expect(validateBankAccountInput(TEST_CHART, { accountCode: "9999" })).toBeNull();
+    expect(validateBankAccountInput(TEST_CHART, { accountCode: "" })).toBeNull();
+    expect(validateBankAccountInput(TEST_CHART, { accountCode: 1020 as unknown })).toBeNull();
   });
 
   it("รหัสเงินฝากถูก → คืนค่าที่ sanitize แล้ว", () => {
-    const v = validateBankAccountInput({
+    const v = validateBankAccountInput(TEST_CHART, {
       accountCode: "  1020  ",
       bankName: "  กสิกรไทย  ",
       accountNo: "210-1-77368-2",
@@ -111,12 +110,12 @@ describe("bank-accounts — validateBankAccountInput", () => {
   });
 
   it("ชื่อ/เลขว่าง → null (ไม่บังคับ)", () => {
-    const v = validateBankAccountInput({ accountCode: "1025", bankName: "", accountNo: "   " });
+    const v = validateBankAccountInput(TEST_CHART, { accountCode: "1025", bankName: "", accountNo: "   " });
     expect(v).toEqual({ accountCode: "1025", bankName: null, accountNo: null });
   });
 
   it("clamp ความยาวชื่อ/เลข", () => {
-    const v = validateBankAccountInput({
+    const v = validateBankAccountInput(TEST_CHART, {
       accountCode: "1030",
       bankName: "ก".repeat(200),
       accountNo: "1".repeat(200),

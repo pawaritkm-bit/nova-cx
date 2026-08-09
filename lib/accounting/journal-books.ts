@@ -9,8 +9,11 @@
  * ★★ สมมติฐานบัญชี (ต้องให้นักบัญชียืนยัน) ★★
  *   A) จัดเล่มตาม "ชนิดเอกสาร" (ผู้ใช้ยืนยัน 2026-08-04): บิลซื้อทุกใบ → สมุดรายวันซื้อ,
  *      บิลขายทุกใบ → สมุดรายวันขาย (ไม่แยกตามวิธีชำระ). 1 บิล → เข้าเล่มเดียว (กัน double count).
- *      ★ เล่มรับเงิน/จ่ายเงิน = เงินสดเข้า-ออกจริง — ยังไม่ post จากบิล (จะมาจากสเตทเมนต์ภายหลัง)
- *        จึงยังว่างจากข้อมูลบิลปัจจุบัน — ★ ต้องยืนยันว่าจะ feed รับ/จ่ายจากอะไร.
+ *      ★ เล่มรับเงิน/จ่ายเงิน = เงินสดเข้า-ออกจริง — บิลปกติไม่ post มาที่เล่มนี้ (บิลไม่มีแนวคิด receipt/
+ *        payment voucher ของตัวเอง) ★ เฟส 1 ส่วน C (docs/06 หมวด 0.8) แก้ TODO เดิมนี้แล้ว: manual
+ *        journal entry (JV/PV/RV, lib/accounting/manual-journal.ts) คือ data source ที่ feed 2 เล่มนี้
+ *        — PV (ใบสำคัญจ่ายเงิน) → เล่มจ่ายเงิน, RV (ใบสำคัญรับเงิน) → เล่มรับเงิน, JV → เล่มทั่วไป
+ *        ผสมเข้าผ่านพารามิเตอร์ manualPostings ของ buildJournalBooks() ด้านล่าง (ไม่ผ่าน billEntry เลย)
  *   B) #10 "ฝั่งขายไม่วิ่งสมุดรายวัน(ทั่วไป)": บิลขายไม่ตกสมุดรายวันทั่วไป (อยู่เล่มขาย).
  *      classifyBook ไม่มีทางคืน 'general' ให้บิลขาย.
  *   C) การ map บัญชีเดบิต/เครดิต (บัญชีคู่จากวิธีรับ/จ่ายเงิน) ใช้กติกาเดียวกับ journal.ts
@@ -20,6 +23,7 @@
  */
 import { round2, type BillEntry, type PaymentMethod } from "@/lib/accounting/queries";
 import { buildJournalEntries, type SkippedEntry } from "@/lib/accounting/journal";
+import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 
 /** เล่มสมุดรายวัน 5 เล่ม */
 export type BookKind = "purchase" | "sale" | "payment" | "receipt" | "general";
@@ -111,13 +115,23 @@ function byDateAsc(a: JournalPosting, b: JournalPosting): number {
 }
 
 /**
- * สร้างสมุดรายวัน 5 เล่มจากบิลทั้งชุด
+ * สร้างสมุดรายวัน 5 เล่มจากบิลทั้งชุด + manual JE (เฟส 1 ส่วน C, 0.8)
  *   - ใช้ buildJournalEntries คำนวณเดบิต/เครดิต (สมดุลต่อบิล) + คัดบิลที่ลงไม่ได้ (skipped)
  *   - จับกลุ่ม lines กลับเป็นใบสำคัญต่อบิล แล้วแยกเข้าเล่มตาม classifyBook
- *   ผู้เรียกควรกรอง customer + month มาก่อน (ผ่าน listEntries)
+ *   - manualPostings (จาก manual-journal.ts::toJournalPosting — สมดุลแล้วต่อใบ) ผสมเข้าเล่มตรง ๆ
+ *     ตาม posting.book ที่ระบุมา (JV→ทั่วไป, PV→จ่ายเงิน, RV→รับเงิน) ★ แก้ TODO เดิม: เล่มรับ/จ่ายเงิน
+ *     เคยว่างเปล่าเพราะไม่มีข้อมูลจากบิล — manual JE คือ data source ที่ TODO นี้รออยู่พอดี
+ *   ผู้เรียกควรกรอง customer + month มาก่อน (ผ่าน listEntries / listManualEntries + filterManualEntriesForReport)
+ *   @param chartByCode ผังบัญชีของ tenant — default {} เพื่อ backward-compat ระดับ compile
+ *     (ผู้เรียกจริงควรส่งของจริงมา ไม่งั้นชื่อบัญชีของ VAT/WHT/บัญชีคู่ synthetic จะ fallback เป็นแค่รหัส)
+ * @param manualPostings ใบสำคัญจาก manual JE ที่ "ยืนยันแล้ว" (caller กรองตาม status/งวดก่อนส่งเข้ามา)
  */
-export function buildJournalBooks(entries: BillEntry[]): JournalBooksResult {
-  const { lines, skipped } = buildJournalEntries(entries);
+export function buildJournalBooks(
+  entries: BillEntry[],
+  chartByCode: ChartByCode = {},
+  manualPostings: JournalPosting[] = []
+): JournalBooksResult {
+  const { lines, skipped } = buildJournalEntries(entries, chartByCode);
 
   // map entryId → entry (เอา entryType/paymentMethod มาจัดเล่ม)
   const entryById = new Map<string, BillEntry>();
@@ -161,6 +175,14 @@ export function buildJournalBooks(entries: BillEntry[]): JournalBooksResult {
   };
 
   for (const p of postingByEntry.values()) {
+    const book = books[p.book];
+    book.postings.push(p);
+    book.totalDebit = round2(book.totalDebit + p.totalDebit);
+    book.totalCredit = round2(book.totalCredit + p.totalCredit);
+  }
+
+  // manual JE — ผสมเข้าเล่มตาม posting.book ตรง ๆ (คำนวณ/สมดุลมาแล้วจาก manual-journal.ts)
+  for (const p of manualPostings) {
     const book = books[p.book];
     book.postings.push(p);
     book.totalDebit = round2(book.totalDebit + p.totalDebit);

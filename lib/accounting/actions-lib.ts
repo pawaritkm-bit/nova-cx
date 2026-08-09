@@ -26,6 +26,11 @@ export type UpsertEntryInput = {
   paymentMethod?: PaymentMethod | null;
   /** บัญชีเงินฝากที่ใช้ (เฉพาะ transfer) · null = ล้าง */
   paymentBankAccountId?: string | null;
+  /**
+   * วันครบกำหนดชำระ (เฟส 2 ส่วน E, migration 0067) — YYYY-MM-DD · null = ล้าง
+   *   undefined = ไม่แตะค่าเดิม (pattern เดียวกับ paymentMethod)
+   */
+  dueDate?: string | null;
   notes?: string | null;
   /**
    * ไฟล์ที่นักบัญชี "อัปเอง" (แนบตอน insert entry ใหม่เท่านั้น)
@@ -45,6 +50,8 @@ export type LineInput = {
   accountCode?: string | null;
   /** ชื่อบัญชี (แก้ต่อบรรทัดได้) · null = ล้าง */
   accountName?: string | null;
+  /** สินค้า/บริการที่เลือก (เฟส 1 ส่วน B) — undefined = ไม่แตะ (update) · null = ล้าง */
+  productId?: string | null;
   amount?: number | null;
   vatAmount?: number | null;
   whtRate?: number | null;
@@ -107,6 +114,8 @@ export async function upsertEntry(
   } else if (input.paymentBankAccountId !== undefined) {
     payload.payment_bank_account_id = input.paymentBankAccountId ?? null;
   }
+  // วันครบกำหนดชำระ: ใส่เฉพาะเมื่อส่งค่ามา (undefined = ไม่แตะ — กัน update ทับเป็น null)
+  if (input.dueDate !== undefined) payload.due_date = input.dueDate ?? null;
   // ไฟล์อัปเอง: ใส่เฉพาะเมื่อส่งค่ามา (undefined = ไม่แตะ — กัน update ทับไฟล์เดิมเป็น null)
   if (input.uploadPath !== undefined) payload.upload_path = input.uploadPath;
   if (input.uploadName !== undefined) payload.upload_name = input.uploadName;
@@ -203,6 +212,7 @@ export async function addLine(
       description: input.description ?? null,
       account_code: input.accountCode ?? null,
       account_name: input.accountName ?? null,
+      product_id: input.productId ?? null,
       amount,
       vat_amount: safeAmount(input.vatAmount),
       wht_rate: wht.rate,
@@ -239,6 +249,7 @@ export async function updateLine(
   if (input.description !== undefined) patch.description = input.description;
   if (input.accountCode !== undefined) patch.account_code = input.accountCode;
   if (input.accountName !== undefined) patch.account_name = input.accountName;
+  if (input.productId !== undefined) patch.product_id = input.productId;
   if (input.lineNo !== undefined) patch.line_no = input.lineNo;
   if (input.amount !== undefined) patch.amount = safeAmount(input.amount);
   if (input.vatAmount !== undefined) patch.vat_amount = safeAmount(input.vatAmount);

@@ -10,6 +10,11 @@
 import ExcelJS from "exceljs";
 import type { Statements, ReportKey } from "@/lib/accounting/statements";
 import { buildLedgerStatements } from "@/lib/accounting/ledger-statement";
+import type { FormalStatements } from "@/lib/accounting/formal-statements";
+import type { IncomeStatement, BalanceSheet } from "@/lib/accounting/financial-statements";
+import type { SkippedEntry } from "@/lib/accounting/journal";
+import { mergeCompareLines, sumCompareLines } from "@/lib/accounting/statement-compare";
+import { aggregateCashFlowLines, type CashFlowStatement } from "@/lib/accounting/cash-flow";
 
 /** วันที่แบบ พ.ศ. dd/mm/yyyy สำหรับชีทบัญชีแยกประเภท (parse ตรง TZ ไม่เพี้ยน) */
 function dateBE(iso: string | null): string {
@@ -233,6 +238,263 @@ export async function buildStatementsWorkbook(
 
   // กันชีทว่าง (เผื่อ report ไม่ตรงอะไรเลย)
   if (wb.worksheets.length === 0) wb.addWorksheet("งบการเงิน");
+
+  const arrayBuffer = await wb.xlsx.writeBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+/* ============================================================================================
+ * เฟส 4 ส่วน N3 (docs/06-accounting-features-roadmap.md, N3) — งบการเงินฉบับทางการ เทียบงวด (.xlsx)
+ *   ★ เพิ่มฟังก์ชันใหม่ทั้งหมดข้างล่างนี้ — ไม่แก้โค้ดเดิมด้านบนแม้แต่บรรทัดเดียว (คนละ route/คนละ workbook)
+ *   ★ ใช้ mergeCompareLines/sumCompareLines เดียวกับที่จอ (N1) และหน้าพิมพ์ (N2) ใช้ — กันตัวเลขเพี้ยนกัน
+ *     ระหว่าง 3 จุด (0.13 spirit)
+ * ============================================================================================ */
+
+/** ป้ายงวด 1 ชุด (ปัจจุบัน หรือ งวดเทียบ) คู่กับ statement ของงวดนั้น */
+type LabeledIncome = { label: string; statement: IncomeStatement };
+type LabeledBalance = { label: string; statement: BalanceSheet };
+type LabeledCashFlow = { label: string; statement: CashFlowStatement };
+
+/** ชีท "งบกำไรขาดทุน" — เทียบงวดได้ (compare=null = ไม่เทียบ แสดงคอลัมน์เดียว) */
+export function sheetIncomeComparative(
+  wb: ExcelJS.Workbook,
+  current: LabeledIncome,
+  compare: LabeledIncome | null,
+  h: StatementsHeader
+): void {
+  const ws = wb.addWorksheet("งบกำไรขาดทุน");
+  writeTitle(ws, "งบกำไรขาดทุน (Income Statement)", h);
+  const cols = compare ? ["รหัสบัญชี", "รายการ", current.label, compare.label] : ["รหัสบัญชี", "รายการ", current.label];
+  styleHeaderRow(ws.addRow(cols));
+
+  const writeSection = (
+    title: string,
+    curLines: IncomeStatement["revenues"],
+    cmpLines: IncomeStatement["revenues"] | null
+  ) => {
+    ws.addRow(["", title]).font = { bold: true };
+    const rows = mergeCompareLines(curLines, cmpLines);
+    for (const r of rows) {
+      ws.addRow(compare ? [r.code, r.name, r.current, r.compare ?? 0] : [r.code, r.name, r.current]);
+    }
+    const totals = sumCompareLines(rows);
+    const totalRow = ws.addRow(
+      compare ? ["", `รวม${title}`, totals.current, totals.compare ?? 0] : ["", `รวม${title}`, totals.current]
+    );
+    totalRow.font = { bold: true };
+    return totals;
+  };
+
+  const revTotal = writeSection("รายได้", current.statement.revenues, compare?.statement.revenues ?? null);
+  const expTotal = writeSection("ค่าใช้จ่าย", current.statement.expenses, compare?.statement.expenses ?? null);
+
+  const netCompare = compare ? (revTotal.compare ?? 0) - (expTotal.compare ?? 0) : null;
+  const netRow = ws.addRow(
+    compare
+      ? ["", "กำไร(ขาดทุน)สุทธิ", current.statement.netProfit, netCompare ?? 0]
+      : ["", "กำไร(ขาดทุน)สุทธิ", current.statement.netProfit]
+  );
+  netRow.font = { bold: true };
+
+  const widths = compare ? [12, 34, 18, 18] : [12, 34, 18];
+  ws.columns.forEach((c, i) => (c.width = widths[i] ?? 14));
+  moneyCols(ws, compare ? [3, 4] : [3]);
+}
+
+/** ชีท "งบแสดงฐานะการเงิน" — เทียบ ณ จุดเวลาอีกจุดหนึ่งได้ (compare=null = ไม่เทียบ) */
+export function sheetBalanceComparative(
+  wb: ExcelJS.Workbook,
+  current: LabeledBalance,
+  compare: LabeledBalance | null,
+  h: StatementsHeader
+): void {
+  const ws = wb.addWorksheet("งบแสดงฐานะการเงิน");
+  writeTitle(ws, "งบแสดงฐานะการเงิน (Balance Sheet)", h);
+  const cols = compare ? ["รหัสบัญชี", "รายการ", current.label, compare.label] : ["รหัสบัญชี", "รายการ", current.label];
+  styleHeaderRow(ws.addRow(cols));
+
+  const writeSection = (
+    title: string,
+    curLines: BalanceSheet["assets"],
+    cmpLines: BalanceSheet["assets"] | null
+  ) => {
+    ws.addRow(["", title]).font = { bold: true };
+    const rows = mergeCompareLines(curLines, cmpLines);
+    for (const r of rows) {
+      ws.addRow(compare ? [r.code, r.name, r.current, r.compare ?? 0] : [r.code, r.name, r.current]);
+    }
+    const totals = sumCompareLines(rows);
+    const totalRow = ws.addRow(
+      compare ? ["", `รวม${title}`, totals.current, totals.compare ?? 0] : ["", `รวม${title}`, totals.current]
+    );
+    totalRow.font = { bold: true };
+    return totals;
+  };
+
+  const assetTotal = writeSection("สินทรัพย์", current.statement.assets, compare?.statement.assets ?? null);
+  const liabilityTotal = writeSection("หนี้สิน", current.statement.liabilities, compare?.statement.liabilities ?? null);
+  const equityTotal = writeSection("ส่วนของผู้ถือหุ้น", current.statement.equity, compare?.statement.equity ?? null);
+
+  ws.addRow(
+    compare
+      ? ["", "กำไร(ขาดทุน)สุทธิของงวด", current.statement.netProfit, compare.statement.netProfit]
+      : ["", "กำไร(ขาดทุน)สุทธิของงวด", current.statement.netProfit]
+  );
+
+  const equityWithProfitCompare = compare ? (equityTotal.compare ?? 0) + compare.statement.netProfit : null;
+  const equityRow = ws.addRow(
+    compare
+      ? ["", "รวมส่วนของผู้ถือหุ้น", current.statement.totalEquityWithProfit, equityWithProfitCompare ?? 0]
+      : ["", "รวมส่วนของผู้ถือหุ้น", current.statement.totalEquityWithProfit]
+  );
+  equityRow.font = { bold: true };
+
+  const liabEquityCompare = compare ? (liabilityTotal.compare ?? 0) + (equityWithProfitCompare ?? 0) : null;
+  const footRow = ws.addRow(
+    compare
+      ? [
+          "",
+          "รวมหนี้สินและส่วนของผู้ถือหุ้น",
+          current.statement.totalLiabilities + current.statement.totalEquityWithProfit,
+          liabEquityCompare ?? 0,
+        ]
+      : ["", "รวมหนี้สินและส่วนของผู้ถือหุ้น", current.statement.totalLiabilities + current.statement.totalEquityWithProfit]
+  );
+  footRow.font = { bold: true };
+
+  if (!current.statement.balanced) {
+    ws.addRow([]);
+    ws.addRow(["", `⚠️ งบไม่สมดุล — ผลต่าง ${current.statement.difference.toFixed(2)} (ตรวจยอดยกมา/บิลที่ตกหล่น)`]).font = {
+      color: { argb: "FFCC0000" },
+    };
+  }
+
+  const widths = compare ? [12, 34, 18, 18] : [12, 34, 18];
+  ws.columns.forEach((c, i) => (c.width = widths[i] ?? 14));
+  moneyCols(ws, compare ? [3, 4] : [3]);
+}
+
+/**
+ * ชีท "งบกระแสเงินสด" (เฟส 4 ส่วน O4, direct method) — เทียบงวดได้ (compare=null = ไม่เทียบ)
+ *   ★ รวม CashFlowLine[] เป็น StatementLine[] ต่อรหัสบัญชีผ่าน aggregateCashFlowLines ก่อนใช้
+ *   mergeCompareLines/sumCompareLines เดิม (0.13 spirit — ใช้ตัวรวมเดียวกับงบอื่น)
+ */
+export function sheetCashFlow(
+  wb: ExcelJS.Workbook,
+  current: LabeledCashFlow,
+  compare: LabeledCashFlow | null,
+  h: StatementsHeader
+): void {
+  const ws = wb.addWorksheet("งบกระแสเงินสด");
+  writeTitle(ws, "งบกระแสเงินสด (Cash Flow Statement)", h);
+  const cols = compare ? ["รหัสบัญชี", "รายการ", current.label, compare.label] : ["รหัสบัญชี", "รายการ", current.label];
+  styleHeaderRow(ws.addRow(cols));
+
+  const writeSection = (title: string, curLines: ReturnType<typeof aggregateCashFlowLines>, cmpLines: ReturnType<typeof aggregateCashFlowLines> | null) => {
+    ws.addRow(["", title]).font = { bold: true };
+    const rows = mergeCompareLines(curLines, cmpLines);
+    for (const r of rows) {
+      ws.addRow(compare ? [r.code, r.name, r.current, r.compare ?? 0] : [r.code, r.name, r.current]);
+    }
+    const totalRow = ws.addRow(
+      compare ? ["", `รวม${title}`, sumCompareLines(rows).current, sumCompareLines(rows).compare ?? 0] : ["", `รวม${title}`, sumCompareLines(rows).current]
+    );
+    totalRow.font = { bold: true };
+  };
+
+  writeSection(
+    "กิจกรรมดำเนินงาน",
+    aggregateCashFlowLines(current.statement.operating),
+    compare ? aggregateCashFlowLines(compare.statement.operating) : null
+  );
+  writeSection(
+    "กิจกรรมลงทุน",
+    aggregateCashFlowLines(current.statement.investing),
+    compare ? aggregateCashFlowLines(compare.statement.investing) : null
+  );
+  writeSection(
+    "กิจกรรมจัดหาเงิน",
+    aggregateCashFlowLines(current.statement.financing),
+    compare ? aggregateCashFlowLines(compare.statement.financing) : null
+  );
+
+  const netRow = ws.addRow(
+    compare
+      ? ["", "เงินสดเพิ่มขึ้น(ลดลง)สุทธิ", current.statement.netChange, compare.statement.netChange]
+      : ["", "เงินสดเพิ่มขึ้น(ลดลง)สุทธิ", current.statement.netChange]
+  );
+  netRow.font = { bold: true };
+  ws.addRow(
+    compare
+      ? ["", "เงินสดต้นงวด", current.statement.openingCash, compare.statement.openingCash]
+      : ["", "เงินสดต้นงวด", current.statement.openingCash]
+  );
+  const closingRow = ws.addRow(
+    compare
+      ? ["", "เงินสดปลายงวด", current.statement.closingCash, compare.statement.closingCash]
+      : ["", "เงินสดปลายงวด", current.statement.closingCash]
+  );
+  closingRow.font = { bold: true };
+
+  if (!current.statement.reconciled) {
+    ws.addRow([]);
+    ws.addRow(["", "⚠️ งบกระแสเงินสดยังไม่สมดุล (reconciled=false) — ตรวจการจัดหมวดรายการ"]).font = {
+      color: { argb: "FFCC0000" },
+    };
+  }
+
+  const widths = compare ? [12, 34, 18, 18] : [12, 34, 18];
+  ws.columns.forEach((c, i) => (c.width = widths[i] ?? 14));
+  moneyCols(ws, compare ? [3, 4] : [3]);
+}
+
+/** ชีท "รายการตกหล่น" ของงวดปัจจุบัน (mirror sheetSkipped เดิม แต่รับ SkippedEntry[] ตรง ๆ ไม่ต้องมี Statements เต็ม) */
+function sheetSkippedFromJournal(wb: ExcelJS.Workbook, skipped: SkippedEntry[]): void {
+  if (skipped.length === 0) return;
+  const ws = wb.addWorksheet("รายการตกหล่น");
+  ws.addRow(["รายการที่ยังไม่เข้าระบบงบ (ต้องแก้ก่อนงบจะครบ)"]).font = { bold: true, size: 13 };
+  ws.addRow([]);
+  const header = ws.addRow(["วันที่", "เลขที่", "ประเภท", "เหตุผล"]);
+  styleHeaderRow(header);
+  for (const sk of skipped) {
+    const typeLabel = sk.entryType === "purchase" ? "ซื้อ" : sk.entryType === "sale" ? "ขาย" : "รอระบุ";
+    ws.addRow([sk.date ?? "", sk.docNo ?? "", typeLabel, sk.reason]);
+  }
+  ws.columns.forEach((c, i) => (c.width = [12, 16, 10, 40][i] ?? 14));
+}
+
+/**
+ * สร้าง workbook งบการเงินฉบับทางการ (N3) — งบกำไรขาดทุน + งบแสดงฐานะการเงิน เทียบงวดได้
+ *   ★ ไฟล์แยกจาก buildStatementsWorkbook() เดิม (คนละ route: financial-statements/export)
+ *   @param formal งบของงวดปัจจุบัน (จาก buildFormalStatements())
+ *   @param header ป้ายกิจการ (ไม่รวมงวด — งวดใส่แยกต่อคอลัมน์ผ่าน compare.currentLabel/compareLabel)
+ *   @param currentLabel ป้ายงวดปัจจุบัน (เช่น "ก.ค. 2569")
+ *   @param compare งวดเทียบ (ถ้ามี) — null = ไม่เทียบ (export คอลัมน์เดียว)
+ */
+export async function buildFormalStatementsWorkbook(
+  formal: FormalStatements,
+  header: StatementsHeader,
+  currentLabel: string,
+  compare: { formal: FormalStatements; label: string } | null = null
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "NOVA-CX";
+  wb.created = new Date();
+
+  const compareIncome: LabeledIncome | null = compare
+    ? { label: compare.label, statement: compare.formal.flow.incomeStatement }
+    : null;
+  const compareBalance: LabeledBalance | null = compare
+    ? { label: compare.label, statement: compare.formal.balanceSheet }
+    : null;
+  const compareCashFlow: LabeledCashFlow | null = compare
+    ? { label: compare.label, statement: compare.formal.cashFlow }
+    : null;
+
+  sheetIncomeComparative(wb, { label: currentLabel, statement: formal.flow.incomeStatement }, compareIncome, header);
+  sheetBalanceComparative(wb, { label: currentLabel, statement: formal.balanceSheet }, compareBalance, header);
+  sheetCashFlow(wb, { label: currentLabel, statement: formal.cashFlow }, compareCashFlow, header);
+  sheetSkippedFromJournal(wb, formal.flow.journal.skipped);
 
   const arrayBuffer = await wb.xlsx.writeBuffer();
   return Buffer.from(arrayBuffer);

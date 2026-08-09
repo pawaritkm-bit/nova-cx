@@ -6,10 +6,11 @@ import { sendToFlowAccountAction } from "./flowaccount-actions";
 import type { EntryType, EntryStatus, FlowAccountSyncInfo } from "@/lib/accounting/queries";
 
 /**
- * ปุ่ม/ป้ายสถานะ "ส่งไป FlowAccount" ต่อแถวบิลขาย (docs/05-flowaccount-integration.md T8)
+ * ปุ่ม/ป้ายสถานะ "ส่งไป FlowAccount" ต่อแถวบิลขาย/บิลซื้อ (docs/05-flowaccount-integration.md T8,
+ *   เฟส 5 ส่วน P — ขยายให้บิลซื้อ (entry_type='purchase') ด้วย)
  *
  * ไม่ render อะไรเลยถ้า:
- *   - entryType ≠ 'sale'  หรือ
+ *   - entryType ≠ 'sale' และ ≠ 'purchase'  หรือ
  *   - status ≠ 'confirmed'  หรือ
  *   - ไม่มีลูกค้าผูก (customerId ว่าง)
  *
@@ -54,8 +55,8 @@ export default function FlowAccountSyncButton({
   const [pending, startTransition] = useTransition();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // ★ เกณฑ์แสดงปุ่ม: บิลขาย + ยืนยันแล้ว + มีลูกค้าผูก เท่านั้น
-  if (entryType !== "sale" || status !== "confirmed" || !customerId) {
+  // ★ เกณฑ์แสดงปุ่ม: บิลขาย/บิลซื้อ + ยืนยันแล้ว + มีลูกค้าผูก เท่านั้น (เฟส 5 ส่วน P — เปิดให้บิลซื้อด้วย)
+  if ((entryType !== "sale" && entryType !== "purchase") || status !== "confirmed" || !customerId) {
     return null;
   }
 

@@ -13,7 +13,12 @@
  * ★ PDPA: ไม่ log เนื้อบิล/ผลละเอียด — log แค่ error สั้น ๆ ไม่มีข้อมูลอ่อนไหว
  */
 
-import { CHART_BY_CODE, searchChartNonBank } from "@/lib/accounting/chart-of-accounts";
+import {
+  type ChartAccount,
+  type ChartByCode,
+  buildChartByCode,
+  searchChartNonBank,
+} from "@/lib/accounting/chart-of-accounts";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -57,13 +62,17 @@ const ACCOUNT_THRESHOLD = 0.7;
 const VAT_TYPE_THRESHOLD = 0.6;
 
 /**
- * รายการบัญชี (รหัส=ชื่อ) ใส่ใน prompt ให้โมเดลเลือก — สร้างครั้งเดียวตอนโหลด
+ * รายการบัญชี (รหัส=ชื่อ) ใส่ใน prompt ให้โมเดลเลือก — ★ คำนวณต่อ call จาก chart ของ tenant นั้น
+ *   (เดิมเป็น module constant คำนวณครั้งเดียวตอนโหลด — ผังบัญชีย้ายเป็น per-tenant ใน DB แล้ว จุดนี้ทำ
+ *   แบบเดิมไม่ได้ ต้องรู้ tenant ก่อนถึงจะรู้ผัง (docs/06 หมวด 0.5))
  *   ★ ตัดบัญชีเงินฝาก (bank:true) ออกจาก prompt — AI ไม่ควรเดาเงินฝากธนาคาร (ให้นักบัญชีเลือกเอง)
  */
-const CHART_PROMPT_LIST = searchChartNonBank("")
-  .filter((a) => !a.bank)
-  .map((a) => `${a.code}=${a.name}`)
-  .join(", ");
+export function buildChartPromptList(chart: ChartAccount[]): string {
+  return searchChartNonBank(chart, "")
+    .filter((a) => !a.bank)
+    .map((a) => `${a.code}=${a.name}`)
+    .join(", ");
+}
 
 /** vat_type ที่รู้จัก */
 const VAT_TYPES = new Set(["vat", "novat"]);
@@ -78,7 +87,7 @@ export type ExtractedLine = {
   vat_amount: number | null;
   /**
    * รหัสบัญชีจากผังกลาง (non-bank) ที่ AI แนะนำ · null = ไม่มั่นใจ/นอกผัง (ให้คนเลือก)
-   *   ★ ชื่อบัญชีให้ worker เติมจากผัง (CHART_BY_CODE) — ไม่เชื่อชื่อจากโมเดล
+   *   ★ ชื่อบัญชีให้ worker เติมจากผังของ tenant (chartByCode) — ไม่เชื่อชื่อจากโมเดล
    */
   account_code: string | null;
   /**
@@ -136,7 +145,9 @@ type ChatCompletionResponse = {
   error?: { message?: string };
 };
 
-const SYSTEM_PROMPT =
+/** system prompt ที่ฝัง "ผังบัญชีของ tenant นั้น" — คำนวณต่อ call (ดู buildChartPromptList) */
+function buildSystemPrompt(chart: ChartAccount[]): string {
+  return (
   "คุณเป็นผู้ช่วยบัญชีที่อ่านรูปบิล/ใบเสร็จ/ใบกำกับภาษี แล้วสกัดข้อมูลเพื่อลงบันทึกภาษีซื้อ/ขาย. " +
   "ตอบเป็น JSON เท่านั้น ตามรูปแบบที่กำหนด. " +
   "ทุก field ที่เป็นค่าเดี่ยว ให้ตอบเป็น object {value, confidence} โดย confidence = ความมั่นใจ 0..1. " +
@@ -176,7 +187,9 @@ const SYSTEM_PROMPT =
   "(เช่น ค่าน้ำมัน→5340, ซื้อสินค้า→5010, ค่าบริการ→5342, ค่าไฟฟ้า→5320). " +
   "ถ้าไม่มั่นใจว่าเข้าบัญชีไหน ให้ account_code value=null (ห้ามเดา — ให้นักบัญชีเลือกเอง). " +
   "ห้ามใช้รหัสนอกรายการนี้ และห้ามเลือกหมวดเงินฝากธนาคาร. " +
-  "ผังบัญชี (รหัส=ชื่อ): " + CHART_PROMPT_LIST + ".";
+  "ผังบัญชี (รหัส=ชื่อ): " + buildChartPromptList(chart) + "."
+  );
+}
 
 const USER_PROMPT =
   "อ่านบิลในเอกสารนี้แล้วสกัดข้อมูลเป็น JSON ตามรูปแบบ. จำไว้: ช่องไหนไม่มั่นใจโดยเฉพาะตัวเลข ให้ value=null ห้ามเดา. ★ ตัวเลขทุกช่องเป็นตัวเลขล้วน ห้ามมีลูกน้ำคั่นหลักพัน (เช่น 2500.00 ไม่ใช่ 2,500.00). ถ้าเอกสารมีหลายบิล ให้สกัด 'บิลแรก' เท่านั้น.";
@@ -319,8 +332,9 @@ function gateNumberGuess(field: ConfField | undefined): { value: number | null; 
  *   - [GUESS_THRESHOLD, ACCOUNT_THRESHOLD) → เติม + low=true (เดา ต้องตรวจ)
  *   - >= ACCOUNT_THRESHOLD → เติม + low=false (มั่นใจ)
  *   รองรับทั้งรูป {value, confidence} และ string ตรง ๆ (string = ถือว่ามั่นใจ)
+ *   @param chartByCode ผังบัญชีของ tenant (map รหัส→บัญชี) — ไม่มี default (ผู้เรียกต้องส่งเสมอ)
  */
-function gateAccountCodeGuess(raw: unknown): { value: string | null; low: boolean } {
+function gateAccountCodeGuess(raw: unknown, chartByCode: ChartByCode): { value: string | null; low: boolean } {
   let value: unknown = raw;
   let conf = 1; // string ตรง ๆ (ไม่มี confidence) → ถือว่ามั่นใจ แล้วค่อย validate ด้วยผัง
   if (raw && typeof raw === "object") {
@@ -331,14 +345,14 @@ function gateAccountCodeGuess(raw: unknown): { value: string | null; low: boolea
   if (typeof value !== "string") return { value: null, low: false };
   const code = value.trim();
   if (!code) return { value: null, low: false };
-  const acct = CHART_BY_CODE[code];
+  const acct = chartByCode[code];
   // ต้องมีในผัง + ไม่ใช่หมวดเงินฝากธนาคาร (bank = บัญชีต่อลูกค้า ห้าม AI เลือก)
   if (!acct || acct.bank) return { value: null, low: false };
   return { value: code, low: conf < ACCOUNT_THRESHOLD };
 }
 
 /** normalize 1 line ดิบ → ExtractedLine พร้อม gate ตัวเลขทุกช่อง */
-function normalizeLine(raw: unknown): ExtractedLine | null {
+function normalizeLine(raw: unknown, chartByCode: ChartByCode): ExtractedLine | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
 
@@ -362,7 +376,7 @@ function normalizeLine(raw: unknown): ExtractedLine | null {
   // ★ โหมดเติมเชิงรุก: amount/vat/account เติมแม้ conf ต่ำ (>= GUESS_THRESHOLD) แต่ mark "เดา"
   const amount = gateNumberGuess(o.amount as ConfField);
   const vatAmount = gateNumberGuess(o.vat_amount as ConfField);
-  const account = gateAccountCodeGuess(o.account_code);
+  const account = gateAccountCodeGuess(o.account_code, chartByCode);
   // low_confidence ของบรรทัด = มีช่องเสี่ยง (amount/vat/บัญชี) ที่เติมแบบ "เดา" อย่างน้อย 1 ช่อง
   const lowConfidence = amount.low || vatAmount.low || account.low;
 
@@ -384,14 +398,20 @@ function normalizeLine(raw: unknown): ExtractedLine | null {
  * แปลงผลดิบจากโมเดล → ExtractedBill พร้อมบังคับ high-confidence gating
  *   (แยกออกมาให้เทสต์ตรง logic ได้ โดยไม่ต้องยิง API)
  *   คืน null เมื่อ parse ไม่ได้/ไม่มี line ที่ใช้ได้เลย (ให้ worker สร้าง draft ว่าง/ข้าม)
+ *   @param chartByCode ผังบัญชีของ tenant (map รหัส→บัญชี) — default {} เพื่อ backward-compat ระดับ
+ *     compile เท่านั้น (caller จริง เช่น extractBillData ต้องส่งผังจริงของ tenant มาเสมอ ไม่งั้น
+ *     account_code ทุกอันจะถูกปฏิเสธเพราะไม่มีรหัสในผังว่าง)
  */
-export function normalizeExtraction(raw: Record<string, unknown> | null): ExtractedBill | null {
+export function normalizeExtraction(
+  raw: Record<string, unknown> | null,
+  chartByCode: ChartByCode = {}
+): ExtractedBill | null {
   if (!raw) return null;
   const r = raw as RawExtract;
 
   const linesRaw = Array.isArray(r.lines) ? r.lines : [];
   const lines = linesRaw
-    .map(normalizeLine)
+    .map((l) => normalizeLine(l, chartByCode))
     .filter((l): l is ExtractedLine => l !== null);
 
   // ถ้าไม่มี line ใด ๆ ให้สร้าง 1 line ว่าง (vat) ไว้ให้คนคีย์ — ไม่ทิ้งทั้งใบ
@@ -415,11 +435,14 @@ export function normalizeExtraction(raw: Record<string, unknown> | null): Extrac
 
 /**
  * สกัดข้อมูลบิลจากรูป (OpenAI vision, detail=high สำหรับตัวเลข, temperature 0)
+ *   @param chart ผังบัญชีของ tenant (สำหรับ prompt + validate account_code) — default [] เพื่อ
+ *     backward-compat ระดับ compile เท่านั้น (caller จริงต้องส่งผังจริงของ tenant มาเสมอ)
  *   @returns ExtractedBill (ช่องไม่มั่นใจ = null) · null เมื่อ error/timeout/ไม่มี key
  */
 export async function extractBillData(
   imageData: Buffer,
-  mime: string
+  mime: string,
+  chart: ChartAccount[] = []
 ): Promise<ExtractedBill | null> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null; // degrade: ไม่มี key → ข้ามการสกัด
@@ -450,7 +473,7 @@ export async function extractBillData(
         //   ตั้งเพดานสูงพอกัน JSON โดนตัดกลางคัน (billed ตาม output จริง — cap ไม่เพิ่มค่าใช้จ่าย)
         max_tokens: 4000,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: buildSystemPrompt(chart) },
           {
             role: "user",
             content: [{ type: "text", text: USER_PROMPT }, filePart],
@@ -469,7 +492,7 @@ export async function extractBillData(
     const content = body.choices?.[0]?.message?.content;
     if (!content) return null;
 
-    return normalizeExtraction(extractJson(content));
+    return normalizeExtraction(extractJson(content), buildChartByCode(chart));
   } catch {
     console.warn("[bill-extract] extract error");
     return null;
@@ -495,8 +518,14 @@ function billHasContent(b: ExtractedBill): boolean {
  *   ★ โมเดลคืน {bills:[...]}; ถ้าคืน object เดี่ยว (บิลเดียว) ก็ห่อเป็น 1 element
  *   ★ กรอง element ที่ว่างจริง (ไม่มีเลข/ชื่อ/เลขที่) ออก · cap 30 บิล/ไฟล์
  *   ★ degrade: ไม่มี key / อ่านไม่ได้ → คืน []
+ *   @param chart ผังบัญชีของ tenant (สำหรับ prompt + validate account_code) — default [] เพื่อ
+ *     backward-compat ระดับ compile เท่านั้น (caller จริงต้องส่งผังจริงของ tenant มาเสมอ)
  */
-export async function extractBillsData(imageData: Buffer, mime: string): Promise<ExtractedBill[]> {
+export async function extractBillsData(
+  imageData: Buffer,
+  mime: string,
+  chart: ChartAccount[] = []
+): Promise<ExtractedBill[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return [];
 
@@ -512,7 +541,7 @@ export async function extractBillsData(imageData: Buffer, mime: string): Promise
   const reqBody: Record<string, unknown> = {
     model,
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: buildSystemPrompt(chart) },
       { role: "user", content: [{ type: "text", text: MULTI_USER_PROMPT }, filePart] },
     ],
   };
@@ -545,8 +574,9 @@ export async function extractBillsData(imageData: Buffer, mime: string): Promise
     const rawBills = Array.isArray((obj as { bills?: unknown }).bills)
       ? ((obj as { bills: unknown[] }).bills)
       : [obj]; // เผื่อโมเดลคืน object เดี่ยว
+    const chartByCode = buildChartByCode(chart);
     return rawBills
-      .map((b) => normalizeExtraction(b as Record<string, unknown>))
+      .map((b) => normalizeExtraction(b as Record<string, unknown>, chartByCode))
       .filter((b): b is ExtractedBill => b !== null && billHasContent(b))
       .slice(0, 30);
   } catch {

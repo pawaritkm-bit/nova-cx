@@ -11,7 +11,7 @@
  * ★ ทั้งหมดเป็น pure function (ไม่แตะ DB/network) — ใช้ทั้งฝั่ง worker (เดา), UI (hint), และเทสต์
  * ★ ค่าที่ worker เซ็ต = "ค่าแนะนำ ไม่ล็อก" — นักบัญชีแก้ได้เสมอ
  */
-import { CHART_BY_CODE } from "@/lib/accounting/chart-of-accounts";
+import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import type { EntryType } from "@/lib/accounting/queries";
 
 /** วิธีจ่าย/รับเงิน (null = ยังไม่ระบุ) */
@@ -78,9 +78,9 @@ export function suggestPaymentMethod(
 /** บัญชีคู่ (เครดิต) — {รหัส, ชื่อ} */
 export type ContraAccount = { code: string; name: string };
 
-/** ชื่อบัญชีจากผังกลาง (fallback = ชื่อที่ส่งมา) */
-function chartName(code: string, fallback: string): string {
-  return CHART_BY_CODE[code]?.name ?? fallback;
+/** ชื่อบัญชีจากผัง (fallback = ชื่อที่ส่งมา) */
+function chartName(chartByCode: ChartByCode, code: string, fallback: string): string {
+  return chartByCode[code]?.name ?? fallback;
 }
 
 /**
@@ -103,11 +103,12 @@ const CONTRA_CONFIG = {
 
 /** บัญชีคู่ของวิธีที่ขึ้นกับฝั่ง (cheque/credit) — sale/purchase เท่านั้น, unspecified = null */
 function sideAccount(
+  chartByCode: ChartByCode,
   cfg: { sale: { code: string; name: string }; purchase: { code: string; name: string } },
   entryType: EntryType
 ): ContraAccount | null {
-  if (entryType === "sale") return { code: cfg.sale.code, name: chartName(cfg.sale.code, cfg.sale.name) };
-  if (entryType === "purchase") return { code: cfg.purchase.code, name: chartName(cfg.purchase.code, cfg.purchase.name) };
+  if (entryType === "sale") return { code: cfg.sale.code, name: chartName(chartByCode, cfg.sale.code, cfg.sale.name) };
+  if (entryType === "purchase") return { code: cfg.purchase.code, name: chartName(chartByCode, cfg.purchase.code, cfg.purchase.name) };
   return null; // unspecified — ยังตัดสินฝั่งไม่ได้
 }
 
@@ -118,25 +119,31 @@ function sideAccount(
  *   - transfer            → bankAccountCode ถ้ามี · ไม่มี = default 1020 เงินฝากธนาคาร
  *   - credit + purchase   → 2010 เจ้าหนี้การค้า · credit + sale → 1140 ลูกหนี้การค้า
  *   - cheque/credit + unspecified → null (ยังตัดสินฝั่งไม่ได้)
+ *   @param chartByCode ผังบัญชีของ tenant (map รหัส→บัญชี) — ไม่มี default (ผู้เรียกต้องส่งเสมอ
+ *     เพื่อให้ TS ฟ้อง caller ที่ยังไม่ threading chart — กันตกหล่นตามแผน)
  *   @returns {code,name} หรือ null ถ้าคำนวณไม่ได้ (ยังขาดข้อมูล)
  */
 export function contraAccountFor(
+  chartByCode: ChartByCode,
   paymentMethod: PaymentMethod | null,
   entryType: EntryType,
   bankAccountCode?: string | null
 ): ContraAccount | null {
   switch (paymentMethod) {
     case "cash":
-      return { code: CONTRA_CONFIG.cash.code, name: chartName(CONTRA_CONFIG.cash.code, CONTRA_CONFIG.cash.name) };
+      return {
+        code: CONTRA_CONFIG.cash.code,
+        name: chartName(chartByCode, CONTRA_CONFIG.cash.code, CONTRA_CONFIG.cash.name),
+      };
     case "cheque":
-      return sideAccount(CONTRA_CONFIG.cheque, entryType);
+      return sideAccount(chartByCode, CONTRA_CONFIG.cheque, entryType);
     case "transfer": {
       // ผูกบัญชีธนาคารเฉพาะไว้ (ข้อมูลเดิม) → ใช้รหัสนั้น · ไม่มี = default 1020
       const code = (bankAccountCode ?? "").trim() || CONTRA_CONFIG.transferDefault.code;
-      return { code, name: chartName(code, CONTRA_CONFIG.transferDefault.name) };
+      return { code, name: chartName(chartByCode, code, CONTRA_CONFIG.transferDefault.name) };
     }
     case "credit":
-      return sideAccount(CONTRA_CONFIG.credit, entryType);
+      return sideAccount(chartByCode, CONTRA_CONFIG.credit, entryType);
     default:
       return null;
   }

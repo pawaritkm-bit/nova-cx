@@ -50,6 +50,7 @@ function entry(p: Partial<BillEntry>): BillEntry {
     paymentMethod: null,
     paymentBankAccountId: null,
     paymentBankAccountCode: null,
+    dueDate: p.dueDate ?? null,
     status: p.status ?? "draft",
     source: p.source ?? "ai",
     aiConfidence: null,

@@ -29,9 +29,23 @@ import { getFlowAccountSharedConfig } from "@/lib/env";
  *   สถานะ "รอดำเนินการ" เหมือนกันทั้งคู่ ต่างกันที่ "ชนิดเอกสาร" เท่านั้น (M1 ตั้งใจไม่ส่งข้อมูลการชำระเงิน —
  *   ต้อง /tax-invoices/with-payment หรือ /cash-invoices/with-payment ถึงจะมาร์คเก็บเงินแล้ว ซึ่งต้องมี
  *   bankAccountId ฝั่ง FlowAccount ที่เรายังไม่มี mapping — เกินขอบเขต M1 ตามเจตนาเดิมของแผน)
+ *
+ * ★★★ เฟส 5 ส่วน P (T30/T31, decision 0.3) — บิลซื้อ/ค่าใช้จ่าย ★★★
+ *   ⚠️ endpoint นี้ยังไม่ยืนยันจาก OpenAPI ทางการ — เป็นสมมติฐานจากความสมมาตรกับ tax-invoices/cash-invoices
+ *   ต้องทดสอบกับ sandbox จริงก่อนใช้งานจริง (T30: ค้นหา `docs/05-flowaccount-integration.md` ทั้งไฟล์แล้ว
+ *   ไม่พบสเปก OpenAPI ฉบับเต็มของฝั่งซื้อ/ค่าใช้จ่ายที่ยืนยันแล้วเหมือนฝั่งขาย — มีแค่ชื่อ class
+ *   `expensesApi`/`purchaseOrderApi` จาก community SDK ที่เป็นเอกสารอ้างอิงเท่านั้น ไม่ใช่การยืนยันสเปกจริง)
+ *   สมมติฐานที่ใช้ (ตาม decision 0.3 ของแผน docs/06-accounting-features-roadmap.md):
+ *     Purchase Bill (เชื่อ ยังไม่จ่าย)  : POST {apiBaseUrl}/purchases  (auth: Bearer token, body=SimpleDocument)
+ *     Cash Expense   (จ่ายเงินสดแล้ว)   : POST {apiBaseUrl}/expenses  (body ทรงเดียวกัน)
+ *   ทุกจุดที่ยิง fetch จริงรวมไว้ที่ `createPurchaseDocument()`/`purchaseEndpointFor()` — ถ้าสเปกจริงต่างจาก
+ *   ที่เดาไว้ (เช่น path อื่น/ทรง response อื่น) แก้ที่ 2 ฟังก์ชันนี้จุดเดียว
  */
 
 export type FlowAccountDocType = "tax_invoice" | "cash_sale";
+
+/** เฟส 5 ส่วน P — ชนิดเอกสารบิลซื้อ/ค่าใช้จ่าย (ดู decision 0.4 ของแผน) */
+export type FlowAccountPurchaseDocType = "purchase_bill" | "cash_expense";
 
 /** เหตุผลที่ไม่สำเร็จ — โชว์ UI แบบสุภาพได้โดยไม่หลุด error ดิบ */
 export type FlowAccountReason =
@@ -60,6 +74,17 @@ export type SalesDocumentPayload = {
 };
 
 export type CreateSalesDocumentResult =
+  | { ok: true; docId: string; docNo: string | null }
+  | { ok: false; reason: FlowAccountReason };
+
+/** เฟส 5 ส่วน P — payload สร้างเอกสารซื้อ/ค่าใช้จ่าย (ทรงเดียวกับ SalesDocumentPayload — ดูคอมเมนต์หัวไฟล์) */
+export type PurchaseDocumentPayload = {
+  docType: FlowAccountPurchaseDocType;
+  /** body ที่ mapper (flowaccount-mapper.ts) สร้างมาแล้ว — client ไม่รู้ทรง field ภายใน (ส่งตรง) */
+  body: Record<string, unknown>;
+};
+
+export type CreatePurchaseDocumentResult =
   | { ok: true; docId: string; docNo: string | null }
   | { ok: false; reason: FlowAccountReason };
 
@@ -239,6 +264,89 @@ export async function createSalesDocument(
       return { ok: false, reason: "timeout" };
     }
     console.warn(`[flowaccount] create document error name=${name}`);
+    return { ok: false, reason: "network" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * resource path ต่อชนิดเอกสารซื้อ/ค่าใช้จ่าย
+ *   ⚠️ ยังไม่ยืนยันสเปกจริงจาก FlowAccount OpenAPI ทางการ (ดูคอมเมนต์หัวไฟล์ + decision 0.3 ของแผน) —
+ *   เป็นสมมติฐานจากความสมมาตรกับ `/tax-invoices`/`/cash-invoices` ฝั่งขาย รวมจุดยิง fetch ไว้ที่นี่จุดเดียว
+ *   แก้ง่ายถ้าสเปกจริงต่างไป
+ */
+function purchaseEndpointFor(docType: FlowAccountPurchaseDocType, apiBaseUrl: string): string {
+  return docType === "purchase_bill" ? `${apiBaseUrl}/purchases` : `${apiBaseUrl}/expenses`;
+}
+
+/**
+ * สร้างเอกสารซื้อ/ค่าใช้จ่าย (บิลซื้อเชื่อ/จ่ายเงินสดแล้ว) ที่ FlowAccount — POST + timeout 8s
+ *   ⚠️ endpoint ยังไม่ยืนยันสเปก 100% (ดูคอมเมนต์หัวไฟล์ + decision 0.3 ของแผน docs/06) — ต้องทดสอบกับ
+ *   sandbox จริงก่อนใช้งานจริง
+ *   reuse `getAccessToken`/token cache/timeout/error-mapping เดิมทั้งหมด 100% (ไม่มี logic ใหม่ตรงนี้)
+ *   ไม่ตั้ง env กลางครบ → not_configured (ไม่ยิง fetch) แม้ credential ครบ · ไม่ throw
+ *   ★ credential เป็นพารามิเตอร์ (ต่อลูกค้า) — ใช้ credential ชุดเดียวกับฝั่งขายของลูกค้ารายนั้น (decision 0.7)
+ */
+export async function createPurchaseDocument(
+  payload: PurchaseDocumentPayload,
+  credential: FlowAccountCredential
+): Promise<CreatePurchaseDocumentResult> {
+  const config = getFlowAccountSharedConfig();
+  if (!config) return { ok: false, reason: "not_configured" };
+
+  const tokenResult = await getAccessToken(credential);
+  if (!tokenResult.ok) return { ok: false, reason: tokenResult.reason };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CREATE_TIMEOUT_MS);
+  try {
+    const res = await fetch(purchaseEndpointFor(payload.docType, config.apiBaseUrl), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenResult.token}`,
+        "Content-Type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify(payload.body),
+      signal: controller.signal,
+      cache: "no-store",
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      console.warn(`[flowaccount] create purchase document auth failed status=${res.status}`);
+      return { ok: false, reason: "auth_failed" };
+    }
+    if (res.status >= 400 && res.status < 500) {
+      console.warn(`[flowaccount] create purchase document rejected status=${res.status}`);
+      return { ok: false, reason: "validation_error" };
+    }
+    if (!res.ok) {
+      console.warn(`[flowaccount] create purchase document failed status=${res.status}`);
+      return { ok: false, reason: "server_error" };
+    }
+
+    // response ทรงตาม schema SimpleDocumentResponse.data: { recordId, documentSerial, ... } — สมมติฐานเดียวกับ
+    // ฝั่งขาย (ยังไม่ยืนยันจริงสำหรับ endpoint นี้ — ดูคอมเมนต์หัวไฟล์)
+    const jsonRaw = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    const data =
+      jsonRaw && typeof jsonRaw.data === "object" && jsonRaw.data !== null
+        ? (jsonRaw.data as Record<string, unknown>)
+        : jsonRaw;
+    const docId = pickIdLike(data, ["recordId", "id", "documentId"]);
+    if (!docId) {
+      console.warn("[flowaccount] create purchase document response missing doc id");
+      return { ok: false, reason: "server_error" };
+    }
+    const docNo = pickIdLike(data, ["documentSerial", "documentNumber", "docNumber"]);
+    return { ok: true, docId, docNo };
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "error";
+    if (name === "AbortError") {
+      console.warn("[flowaccount] create purchase document timeout");
+      return { ok: false, reason: "timeout" };
+    }
+    console.warn(`[flowaccount] create purchase document error name=${name}`);
     return { ok: false, reason: "network" };
   } finally {
     clearTimeout(timer);
