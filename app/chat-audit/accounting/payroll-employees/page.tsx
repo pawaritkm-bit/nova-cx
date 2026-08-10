@@ -1,0 +1,148 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseEnv } from "@/lib/env";
+import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
+import { resolveAccountingAccess, type AccountingAccess } from "@/lib/accounting/access";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
+import { listEmployees, maskIdCardNo, type PayrollEmployee } from "@/lib/accounting/payroll-employees";
+import { getOrCreateDefaultSettings } from "@/lib/accounting/payroll-settings";
+import PayrollEmployeesPanel from "./PayrollEmployeesPanel";
+import ChatAuditFrame from "../../_Frame";
+import "../../chat-admin.css";
+import "../../bills/bills.css";
+import "../accounting.css";
+
+export const dynamic = "force-dynamic";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function customerLabel(code: string | null, name: string | null): string {
+  if (code && name) return `${code} · ${name}`;
+  if (code) return code;
+  if (name) return name;
+  return "ลูกค้า";
+}
+
+async function fetchScopedCustomers(
+  service: SupabaseClient,
+  access: AccountingAccess
+): Promise<{ id: string; label: string }[]> {
+  let q = service
+    .from("customers")
+    .select("id, customer_code, name")
+    .eq("tenant_id", access.tenantId)
+    .is("deleted_at", null)
+    .order("customer_code", { ascending: true, nullsFirst: false })
+    .limit(5000);
+  if (access.allowedCustomerIds !== null) {
+    const ids = [...access.allowedCustomerIds];
+    if (ids.length === 0) return [];
+    q = q.in("id", ids);
+  }
+  const { data } = await q;
+  const rows = (data ?? []) as { id: string; customer_code: string | null; name: string | null }[];
+  return rows.map((c) => ({ id: c.id, label: customerLabel(c.customer_code, c.name) }));
+}
+
+/** ★ 0.12 PDPA: มาสก์เลขบัตรประชาชนเป็นค่าเริ่มต้นตั้งแต่ชั้น server ก่อนส่งลง client component เลย
+ *   (ไม่ส่งเลขเต็มลง HTML/props ตั้งแต่แรก — ต้องกดปุ่ม "เผยเลขเต็ม" เรียก revealIdCardAction เอาเลขจริง
+ *   มาแสดงชั่วคราวในจอเท่านั้น) */
+function toMaskedEmployee(e: PayrollEmployee): PayrollEmployee {
+  return { ...e, idCardNo: maskIdCardNo(e.idCardNo) };
+}
+
+/**
+ * /chat-audit/accounting/payroll-employees — "ทะเบียนพนักงาน/ตั้งค่าเงินเดือน" (เฟส 9 ส่วน AC)
+ *   เลือกลูกค้า (ในสโคป) → ทะเบียนพนักงานของบริษัทลูกค้า (★ ไม่ใช่ public.employees เดิม, 0.2) + แท็บตั้งค่า
+ *   บัญชีที่ใช้เมื่อสร้างรายการบัญชีจากรอบเงินเดือน (payroll_settings, 0.11)
+ */
+export default async function PayrollEmployeesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ customerId?: string }>;
+}) {
+  const sp = await searchParams;
+
+  if (!getSupabaseEnv()) {
+    return (
+      <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="ทะเบียนพนักงาน/เงินเดือน" subtitle="ทะเบียนพนักงานลูกค้า + ตั้งค่าบัญชีเงินเดือน">
+        <div className="card">ยังไม่ได้ตั้งค่าฐานข้อมูล (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)</div>
+      </ChatAuditFrame>
+    );
+  }
+
+  const authed = await createClient();
+  const service = createServiceRoleClient();
+  const access = await resolveAccountingAccess(authed, service);
+  if (!access) redirect("/login?redirect=/chat-audit/accounting");
+
+  const navRole = access.navRole;
+  const staffOnly = access.mode === "accountant" || access.mode === "lead";
+
+  const customers = await fetchScopedCustomers(service, access);
+  const chart = await listChartOfAccounts(service, access.tenantId);
+
+  const rawCustomer = (sp.customerId ?? "").trim();
+  const validCustomerId =
+    UUID_RE.test(rawCustomer) && customers.some((c) => c.id === rawCustomer) ? rawCustomer : "";
+  const selectedLabel = customers.find((c) => c.id === validCustomerId)?.label ?? "";
+
+  const employees = validCustomerId ? await listEmployees(service, access.tenantId, validCustomerId) : [];
+  const maskedEmployees = employees.map(toMaskedEmployee);
+  const settings = validCustomerId ? await getOrCreateDefaultSettings(service, access.tenantId, validCustomerId) : null;
+
+  return (
+    <ChatAuditFrame
+      active="chat-accounting"
+      role={navRole}
+      authed
+      staffOnly={staffOnly}
+      title="ทะเบียนพนักงาน/เงินเดือน"
+      subtitle="ทะเบียนพนักงานของบริษัทลูกค้า + ตั้งค่าบัญชีที่ใช้เมื่อสร้างรายการบัญชีจากรอบเงินเดือน"
+    >
+      <div className="dash-views">
+        <div className="card acc-review-head">
+          <form method="get" className="acc-opening-cust">
+            <label>
+              ลูกค้า:{" "}
+              <select name="customerId" defaultValue={validCustomerId}>
+                <option value="">— เลือกลูกค้า —</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="submit" className="btn">เปิด</button>
+          </form>
+          <span className="acc-toolbar-spacer" />
+          {validCustomerId ? (
+            <Link href={`/chat-audit/accounting/payroll?customerId=${validCustomerId}`} className="btn btn-ghost">
+              ไปหน้ารอบเงินเดือน →
+            </Link>
+          ) : null}
+          <Link href="/chat-audit/accounting" className="btn btn-ghost">← กลับไปลงบันทึกบัญชี</Link>
+        </div>
+
+        {customers.length === 0 ? (
+          <div className="card">
+            <p className="empty">ยังไม่มีลูกค้าในความดูแลของคุณ</p>
+          </div>
+        ) : !validCustomerId ? (
+          <div className="card">
+            <p className="empty">เลือกลูกค้าด้านบนเพื่อจัดการทะเบียนพนักงาน/ตั้งค่าเงินเดือน</p>
+          </div>
+        ) : (
+          <div className="card">
+            <div className="acc-opening-cust-label">{selectedLabel}</div>
+            {settings ? (
+              <PayrollEmployeesPanel customerId={validCustomerId} employees={maskedEmployees} settings={settings} chart={chart} />
+            ) : null}
+          </div>
+        )}
+      </div>
+    </ChatAuditFrame>
+  );
+}

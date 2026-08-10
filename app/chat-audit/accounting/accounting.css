@@ -1486,3 +1486,19 @@
 @media (max-width: 900px) {
   .nova-dash .acc-bankrec-columns { grid-template-columns: 1fr; }
 }
+
+/* ---------------------------------------------------------------------
+ * เฟส 9 (Payroll) — สลิปเงินเดือน (SlipView.tsx, T119): พิมพ์/บันทึก PDF เฉพาะตัวสลิป
+ *   ซ่อนทุกอย่างในหน้า (nav/frame/ปุ่ม) ยกเว้น .payroll-slip-print เมื่อกด Ctrl+P/พิมพ์
+ * --------------------------------------------------------------------- */
+@media print {
+  body * { visibility: hidden; }
+  .payroll-slip-print, .payroll-slip-print * { visibility: visible; }
+  .payroll-slip-print {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+  }
+  .payroll-slip-print .no-print { display: none !important; }
+}
