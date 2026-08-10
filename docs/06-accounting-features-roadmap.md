@@ -39,8 +39,8 @@ Note) เป็นเอกสารที่ขาดไปจาก backlog �
 **หมายเหตุการเพิ่มเฟส (2026-08-09):** หลัง merge+deploy เฟส 1-6 แล้ว ผู้ใช้ขอให้ทำ gap analysis เทียบ
 FlowAccount อีกรอบเพื่อยืนยันว่า "copy มาครบทุกฟีเจอร์" — พบว่า **ทะเบียนทรัพย์สินถาวร + ค่าเสื่อมราคาอัตโนมัติ**
 เป็นฟีเจอร์ที่ผู้ใช้เคยขอไว้ตั้งแต่ต้น ("ค่าเสื่อมราคาทรัพย์สินด้วย") แต่ตกหล่นจากแผน 6 เฟสเดิม จึงเพิ่มเป็น
-**เฟส 7** ท้ายไฟล์นี้ ส่วนฟีเจอร์อื่นที่พบว่าขาด (payroll, ระบบคลังสินค้า/สต็อกจริง, multi-currency,
-e-Tax Invoice by Time Stamp) เป็นโมดูลใหญ่ที่ขึ้นกับ business context ของลูกค้าสำนักงานบัญชี — ผู้ใช้ยังไม่ได้
+**เฟส 7** ท้ายไฟล์นี้ ส่วนฟีเจอร์อื่นที่พบว่าขาด (payroll, ระบบคลังสินค้า/สต็อกจริง, multi-currency)
+เป็นโมดูลใหญ่ที่ขึ้นกับ business context ของลูกค้าสำนักงานบัญชี — ผู้ใช้ยังไม่ได้
 สั่งให้ทำ ไม่รวมในรอบนี้ (payment gateway/POS/e-commerce integration/mobile app ตัดออกจากสโคปเพราะไม่ตรงกับ
 business model ของ NOVA-CX ที่เป็นเครื่องมือให้สำนักงานบัญชีใช้ ไม่ใช่ให้เจ้าของธุรกิจใช้เอง) — ต่อมาผู้ใช้
 ยืนยันว่าลูกค้าหลายรายมีสต็อกสินค้าจริง (ควรใส่) จึงเพิ่ม **เฟส 8** สต็อกสินค้าคงเหลือ พร้อมส่งตัวอย่างหน้าจอ
@@ -3741,3 +3741,1163 @@ customerId แยกที่ไม่ผูกกับ entry)
 
 *(เฟส 8 เป็นฟีเจอร์เพิ่มหลังเฟส 7 — ทำตาม pattern เดียวกัน: implement → QC (review+security+test) → แก้ไข
 ทุกข้อที่พบ → verify เต็มรูป → รวมเข้า branch → merge+deploy เมื่อผู้ใช้ยืนยัน)*
+
+---
+
+**สโคป (จาก analyst — เชื่อถือได้ ไม่วิเคราะห์ซ้ำ):** รองรับบิลซื้อ/ขายที่เป็นสกุลเงินต่างประเทศ (ISO 4217
+เช่น USD/EUR/CNY/JPY/GBP/SGD ฯลฯ ไม่ hardcode รายชื่อตายตัว) — mirror pattern ของ FlowAccount (คู่แข่ง,
+ยืนยันจาก help center จริง): เลือกสกุลเงินต่อเอกสาร → อัตราแลกเปลี่ยน (ดึงอ้างอิง ธปท. รายวันแบบ best-effort
+หรือกรอกเองได้เสมอ) → บันทึกบัญชี (GL) แปลงเป็น **THB เสมอ** → ไม่มีบัญชีธนาคารสกุลต่างประเทศ → การชำระเงินอาจ
+ก่อกำไร/ขาดทุนจากอัตราแลกเปลี่ยนที่รับรู้ได้ (realized) → งบการเงิน/รายงานภาษี/FlowAccount sync เป็น THB ล้วน
+100% เหมือนเดิมไม่เปลี่ยน
+
+**เฟส 10a เท่านั้น (ตามที่ผู้ใช้/analyst ล็อกสโคปไว้แล้ว):**
+- ✅ ทำ: บันทึกบิล/CN-DN/การรับ-จ่ายเงินเป็นสกุลต่างประเทศ + คำนวณ/แนะนำกำไร-ขาดทุนจากอัตราแลกเปลี่ยน
+  "ที่รับรู้แล้ว" (realized) ตอนชำระเงินจริง
+- ❌ ไม่ทำ (= **backlog 10b** ท้ายเอกสารนี้): revaluation ปลายงวดของ AR/AP คงค้าง (unrealized FX gain/loss),
+  งบการเงินหลายสกุลเงิน (presentation currency), บัญชีธนาคารสกุลต่างประเทศ, เปลี่ยน functional currency
+
+**สมมติฐานที่ล็อกไว้ (ต้องอ่านก่อนเปิดใช้ฟีเจอร์นี้ให้ลูกค้ารายใด):** ลูกค้า Finovas **ทุกราย** มี
+**functional currency = THB** เสมอ (ตามที่ธุรกิจดำเนินงานจริงในไทย ใช้บาทเป็นสกุลหลักในการวัดผล) — TAS 21/
+TFRS อนุญาตให้ functional currency ≠ THB ได้ตามกฎหมาย แต่ต้อง (1) พิสูจน์สภาพแวดล้อมทางเศรษฐกิจจริงที่ทำให้
+สกุลอื่นเหมาะสมกว่า (2) ผู้สอบบัญชีรับรอง (3) ขออนุมัติกรมสรรพากรภายใน 6 เดือนแรกของรอบบัญชี — **ถ้าสมมติฐาน
+นี้ผิดสำหรับลูกค้ารายใดในอนาคต ถือเป็นโปรเจกต์แยกต่างหาก ไม่ใช่ส่วนหนึ่งของเฟสนี้** ต้องมาคุยกันใหม่ก่อนเปิดใช้
+ฟีเจอร์นี้ให้ลูกค้ารายนั้น (ห้ามเปิดใช้เงียบ ๆ)
+
+ต่อยอดของที่มีอยู่แล้วในระบบ (ตรวจโค้ดจริงก่อนวางแผน — grep ยืนยันแล้วว่า **ไม่มี currency scaffolding ใดๆ
+ใน `lib/accounting/**`/`supabase/migrations/**` เลย ต้องสร้างใหม่ทั้งหมด**):
+- `lib/accounting/queries.ts::BillEntry/BillEntryLine` — pattern การเพิ่มฟิลด์ optional ที่ไม่กระทบ engine
+  เดิม (`productId`/`quantity`/`stockSync` ของเฟส 1/8) คือ pattern เดียวกันที่เฟสนี้จะใช้กับ `currency`/
+  `fxRate`/`fxAmount`
+- `lib/accounting/product-stock.ts` (เฟส 8) — ต้นแบบสถาปัตยกรรม "เก็บ raw unit ต้นทาง (quantity/unit_cost)
+  แยกจาก THB ที่ engine ใช้จริง" ที่เฟสนี้ mirror ตรงๆ (`fx_amount`+`fx_rate` แยกจาก `amount` ที่ derive แล้ว)
+- `lib/accounting/bill-payments.ts`/`credit-debit-notes.ts` — pattern แยกตาราง + reuse eligibility/scope
+  (`isCreditEligibleForPayment`, `getBillPaymentScope`) + mapper 2 บรรทัด (`toJournalLines`/
+  `toJournalPosting`) ไม่ import `journal.ts` ตรง ๆ — เฟสนี้ reuse ทั้งหมดนี้ **โดยไม่แก้ mapper เดิมแม้แต่
+  บรรทัดเดียว** (ดู 0.6)
+- `lib/accounting/manual-journal.ts::upsertManualEntry` — จุดเดียวที่อนุญาตให้สร้าง JE จากระบบอัตโนมัติ
+  (ต้องเป็น `draft` เสมอ) — เฟสนี้ reuse จุดนี้ 100% สำหรับ "แนะนำกำไร/ขาดทุนจากอัตราแลกเปลี่ยน"
+  (mirror recurring JE เฟส 6 / ค่าเสื่อมเฟส 7 ที่ห้าม auto-confirm เด็ดขาดเหมือนกัน)
+- `lib/accounting/id-chunk.ts::chunkIds()` — ถ้าเพิ่ม query `.in()` ใหม่ที่ไม่มีเพดานตายตัว (เช่น join
+  `bill_entries.fx_rate` ของหลายบิลพร้อมกัน) ต้องใช้ตัวนี้เสมอ (บทเรียนจาก commit `7ab9f91`)
+- `lib/integrations/flowaccount-mapper.ts`/`flowaccount-sync.ts` (เฟส 5) — อ่าน `line.amount`/`vatAmount`
+  (THB ที่ derive แล้ว) อยู่แล้ว → **ไม่ต้องแก้ไฟล์เหล่านี้เลยในเฟสนี้** (ดู 0.13)
+- `lib/accounting/chart-accounts-data.ts` — `PROTECTED_CODES`/seed pattern ที่ migration 0063 ใช้ — เฟสนี้
+  seed บัญชีใหม่เพิ่มแบบเดียวกัน (additive, `on conflict ... do nothing`) แต่ **ไม่ใส่ใน `PROTECTED_CODES`**
+  (0.4 — ให้นักบัญชีเปลี่ยนบัญชีเองได้)
+
+---
+
+## 0) การตัดสินใจที่ล็อกไว้ก่อนเริ่มโค้ด
+
+### 0.1 ขอบเขต 10a เท่านั้น (ย้ำจากบทนำ)
+ไม่ทำ: unrealized revaluation ปลายงวด, งบการเงินหลายสกุลเงิน, บัญชีธนาคารสกุลต่างประเทศ, เปลี่ยน functional
+currency — 4 ข้อนี้บันทึกเป็น **backlog 10b** ท้ายเอกสาร (หมวด 5) ไม่ใช่ส่วนหนึ่งของแผนที่วางรายละเอียดนี้
+
+### 0.2 สมมติฐาน functional currency = THB เสมอ (ย้ำจากบทนำ — ล็อกไว้ระดับสถาปัตยกรรม)
+ทุกฟังก์ชัน/schema ในเฟสนี้ตั้งอยู่บนสมมติฐานนี้ตรง ๆ (เช่น `amount`/`vatAmount`/`debit`/`credit` ทุกฟิลด์
+เดิมของระบบยังหมายถึง **THB เสมอ** ไม่มีทางอื่น) — ถ้าอนาคตมีลูกค้าที่ functional currency ≠ THB จริง
+(ตามเงื่อนไขกฎหมายที่ระบุในบทนำ) **ห้ามพยายาม "ยืด" schema นี้ไปรองรับ** ต้องเปิดเป็นโปรเจกต์ใหม่แยก
+
+### 0.3 สกุลเงิน — ISO 4217 code, ไม่ hardcode รายชื่อตายตัว, validate รูปแบบเท่านั้น
+เก็บเป็น `text` 3 ตัวอักษร (`^[A-Z]{3}$`) ไม่ผูก enum/FK ตายตัว (ต่างจาก `payment_method`/`doc_type` ที่มี
+`check ... in (...)` เพราะรายการสกุลเงินที่ ธปท. รับรอง 23 สกุลอาจเปลี่ยน/ลูกค้าอาจใช้สกุลนอกลิสต์ที่ ธปท.
+ประกาศราคาอ้างอิงได้ในทางปฏิบัติ) — UI เป็น dropdown ค้นหาได้ (`CurrencyCombobox.tsx`, mirror
+`AccountCombobox.tsx`) พร้อมลิสต์สกุลที่พบบ่อย (~20 สกุล) ให้เลือกเร็ว + free-text 3 ตัวอักษรสำหรับสกุลอื่น
+(validate รูปแบบที่ server เสมอ ไม่เชื่อ client)
+
+### 0.4 บัญชี GL สำหรับกำไร/ขาดทุนจากอัตราแลกเปลี่ยน — additive seed, self-service (ไม่ hardcode mapping)
+Migration ใหม่ (0084) insert แถวเดียว **"กำไร(ขาดทุน)จากอัตราแลกเปลี่ยน"** เข้า `chart_of_accounts` ของทุก
+tenant แบบ additive (`on conflict (tenant_id, code) where deleted_at is null do nothing` — pattern เดียวกับ
+seed 75 รายการของ migration 0063) — รหัสที่เลือก: **`4025`** หมวด **"รายได้"** (แทรกตามลำดับความหมายระหว่าง
+`4020 รายได้อื่น ๆ` กับ `4210 ดอกเบี้ยเงินฝากธนาคาร`) **ไม่ใส่ใน `PROTECTED_CODES`** (`chart-accounts-data.ts`)
+— นักบัญชี/แอดมินเปลี่ยนชื่อ/หมวด/ลบได้เองตามปกติผ่านหน้าจัดการผังเดิม (self-service ตามที่ผู้ใช้ล็อกไว้)
+ระบบเสนอรหัสนี้เป็นค่าเริ่มต้นในหน้ากรอกเท่านั้น ไม่ hardcode mapping ตายตัวที่ไหนในโค้ด (นักบัญชีเปลี่ยนบัญชี
+ที่ใช้ต่อรายการได้ทุกครั้งตอนสร้าง JV แนะนำ — ดู 0.8)
+
+### 0.5 Never-auto-confirm — ย้ำมาตรฐานเดิมตั้งแต่เฟส 6/7
+กำไร/ขาดทุนจากอัตราแลกเปลี่ยนที่ "รับรู้แล้ว" (realized, ตอนชำระเงิน) **ไม่มีทาง auto-post เข้าบัญชีแยกประเภท
+โดยไม่มีคนตรวจ** — ระบบทำได้แค่ **"แนะนำ"** (คำนวณให้ + สร้างเป็น JV **draft** ผ่าน `upsertManualEntry` เดิม
+เท่านั้น) นักบัญชีต้องเข้าไปตรวจ/แก้/กด "ยืนยัน" เองที่หน้า journal-entry เดิมเสมอ (mirror recurring JE เฟส 6 /
+ค่าเสื่อมราคาเฟส 7 ทุกประการ)
+
+### 0.6 ⚠️ สถาปัตยกรรมหลัก — "compute at recording layer, store derived THB field" (mirror `unit_cost` เฟส 8)
+นี่คือหลักการที่ทำให้ `journal.ts`/`ledger.ts`/`trial-balance.ts`/`financial-statements.ts`/`cash-flow.ts`/
+`formal-statements.ts` **ไม่ต้องแก้เลยแม้แต่บรรทัดเดียว**:
+- `bill_entries.currency` + `bill_entries.fx_rate` (เก็บครั้งเดียวตอนบันทึกบิล = spot rate ณ `doc_date`,
+  **ไม่ revalue ซ้ำอีกทั้งชีวิตของบิลนั้น** ตาม 0.1) → ล็อกตลอดไป (ดู 0.9)
+- `bill_entry_lines.fx_amount` (ยอดต้นฉบับสกุลต่างประเทศ **ก่อน VAT** ต่อบรรทัด, nullable) — ฟิลด์เดิม
+  `bill_entry_lines.amount` (THB) **เปลี่ยนความหมายจาก "กรอกตรง" → "derived"** เฉพาะเมื่อ `currency` ไม่
+  null: `amount = round2(fx_amount × bill_entries.fx_rate)` — เมื่อ `currency` เป็น null (บิล THB ปกติ,
+  พฤติกรรมเดิม 100%) `amount` ยังกรอกตรงเหมือนเดิมทุกประการ (backward-compat)
+- `bill_entry_lines`: **ไม่ต้องเพิ่มฟิลด์คู่ขนานอื่นอีก** — ตรวจแล้วพอแค่ระดับ entry (fx_rate เดียวใช้ร่วมทุก
+  บรรทัดของบิลใบเดียวกัน ตรงกับความเป็นจริงทางธุรกิจ: ใบกำกับภาษี/invoice 1 ใบใช้อัตราแลกเปลี่ยนเดียวทั้งใบ
+  เสมอ ไม่มีทางที่แต่ละบรรทัดของบิลเดียวกันใช้อัตราต่างกัน)
+- ทุกฟังก์ชัน engine เดิม (`summarizeEntry`, `billNetTotal`, `toJournalLines` ของทุกไฟล์) **อ่าน `amount`/
+  `vatAmount` ตรง ๆ เหมือนเดิม** — ไม่รู้จัก/ไม่สนใจว่าค่านั้น derive มาจาก fx หรือกรอกตรง (transparent)
+
+### 0.7 VAT ไม่มีฟิลด์ fx คู่ขนาน — กรอกเป็น THB ตรงเสมอ (ไม่ derive จาก fx)
+ใบกำกับภาษีตามกฎหมายไทยต้องระบุจำนวนภาษีมูลค่าเพิ่มเป็น **บาทเสมอ** (ไม่ว่ามูลค่าสินค้า/บริการเป็นสกุลใด) —
+`bill_entry_lines.vat_amount`/`credit_debit_note_lines.vat_amount` **ไม่เพิ่ม `fx_vat_amount` คู่ขนาน**
+นักบัญชีกรอก VAT เป็นบาทตรงจากใบกำกับภาษีจริงเหมือนเดิมทุกประการ (ลดความซับซ้อน + ตรงกับเอกสารจริงที่เห็น)
+
+### 0.8 ⚠️ ความหมายของ `bill_payments.amount` "ไม่เปลี่ยน" — จุดที่ทำให้ engine เดิมไม่ต้องแก้
+นี่คือจุดสถาปัตยกรรมสำคัญที่สุดของเฟสนี้ (อ่านให้ครบก่อนลงโค้ด T89):
+- `bill_payments.amount` (THB) ยังคงหมายถึง **"ยอดที่ตัด AR/AP ลง"** เหมือนเดิมทุกประการ (สิ่งที่
+  `billOutstanding()`/`toJournalLines()` ของ `bill-payments.ts` ใช้อยู่ตอนนี้) — เมื่อบิลเป็น FX
+  `amount` ของงวดชำระนั้น **derive จาก `fx_amount × bill_entries.fx_rate` ของบิลต้นทาง (อัตราตอนออกบิล
+  ไม่ใช่อัตราวันชำระ)** — นักบัญชีกรอก `fx_amount` (จำนวนเงินตราต่างประเทศที่ได้รับ/จ่ายจริงงวดนี้) แล้ว
+  ระบบคำนวณ `amount` ให้ตรงนี้ (ไม่ใช่กรอก `amount` ตรงเหมือนบิล THB ปกติ)
+- เพิ่มฟิลด์ใหม่ `bill_payments.fx_rate` (**อัตราวันชำระ/settlement date ของงวดนี้ — คนละอัตรากับ
+  `bill_entries.fx_rate`**) — ใช้คำนวณ "เงินสด/ธนาคารที่ได้รับ/จ่ายจริงเป็นบาท" =
+  `round2(fx_amount × bill_payments.fx_rate)` แยกจาก `amount` (ที่ตัด AR/AP ด้วยอัตราตอนออกบิล)
+- **ผลต่างระหว่างสองค่านี้ = กำไร/ขาดทุนจากอัตราแลกเปลี่ยนที่ "รับรู้แล้ว" (realized) ของงวดชำระนั้น** —
+  สูตร (เครื่องหมายอิงทิศทางธุรกรรม):
+  - บิลขาย (ลด AR): `realized = round2(fx_amount × (bill_payments.fx_rate − bill_entries.fx_rate))`
+    (บาทละ ค่าบาทอ่อนตัวลง=รับบาทมากกว่าที่ตั้งไว้ → กำไร บวก; ค่าบาทแข็งขึ้น → ขาดทุน ลบ)
+  - บิลซื้อ (ลด AP): `realized = round2(fx_amount × (bill_entries.fx_rate − bill_payments.fx_rate))`
+    (ทิศตรงข้ามกับขาย เพราะเป็นฝั่งจ่าย)
+- **ทำไมไม่ post 3 ขาเข้า JE ของ `bill_payments` โดยตรง (Dr เงินสดจริง / Cr AR ตามที่ตั้งไว้ / plug FX)?**
+  เพราะ `bill_payments` **ไม่มีสถานะ draft/confirmed** (0.2 ของเฟส 2 — บันทึกแล้วถือว่าเงินเข้า/ออกจริง
+  ทันที ไม่มีขั้นตรวจ) การ post FX gain/loss เข้าไปพร้อมกันจะเท่ากับ **auto-confirm รายการ FX โดยไม่มีคน
+  ตรวจ** ผิดหลัก 0.5 — จึงแยก: `toJournalLines()`/`toJournalPosting()` ของ `bill-payments.ts`
+  **ไม่แก้แม้แต่บรรทัดเดียว** (ยังคง 2 บรรทัดเดิม ใช้ `amount` — คือยอดตัด AR/AP ที่อัตราตอนออกบิลเหมือนเดิม
+  เป๊ะ ไม่ต้องรู้จัก fx เลย) ส่วน "เงินสด/ธนาคารจริงต่างจากที่ตัด AR/AP" (= realized FX) ปล่อยเป็น **ส่วน
+  ต่างที่ยังค้างอยู่ใน AR/AP เล็กน้อย** (แทนที่จะเป็น 0 เป๊ะตอนชำระครบ) แล้วให้ระบบ **"แนะนำ" JV แยก** (0.5)
+  ให้นักบัญชีตรวจ/ยืนยันเองเพื่อ "เคลียร์" ส่วนต่างนั้นออกจาก AR/AP ไปเข้าบัญชี 4025
+
+### 0.9 ล็อกฟิลด์ FX ของบิลหลังมีการชำระเงินไปแล้ว (mirror phase 7 lock ทะเบียนทรัพย์สินหลังมีค่าเสื่อม)
+`bill_entries.currency`/`fx_rate` **แก้ไม่ได้อีกทันทีที่บิลนั้นมี `bill_payments` ที่ยัง**ไม่ถูกยกเลิก**อย่าง
+น้อย 1 รายการ** (query count ก่อน update ใน `upsertEntry`/`saveEntryAction` — เหตุผลเดียวกับ 0.8: การรับรู้
+FX gain/loss ของงวดที่จ่ายไปแล้วอิงอัตรา ณ ตอนนั้น ถ้าย้อนไปแก้อัตราบิลจะทำให้ตัวเลขที่คำนวณไปแล้วผิดย้อนหลัง
+เงียบ ๆ) — UI (`EntryEditor.tsx`) แสดง badge "🔒 ล็อกสกุลเงิน/อัตราแลกเปลี่ยน — มีการรับ/จ่ายเงินแล้ว" +
+ฟิลด์เป็น read-only เมื่อเข้าเงื่อนไขนี้ (ยังแก้ฟิลด์อื่นของบิลได้ตามปกติ — ล็อกเฉพาะ currency/fx_rate ไม่ล็อก
+ทั้งบิล ต่างจากทะเบียนทรัพย์สินเฟส 7 ที่ล็อกทั้งระเบียนเพราะบริบทต่างกัน)
+
+### 0.10 CN/DN ของบิล FX — ใช้ `fx_rate` ของ**บิลต้นฉบับเสมอ** (ไม่ใช่วันที่ออก CN/DN)
+ใบลดหนี้/เพิ่มหนี้เป็นการ "ปรับปรุงรายการเดิม" ไม่ใช่ธุรกรรมใหม่ที่ต้องแปลงค่าใหม่ ณ วันที่ออกเอกสาร (ต่างจาก
+`bill_payments` ที่เป็นธุรกรรมชำระเงินจริง ณ วันนั้น) — `credit_debit_note_lines.fx_amount` (ใหม่, nullable)
+× `bill_entries.fx_rate` **ของบิลต้นฉบับที่ CN/DN อ้างถึง** (join ผ่าน `entry_id`) = `amount` (THB, derived,
+วิธีเดียวกับ 0.6) — **ไม่เพิ่มคอลัมน์ `currency`/`fx_rate` ใหม่บน `credit_debit_notes` เอง** (ไม่จำเป็น เพราะ
+อ่าน fx_rate จากบิลต้นทางได้เสมอผ่าน `entry_id` ที่มีอยู่แล้ว) — ถ้าบิลต้นฉบับไม่ใช่ FX (`currency=null`)
+CN/DN ก็กรอก `amount` ตรงเหมือนเดิมทุกประการ (backward-compat)
+
+### 0.11 validate `fx_rate` ที่กรอกเอง — soft plausibility guard กันพิมพ์ผิดหลักสิบ/ร้อยเท่า (ไม่ hard-block ผิดปกติทั่วไป)
+อัตราแลกเปลี่ยนจริงผันผวนได้ — **ห้าม hard-block แค่เพราะดูสูง/ต่ำกว่าปกติ** (จะกันคนกรอกอัตราจริงที่ผันผวน
+รุนแรงในบางช่วงเวลา) แต่ต้อง **hard-block ค่าที่เป็นไปไม่ได้แน่ๆ**: `fx_rate <= 0`, ไม่ใช่ตัวเลข, หรือเกิน
+เพดานทั่วไปที่ไม่มีสกุลเงินจริงเคยไปถึง (ceiling กันพิมพ์เกินหลักสิบ/ร้อยเท่าจริง ๆ เช่น พิมพ์ 3650 ทั้งที่
+ตั้งใจพิมพ์ 36.50) — ออกแบบ 2 ชั้นใน `lib/accounting/currency.ts`:
+- **hard-block**: `fx_rate <= 0` หรือ `fx_rate > 100000` (ไม่มีสกุลที่ ธปท. ประกาศเคยเกินหลักหมื่นต่อ 1 บาท)
+- **soft-warn (แสดงข้อความเตือนที่ UI แต่ยังบันทึกได้ถ้านักบัญชียืนยัน)**: เทียบกับตารางช่วงอัตราคร่าว ๆ ของ
+  สกุลที่พบบ่อย (เช่น USD 25-45, EUR 30-55, GBP 35-60, JPY 0.15-0.35, CNY 3.5-7, SGD 20-32, AUD 18-30,
+  HKD 3-6, KRW 0.02-0.04 — ตัวเลขคร่าวๆ กว้างพอรับความผันผวนจริง ไม่ใช่ real-time rate) — สกุลที่ไม่มีในตาราง
+  → ไม่เตือน (ไม่มีข้อมูลอ้างอิง ไม่เดา)
+
+### 0.12 ดึงอัตราอ้างอิง ธปท. รายวัน — best-effort prefill เท่านั้น, ไม่บังคับ, ไม่ block การบันทึก (mirror FlowAccount)
+`lib/integrations/bot-exchange-rate.ts` (ใหม่) — `fetchBotReferenceRate(currency, date)` เรียก endpoint
+เผยแพร่ข้อมูลอัตราแลกเปลี่ยนอ้างอิงของธนาคารแห่งประเทศไทย (public, ไม่ต้อง credential) มา **prefill** ช่อง
+`fx_rate` เท่านั้น — นักบัญชี**แก้ทับได้เสมอ** (manual override ชนะเสมอ ไม่มีทาง "ล็อก" ตามค่าที่ดึงมา) —
+`try/catch` ทุกกรณี (network/timeout/format เปลี่ยน/ไม่มีอัตราของสกุลนั้นวันนั้น) **ไม่ throw** คืน
+`{ok:false}` แล้ว UI แสดง "ดึงอัตราอัตโนมัติไม่สำเร็จ กรุณากรอกเอง" เฉย ๆ (ไม่ block การบันทึกบิลเลย — เหมือน
+pattern degrade ของ `flowaccount-map.ts`/`input_tax_month` ในไฟล์ actions.ts เดิม)
+
+### 0.13 ขอบเขต sync ไป FlowAccount ของบิล FX — ไม่แก้ mapper/sync engine เลย (ส่ง THB ล้วนเหมือนเดิม)
+`lib/integrations/flowaccount-mapper.ts::buildSalesDocumentPayload/buildPurchaseDocumentPayload` และ
+`lib/accounting/flowaccount-sync.ts::syncEntryToFlowAccount` อ่าน `line.amount`/`vatAmount` (THB ที่
+derive แล้วตาม 0.6) อยู่แล้ว — **ไม่ต้องแก้ไฟล์ทั้งสองนี้แม้แต่บรรทัดเดียว** และ **ไม่ส่ง `currency`/`fx_rate`/
+`fx_amount` ไปให้ FlowAccount เลย** (สอดคล้องกับที่ analyst ยืนยันจาก help center จริงว่า FlowAccount เองก็
+บันทึกบัญชี GL เป็น THB เสมอ ไม่มีบัญชีธนาคารสกุลต่างประเทศ) — T96 ทำแค่ grep ยืนยัน + เพิ่มคอมเมนต์อ้างอิงใน
+โค้ด ไม่มีการแก้ไฟล์จริง
+
+### 0.14 dedupe "แนะนำ JV กำไร/ขาดทุน FX" ต่องวดชำระ — คอลัมน์ผูกกลับบน `bill_payments`
+เพิ่ม `bill_payments.fx_gain_loss_note_id` (uuid, nullable, `references manual_journal_entries(id) on
+delete set null`) — เซ็ตค่าทันทีที่กดปุ่ม "แนะนำ" สำเร็จ (สร้าง JV draft แล้ว) ปุ่มของงวดนั้นจะกลาย
+เป็น "ดูรายการ JV เลขที่..." (ไม่ใช่ "แนะนำ" ซ้ำ) กันคำนวณ/สร้าง JV ซ้ำสองจากงวดชำระเดียวกัน (mirror
+`fixed_asset_id` ที่ผูกกลับบน `manual_journal_entries` ของเฟส 7 แนวคิดเดียวกันแต่กลับทาง — ที่นี่ผูกจาก
+`bill_payments` ชี้ไป `manual_journal_entries` เพราะ 1 งวดชำระ ควรมี "คำแนะนำ" ได้ครั้งเดียว)
+
+### 0.15 หลายงวดชำระ (multi-installment) ของบิล FX เดียว — รับรู้ realized ต่อ**งวด** ไม่ใช่รวมทั้งบิล
+แต่ละ `bill_payments` แถวมี `fx_amount`/`fx_rate` **ของงวดนั้นเอง** (ไม่ใช่ยอด/อัตราของทั้งบิล) — ปุ่ม "แนะนำ
+กำไร/ขาดทุน FX" อยู่ **ต่องวด** (แถวรับ/จ่ายเงินแต่ละแถวในหน้า `PaymentsPanel.tsx`) คำนวณจากอัตราต่างของงวด
+นั้นล้วน ๆ (ไม่ผสมกับงวดอื่น) — ถูกต้องตามหลักบัญชี (แต่ละงวดชำระคือธุรกรรม settlement แยกกัน รับรู้ FX
+gain/loss ณ วันนั้นแยกกัน) และแก้ปัญหา double-count ได้ตรงไปตรงมา (0.14 dedupe ต่อแถวอยู่แล้ว)
+
+### 0.16 แก้ไขบิลหลังชำระเงินไปแล้วบางส่วน — เฉพาะ currency/fx_rate ที่ถูกล็อก (ย้ำ 0.9)
+ฟิลด์อื่นของบิล (คู่ค้า/รายละเอียด/บรรทัดที่ยังไม่ผูก stock ฯลฯ) ยังแก้ได้ตาม flow เดิมของระบบ (บิล confirmed
+แก้ได้ผ่าน `allowConfirmed` เหมือนเดิมทุกประการ) — ล็อกเฉพาะ `currency`/`fx_rate` เท่านั้น (0.9) ส่วน
+`fx_amount` ต่อบรรทัดยังแก้ได้ (จะกระทบ `amount` ที่ derive ใหม่ — เป็นพฤติกรรมที่ตั้งใจ เหมือนแก้ `amount`
+บิล THB ปกติได้ก่อน re-confirm) — ถ้าแก้ `fx_amount` หลังมี `bill_payments` ผูกแล้ว UI แสดงคำเตือน "ยอดบิล
+เปลี่ยน อาจกระทบยอดค้างชำระที่คำนวณไปแล้ว ตรวจสอบหน้ารับ/จ่ายเงินอีกครั้ง" (ไม่ hard-block — ตรงกับ pattern
+เดิมทั้งระบบที่ไม่มี hard-lock ฟิลด์อื่นของบิลที่ confirmed แล้ว)
+
+### 0.17 สิทธิ์ — reuse `requireAccountingAccess`+`assertCustomerInScope` เดิมทั้งหมด (ย้ำมาตรฐานเดิม)
+ทุก server action ใหม่ของเฟสนี้ (แก้บิล FX, บันทึกรับ/จ่ายเงิน FX, สร้าง CN/DN FX, แนะนำ JV กำไร/ขาดทุน FX)
+guard ด้วย pattern เดิม 100% ไม่มี admin-only ใหม่ — สโคป derive จาก **resource ที่กำลังจะเขียนจริงเสมอ**
+(เช่น `getBillPaymentScope`/`getNoteScope`/`getPaymentScope` เดิม) ไม่เชื่อ `customerId`/`entryId` จาก client
+(มาตรฐาน IDOR-safe ตั้งแต่เฟส 3)
+
+### 0.18 ยืนยันเลข migration จริงก่อน apply เสมอ — เลขที่ล็อกในแผนนี้อิง "0078 เป็นไฟล์ล่าสุด ณ วันที่วางแผน"
+`ls supabase/migrations/` ล่าสุดตอนวางแผน (2026-08-10) = `0078_bill_entries_stock_synced_at.sql` — เฟสนี้
+จองเลข **0079-0084** ต่อจากนั้น **แต่ต้อง `ls supabase/migrations/ | sort -V | tail -20` ซ้ำอีกครั้งก่อน
+สร้างไฟล์จริงเสมอ** เผื่อมีงานคู่ขนานอื่น (เช่น เฟส payroll/สต็อกจริงที่ backlog หัวไฟล์เคยพูดถึงว่า "ยังไม่ได้
+สั่งให้ทำ" — ถ้ามีคนเริ่มทำระหว่างนี้อาจจองเลขซ้อนกันได้) ถ้าเลขชนให้เลื่อนเลขของเฟสนี้ขึ้นตามลำดับที่ว่างจริง
+(ไม่แก้เลขของงานอื่นที่จองไปแล้ว)
+
+---
+
+## 1) โครงสร้างไฟล์ (ใหม่/แก้) — เฟส 10
+
+```
+supabase/migrations/
+  0079_bill_entries_fx.sql                 [ใหม่] bill_entries: currency, fx_rate (nullable + check format/>0)
+  0080_bill_entry_lines_fx_amount.sql      [ใหม่] bill_entry_lines: fx_amount (nullable)
+  0081_credit_debit_note_lines_fx_amount.sql [ใหม่] credit_debit_note_lines: fx_amount (nullable)
+  0082_bill_payments_fx.sql                [ใหม่] bill_payments: currency, fx_rate, fx_amount,
+                                                     fx_gain_loss_note_id (FK manual_journal_entries, nullable)
+  0083_manual_journal_entry_lines_fx.sql   [ใหม่] manual_journal_entry_lines: fx_currency, fx_rate, fx_amount
+                                                     (metadata ล้วน, nullable — ไม่กระทบ isBalanced/mapper)
+  0084_chart_of_accounts_fx_gain_loss_seed.sql [ใหม่] seed additive บัญชี 4025 ทุก tenant (ไม่ผูก PROTECTED_CODES)
+  ⚠️ เลขไฟล์ 0079-0084 อิง "0078 เป็นไฟล์ล่าสุด ณ วันที่วางแผน" (0.18) — ตรวจซ้ำก่อน apply จริงเสมอ
+
+lib/accounting/
+  currency.ts        [ใหม่] pure ทั้งไฟล์ (ไม่แตะ DB):
+                              - isValidCurrencyCode(v) → /^[A-Z]{3}$/ (0.3)
+                              - COMMON_CURRENCIES: {code,label}[] ~20 สกุลที่พบบ่อย (สำหรับ combobox)
+                              - validateFxRate(v) → {ok:true,value}|{ok:false,message} (hard-block, 0.11)
+                              - fxRatePlausibilityWarning(currency, rate) → string|null (soft-warn, 0.11)
+                              - deriveThbAmount(fxAmount, fxRate) → round2(fxAmount*fxRate) (0.6/0.8, ใช้ร่วม
+                                ทุกจุดที่ derive THB จาก fx — จุดเดียวกันเป๊ะทุกไฟล์ ไม่มีสูตรคู่ขนาน)
+                              - DEFAULT_FX_GAIN_LOSS_ACCOUNT_CODE = "4025" (ค่าเสนอ default เท่านั้น, 0.4)
+  fx.ts               [ใหม่] pure ทั้งไฟล์ (ไม่แตะ DB, ไม่ import journal/ledger):
+                              - realizedFxGainLoss(entryType, fxAmount, invoiceFxRate, settleFxRate) → number
+                                (0.8, เครื่องหมายตามทิศทางขาย/ซื้อ)
+                              - suggestFxGainLossEntryInput(payment, entry, gainLossAccountCode, chartByCode)
+                                → ManualEntryInput พร้อม 2 บรรทัด (Dr/Cr AR-AP ปรับ + Dr/Cr บัญชี FX) ที่
+                                สมดุลเสมอ (ส่งเข้า upsertManualEntry ตรง ๆ, ห้าม auto-confirm ตาม 0.5)
+                              - ⚠️ ไม่ import จาก `bill-payments.ts`/`journal.ts` (รับพารามิเตอร์ที่จำเป็นตรง ๆ
+                                กันวนลูป import — pattern เดียวกับ dynamic import ที่ bill-payments.ts ใช้กับ
+                                credit-debit-notes.ts เดิม ถ้าจำเป็น)
+  lib/integrations/bot-exchange-rate.ts [ใหม่]
+                              - fetchBotReferenceRate(currency, date) → {ok:true,rate}|{ok:false} (0.12,
+                                try/catch ครอบทั้งฟังก์ชัน ไม่ throw ทะลุ)
+  queries.ts          [แก้] BillEntry: +currency, +fxRate (optional, mirror stockSync เดิม) ·
+                              BillEntryLine: +fxAmount (optional) · select columns + mapping ของ
+                              listEntries()/mapLine() เพิ่มคอลัมน์ใหม่ (degrade เป็น null ถ้า migration ยังไม่
+                              apply — pattern เดิมของ inputTaxMonth)
+  actions-lib.ts      [แก้] UpsertEntryInput: +currency, +fxRate (undefined = ไม่แตะค่าเดิม) · guard: ถ้าบิลนี้
+                              มี bill_payments ที่ยังไม่ถูกยกเลิกอยู่แล้ว → ปฏิเสธการเปลี่ยน currency/fxRate
+                              (0.9, query count ก่อน update) · payload บรรทัด: +fx_amount (ต่อ line)
+  app/chat-audit/accounting/actions.ts [แก้] SaveEntryInput: +currency, +fxRate (header) ·
+                              EditableLineInput: +fxAmount · derive amount จาก fxAmount×fxRate ก่อนส่งเข้า
+                              addLine/updateLine เมื่อ currency ไม่ null (validate รูปแบบ/plausibility ก่อน)
+  bill-payments.ts    [แก้] BillPayment: +currency, +fxRate, +fxAmount, +fxGainLossNoteId ·
+                              BillPaymentInput: +fxAmount, +fxRate (currency สำเนาจากบิลต้นทางเสมอ ไม่รับจาก
+                              client) · validatePaymentInput/recordBillPayment: derive `amount` จาก
+                              fxAmount×(bill_entries.fx_rate) เมื่อบิลนั้น currency ไม่ null (0.8) — ยังคง
+                              re-fetch ยอดค้างชำระจาก DB ก่อน insert ทุกครั้งเหมือนเดิม (0.8 เดิมของเฟส 2) ·
+                              toJournalLines/toJournalPosting **ไม่แก้แม้แต่บรรทัดเดียว** (0.8 ของเฟสนี้)
+  credit-debit-notes.ts [แก้] CreditDebitNoteLine: +fxAmount · validateNoteInput/createDraftNote/
+                              updateDraftNote: derive `amount` จาก fxAmount×(bill_entries.fx_rate ของบิล
+                              ต้นทาง, join เพิ่ม) เมื่อบิลต้นทาง currency ไม่ null (0.10) · toJournalLines/
+                              toJournalPosting ไม่แก้ (อ่าน amount/vatAmount derived เหมือนเดิม)
+  manual-journal.ts   [แก้] ManualJournalLine: +fxCurrency, +fxRate, +fxAmount (optional, metadata ล้วน) ·
+                              validateManualEntryInput: รับ/เก็บผ่านเฉยๆ ไม่ validate ความสัมพันธ์กับ
+                              debit/credit (ไม่ใช่แหล่งความจริงทางบัญชี แค่ metadata อธิบายที่มา) ·
+                              upsertManualEntry: insert/update คอลัมน์ใหม่เพิ่ม (best-effort เหมือน
+                              input_tax_month — ถ้า migration ยังไม่ apply ข้ามเงียบ ไม่ throw ทั้งการบันทึก)
+  flowaccount-mapper.ts / flowaccount-sync.ts [ไม่แก้เลย] (0.13 — grep ยืนยันใน T96)
+
+app/chat-audit/accounting/
+  CurrencyCombobox.tsx  [ใหม่] client component (mirror AccountCombobox.tsx โครงสร้าง 3 โหมด: readOnly/
+                              เลือกแล้ว/ค้นหา) — data source = COMMON_CURRENCIES (static, ไม่ query DB) +
+                              free-text 3 ตัวอักษรที่ผ่าน isValidCurrencyCode
+  EntryEditor.tsx       [แก้] เพิ่มช่อง currency (CurrencyCombobox) + fx_rate (input number + ปุ่ม "ดึงอัตรา
+                              ธปท." best-effort, 0.12) ต่อจากช่องวิธีจ่าย/รับเงินเดิม · ต่อบรรทัด: ช่อง
+                              fx_amount (แสดงเฉพาะเมื่อ currency ตั้งไว้) + แสดง amount (THB) เป็น read-only
+                              ที่ derive แล้ว (ไม่ให้กรอกตรงอีกเมื่อเป็น FX) · badge ล็อก (0.9) เมื่อมี payments
+  payments/PaymentsPanel.tsx [แก้] ฟอร์มบันทึกรับ/จ่ายเงิน: ช่อง fx_amount + fx_rate (แสดงเฉพาะบิลที่
+                              currency ตั้งไว้) · ต่อแถวประวัติ: ปุ่ม "แนะนำ JV กำไร/ขาดทุน FX" (0.5/0.14,
+                              disabled+ลิงก์ไปดู JV ถ้ามี fxGainLossNoteId แล้ว)
+  payments/actions.ts   [แก้] RecordBillPaymentActionInput: +fxAmount, +fxRate · เพิ่ม
+                              suggestFxGainLossNoteAction(paymentId, gainLossAccountCode?) — guard สโคปผ่าน
+                              getPaymentScope เดิม → เรียก fx.ts::suggestFxGainLossEntryInput →
+                              upsertManualEntry (draft) → update bill_payments.fx_gain_loss_note_id
+  credit-debit-notes/CreditDebitNotesPanel.tsx [แก้] ต่อบรรทัด: ช่อง fx_amount (แสดงเฉพาะบิลต้นทางที่
+                              currency ตั้งไว้) + แสดง fx_rate ที่ล็อกจากบิลต้นทาง (read-only, อ้างอิงเท่านั้น)
+  credit-debit-notes/actions.ts [แก้] NoteLineInput: +fxAmount ส่งต่อ createDraftNote/updateDraftNote
+
+tests/accounting/
+  currency.test.ts              [ใหม่] validate format/plausibility/deriveThbAmount ทุก branch (0.3/0.11)
+  fx.test.ts                    [ใหม่] realizedFxGainLoss ทุกทิศทาง (ขาย/ซื้อ, กำไร/ขาดทุน/พอดี) +
+                                  suggestFxGainLossEntryInput สมดุลเสมอ (debit=credit)
+  bill-payments.test.ts         [แก้] เพิ่มเทสต์ derive amount จาก fx + toJournalLines/toJournalPosting
+                                  ไม่เปลี่ยนพฤติกรรมเดิมแม้เป็นบิล FX (regression บังคับ, 0.8)
+  credit-debit-notes.test.ts    [แก้] เพิ่มเทสต์ derive amount จาก fx ของบิลต้นทาง
+  manual-journal.test.ts        [แก้] เพิ่มเทสต์ fx metadata ผ่านเฉยๆ ไม่กระทบ isBalanced/mapper
+  queries.test.ts               [แก้] เพิ่ม fixture currency/fxRate/fxAmount (optional-safe)
+  actions-lib.test.ts           [แก้] เพิ่มเทสต์ guard ล็อก currency/fx_rate เมื่อมี bill_payments ผูกแล้ว (0.9)
+  payments-actions.test.ts      [แก้] เพิ่มเทสต์ suggestFxGainLossNoteAction (guard สโคป, dedupe 0.14)
+tests/integrations/
+  bot-exchange-rate.test.ts     [ใหม่] fetch สำเร็จ/ล้มทุกกรณี (network/timeout/format) ไม่ throw (0.12)
+```
+
+### 1.1 Schema — migration 0079 (bill_entries: currency/fx_rate)
+
+```sql
+-- เฟส 10 ส่วน Z (docs/06-accounting-features-roadmap.md, 0.3/0.6/0.9)
+-- สกุลเงิน + อัตราแลกเปลี่ยน "ตอนออกบิล" ต่อบิล — nullable, ไม่ backfill บิลเก่า (non-destructive)
+--   currency=null (ค่าเริ่มต้น/บิลเก่าทุกใบ) = บิล THB ปกติ พฤติกรรมเดิม 100% ไม่เปลี่ยน
+
+alter table public.bill_entries
+  add column if not exists currency text,
+  add column if not exists fx_rate numeric(18,6);
+
+alter table public.bill_entries
+  drop constraint if exists bill_entries_currency_format;
+alter table public.bill_entries
+  add constraint bill_entries_currency_format
+    check (currency is null or currency ~ '^[A-Z]{3}$');
+
+alter table public.bill_entries
+  drop constraint if exists bill_entries_fx_rate_range;
+alter table public.bill_entries
+  add constraint bill_entries_fx_rate_range
+    check (fx_rate is null or (fx_rate > 0 and fx_rate <= 100000));
+
+notify pgrst, 'reload schema';
+```
+
+### 1.2 Schema — migration 0080 (bill_entry_lines: fx_amount)
+
+```sql
+-- เฟส 10 ส่วน Z — ยอดต้นฉบับสกุลต่างประเทศต่อบรรทัด (ก่อน VAT) — nullable
+--   amount (THB) เดิม = derive จาก fx_amount * bill_entries.fx_rate เมื่อ bill_entries.currency ไม่ null
+--   (application layer เท่านั้น — ไม่มี generated column/trigger ระดับ DB ตาม pattern เดิมทั้งระบบที่ไม่ใช้
+--   DB คำนวณ business logic)
+
+alter table public.bill_entry_lines
+  add column if not exists fx_amount numeric(14,2);
+
+notify pgrst, 'reload schema';
+```
+
+### 1.3 Schema — migration 0081 (credit_debit_note_lines: fx_amount)
+
+```sql
+-- เฟส 10 ส่วน AA — mirror 0080 แต่สำหรับ CN/DN (0.10) — amount derive จาก fx_amount * fx_rate ของ
+--   "บิลต้นฉบับ" (join ผ่าน credit_debit_notes.entry_id -> bill_entries.fx_rate) ไม่ใช่อัตราวันออก CN/DN
+
+alter table public.credit_debit_note_lines
+  add column if not exists fx_amount numeric(14,2);
+
+notify pgrst, 'reload schema';
+```
+
+### 1.4 Schema — migration 0082 (bill_payments: currency/fx_rate/fx_amount/fx_gain_loss_note_id)
+
+```sql
+-- เฟส 10 ส่วน AA (0.8/0.14) — fx_rate ที่นี่คือ "อัตราวันชำระ/settlement" คนละอัตรากับ bill_entries.fx_rate
+--   (อัตราวันออกบิล) — amount (THB) เดิมยังหมายถึงยอดที่ตัด AR/AP (derive จาก fx_amount * bill_entries.
+--   fx_rate ของบิลต้นทาง ไม่ใช่ fx_rate ของ payment นี้เอง — ผลต่างคือ realized FX gain/loss ตาม 0.8)
+
+alter table public.bill_payments
+  add column if not exists currency text,
+  add column if not exists fx_rate numeric(18,6),
+  add column if not exists fx_amount numeric(14,2),
+  add column if not exists fx_gain_loss_note_id uuid
+    references public.manual_journal_entries(id) on delete set null;
+
+alter table public.bill_payments
+  drop constraint if exists bill_payments_currency_format;
+alter table public.bill_payments
+  add constraint bill_payments_currency_format
+    check (currency is null or currency ~ '^[A-Z]{3}$');
+
+alter table public.bill_payments
+  drop constraint if exists bill_payments_fx_rate_range;
+alter table public.bill_payments
+  add constraint bill_payments_fx_rate_range
+    check (fx_rate is null or (fx_rate > 0 and fx_rate <= 100000));
+
+-- index ช่วยเช็คเร็วว่างวดนี้ "เคยแนะนำ JV กำไร/ขาดทุน FX ไปแล้วหรือยัง" (0.14)
+create index if not exists idx_bill_payments_fx_gain_loss_note
+  on public.bill_payments (tenant_id, fx_gain_loss_note_id)
+  where deleted_at is null and fx_gain_loss_note_id is not null;
+
+notify pgrst, 'reload schema';
+```
+
+### 1.5 Schema — migration 0083 (manual_journal_entry_lines: fx metadata)
+
+```sql
+-- เฟส 10 ส่วน AA — metadata ล้วน (ไม่กระทบ debit/credit/isBalanced/mapper เดิมแม้แต่จุดเดียว) ใช้บอกที่มา
+--   ของบรรทัด JV ที่เกี่ยวกับ FX (เช่น JV ที่แนะนำจาก fx.ts::suggestFxGainLossEntryInput) — nullable ทั้งชุด
+--   บรรทัด JV ปกติที่ไม่เกี่ยว FX เลย ค่าเป็น null ทั้ง 3 คอลัมน์เสมอ (ไม่กระทบ manual JE เดิมทั้งหมดที่มีอยู่)
+
+alter table public.manual_journal_entry_lines
+  add column if not exists fx_currency text,
+  add column if not exists fx_rate numeric(18,6),
+  add column if not exists fx_amount numeric(14,2);
+
+alter table public.manual_journal_entry_lines
+  drop constraint if exists manual_je_lines_fx_currency_format;
+alter table public.manual_journal_entry_lines
+  add constraint manual_je_lines_fx_currency_format
+    check (fx_currency is null or fx_currency ~ '^[A-Z]{3}$');
+
+notify pgrst, 'reload schema';
+```
+
+### 1.6 Schema — migration 0084 (seed บัญชี "กำไร(ขาดทุน)จากอัตราแลกเปลี่ยน")
+
+```sql
+-- เฟส 10 (0.4) — additive seed เข้า chart_of_accounts ทุก tenant ที่มีอยู่แล้ว (pattern เดียวกับ migration
+--   0063) — ไม่ใส่ใน PROTECTED_CODES (chart-accounts-data.ts) — นักบัญชี/แอดมินแก้ชื่อ/หมวด/ลบเองได้ตามปกติ
+--   sort_order คำนวณต่อ tenant (max(sort_order)+1) กันชนกับ 75 รายการเดิมที่ sort_order ตายตัวอยู่แล้ว
+
+insert into public.chart_of_accounts (tenant_id, code, name, category, is_bank, sort_order)
+select
+  t.id,
+  '4025',
+  'กำไร(ขาดทุน)จากอัตราแลกเปลี่ยน',
+  'รายได้',
+  false,
+  coalesce(
+    (select max(c.sort_order) + 1 from public.chart_of_accounts c
+     where c.tenant_id = t.id and c.deleted_at is null),
+    1
+  )
+from public.tenants t
+on conflict (tenant_id, code) where deleted_at is null do nothing;
+
+notify pgrst, 'reload schema';
+```
+
+---
+
+## 2) งานย่อยเรียงลำดับ (เฟส 10)
+
+**Legend**: [โค้ดได้เลย] = ทำตามสเปกได้ทันที · [⚠️ FLAG] = ทำต่อได้เลยแต่ต้องแจ้งผู้ใช้ (ดูรายละเอียดในหมวด 0)
+
+เลขงาน: ต่อจากเฟส 8 (T67–T76) → เริ่มที่ **T77**
+
+### ส่วน Z — โครงพื้นฐาน FX: schema + บันทึกบิล + ล็อกหลังชำระเงิน + BOT prefill (ทำก่อน AA)
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T77** [โค้ดได้เลย] | Migration 0079 — `bill_entries.currency`/`fx_rate` + check constraints | `0079_bill_entries_fx.sql` | - | ⚠️ ก่อนสร้างไฟล์ `ls supabase/migrations/` เช็ค 0078 ยังล่าสุดจริง (0.18); apply ไม่ error; insert แถวทดสอบ `currency='usd'` (พิมพ์เล็ก) → ถูกปฏิเสธ (constraint), `currency='USD'` → ผ่าน; `fx_rate=0`/`fx_rate=-5`/`fx_rate=200000` → ถูกปฏิเสธ, `fx_rate=35.5` → ผ่าน; แถวเก่าทั้งหมด (`currency`/`fx_rate`=null) ไม่ถูกกระทบ; เทสต์เดิมทั้งหมดผ่าน |
+| **T78** [โค้ดได้เลย] | Migration 0080 — `bill_entry_lines.fx_amount` | `0080_bill_entry_lines_fx_amount.sql` | - | apply ไม่ error (non-destructive); เทสต์เดิม (`queries.test.ts`) ยังผ่านครบ (ฟิลด์ใหม่ optional ไม่พังของเดิม) |
+| **T79** [โค้ดได้เลย] | `lib/accounting/currency.ts` — `isValidCurrencyCode`, `COMMON_CURRENCIES`, `validateFxRate` (hard-block, 0.11), `fxRatePlausibilityWarning` (soft-warn, 0.11), `deriveThbAmount` (0.6) | `currency.ts` | - | unit test: format ถูก/ผิดครบ (ตัวเล็ก/ยาวเกิน/มีตัวเลข/ว่าง); `validateFxRate`: 0/ลบ/เกิน 100000/NaN → ปฏิเสธ, ค่าปกติ (เช่น 35.50) → ผ่าน; `fxRatePlausibilityWarning('USD', 3650)` → มีข้อความเตือน (พิมพ์เกินหลักสิบเท่า), `('USD', 36.50)` → null (ไม่เตือน), สกุลไม่มีในตาราง → null เสมอ (ไม่เดา); `deriveThbAmount(100, 35.5)` = 3550.00 |
+| **T80** [โค้ดได้เลย] | `lib/integrations/bot-exchange-rate.ts` — `fetchBotReferenceRate(currency, date)` (0.12, best-effort, ไม่ throw) | `bot-exchange-rate.ts` | - | unit test (mock fetch): สำเร็จ → `{ok:true,rate}`; network error/timeout/status ไม่ 200/format เปลี่ยน/ไม่มีอัตราของสกุลนั้นวันนั้น → `{ok:false}` ทุกกรณี ไม่ throw ทะลุ; ไม่มี `console.*` ที่มี response payload เต็ม |
+| **T81** [โค้ดได้เลย] | `lib/accounting/queries.ts` — เพิ่ม `currency`/`fxRate` เข้า `BillEntry`, `fxAmount` เข้า `BillEntryLine` (optional, mirror `stockSync`/`quantity`) + select columns + mapping ของ `listEntries()` | `queries.ts` | T77, T78 | `queries.test.ts` ผ่าน (เพิ่ม fixture); หน้าเดิมที่ใช้ `BillEntry` ยัง compile ผ่าน (optional-safe); คอลัมน์ยังไม่ apply migration (จำลอง) → mapping คืน `null`/`undefined` ไม่ throw (degrade เหมือน `inputTaxMonth`) |
+| **T82** [โค้ดได้เลย] | `lib/accounting/actions-lib.ts` + `app/chat-audit/accounting/actions.ts` — `UpsertEntryInput`/`SaveEntryInput` เพิ่ม `currency`/`fxRate` (header) + `EditableLineInput.fxAmount` · validate รูปแบบ (T79) ก่อนเขียน · **guard 0.9**: ถ้ามี `bill_payments` (`deleted_at is null`) ผูก entry นี้อยู่ ≥1 แถว → ปฏิเสธการเปลี่ยน `currency`/`fx_rate` (คืนข้อความชัดเจน) · derive `amount` ต่อบรรทัดจาก `fxAmount × fxRate` เมื่อ `currency` ไม่ null ก่อนส่งเข้า `addLine`/`updateLine` | 2 ไฟล์ข้างต้น | T77, T78, T81 | unit test: บิลไม่มี payment ผูก → เปลี่ยน currency/fx_rate ได้ปกติ; มี payment ผูก (mock) → ปฏิเสธพร้อมข้อความ (0.9); ส่ง `currency=null` (ปกติ) → `amount` ยังกรอกตรงเหมือนเดิม (ไม่ derive, ไม่ regression); ส่ง `currency='USD'`+`fxAmount=100`+`fxRate=35.5` → `amount` ที่บันทึกจริง = 3550.00; `fx_rate`/`currency` รูปแบบผิด → ปฏิเสธ (server-side จริง ไม่เชื่อ client) |
+| **T83** [โค้ดได้เลย] | `CurrencyCombobox.tsx` (ใหม่, mirror `AccountCombobox.tsx`) + `EntryEditor.tsx` — ช่อง currency/fx_rate (header, ต่อจากช่องวิธีจ่าย/รับเงิน) + ปุ่ม "ดึงอัตรา ธปท." (0.12, best-effort, ไม่ block) + ช่อง `fx_amount` ต่อบรรทัด (แสดงเมื่อ currency ตั้งไว้ — `amount` กลายเป็น read-only แสดงผลลัพธ์ derive) + badge ล็อก (0.9) เมื่อมี payments ผูกแล้ว | `CurrencyCombobox.tsx`, `EntryEditor.tsx` | T82 | เปิดหน้าลงบัญชีจริง → เลือก currency='USD' → กรอก fx_rate (หรือกดดึงอัตรา ธปท. — ถ้า fetch ล้มเห็นข้อความ "กรุณากรอกเอง" ไม่ค้าง) → กรอก fx_amount ต่อบรรทัด → เห็น amount (THB) คำนวณอัตโนมัติถูกต้อง → บันทึก → ตรวจ DB ตรงกับที่คำนวณ; บิลที่มี payment ผูกแล้ว → ช่อง currency/fx_rate เป็น read-only + เห็น badge ล็อก; บิล currency=null (ปกติ) → หน้าตา/behavior เหมือนก่อนเฟสนี้ 100% (regression) |
+| **T84** [โค้ดได้เลย] | เทสต์ครบส่วน Z: `currency.test.ts`, `bot-exchange-rate.test.ts`, อัปเดต `queries.test.ts`/`actions-lib.test.ts` | หลายไฟล์ | T77-T83 | `npm run test` ผ่านทั้งชุด Z |
+
+**Milestone เฟส 10-Z**: บันทึกบิลซื้อ/ขายสกุลต่างประเทศได้จริง ระบบแปลงเป็น THB ถูกต้องอัตโนมัติ ล็อกฟิลด์ FX
+หลังมีการชำระเงินแล้ว — ยังไม่มีฝั่งรับ/จ่ายเงิน FX/realized gain-loss (ส่วน AA ทำถัดไป)
+
+### ส่วน AA — รับ/จ่ายเงิน FX + แนะนำกำไร/ขาดทุนจากอัตราแลกเปลี่ยน + CN/DN ของบิล FX + ยืนยันขอบเขต FlowAccount
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T85** [โค้ดได้เลย] | Migration 0081 — `credit_debit_note_lines.fx_amount` | `0081_credit_debit_note_lines_fx_amount.sql` | - | apply ไม่ error; เทสต์เดิมทั้งหมดผ่าน |
+| **T86** [โค้ดได้เลย] | Migration 0082 — `bill_payments.currency`/`fx_rate`/`fx_amount`/`fx_gain_loss_note_id` + constraints + index | `0082_bill_payments_fx.sql` | T77 (FK ไปยัง manual_journal_entries ต้องมีตารางนั้นอยู่แล้วจากเฟส 1 — มีอยู่แล้ว) | apply ไม่ error; insert แถวทดสอบ `currency`/`fx_rate` รูปแบบผิด → ถูกปฏิเสธเหมือน T77; `fx_gain_loss_note_id` ชี้ manual JE ที่ถูกลบ (soft-delete ไม่กระทบ FK, hard-delete ไม่มีในระบบ) ทำงานถูกต้องตาม `on delete set null`; เทสต์เดิมทั้งหมดผ่าน |
+| **T87** [โค้ดได้เลย] | Migration 0083 — `manual_journal_entry_lines.fx_currency`/`fx_rate`/`fx_amount` (metadata) | `0083_manual_journal_entry_lines_fx.sql` | - | apply ไม่ error; JV เดิมทุกใบ (ก่อนเฟสนี้) มีค่า 3 คอลัมน์นี้เป็น null ทั้งหมด (ตรวจด้วย query); เทสต์เดิม (`manual-journal.test.ts`) ผ่านครบ 100% (regression บังคับ — isBalanced/mapper ไม่รู้จักคอลัมน์นี้เลย) |
+| **T88** [โค้ดได้เลย] | Migration 0084 — seed บัญชี 4025 "กำไร(ขาดทุน)จากอัตราแลกเปลี่ยน" ทุก tenant (additive) | `0084_chart_of_accounts_fx_gain_loss_seed.sql` | - | apply ไม่ error; ทุก tenant มีรหัส 4025 หลัง apply (query นับแถวเทียบ); apply ซ้ำ (idempotent) → ไม่สร้างซ้ำ (`on conflict do nothing`); รหัส 4025 **ไม่อยู่ใน** `PROTECTED_CODES` (`chart-accounts-data.ts`) → ทดสอบแก้ชื่อ/ลบผ่านหน้าจัดการผังเดิมได้ปกติ (self-service, 0.4) |
+| **T89** [⚠️ FLAG — ดู 0.8] | `lib/accounting/bill-payments.ts` — `BillPayment`/`BillPaymentInput` เพิ่ม `currency`/`fxRate`/`fxAmount`/`fxGainLossNoteId` · `validatePaymentInput`/`recordBillPayment`: เมื่อบิลต้นทาง `currency` ไม่ null → derive `amount = deriveThbAmount(fxAmount, entry.fxRate)` (อัตราของ**บิล** ไม่ใช่อัตราของ payment นี้) แล้ว re-validate overpay เหมือนเดิมทุกประการ (0.8 ของเฟสนี้ + 0.8 เดิมของเฟส 2) · `toJournalLines`/`toJournalPosting` **ห้ามแก้แม้แต่บรรทัดเดียว** | `bill-payments.ts` | T81, T86 | unit test: บิล currency=null → พฤติกรรมเดิมเป๊ะ 100% (regression บังคับ, เทียบ byte-ต่อ-byte ผลลัพธ์ `toJournalLines` กับเทสต์เดิมของเฟส 2/3); บิล FX (USD, fxRate ตอนออกบิล=35.0) + payment `fxAmount=100`,`fxRate=36.0` (settlement) → `amount` ที่บันทึกจริง = `100×35.0=3500.00` (**ไม่ใช่** 3600.00 จาก settlement rate); `toJournalLines`/`toJournalPosting` ของ payment นี้ยังคืนแค่ 2 บรรทัดเดิม สมดุลด้วย `amount`=3500.00 เป๊ะ (ไม่มีขา FX เพิ่ม); grep ยืนยัน `toJournalLines`/`toJournalPosting` ในไฟล์นี้ไม่ถูกแก้ (diff เทียบกับก่อนเฟสนี้) |
+| **T90** [โค้ดได้เลย] | `lib/accounting/fx.ts` (ใหม่) — `realizedFxGainLoss(entryType, fxAmount, invoiceFxRate, settleFxRate)` (0.8, pure) + `suggestFxGainLossEntryInput(payment, entry, gainLossAccountCode, chartByCode)` → `ManualEntryInput` (2 บรรทัด Dr/Cr AR-AP + Dr/Cr บัญชี FX, สมดุลเสมอ, `docType='JV'`) | `fx.ts` | T79 | unit test: ขาย+baht อ่อนตัว (settleRate>invoiceRate) → กำไร (บวก); ขาย+baht แข็งขึ้น → ขาดทุน (ลบ); ซื้อ ทิศตรงข้ามครบทั้ง 2 กรณี; `fxAmount×(rate เท่ากันเป๊ะ)` → 0 (ไม่มี gain/loss); `suggestFxGainLossEntryInput` คืน `ManualEntryInput` ที่ `isBalanced()` (จาก `manual-journal.ts`) ผ่านเสมอทุกเคส รวมเคส gain=0 (ไม่ควรสร้างบรรทัดยอด 0 ที่ไม่มีความหมาย — ตัดสินใจให้ชัดในโค้ด: ถ้า realized=0 คืน `null` แทน ไม่ให้สร้าง JV เปล่า) |
+| **T91** [โค้ดได้เลย] | `app/chat-audit/accounting/payments/actions.ts` — `RecordBillPaymentActionInput` เพิ่ม `fxAmount`/`fxRate` · เพิ่ม `suggestFxGainLossNoteAction(paymentId, gainLossAccountCode?)`: guard สโคปผ่าน `getPaymentScope` เดิม (derive จาก `paymentId` ที่กำลังเขียนจริงเสมอ ตาม 0.17/IDOR-safe) → ปฏิเสธถ้า `fxGainLossNoteId` มีอยู่แล้ว (0.14, dedupe) → เรียก `fx.ts::suggestFxGainLossEntryInput` → `upsertManualEntry` (**draft เสมอ**, 0.5) → update `bill_payments.fx_gain_loss_note_id` = id ของ JV ที่สร้าง | `payments/actions.ts` | T89, T90 | unit test: งวดชำระที่เป็น FX + ยังไม่เคยแนะนำ → สร้าง JV draft สำเร็จ + ผูก `fx_gain_loss_note_id` กลับถูกต้อง; เรียกซ้ำงวดเดียวกัน (กดปุ่มซ้ำ/สองแท็บ) → ปฏิเสธ "แนะนำไปแล้ว" ไม่สร้าง JV ซ้ำสอง (0.14); งวดที่ไม่ใช่ FX (`currency=null`) → ปฏิเสธ (ไม่มีอะไรให้แนะนำ); นักบัญชีนอกสโคปเรียกกับ payment ของลูกค้าอื่น → ปฏิเสธ (guard เดิม); realized=0 (rate เท่ากันเป๊ะ) → ข้อความแจ้ง "ไม่มีผลต่างจากอัตราแลกเปลี่ยน" ไม่สร้าง JV เปล่า (mirror T90) |
+| **T92** [โค้ดได้เลย] | `payments/PaymentsPanel.tsx` — ฟอร์มบันทึกรับ/จ่ายเงิน: ช่อง `fx_amount`/`fx_rate` (แสดงเฉพาะบิลที่ `currency` ตั้งไว้ — ซ่อนเหมือนก่อนเฟสนี้สำหรับบิล THB ปกติ) · ต่อแถวประวัติการชำระ: ปุ่ม "แนะนำ JV กำไร/ขาดทุน FX" (เห็นเฉพาะงวดที่เป็น FX) → disabled+เปลี่ยนเป็นลิงก์ "ดู JV เลขที่..." เมื่อมี `fxGainLossNoteId` แล้ว | `PaymentsPanel.tsx` | T91 | เปิดหน้า `/chat-audit/accounting/payments` ของบิล FX จริง → บันทึกรับ/จ่ายเงินงวดหนึ่งด้วย fx_amount/fx_rate → เห็นยอด THB (amount ที่ตัด AR/AP) ถูกต้องตามอัตราตอนออกบิล (ไม่ใช่อัตรา settlement) → กดปุ่มแนะนำ JV → เห็น draft ใหม่ที่หน้า journal-entry พร้อมยอด/ทิศทางถูกต้อง → กดปุ่มซ้ำ → เห็นลิงก์ไป JV เดิม ไม่สร้างซ้ำ; บิล THB ปกติ → ไม่เห็นช่อง fx/ปุ่มแนะนำเลย (regression, หน้าตาเหมือนก่อนเฟสนี้ 100%) |
+| **T93** [โค้ดได้เลย] | `lib/accounting/credit-debit-notes.ts` — `CreditDebitNoteLine.fxAmount` · `validateNoteInput`/`createDraftNote`/`updateDraftNote`: โหลด `bill_entries.fx_rate`/`currency` ของบิลต้นทาง (join เพิ่ม 1 คอลัมน์ในคำสั่ง select ที่มีอยู่แล้ว) → derive `amount` ต่อบรรทัดจาก `fxAmount × entry.fxRate` เมื่อบิลต้นทาง `currency` ไม่ null (0.10) · `toJournalLines`/`toJournalPosting` ไม่แก้ (อ่าน `amount`/`vatAmount` derived เหมือนเดิม) | `credit-debit-notes.ts` | T85, T89 (ใช้ `entry.fxRate` จาก `queries.ts` เดียวกัน) | unit test: บิลต้นทาง currency=null → CN/DN พฤติกรรมเดิม 100% (regression); บิลต้นทาง FX (fxRate=35.0) + CN line `fxAmount=50` → `amount` derived = 1750.00 ไม่ว่า `doc_date` ของ CN/DN จะเป็นวันไหนก็ตาม (0.10 — ใช้ fxRate ของบิลต้นทางเสมอ ไม่ใช่อัตราวันออก CN/DN); `noteSignedAdjustment`/`billOutstanding` ยังทำงานถูกต้องกับ `amount` ที่ derive มา (reuse สูตรเดิม ไม่ต้องแก้) |
+| **T94** [โค้ดได้เลย] | `credit-debit-notes/CreditDebitNotesPanel.tsx` — ช่อง `fx_amount` ต่อบรรทัด (แสดงเฉพาะบิลต้นทาง FX) + แสดง `fx_rate` ของบิลต้นทาง (read-only, อ้างอิงให้เห็นว่าใช้อัตราไหน) | `CreditDebitNotesPanel.tsx` | T93 | เปิดหน้า CN/DN ของบิล FX จริง → กรอก fx_amount ต่อบรรทัด → เห็น amount (THB) คำนวณถูกต้องด้วยอัตราของบิลต้นทาง (ไม่ใช่อัตราวันนี้) → บันทึก/ยืนยัน → ยอดค้างชำระของบิลปรับถูกต้อง (ผ่าน `netAdjustmentByEntry` เดิม); บิล THB ปกติ → ไม่เห็นช่อง fx เลย (regression) |
+| **T95** [โค้ดได้เลย] | `lib/accounting/manual-journal.ts` — `ManualJournalLine` เพิ่ม `fxCurrency`/`fxRate`/`fxAmount` (optional metadata) · `upsertManualEntry`/`listManualEntries`: insert/select/map คอลัมน์ใหม่ (best-effort — ถ้า migration 0083 ยังไม่ apply ข้ามเงียบ ไม่ throw ทั้งการบันทึก, mirror `input_tax_month`) · `JournalEntryPanel.tsx` แสดง badge เล็ก ๆ "FX: USD @35.0000" ต่อบรรทัดที่มี metadata นี้ (read-only, informational — ไม่มีช่องกรอกเองในฟอร์ม JV ทั่วไป เพราะมาจาก T91 อัตโนมัติเท่านั้น) | `manual-journal.ts`, `JournalEntryPanel.tsx` | T87 | unit test: `isBalanced()`/`toJournalLines()`/`toJournalPosting()` ไม่กระทบเลยแม้บรรทัดมี fx metadata (ค่ายังอ่านจาก debit/credit ตรง ๆ เหมือนเดิม, regression บังคับ); JV ที่สร้างจาก T91 (`suggestFxGainLossEntryInput`) → โหลดกลับมาเห็น badge FX ถูกต้องตรงกับที่คำนวณ; JV ปกติที่นักบัญชีสร้างเอง (ไม่มี fx metadata) → ไม่เห็น badge เลย |
+| **T96** [โค้ดได้เลย] | ยืนยันขอบเขต FlowAccount sync ของบิล FX (0.13) — grep `lib/integrations/flowaccount-mapper.ts`/`lib/accounting/flowaccount-sync.ts` ยืนยันไม่มีการแก้ไฟล์ทั้งสองในเฟสนี้เลย + เพิ่มคอมเมนต์อ้างอิง 1 บรรทัดในแต่ละไฟล์ชี้ไปเอกสารนี้ (0.13) ว่าทำไมไม่ต้องแก้ | คอมเมนต์เท่านั้น 2 ไฟล์ | T89 (ยืนยันว่า amount/vatAmount ยังเป็น THB derived ที่ mapper อ่านได้ตรง ๆ) | ส่งบิลขาย/ซื้อที่เป็น FX (confirmed, มี mapping/credential ครบตามเฟส 5) ไป FlowAccount sandbox จริง → เอกสารสร้างสำเร็จ ยอด/VAT ที่ FlowAccount เห็นเป็น THB ถูกต้องตรงกับที่ derive ไว้ (ไม่มี currency/rate ปนไปในเอกสารที่ FlowAccount เห็นเลย); เทสต์เดิมของเฟส 5 (M1/M2/Q/P) ทั้งหมดยังผ่าน 100% (regression, ไม่มีไฟล์ไหนถูกแก้จริง) |
+| **T97** [โค้ดได้เลย] | เทสต์ครบส่วน AA: `fx.test.ts`, อัปเดต `bill-payments.test.ts`/`credit-debit-notes.test.ts`/`manual-journal.test.ts`/`payments-actions.test.ts`/`credit-debit-notes-actions.test.ts` | หลายไฟล์ | T85-T96 | `npm run test` ผ่านทั้งชุด AA |
+
+**Milestone เฟส 10-AA**: รับ/จ่ายเงินบิล FX ได้จริง คำนวณยอดตัด AR/AP ถูกต้องด้วยอัตราตอนออกบิล + แนะนำ (ไม่
+auto-post) กำไร/ขาดทุนจากอัตราแลกเปลี่ยนที่รับรู้แล้วให้นักบัญชีตรวจ/ยืนยันเองผ่านหน้า journal-entry เดิม —
+CN/DN ของบิล FX ใช้อัตราบิลต้นฉบับถูกต้อง — ยืนยันแล้วว่า FlowAccount sync ไม่ต้องแก้อะไรเลย
+
+### AB — ปิดงานเฟส 10
+
+| รหัส | สิ่งที่ต้องทำ | ขึ้นกับ | เกณฑ์เสร็จ |
+|---|---|---|---|
+| **T98** [โค้ดได้เลย] | regression sweep ข้ามเฟส 1-10 — เปิดทุกหน้าบัญชีที่มีอยู่ ตรวจว่าไม่มีหน้าไหนพังจากคอลัมน์ใหม่ (`currency`/`fx_rate`/`fx_amount`/`fx_gain_loss_note_id`/`fx_currency`) หรือฟีเจอร์ใหม่ | T77-T97 | ทุกหน้า `/chat-audit/accounting/*` เดิมเปิดได้ปกติไม่ error; รายงาน/งบการเงินของลูกค้าเดิมที่**ไม่มี**บิล FX เลย ยอด**ไม่เปลี่ยนแม้แต่สตางค์เดียว**จากก่อนเฟส 10 (เทียบผลลัพธ์เดียวกันของลูกค้าเดิมก่อน/หลัง — ฟีเจอร์นี้ additive ล้วนตาม 0.6); เทสต์เดิมของเฟส 1-9 ทั้งหมดยังผ่าน |
+| **T99** [โค้ดได้เลย] | รันชุดตรวจสอบเต็ม + ทดสอบมือรอบสุดท้ายก่อน merge/deploy | T77-T98 | `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด ไม่มี error/warning ใหม่; smoke test มือครบ flow เดียว: สร้างบิลขาย USD → บันทึกรับเงิน 2 งวด (คนละอัตรา settlement) → แนะนำ+ยืนยัน JV กำไร/ขาดทุน FX ทั้ง 2 งวด → เปิดงบทดลอง/งบการเงินเห็นยอดถูกต้องเป็น THB ล้วน 100% |
+
+---
+
+## 3) Definition of Done (เฟส 10 รวม)
+
+- [ ] นักบัญชีเลือกสกุลเงินต่อบิล (dropdown ค้นหาได้ + free-text 3 ตัวอักษรสำหรับสกุลอื่น) และกรอก/ดึงอัตรา
+      แลกเปลี่ยน (ธปท. อัตโนมัติแบบ best-effort หรือกรอกเอง) ได้จริงผ่านหน้าลงบัญชีเดิม
+- [ ] บิลสกุลต่างประเทศบันทึกยอดต้นฉบับ (`fx_amount`) + แปลงเป็น THB (`amount`) อัตโนมัติถูกต้อง — VAT ยังกรอก
+      เป็น THB ตรงเสมอ (ไม่ derive)
+- [ ] บิล `currency=null` (ปกติ, ค่าเริ่มต้น/บิลเก่าทุกใบ) พฤติกรรม/หน้าตา **เหมือนก่อนเฟสนี้ 100%** ไม่มี
+      regression แม้แต่จุดเดียว
+- [ ] `journal.ts`/`ledger.ts`/`trial-balance.ts`/`financial-statements.ts`/`cash-flow.ts`/
+      `formal-statements.ts` **ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว** (0.6 — grep ยืนยันก่อนปิดงาน)
+- [ ] `bill-payments.ts::toJournalLines/toJournalPosting` และ `flowaccount-mapper.ts`/
+      `flowaccount-sync.ts` **ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว** (0.8/0.13 — grep ยืนยันก่อนปิดงาน)
+- [ ] แก้ไข `currency`/`fx_rate` ของบิลที่มีการรับ/จ่ายเงินไปแล้วบางส่วน → ถูกล็อก/ปฏิเสธเสมอ (0.9)
+- [ ] บันทึกรับ/จ่ายเงินบิล FX ตัดยอด AR/AP ด้วยอัตราตอนออกบิล (ไม่ใช่อัตรา settlement) ถูกต้องทุกงวด
+      รวมกรณีชำระหลายงวด (multi-installment) คนละอัตรากัน
+- [ ] ระบบคำนวณ "แนะนำ" กำไร/ขาดทุนจากอัตราแลกเปลี่ยนที่รับรู้แล้วต่องวดชำระได้ถูกต้อง สร้างเป็น **draft JV
+      เสมอ** ให้นักบัญชีตรวจ/แก้/ยืนยันเองที่หน้า journal-entry เดิม — **ไม่มีทาง auto-confirm**
+- [ ] กดปุ่ม "แนะนำ" ซ้ำ/สองแท็บพร้อมกันกับงวดชำระเดียวกัน → ไม่สร้าง JV ซ้ำสอง (dedupe ผ่าน
+      `fx_gain_loss_note_id`)
+- [ ] ใบลดหนี้/ใบเพิ่มหนี้ของบิล FX ใช้อัตราแลกเปลี่ยน**ของบิลต้นฉบับ** (ไม่ใช่วันที่ออก CN/DN) ถูกต้องเสมอ
+- [ ] บัญชี "กำไร(ขาดทุน)จากอัตราแลกเปลี่ยน" (4025) ถูก seed เข้าผังบัญชีทุก tenant แบบ additive และนักบัญชี/
+      แอดมินแก้ชื่อ/หมวด/ลบเองได้ตามปกติ (self-service, ไม่ hardcode mapping ตายตัว)
+- [ ] ส่งบิล FX ไป FlowAccount ยังทำงานได้ปกติ — FlowAccount เห็นเฉพาะยอด/VAT เป็น THB ล้วน ไม่มี currency/
+      rate ปนไปด้วย (0.13, ยืนยันจริงบน sandbox)
+- [ ] ทุก write path ใหม่ผ่าน `requireAccountingAccess` + `assertCustomerInScope` (derive จาก resource id
+      ที่กำลังเขียนจริงเสมอ — ไม่ซ้ำ pattern IDOR ที่เคยพบในเฟส 3)
+- [ ] ไม่มี `console.log`/log ใดที่มีตัวเลข/อัตราแลกเปลี่ยน/ชื่อลูกค้า (PDPA)
+- [ ] ไม่มี mock/stub ปนอยู่ใน critical flow ของโค้ด production
+- [ ] เทสต์เดิมของเฟส 1-9 ทั้งหมดยังผ่านหลังเพิ่มคอลัมน์/ไฟล์ใหม่ (ไม่มี regression ข้ามเฟส)
+- [ ] `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด ไม่มี error/warning ใหม่
+
+---
+
+## 4) แนวทางการทดสอบ (สำหรับ tester)
+
+### 4.1 Unit test
+
+**`currency.ts` (T79) — พื้นฐานที่ทุกจุดอื่นพึ่งพา:**
+- `isValidCurrencyCode`: `"USD"`→true, `"usd"`/`"US"`/`"USDD"`/`""`/`null`→false
+- `validateFxRate` (hard-block): `0`/`-1`/`100001`/`NaN`/`"abc"`→ปฏิเสธ, `35.5`/`0.0001`/`100000`→ผ่าน
+- `fxRatePlausibilityWarning`: สกุลที่มีในตาราง+ค่าเกินช่วงมาก (เผื่อพิมพ์ผิดหลักสิบ/ร้อยเท่า) → มีข้อความ,
+  ค่าปกติ → null, สกุลนอกตาราง → null เสมอ (ไม่มีข้อมูลอ้างอิง ไม่เดา)
+- `deriveThbAmount`: ปัดเศษ 2 ตำแหน่งถูกต้องทุกกรณี (รวมเคสมีเศษสตางค์ยาว)
+
+**`fx.ts` (T90) — จุดสำคัญที่สุดของส่วน AA:**
+- `realizedFxGainLoss`: ครบ 4 กรณี (ขาย×กำไร, ขาย×ขาดทุน, ซื้อ×กำไร, ซื้อ×ขาดทุน) + เคส rate เท่ากันเป๊ะ → 0
+- `suggestFxGainLossEntryInput`: คืนบรรทัดที่ `isBalanced()` ผ่านเสมอ (import จาก `manual-journal.ts` มาเทียบ
+  ตรง ๆ ไม่มีสูตรคู่ขนาน); เคส realized=0 → คืน `null` (ไม่สร้าง JV เปล่า, ตาม T90); ทิศทาง Dr/Cr ของขา
+  AR/AP ตรงกับตาราง 0.5 ของเฟส 3 (credit_note-style กลับทิศ/debit_note-style ทิศเดียวกัน — แนวคิดเดียวกัน
+  แต่คนละบริบท ต้องตรวจทิศทางให้ตรงกับที่เขียนไว้ใน 0.8 ของเฟสนี้ ไม่ใช่ยกมาจากเฟส 3 ตรง ๆ)
+
+**`bill-payments.ts` (T89) — regression + FX ผสมกัน:**
+- ทุกเคสเดิมของเฟส 2/3 (`billOutstanding`/`isCreditEligibleForPayment`/`toJournalLines`/`toJournalPosting`)
+  ต้องผ่าน **ไม่เปลี่ยนแม้แต่ 1 ตัวอักษรของผลลัพธ์** เมื่อ `currency=null` (regression บังคับ, เทียบกับผลลัพธ์
+  เทสต์เดิมของเฟส 2/3 แบบ byte-ต่อ-byte)
+- `recordBillPayment` บิล FX: derive `amount` จาก `fxAmount × entry.fxRate` (อัตราบิล ไม่ใช่อัตรา settlement)
+  ถูกต้อง + ยัง re-fetch/ปฏิเสธ overpay จาก DB เหมือนเดิมทุกประการ (รวม `netAdjustment` จาก CN/DN เดิมของ
+  เฟส 3 ที่ต้องยังทำงานถูกกับบิล FX ด้วย)
+
+**`credit-debit-notes.ts` (T93):**
+- บิลต้นทาง FX → `amount` derive จาก `fxAmount × entry.fxRate`(ของบิลต้นทาง) ถูกต้อง ไม่ว่า `doc_date` ของ
+  CN/DN จะเป็นวันไหน (ทดสอบตั้งใจให้ `doc_date` ต่างจาก `bill_entries.doc_date` มาก ๆ เพื่อยืนยันว่าไม่หลุด
+  ไปใช้อัตราวันออก CN/DN)
+
+**`manual-journal.ts` (T95):**
+- fx metadata ไม่กระทบ `isBalanced`/`toJournalLines`/`toJournalPosting` เลย (regression บังคับ)
+
+**Actions (`payments-actions.test.ts`/`credit-debit-notes-actions.test.ts`/`actions-lib.test.ts`):**
+- guard สโคป: นักบัญชีนอกสโคปทำรายการ FX ของลูกค้าอื่นไม่ได้ (ทุก action ใหม่)
+- `suggestFxGainLossNoteAction`: dedupe ผ่าน (0.14), guard ปฏิเสธงวดที่ไม่ใช่ FX
+- `saveEntryAction`/`upsertEntry`: ปฏิเสธเปลี่ยน `currency`/`fx_rate` เมื่อมี `bill_payments` ผูกแล้ว (0.9)
+
+### 4.2 Integration/manual (บน dev จริง — ทำต่อเนื่องกันเป็น flow เดียว)
+
+1. สร้างบิลขาย (sale, `payment_method='credit'`) สกุล USD → กรอก `fx_rate` เอง (หรือกดดึงอัตรา ธปท. —
+   ทดสอบทั้งกรณี fetch สำเร็จ/จำลอง fetch ล้ม) → กรอก `fx_amount` ต่อบรรทัด → บันทึก+ยืนยัน → ตรวจงบทดลอง:
+   AR (1140) ตั้งยอดเป็น THB ที่คำนวณถูกต้องตามอัตราตอนออกบิล (ตรวจเทียบเลขมือ)
+2. เปิด `/chat-audit/accounting/payments` → บันทึกรับเงินงวดที่ 1 (fx_amount+fx_rate settlement คนละอัตรา
+   จากตอนออกบิล) → ตรวจว่า AR ลดลงตามยอดที่ตัด (อัตราบิล) ไม่ใช่อัตรา settlement
+3. กดปุ่ม "แนะนำ JV กำไร/ขาดทุน FX" ของงวดนั้น → เห็น draft JV ใหม่ที่หน้า journal-entry ยอด/ทิศทางตรงกับที่
+   คำนวณด้วยมือ (`fxAmount × ผลต่างอัตรา`) → กดยืนยัน JV → เปิดงบทดลอง/งบกำไรขาดทุน เห็นบัญชี 4025 มียอดถูกต้อง
+4. กดปุ่มแนะนำซ้ำงวดเดียวกัน → เห็นข้อความ/ลิงก์ไป JV เดิม ไม่มี JV ใหม่ซ้ำสอง
+5. บันทึกรับเงินงวดที่ 2 (คนละอัตรา settlement อีกครั้ง) → ทำซ้ำข้อ 3 → ตรวจว่าคำนวณ realized ของงวดนี้แยก
+   จากงวดที่ 1 ถูกต้อง (ไม่ผสมยอด/อัตราข้ามงวด — 0.15)
+6. ลองแก้ `currency`/`fx_rate` ของบิลในข้อ 1 (ที่มี payment ผูกแล้ว) → ต้องถูกปฏิเสธ/เห็น badge ล็อกชัดเจน
+7. ออกใบลดหนี้ (CN) ของบิลในข้อ 1 → กรอก `fx_amount` → ตรวจว่า `amount` (THB) คำนวณด้วยอัตราของบิลต้นฉบับ
+   (ไม่ใช่อัตราวันนี้ที่ออก CN) → ยืนยัน CN → เปิดหน้า `/ar-ap-aging` เห็นยอดค้างชำระปรับถูกต้อง
+8. ส่งบิลในข้อ 1 ไป FlowAccount (sandbox, ต้องมี credential/mapping ตามเฟส 5) → **[ต้อง sandbox จริง]**
+   ตรวจว่าเอกสารที่ FlowAccount เห็นเป็นยอด THB ล้วน ไม่มี currency/rate ปนไปเลย
+9. regression: เปิดทุกหน้าบัญชีเดิม (เฟส 1-9) ของลูกค้าที่มีข้อมูลครบแต่**ไม่มี**บิล FX เลย → ยอด/รายงาน/
+   งบการเงิน/สมุดรายวันต้องเหมือนก่อนเฟส 10 ทุกตัวเลข
+10. staff นักบัญชีที่ไม่ได้ดูแลลูกค้า A → เปิดหน้า payments/CN-DN/journal-entry ของบิล FX ของลูกค้า A ไม่ได้/
+    ทำรายการไม่ได้
+
+---
+
+## 5) ความเสี่ยงของแผน & แผนสำรอง
+
+| ความเสี่ยง | แผนสำรอง |
+|---|---|
+| **สับสนระหว่าง `bill_entries.fx_rate` (อัตราตอนออกบิล) กับ `bill_payments.fx_rate` (อัตรา settlement) — implement ผิดจุดจะทำให้ยอดตัด AR/AP กลายเป็นอัตราผิด (0.8)** | เขียน `deriveThbAmount`/`realizedFxGainLoss` แยกเป็นฟังก์ชัน pure ที่รับพารามิเตอร์ชื่อชัดเจน (`invoiceFxRate` vs `settleFxRate`) ไม่ใช้ชื่อกำกวม (`rate`) ที่ไหนเลยในโค้ด T89/T90; unit test ของ T89 ทดสอบเคสที่ทั้งสองอัตราต่างกันชัดเจน (35.0 vs 36.0) บังคับให้ต้องแยกถูก |
+| **ลืม guard 0.9 (ล็อก currency/fx_rate หลังมี payment) แล้วนักบัญชีแก้อัตราบิลย้อนหลังทำให้ realized ที่คำนวณไปแล้วผิดเงียบ ๆ** | `upsertEntry`/`saveEntryAction` query count `bill_payments` (`deleted_at is null`) ก่อน update ทุกครั้งที่ payload มี `currency`/`fxRate` ต่างจากค่าเดิมใน DB (ไม่ใช่แค่เช็คว่า field ถูกส่งมา) + unit test บังคับ (T82) |
+| **`suggestFxGainLossEntryInput` เผลอสร้าง JV ที่ไม่สมดุล ถ้าปัดเศษ (`round2`) 2 ขาไม่ตรงกัน** | reuse `round2` ตัวเดียวกับที่ `manual-journal.ts`/`bill-payments.ts` ใช้อยู่แล้ว (import จาก `queries.ts` จุดเดียว ไม่เขียนสูตรปัดเศษคู่ขนาน) + unit test เทียบกับ `isBalanced()` ตรง ๆ ทุกเคส (T90) |
+| **นักบัญชีกดปุ่ม "แนะนำ" ซ้ำ/สองแท็บพร้อมกันกับงวดชำระเดียวกัน แข่งกันสร้าง JV ซ้ำสอง (race condition)** | ยอมรับความเสี่ยงระดับต่ำนี้เหมือน posture เดิมทั้งระบบ (ไม่มี DB-level lock ที่อื่นเลย — mirror เหตุผลเดียวกับความเสี่ยง race ของ `bill_payments` เฟส 2) — update `fx_gain_loss_note_id` ด้วย `.eq("fx_gain_loss_note_id", null)` ในคำสั่ง UPDATE จริง (atomic check-and-write แบบเดียวกับที่ `updateDraftNote` ของเฟส 3 ใช้กัน TOCTOU) ลดโอกาสชนได้มากแล้วแม้ไม่ใช่ lock ระดับ DB เต็มรูป |
+| **การดึงอัตรา ธปท. อัตโนมัติ (0.12) — endpoint จริง/รูปแบบข้อมูลยังไม่ยืนยัน 100% ก่อนเขียนโค้ด (ต่างจาก M1 ฝั่ง FlowAccount ที่มี OpenAPI ทางการ)** | รวมจุดยิง fetch ไว้ที่ `fetchBotReferenceRate()` จุดเดียว (เหมือน pattern `createSalesDocument()` ของเฟส 5) แก้ที่เดียวถ้า endpoint จริงต่างจากที่เดาไว้; ฟีเจอร์นี้เป็น **best-effort prefill เท่านั้น** (0.12) ไม่ block การใช้งานฟีเจอร์หลักแม้ endpoint ผิด/ล่ม — T77-T99 ที่เหลือทั้งหมดไม่พึ่ง T80 เลย (ปล่อยใช้งานฟีเจอร์หลักได้แม้ T80 ยังไม่เสร็จ/ต้องแก้ endpoint ทีหลัง) |
+| **นักบัญชีพิมพ์ `fx_rate` ผิดหลักสิบ/ร้อยเท่า แล้ว soft-warn (0.11) ไม่เด่นพอจนมองข้าม** | UI แสดงคำเตือนเป็นสีเด่น (เหลือง/แดง) ต้องกดยืนยัน/พิมพ์ยืนยันซ้ำก่อนบันทึกเมื่อมี warning (ไม่ใช่แค่ข้อความเฉย ๆ ที่เลื่อนผ่านได้ทันที) — เป็น nice-to-have ของ UI ถ้าเวลาไม่พอ อย่างน้อย DoD บังคับแค่ "มีข้อความเตือนให้เห็น" (ไม่ hard-block ตาม 0.11 ที่ตั้งใจ) |
+| **CN/DN ของบิล FX ต้อง join `bill_entries.fx_rate` เพิ่ม — ถ้าลืมจุดใดจุดหนึ่ง (`createDraftNote`/`updateDraftNote`/`validateNoteInput`) จะ derive `amount` ผิดแบบเงียบ ๆ (ไม่ throw แค่ผิดตัวเลข)** | grep `bill_entries.fx_rate`/`entry.fxRate` ในไฟล์ `credit-debit-notes.ts` ก่อนปิดงาน T93 ต้องเจอครบทุก entry point ที่ derive `amount`; unit test เทียบตัวเลขที่คำนวณจริงกับเลขมือ (ไม่ใช่แค่ตรวจว่า derive ทำงาน "บางจุด") |
+| **`fx_gain_loss_note_id` ชี้ manual JE ที่ถูก soft-delete ไปแล้ว (นักบัญชีลบ JV ที่แนะนำไว้ทิ้ง) — ปุ่มยัง disabled อยู่ทั้งที่ควรกดแนะนำใหม่ได้** | `suggestFxGainLossNoteAction`/UI เช็คสถานะ `deleted_at` ของ JV ที่ `fx_gain_loss_note_id` ชี้อยู่ก่อนตัดสินใจ disable ปุ่ม — ถ้า JV ถูกลบไปแล้ว ให้ปุ่ม "แนะนำ" กลับมาใช้ได้ใหม่ (reset `fx_gain_loss_note_id`=null เมื่อพบว่า JV เป้าหมายถูกลบ, ทำใน T91) |
+| **จำนวน call site ที่ต้องแก้ให้ตรงกัน (`EntryEditor.tsx`/`actions.ts`/`PaymentsPanel.tsx`/`CreditDebitNotesPanel.tsx`) เสี่ยง gap แบบที่เจอซ้ำทุกเฟส** | grep ยืนยันครบก่อนปิดงาน (T98) เหมือนที่ L1/H1/T54/T66/T76 ของเฟสก่อนหน้าทำสำเร็จมาแล้วทุกครั้ง |
+
+---
+
+## 6) Backlog 10b (นอกสโคปเฟสนี้ — บันทึกไว้เผื่อทำต่อในอนาคต)
+
+1. **Unrealized FX revaluation ปลายงวด** — แปลงค่า AR/AP คงค้างที่เป็นสกุลต่างประเทศใหม่ด้วยอัตราปิด ณ วันสิ้น
+   งวด (unrealized gain/loss ลงกำไรขาดทุนทันทีตาม TAS 21) — ต้องมีกลไก "อัตราปิดต่องวด" + JE ปรับปรุงที่
+   **reverse อัตโนมัติ** ต้นงวดถัดไป (ซับซ้อนกว่า realized มาก — เป็นโปรเจกต์แยก)
+2. **งบการเงินหลายสกุลเงิน (presentation currency)** — แสดงงบเป็นสกุลอื่นที่ไม่ใช่ THB (ต้องมี presentation
+   currency แยกจาก functional currency ตาม TAS 21 หมวด translation)
+3. **บัญชีธนาคารสกุลต่างประเทศ** — `customer_bank_accounts` ที่ผูกกับบัญชีเงินฝาก FCY จริง (ปัจจุบันระบบไม่มี
+   concept นี้เลย — ทุกบัญชีธนาคารเป็น THB)
+4. **เปลี่ยน functional currency ของลูกค้ารายใดจาก THB** — ต้องมีการตรวจสอบเงื่อนไขกฎหมาย/ผู้สอบบัญชี/สรรพากร
+   ตามที่ระบุในสมมติฐาน 0.2 ก่อนเสมอ — ไม่ใช่ปัญหาทางเทคนิคอย่างเดียว ต้องดีลเป็นกรณีเฉพาะลูกค้า
+
+---
+
+*(เฟส 10 เป็นฟีเจอร์เพิ่มหลังเฟส 8 — ทำตาม pattern เดียวกัน: implement → QC (review+security+test) → แก้ไข
+ทุกข้อที่พบ → verify เต็มรูป → รวมเข้า branch → merge+deploy เมื่อผู้ใช้ยืนยัน)*
+
+# เฟส 9 — แผนละเอียด: ระบบเงินเดือน (Payroll)
+
+สโคป (จากการวิเคราะห์ + คำตอบผู้ใช้จริง — เชื่อถือได้ ไม่วิเคราะห์ซ้ำ): Finovas ให้บริการทำเงินเดือน + ยื่นภาษี
+หัก ณ ที่จ่าย (ภ.ง.ด.1) + ประกันสังคม **แทนลูกค้าจริง** (outsource model) — ลูกค้าบางรายมีพนักงาน 100+ คน
+(โรงงาน/ธุรกิจขนาดกลาง) ต้องออกแบบให้ scale ได้ระดับนั้น ไม่ใช่แค่ SME เล็ก 5-10 คน — ไม่มี e-filing API
+สาธารณะทั้ง PND1/สปส. จริง (ยืนยันแล้วรวม FlowAccount เองก็ไม่มี) → flow คือ **ระบบคำนวณ+สร้างเอกสาร →
+นักบัญชียื่นเองผ่านเว็บราชการ → กลับมากด "บันทึกว่ายื่นแล้ว" ในระบบ**
+
+ต่อยอดของที่มีอยู่แล้วในระบบ (ตรวจโค้ดจริงก่อนวางแผน):
+- `lib/accounting/tax-id.ts::normalizeTaxId/isValidTaxId` — เลขบัตรประชาชนไทย 13 หลักใช้ checksum/รูปแบบ
+  เดียวกับเลขผู้เสียภาษีบุคคลธรรมดาเป๊ะ → เฟสนี้ reuse ตรง ๆ กับ `payroll_employees.id_card_no` ไม่เขียน
+  validator คู่ขนาน
+- `lib/accounting/id-chunk.ts::chunkIds()` — ต้องใช้ทุกจุดที่ query `.in()` รายชื่อพนักงาน/รหัสบัญชีของ
+  ลูกค้าที่มีพนักงาน 100+ คน (บทเรียนจาก commit `7ab9f91`)
+- `lib/accounting/manual-journal.ts::upsertManualEntry` — จุดเดียวที่อนุญาตให้สร้าง JE จากระบบอัตโนมัติ
+  (ต้องเป็น `draft` เสมอ) — เฟสนี้สร้าง JE บันทึกค่าแรง/ภาษีหัก ณ ที่จ่าย/ประกันสังคมทั้งรอบผ่านจุดนี้ 100%
+- `lib/accounting/chart-accounts-data.ts::PROTECTED_CODES` / migration `0063` seed pattern — เฟสนี้ seed
+  บัญชีใหม่เพิ่มแบบเดียวกัน (additive, `on conflict do nothing`) แต่ **ไม่ใส่ใน `PROTECTED_CODES`**
+  (ให้นักบัญชีเปลี่ยนบัญชีเองได้ mirror 0.4 ของเฟส 10) — ผังที่มีอยู่แล้วมี `5310 เงินเดือนพนักงาน` (ค่าใช้จ่าย)
+  และ `2910 ภาษีหัก ณ ที่จ่าย` (หนี้สิน, PROTECTED) เป็นค่าเริ่มต้นที่แนะนำได้ทันทีโดยไม่ต้อง seed ใหม่
+- `supabase/migrations/0078_bill_entries_stock_synced_at.sql` (เฟส 8, 0.8) — ต้นแบบ **manual-trigger
+  sync-status** ที่เฟสนี้ mirror ตรง ๆ สำหรับ "บันทึกว่ายื่นแล้ว" (คอลัมน์ `*_filing_status`/`*_filed_at` +
+  ปุ่มกดเอง แทน `stock_synced_at`)
+- `supabase/migrations/0073_recurring_journal_entries.sql::add_months_clamped/claim_recurring_je_occurrence`
+  — ไม่ได้ใช้ตรง ๆ ในเฟสนี้ (payroll run ไม่ใช่ cron รายวัน — นักบัญชีเลือกเดือน/วันจ่ายเองต่อรอบ) แต่ pattern
+  atomic-claim ยังใช้กันกดปุ่ม "สร้าง JE" ซ้ำสอง (ดู 0.9)
+- `lib/accounting/fixed-assets.ts` (เฟส 7, 0.11) — ต้นแบบ "รหัสบัญชีไม่ hardcode FK, ใช้ seed เดิมเป็นตัวเลือก
+  แนะนำผ่าน combobox เท่านั้น" — เฟสนี้ mirror ตรงกับ `payroll_settings` (บัญชีเงินเดือน/ภาษีหัก/ประกันสังคม)
+
+---
+
+## 0) การตัดสินใจที่ล็อกไว้ก่อนเริ่มโค้ด
+
+### 0.1 Outsource model — ยืนยันจากผู้ใช้
+Finovas เป็นผู้คำนวณ+ยื่น PND1/ประกันสังคม **แทนลูกค้า** จริง (ไม่ใช่ลูกค้าทำเอง) — DPA (การประมวลผลข้อมูล
+ส่วนบุคคลพนักงานของลูกค้า) มีอยู่แล้ว/จัดการนอกระบบนี้ — **ไม่สร้างกลไก consent/DPA ใด ๆ ในระบบ** ลูกค้าบางราย
+มีพนักงาน 100+ คน → ทุกจุดที่ query/insert ต่อพนักงานต้อง**ไม่ scale เชิงเส้นกับจำนวนพนักงาน**ในจุดที่จะกลาย
+เป็นคอขวด (ดู 0.8 เรื่อง JE รวมยอด ไม่ใช่ 1 บรรทัดต่อพนักงาน)
+
+### 0.2 ตารางใหม่ทั้งหมด — **ห้ามแตะ/ขยาย `public.employees` เดิมเด็ดขาด**
+`public.employees` (migration `0003_employee_team.sql`) หมายถึง**พนักงานภายในของ Finovas เอง**
+(นักบัญชี/เซลส์/CS) ไม่มี `customer_id`, ผูกกับ `chat_groups.responsible_employee_id`/สิทธิ์ภายในทั้งระบบ —
+"พนักงานของบริษัทลูกค้า" (payroll) เป็นคนละเอนทิตีโดยสิ้นเชิง → ตารางใหม่ **`payroll_employees`** เท่านั้น
+scope ด้วยทั้ง `tenant_id` **และ** `customer_id` เสมอ (ต่างจาก `employees` เดิมที่ไม่มี `customer_id`) —
+ชื่อคอลัมน์/ตัวแปรในโค้ดทั้งหมดของเฟสนี้ต้องสะกด `payrollEmployee`/`payroll_employees` ให้ต่างจาก
+`employee`/`employees` ชัดเจนพอที่ code reviewer แยกออกได้ทันทีจากชื่อตัวแปรเฉย ๆ (กันสลับสโคปผิดโดยไม่ตั้งใจ
+— ความเสี่ยงสูงสุดของเฟสนี้ ดู 5)
+
+### 0.3 ไม่มี e-filing จริง — manual-trigger sync-status pattern (mirror เฟส 5/8)
+ไม่มี API สาธารณะให้ยื่น PND1 (efiling.rd.go.th) หรือ สปส.1-10 (sso.go.th) โดยตรง (ยืนยันแล้วรวม FlowAccount
+เองก็ทำได้แค่คำนวณ+ออกเอกสารให้ดาวน์โหลด ไม่มี e-filing ตรง) → ระบบทำแค่: **(1)** คำนวณ+สร้างเอกสารสรุปให้
+นักบัญชีเอาไปยื่นเอง **(2)** ปุ่ม "บันทึกว่ายื่นแล้ว" ต่อ**รอบเงินเดือน** (ไม่ใช่ต่อพนักงาน — ภ.ง.ด.1/สปส.1-10
+เป็นการยื่นเอกสารเดียวรวมพนักงานทั้งหมดของเดือนนั้น 1 ครั้ง) เก็บสถานะ `pit_filing_status`/`sso_filing_status`
+บน `payroll_runs` (`not_filed`→`filed`, มี `*_filed_at`+`*_filed_by`) — มีปุ่ม "ยกเลิกสถานะยื่นแล้ว" (undo) ด้วย
+เผื่อกดพลาด mirror `undisposeAsset` ของเฟส 7
+
+### 0.4 PIT หัก ณ ที่จ่าย (มาตรา 50) — สูตร annualize มาตรฐาน + ทำงวดต่องวดไม่ต้องพึ่ง YTD สะสม
+ต่อพนักงาน 1 คนต่อ 1 งวดจ่าย: `annualEstimate = grossThisPeriod × periodsPerYear` → หักค่าใช้จ่าย
+`min(annualEstimate×50%, 100000)` → หักค่าลดหย่อนส่วนบุคคล (มาตรฐาน 60,000 บาท เท่านั้นในรอบแรก — ดู backlog
+9b เรื่องค่าลดหย่อนอื่น) → ได้เงินได้สุทธิ → คำนวณภาษีทั้งปีตามอัตราก้าวหน้า 8 ขั้น (0/5/10/15/20/25/30/35%)
+→ หาร `periodsPerYear` = ภาษีที่หักงวดนี้ — **ไม่ต้องเก็บ/อ้างอิงยอดสะสม (YTD) ข้ามงวดเพื่อคำนวณ** (คำนวณใหม่
+อิสระทุกงวดจากยอดของงวดนั้นเอง ตรงตามวิธีที่กรมสรรพากรใช้จริงสำหรับเงินได้ประจำ — ความคลาดเคลื่อนจากเงินเดือน
+เปลี่ยนกลางปี/มีนายจ้างเดิมมาก่อน เป็นเรื่องที่พนักงานไปกระทบยอดเองตอนยื่น ภ.ง.ด.90/91 ปลายปี ไม่ใช่หน้าที่
+นายจ้างต้อง reconcile) — `periodsPerYear` = 12 คงที่สำหรับพนักงานที่ทำงานมาตั้งแต่ก่อนปีปัจจุบัน แต่พนักงาน
+**เข้าใหม่กลางปี (`start_date` อยู่ในปีเดียวกับ `pay_date`)** ต้องใช้ `remainingPeriodsInYear` = จำนวนเดือน
+นับจากเดือนที่เริ่มงานถึงเดือนธันวาคม (ไม่ใช่ 12 คงที่) — **[⚠️ FLAG]** สูตรนี้อ้างอิงวิธีปฏิบัติที่พบทั่วไป
+ต้องให้นักบัญชีจริงยืนยันอีกรอบก่อนใช้กับลูกค้าจริงรายแรก (ไม่ใช่ blog summary)
+
+### 0.5 ⚠️ กรณีโบนัส/เงินได้ครั้งเดียว (คำสั่งกรมสรรพากร ทป.4/2528 ข้อ 3) — ต้อง verify ตัวอย่างจริงก่อนถือว่าเสร็จ
+สูตรที่ใช้ (ต้อง verify): คำนวณภาษีทั้งปี **โดยไม่รวมโบนัส** (ตาม 0.4) = `taxRegularOnly` → คำนวณภาษีทั้งปีอีกครั้ง
+โดยบวกโบนัสเข้า `annualEstimate` ก่อนหักลดหย่อน = `taxWithBonus` → ภาษีที่ต้องหักจากโบนัสงวดนี้ = `taxWithBonus
+− taxRegularOnly` (หักเต็มจำนวนในงวดนั้น **ไม่หารด้วย periodsPerYear**) → ภาษีรวมที่หักงวดนี้ = ภาษีเงินเดือน
+ปกติ (0.4, หารแล้ว) + ภาษีโบนัส (ไม่หาร) — **[⚠️⚠️ FLAG — ล็อกจากผู้ใช้ตรง ๆ]** ห้ามเขียน engine จริงจาก
+บทสรุปนี้เฉย ๆ **ต้องมี task แยก (T112) หาตัวอย่างคำนวณอ้างอิงที่เชื่อถือได้จริง** (เช่น เอกสารประกอบคำสั่ง
+ทป.4/2528 ฉบับเต็ม, ตัวอย่างจากหนังสือ/หลักสูตรบัญชีที่มีเลขอ้างอิงชัดเจน — ไม่ใช่บล็อกสรุปทั่วไป) มาทำเป็น
+golden test case ก่อนถือว่า T112 เสร็จ — ถ้าหาตัวอย่างที่เชื่อถือได้ไม่ทันก่อน deploy รอบนี้ ให้ตัดสินใจ ณ
+ตอนนั้นระหว่าง (ก) เลื่อน merge ทั้งเฟสจนกว่าจะยืนยันได้ หรือ (ข) ปิดสวิตช์ UI ช่องกรอกโบนัสไว้ก่อน
+(ใส่ `bonus_amount` ได้แต่ปฏิเสธ >0 ชั่วคราว) แล้วเปิด backlog 9b ทำต่อ — **ห้าม deploy engine โบนัสที่ยัง
+ไม่ verify ให้ใช้กับเงินจริงของลูกค้า**
+
+### 0.6 ประกันสังคม (มาตรา 33) — effective-dated config table ไม่ hardcode
+5%/5% (ลูกจ้าง/นายจ้าง), ฐานค่าจ้างขั้นต่ำ 1,650 บาท (floor), ฐานค่าจ้างเพดาน (ceiling) **เปลี่ยนตามเวลา**
+(15,000 ก่อน 1 ม.ค. 2569 → 17,500 ตั้งแต่ 1 ม.ค. 2569 → มีขึ้นอีกในปี 2572/2575) → เก็บในตาราง
+`sso_contribution_config` ที่มี `effective_from` (มิเรอร์บทเรียนเฟส 1 ที่ chart of accounts เคย hardcode
+แล้วต้อง migrate) — **เลือกแถวที่ effective_from ล่าสุดที่ ≤ `payroll_runs.pay_date`** (ใช้วันที่จ่ายจริง
+เป็นตัวกำหนด ไม่ใช่เดือนที่จ่ายให้ — ตรงกับหลักปฏิบัติจริงที่ยึดวันที่นำส่งเป็นเกณฑ์) — ตารางนี้และ
+`pit_tax_brackets` (0.4) เป็น **ตาราง global ไม่ผูก tenant** (เป็นตัวเลขตามกฎหมายไทย ใช้เหมือนกันทุก tenant/
+ลูกค้า ต่างจาก `chart_of_accounts` ที่ tenant ปรับแก้เองได้) — เขียน/แก้ได้เฉพาะ `service_role` (ไม่มี UI
+ให้ tenant แก้ค่าเหล่านี้ในรอบแรก — เปลี่ยนผ่าน migration ใหม่เมื่อกฎหมายเปลี่ยนจริงเท่านั้น)
+
+### 0.7 Never-auto-confirm — mirror มาตรฐานเดิมทุกเฟสตั้งแต่เฟส 6
+JE ที่ระบบสร้างจากรอบเงินเดือน (`buildPayrollJournalEntry`) ต้องเป็น `draft` เสมอผ่าน `upsertManualEntry`
+เท่านั้น — ไม่มีทาง auto-confirm เข้าบัญชีจริงโดยไม่มีนักบัญชีกดยืนยันเองที่หน้า journal-entry เดิม
+
+### 0.8 ⚠️ JE ต่อรอบเป็น "1 ใบรวมยอด" ไม่ใช่ 1 บรรทัดต่อพนักงาน — จุดออกแบบที่รองรับพนักงาน 100+ คน
+ถ้าทำ JE 1 ใบที่มีบรรทัดแยกตามพนักงาน (เช่น เดบิตเงินเดือนแยกทุกคน) จะได้ JE ที่มี 100+ บรรทัดต่อรอบ — หนัก
+ทั้งการ render UI/journal-entry เดิมและผิดธรรมชาติของบัญชี (เงินเดือนทั้งบริษัทควรลงเป็นยอดรวม ไม่ใช่แยกราย
+บุคคลในสมุดรายวันทั่วไป) → ออกแบบ `buildPayrollJournalEntry(lines, settings)` ให้ **รวมยอด (SUM) ต่อรหัสบัญชี**
+ก่อนสร้างบรรทัด JE (ปกติจะได้ 4-6 บรรทัดต่อรอบไม่ว่าจะมีพนักงาน 5 คนหรือ 500 คน):
+- Dr `salary_expense_account_code` = Σ(gross_salary + other_additions + bonus_amount) ทุกพนักงาน
+- Dr `sso_employer_expense_account_code` = Σ(sso_employer) (ข้ามบรรทัดนี้ถ้ายอด = 0)
+- Cr `pit_payable_account_code` = Σ(pit_withheld) (ข้ามถ้า = 0)
+- Cr `sso_payable_account_code` = Σ(sso_employee + sso_employer) (ข้ามถ้า = 0)
+- Cr `other_deductions_account_code` = Σ(other_deductions) (ข้ามถ้า = 0 — ถ้า >0 แต่ไม่ตั้งรหัสบัญชีไว้ใน
+  settings → ปฏิเสธการสร้าง JE พร้อมข้อความชัดเจนให้ไปตั้งค่าก่อน)
+- Cr `net_pay_account_code` = Σ(net_pay ต่อพนักงาน, net_pay = gross+additions+bonus−pit−sso_employee−
+  other_deductions) — พิสูจน์ทางคณิตศาสตร์แล้วว่า Dr รวม = Cr รวมเสมอ (ดูรายละเอียดพีชคณิตใน T115)
+รายละเอียดต่อพนักงาน (ใครหักภาษี/ประกันสังคมเท่าไหร่) อยู่ครบใน `payroll_run_lines` + หน้าสลิป/รายงานสรุปรอบ
+อยู่แล้ว — ไม่จำเป็นต้องอยู่ใน JE ระดับบรรทัดด้วย (เหมือนที่ระบบสต็อกเฟส 8 ไม่ auto-post COGS แยกทุกตัว)
+
+### 0.9 กันกดปุ่ม "สร้าง JE" ซ้ำสอง — atomic claim ระดับ column เดียว (ไม่ต้อง RPC เต็มรูปแบบ)
+`payroll_runs.manual_entry_id` (nullable) — `generateRunJournalEntry` เขียนแบบ
+`UPDATE ... WHERE id=$run AND manual_entry_id IS NULL ... RETURNING id` **ก่อน** เรียก `upsertManualEntry`
+ไม่ใช่หลัง (claim ก่อนสร้างจริงเหมือนหลักการ 0.8/0.9 ของเฟส 5/8) — claim ไม่ติด (ไม่ได้แถวกลับมา) = มีคน
+กดสร้างไปแล้ว → ปฏิเสธ ไม่สร้าง JE ที่สอง (mirror `stock_synced_at` เฟส 8 — ไม่ต้องมี RPC/`for update skip
+locked` เต็มรูปแบบเหมือน recurring JE/ค่าเสื่อม เพราะนี่เป็นการกดปุ่มมือ 1 ครั้งต่อรอบ ไม่มี cron มาชนด้วย)
+
+### 0.10 การตั้ง/จ่ายเงินสุทธิจริง (net pay settlement) — นอกสโคป, reuse ฟีเจอร์ "ลงบันทึกบัญชีเอง" เดิม
+เฟสนี้จบที่การสร้าง JE บันทึก **ยอดเงินเดือนค้างจ่าย** (`net_pay_account_code` เป็นบัญชีหนี้สินถ้ายังไม่โอน
+จริงวันเดียวกัน) เท่านั้น — การโอนเงินจริงให้พนักงาน (Dr เงินเดือนค้างจ่าย / Cr เงินสด-ธนาคาร) ให้นักบัญชี
+ไปบันทึกเองผ่านฟีเจอร์ Manual JE ที่มีอยู่แล้ว (เฟส 1 ส่วน C) **ไม่สร้างฟีเจอร์ "จ่ายจริงแล้ว" ซ้ำซ้อนในเฟสนี้**
+(กันสโคปบวม, เหมือนหลักการ 0.6 ของเฟส 8 ที่ไม่ทำ COGS auto-post) — ถ้าลูกค้าโอนเงินเดือนวันเดียวกับที่ปิดรอบ
+เป๊ะ `payroll_settings.net_pay_is_paid_immediately=true` ให้เลือก `net_pay_account_code` เป็นบัญชีเงินสด/
+ธนาคารตรง ๆ แทนบัญชีค้างจ่าย (ทางเลือกที่มีอยู่แล้วในการตั้งค่า ไม่ต้องมีฟีเจอร์เพิ่ม)
+
+### 0.11 รหัสบัญชีของ `payroll_settings` — ไม่ hardcode FK, เลือกผ่าน combobox เสมอ (mirror 0.11 เฟส 7)
+6 ช่อง: `salary_expense_account_code`(แนะนำ `5310` ที่มีอยู่แล้ว), `sso_employer_expense_account_code`
+(แนะนำ `5311` ที่ seed ใหม่), `sso_payable_account_code` (แนะนำ `2050` ที่ seed ใหม่),
+`pit_payable_account_code` (แนะนำ `2910` ที่มีอยู่แล้ว — PROTECTED_CODES เดิม ใช้ได้ปกติแค่ต้องอยู่ในหมวด
+หนี้สิน), `other_deductions_account_code` (nullable, ไม่มีค่าแนะนำตายตัว), `net_pay_account_code`
+(nullable ตอนตั้งค่าเริ่มต้น, บังคับกรอกก่อนสร้าง JE ได้จริง) — validate ต้องอยู่ในหมวดบัญชีที่ถูกต้องตามชนิด
+(ค่าใช้จ่าย/หนี้สิน/บัญชีเงินสด-ธนาคารตามแต่ละช่อง) เหมือนที่ `fixed-assets.ts::validateFixedAssetInput` ทำ
+
+### 0.12 `payroll_employees.id_card_no` — reuse `normalizeTaxId` + มาสก์การแสดงผล (PDPA)
+เลขบัตรประชาชนไทย 13 หลัก validate ด้วย `normalizeTaxId`/`isValidTaxId` ตรง ๆ (ไม่เขียนซ้ำ) — พนักงาน
+ต่างชาติไม่มีบัตร 13 หลัก ใช้ `passport_no` (free-text) แทนได้ (ต้องมีอย่างน้อย 1 ใน 2 ช่อง, check constraint)
+**[⚠️ FLAG — เพิ่มขอบเขตเล็กน้อยจาก PDPA]** เลขบัตรประชาชนของพนักงานลูกค้าเป็นข้อมูลอ่อนไหวกว่าข้อมูลอื่นที่
+ระบบเคยเก็บ (เทียบเคียงเลขผู้เสียภาษี) — หน้าจอแสดงผล**มาสก์เป็นค่าเริ่มต้น** (โชว์ 4 ตัวท้ายเท่านั้น เช่น
+`x-xxxx-xxxxx-xx-3`) มีปุ่ม "เผยเลขเต็ม" ต่อแถวให้กดดูเองเมื่อจำเป็น (ไม่ auto-reveal ทั้งตาราง) — ไม่ log
+เลขเต็มที่ไหนเลยในระบบ (มาตรฐาน PDPA เดิมทั้งระบบ)
+
+### 0.13 ยอด `gross_salary` ต่องวด — prefill จาก `base_salary` แต่แก้ไขได้เสมอ (รองรับกลางเดือน/ลาออก/ปรับเงินเดือน)
+`payroll_run_lines.gross_salary` prefill จาก `payroll_employees.base_salary` ตอนสร้างรอบ แต่นักบัญชีแก้ไข
+เป็นรายบุคคลได้เสมอก่อนกด "คำนวณ" (รองรับ: เข้างานกลางเดือน/ลาออกกลางเดือน/ปรับเงินเดือน/ไม่มาทำงานบางวัน —
+ระบบไม่มีสูตร prorate ตามวันทำงานอัตโนมัติในรอบแรก นักบัญชีคำนวณเองแล้วกรอกยอดที่ถูกต้องต่องวด — ยืนยันเป็น
+backlog 9b ถ้าลูกค้าต้องการ auto-prorate ในอนาคต)
+
+### 0.14 ยอดต่อรอบต่อลูกค้าต่อเดือน — unique กันสร้างซ้ำ, soft-delete ได้
+`payroll_runs` unique ที่ (`tenant_id`,`customer_id`,`pay_period_year`,`pay_period_month`) เฉพาะแถวที่
+`deleted_at is null` (partial unique index) — กันสร้างรอบเดือนเดียวกันซ้ำสองโดยไม่ตั้งใจ, ลบรอบที่สร้างผิด
+ได้เฉพาะตอน `status='draft'` (ยังไม่สร้าง JE) เหมือนหลักการล็อกของเฟส 7/8
+
+### 0.15 สิทธิ์ — reuse `requireAccountingAccess`+`assertCustomerInScope` เดิมทั้งหมด ไม่มี admin-only ใหม่
+ทุก write path (payroll_employees/payroll_settings/payroll_runs/payroll_run_lines/filing-status) ต้อง
+derive scope จาก resource id ที่กำลังเขียนจริงเสมอ (ไม่เชื่อ client) — pattern เดียวกับ `fixed-assets.ts`/
+`product-stock.ts` ทุกประการ (IDOR-safe)
+
+### 0.16 ยืนยันเลข migration จริงก่อน apply เสมอ
+`ls supabase/migrations/` ล่าสุดจริง (ยืนยันแล้ว ณ วันวางแผนนี้) = `0078_bill_entries_stock_synced_at.sql`
+— **เฟส 10 (FX, แผนละเอียดอยู่ก่อนเฟสนี้ในเอกสารหลัก) จองเลข 0079-0084 ไว้แล้ว** (ยังไม่ apply จริงตอนวางแผน
+เฟสนี้) → เฟสนี้จองเลขต่อจากนั้น **0085-0090** **แต่ต้อง `ls supabase/migrations/ | sort -V | tail -20`
+ซ้ำอีกครั้งก่อนสร้างไฟล์จริงเสมอ** เพราะลำดับที่แต่ละเฟสถูก implement จริงอาจไม่ตรงกับลำดับเลขเฟสในเอกสาร
+(เฟส 10 อาจถูก implement ไปแล้วก่อนเฟสนี้ ใช้เลขที่ต่างจากที่จองไว้ในแผนของมันจริงก็ได้ — เชื่อ `ls` เท่านั้น
+ไม่เชื่อเลขในเอกสารนี้ตรง ๆ)
+
+---
+
+## 1) โครงสร้างไฟล์ (ใหม่/แก้) — เฟส 9
+
+```
+supabase/migrations/
+  0085_payroll_config.sql          [ใหม่] pit_tax_brackets + sso_contribution_config (global, ไม่ผูก
+                                    tenant) + seed อัตราภาษีก้าวหน้า 8 ขั้นปัจจุบัน + seed SSO
+                                    (ceiling 15000 effective 2540-01-01, 17500 effective 2569-01-01) + RLS
+                                    (select ให้ authenticated ทุกคน, เขียนได้แค่ service_role)
+  0086_payroll_employees.sql       [ใหม่] payroll_employees + RLS (tenant_read + revoke anon)
+  0087_payroll_settings.sql        [ใหม่] payroll_settings (1 แถวต่อ tenant+customer) + RLS
+  0088_payroll_runs.sql            [ใหม่] payroll_runs (unique ต่อ tenant+customer+ปี+เดือน) + RLS
+  0089_payroll_run_lines.sql       [ใหม่] payroll_run_lines + RLS
+  0090_payroll_accounts_seed.sql   [ใหม่] seed บัญชีใหม่ '2050 เงินสมทบประกันสังคมค้างนำส่ง' (หนี้สิน),
+                                    '5311 เงินสมทบประกันสังคม (ส่วนนายจ้าง)' (ค่าใช้จ่าย) ทุก tenant
+                                    (additive, on conflict do nothing, ไม่ใส่ PROTECTED_CODES)
+
+lib/
+  accounting/
+    payroll-config.ts       [ใหม่] data layer อ่านอย่างเดียว: getEffectivePitBrackets(db, asOfDate),
+                                    getEffectiveSsoConfig(db, asOfDate) — เลือกแถว effective_from
+                                    ล่าสุดที่ ≤ asOfDate (0.6)
+    payroll-employees.ts    [ใหม่] types PayrollEmployee/PayrollEmployeeInput, validate (reuse
+                                    normalizeTaxId 0.12, บังคับมี id_card_no หรือ passport_no อย่างน้อย 1),
+                                    CRUD (listEmployees/upsertEmployee/softDeleteEmployee) scope
+                                    tenant+customer, dedupe id_card_no ซ้ำในลูกค้าเดียวกัน
+    payroll-settings.ts     [ใหม่] types PayrollSettings/PayrollSettingsInput, validate รหัสบัญชี 6 ช่อง
+                                    ตามหมวดที่ถูกต้อง (0.11, reuse ChartByCode เหมือน fixed-assets.ts),
+                                    getOrCreateDefaultSettings (แนะนำ 5310/2910 ที่มีอยู่แล้ว + 5311/2050
+                                    ที่ seed ใหม่), upsertSettings
+    payroll-tax.ts           [ใหม่] ★ pure ล้วน — expenseDeduction(annualIncome),
+                                    calcAnnualTax(taxableIncome, brackets), remainingPeriodsInYear
+                                    (payDate, startDate) (0.4), calcMonthlyPitForRegularIncome(...) (0.4),
+                                    calcMonthlyPitWithBonus(...) [⚠️ FLAG ต้อง verify, 0.5],
+                                    calcSsoContribution(grossWage, config) (0.6)
+    payroll.ts                [ใหม่] orchestrator: createDraftRun (prefill จาก payroll_employees active,
+                                    ใช้ chunkIds ถ้า >150 คน), recalcRunLines (เรียก payroll-tax.ts ทุก
+                                    บรรทัด, idempotent — เรียกซ้ำได้ตลอดตอน draft), listRuns/getRunWithLines,
+                                    buildPayrollJournalEntry (0.8, รวมยอดต่อรหัสบัญชี),
+                                    generateRunJournalEntry (0.9 atomic claim + upsertManualEntry draft),
+                                    markPitFiled/unmarkPitFiled/markSsoFiled/unmarkSsoFiled (0.3)
+
+app/
+  chat-audit/accounting/
+    payroll-employees/
+      page.tsx                [ใหม่] เลือกลูกค้า (mirror fixed-assets/page.tsx) → ทะเบียนพนักงานลูกค้า +
+                                    แท็บตั้งค่าบัญชี (payroll_settings)
+      PayrollEmployeesPanel.tsx [ใหม่] ฟอร์ม CRUD พนักงาน (มาสก์เลขบัตร 0.12), ฟอร์มตั้งค่าบัญชี 6 ช่อง
+                                    (AccountCombobox × 6)
+      actions.ts               [ใหม่] server actions guard requireAccountingAccess+assertCustomerInScope
+                                    (upsertEmployeeAction/deleteEmployeeAction/upsertSettingsAction)
+
+    payroll/
+      page.tsx                 [ใหม่] เลือกลูกค้า → รายการรอบเงินเดือน (ปี/เดือน/สถานะ/สถานะยื่น) + ปุ่ม
+                                    "สร้างรอบใหม่"
+      PayrollRunPanel.tsx      [ใหม่] ตารางบรรทัดต่อพนักงาน (gross/additions/bonus/deductions แก้ได้,
+                                    pit/sso/net แสดงผลหลังคำนวณ) รองรับ 100+ แถว, ปุ่ม "คำนวณภาษี+
+                                    ประกันสังคม" (recalcRunLines), ปุ่ม "สร้างรายการบัญชี (JE)"
+                                    (generateRunJournalEntry — ล็อกแก้บรรทัดหลังสร้าง JE แล้ว), ปุ่ม
+                                    "บันทึกว่ายื่น ภ.ง.ด.1/สปส.1-10 แล้ว" + "ยกเลิกสถานะ" (0.3)
+      SlipView.tsx              [ใหม่] สลิปเงินเดือนต่อพนักงาน (หน้าพิมพ์ CSS, mirror รูปแบบเฟส 4)
+      actions.ts                [ใหม่] server actions guard เดิม (createRunAction/recalcRunAction/
+                                    generateJournalEntryAction/markFiledAction/unmarkFiledAction)
+      export/route.ts           [ใหม่] export Excel รายงานสรุปรอบเงินเดือน (reuse exceljs pattern จาก
+                                    budget/export/route.ts)
+
+  chat-audit/accounting/page.tsx, CustomerTabs.tsx  [แก้] เพิ่มลิงก์ "พนักงาน/เงินเดือน" (จุดเดียวกับ
+                                    opening/reports/flowaccount-map/budget/recurring-journal/fixed-assets/
+                                    inventory เดิม)
+
+tests/
+  accounting/payroll-config.test.ts          [ใหม่] เลือกแถว effective_from ถูกต้องทุกกรณี (วันคาบเกี่ยว
+                                    รอยต่อ 2568/2569, วันก่อน/หลังพอดี)
+  accounting/payroll-employees.test.ts       [ใหม่] validate + CRUD + dedupe id_card_no
+  accounting/payroll-employees-actions.test.ts [ใหม่] guard สโคปครบทุก action
+  accounting/payroll-settings.test.ts        [ใหม่] validate หมวดบัญชี 6 ช่อง
+  accounting/payroll-tax.test.ts             [ใหม่] ★ golden test เงินเดือนปกติ + โบนัส (0.5, อ้างอิงแหล่ง
+                                    ที่มาในคอมเมนต์) + SSO floor/ceiling ทุกช่วงเวลา
+  accounting/payroll.test.ts                 [ใหม่] recalcRunLines/buildPayrollJournalEntry (สมดุล
+                                    Dr=Cr ทุกเคส รวมเคส other_deductions=0/>0), performance test
+                                    (จำลอง 150+ บรรทัด ต้องได้ JE เดียวไม่เกิน ~6 บรรทัด), atomic claim
+                                    กันสร้าง JE ซ้ำสอง
+  accounting/payroll-actions.test.ts         [ใหม่] guard สโคป, ล็อกแก้บรรทัดหลังสร้าง JE แล้ว, markFiled/
+                                    unmarkFiled เฉพาะตอน status='finalized'
+```
+
+### 1.1 Schema — migration 0085 (config effective-dated, ร่างหลัก)
+```sql
+create table if not exists public.pit_tax_brackets (
+  id             uuid primary key default gen_random_uuid(),
+  effective_from date not null,
+  bracket_order  int not null,
+  income_from    numeric(14,2) not null,
+  income_to      numeric(14,2),                 -- null = ไม่มีเพดาน (ขั้นสูงสุด)
+  rate_percent   numeric(5,2) not null,
+  created_at     timestamptz not null default now(),
+  unique (effective_from, bracket_order)
+);
+
+create table if not exists public.sso_contribution_config (
+  id                      uuid primary key default gen_random_uuid(),
+  effective_from          date not null unique,
+  employee_rate_percent   numeric(5,2) not null default 5.00,
+  employer_rate_percent   numeric(5,2) not null default 5.00,
+  wage_floor              numeric(14,2) not null default 1650.00,
+  wage_ceiling            numeric(14,2) not null,
+  created_at              timestamptz not null default now()
+);
+
+-- seed อัตราภาษีก้าวหน้าปัจจุบัน (ไม่เปลี่ยนมานาน — 8 ขั้น)
+insert into public.pit_tax_brackets (effective_from, bracket_order, income_from, income_to, rate_percent)
+values
+  ('2560-01-01', 1,       0,  150000, 0),
+  ('2560-01-01', 2,  150001,  300000, 5),
+  ('2560-01-01', 3,  300001,  500000, 10),
+  ('2560-01-01', 4,  500001,  750000, 15),
+  ('2560-01-01', 5,  750001, 1000000, 20),
+  ('2560-01-01', 6, 1000001, 2000000, 25),
+  ('2560-01-01', 7, 2000001, 5000000, 30),
+  ('2560-01-01', 8, 5000001, null,    35)
+on conflict (effective_from, bracket_order) do nothing;
+
+-- seed SSO — ceiling เดิม 15000 (ก่อน 2569) + ceiling ใหม่ 17500 (ตั้งแต่ 1 ม.ค. 2569)
+insert into public.sso_contribution_config (effective_from, employee_rate_percent, employer_rate_percent, wage_floor, wage_ceiling)
+values
+  ('2540-01-01', 5.00, 5.00, 1650.00, 15000.00),
+  ('2569-01-01', 5.00, 5.00, 1650.00, 17500.00)
+on conflict (effective_from) do nothing;
+
+alter table public.pit_tax_brackets       enable row level security;
+alter table public.sso_contribution_config enable row level security;
+drop policy if exists authenticated_read on public.pit_tax_brackets;
+create policy authenticated_read on public.pit_tax_brackets for select to authenticated using (true);
+drop policy if exists authenticated_read on public.sso_contribution_config;
+create policy authenticated_read on public.sso_contribution_config for select to authenticated using (true);
+revoke all on public.pit_tax_brackets       from anon;
+revoke all on public.sso_contribution_config from anon;
+grant select on public.pit_tax_brackets       to authenticated;
+grant select on public.sso_contribution_config to authenticated;
+grant all    on public.pit_tax_brackets       to service_role;
+grant all    on public.sso_contribution_config to service_role;
+
+notify pgrst, 'reload schema';
+```
+⚠️ ตารางนี้ไม่มี `tenant_id` โดยตั้งใจ (0.6 — เป็นข้อมูลกฎหมายเดียวกันทุก tenant) — RLS policy จึงเป็น
+"authenticated อ่านได้ทุกคน" ไม่กรอง tenant (ต่างจากทุกตารางอื่นในระบบ — ต้องมีคอมเมนต์กำกับเหตุผลชัดเจน
+กันคนอ่านโค้ดทีหลังคิดว่าเป็นช่องโหว่)
+
+### 1.2 Schema — migration 0086 (payroll_employees, ร่างหลัก)
+```sql
+create table if not exists public.payroll_employees (
+  id             uuid primary key default gen_random_uuid(),
+  tenant_id      uuid not null references public.tenants(id) on delete cascade,
+  customer_id    uuid not null references public.customers(id) on delete cascade,
+  employee_code  text,
+  full_name      text not null,
+  id_card_no     text,     -- 13 หลัก, normalize ด้วย normalizeTaxId ก่อนเก็บ (0.12)
+  passport_no    text,
+  position       text,
+  base_salary    numeric(14,2) not null default 0 check (base_salary >= 0),
+  start_date     date,
+  resign_date    date,
+  is_active      boolean not null default true,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  deleted_at     timestamptz,
+  check (id_card_no is not null or passport_no is not null)
+);
+create index if not exists idx_payroll_employees_customer
+  on public.payroll_employees (tenant_id, customer_id) where deleted_at is null;
+create unique index if not exists uq_payroll_employees_id_card
+  on public.payroll_employees (tenant_id, customer_id, id_card_no)
+  where deleted_at is null and id_card_no is not null;
+
+drop trigger if exists trg_payroll_employees_updated on public.payroll_employees;
+create trigger trg_payroll_employees_updated before update on public.payroll_employees
+  for each row execute function public.set_updated_at();
+
+alter table public.payroll_employees enable row level security;
+drop policy if exists tenant_read on public.payroll_employees;
+create policy tenant_read on public.payroll_employees for select to authenticated
+  using (tenant_id = public.current_tenant_id());
+revoke all on public.payroll_employees from anon;
+grant select on public.payroll_employees to authenticated;
+grant all    on public.payroll_employees to service_role;
+
+notify pgrst, 'reload schema';
+```
+
+### 1.3 Schema — migration 0087/0088/0089 (สรุปย่อ, ร่างเต็มทำตอนเขียนโค้ดจริงตาม T102/T109/T110)
+- **`payroll_settings`**: `id, tenant_id, customer_id, salary_expense_account_code default '5310',
+  sso_employer_expense_account_code, sso_payable_account_code, pit_payable_account_code default '2910',
+  other_deductions_account_code, net_pay_account_code, net_pay_is_paid_immediately default false,
+  created_at, updated_at`, unique `(tenant_id, customer_id)`, RLS เหมือน 1.2
+- **`payroll_runs`**: `id, tenant_id, customer_id, pay_period_year, pay_period_month, pay_date,
+  status default 'draft' check in ('draft','finalized'), manual_entry_id (FK manual_journal_entries,
+  on delete set null), pit_filing_status default 'not_filed' check in ('not_filed','filed'),
+  pit_filed_at, pit_filed_by (FK employees), sso_filing_status/sso_filed_at/sso_filed_by (เหมือนกัน),
+  created_at, updated_at, deleted_at`, unique partial index `(tenant_id, customer_id, pay_period_year,
+  pay_period_month) where deleted_at is null`, RLS เหมือน 1.2
+- **`payroll_run_lines`**: `id, tenant_id, run_id (FK payroll_runs, on delete cascade),
+  payroll_employee_id (FK payroll_employees, on delete cascade), gross_salary, other_additions,
+  bonus_amount, other_deductions, pit_withheld, sso_employee, sso_employer, net_pay
+  (numeric(14,2) not null default 0 ทุกช่อง), created_at`, unique `(run_id, payroll_employee_id)`, RLS
+  เหมือน 1.2 (ไม่ต้อง soft-delete แยก — ลบทั้งบรรทัดตอนยัง draft ได้ตรง ๆ, ลบไม่ได้หลัง finalized)
+
+---
+
+## 2) งานย่อยเรียงลำดับ (เฟส 9)
+
+⚠️ เลขงานในเอกสารหลักล่าสุด (เฟส 10, ส่วน AB) จบที่ **T99** — เฟสนี้ต่อเลขจากนั้นเป็น **T100** (แม้ชื่อ
+"เฟส 9" จะมาก่อนเฟส 10 ตามลำดับหัวข้อ แต่ถูกวางแผนรายละเอียด**หลัง**เฟส 10 ตามลำดับเวลาจริง — ยึดเลขงาน
+ต่อเนื่องกันข้ามเฟสเพื่อไม่ให้ T-code ชนกัน ไม่ยึดตามเลขเฟส)
+
+### ส่วน AC — โครงพื้นฐาน: config effective-dated + ทะเบียนพนักงานลูกค้า + ตั้งค่าบัญชี
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T100** | Migration 0085 — `pit_tax_brackets`+`sso_contribution_config` (global, ไม่ผูก tenant) + seed 8 ขั้นภาษี + seed SSO 2 ช่วงเวลา + RLS (0.6) | `0085_payroll_config.sql` | - | ⚠️ ก่อนสร้างไฟล์ `ls supabase/migrations/ \| sort -V \| tail -20` เช็คเลขล่าสุดจริง (0.16); apply ไม่ error; query `pit_tax_brackets` ได้ครบ 8 แถว effective_from='2560-01-01' รวมภาษี=100% ไม่มีช่องว่าง/ซ้อนทับระหว่างขั้น; `sso_contribution_config` มี 2 แถวตรงตาม seed; anon อ่านไม่ได้ (RLS ปฏิเสธ), authenticated อ่านได้, เขียนได้แค่ service_role |
+| **T101** | Migration 0086 — `payroll_employees` + RLS (1.2) | `0086_payroll_employees.sql` | T100 | apply ไม่ error; insert แถวไม่มีทั้ง `id_card_no`/`passport_no` → ถูกปฏิเสธ (check constraint); insert `id_card_no` ซ้ำในลูกค้าเดียวกัน (ที่ยังไม่ลบ) → ถูกปฏิเสธ (unique index); ลูกค้าคนละรายใช้เลขบัตรเดียวกันได้ (ไม่ unique ข้ามลูกค้า — สมมติฐานที่ตั้งใจ เพราะพนักงานย้ายงานข้ามลูกค้าของ Finovas เองได้จริง); เทสต์เดิมทั้งหมดผ่าน |
+| **T102** | Migration 0087 — `payroll_settings` + RLS (1.3) | `0087_payroll_settings.sql` | T100 | apply ไม่ error; unique `(tenant_id,customer_id)` ทำงานถูกต้อง (insert ซ้ำถูกปฏิเสธ); เทสต์เดิมทั้งหมดผ่าน |
+| **T103** | `lib/accounting/payroll-config.ts` — `getEffectivePitBrackets(db, asOfDate)`/`getEffectiveSsoConfig(db, asOfDate)` (เลือก `effective_from` ล่าสุดที่ ≤ asOfDate) | `payroll-config.ts` | T100 | unit test: asOfDate ก่อน 2569-01-01 → ได้ ceiling 15000, asOfDate = 2569-01-01 เป๊ะ/หลังจากนั้น → ได้ 17500; asOfDate ก่อนแถวแรกสุดที่มี (ไม่มีข้อมูลเก่ากว่านั้น) → คืน null/error ชัดเจน ไม่ throw ทะลุแบบไม่มีข้อความ |
+| **T104** | `lib/accounting/payroll-employees.ts` — types, validate (reuse `normalizeTaxId` 0.12), CRUD (`listEmployees`/`upsertEmployee`/`softDeleteEmployee`) scope tenant+customer | `payroll-employees.ts` | T101 | unit test: `id_card_no` รูปแบบผิด (ไม่ครบ 13 หลัก) → ปฏิเสธ (reuse `isValidTaxId`); ไม่กรอกทั้ง 2 ช่องเลข → ปฏิเสธ; `base_salary` ติดลบ → ปฏิเสธ; `upsertEmployee`/`softDeleteEmployee` เขียนเฉพาะ tenant+customer ที่ตรงกันเท่านั้น |
+| **T105** | `lib/accounting/payroll-settings.ts` — types, validate รหัสบัญชี 6 ช่องตามหมวด (0.11, reuse `ChartByCode`), `getOrCreateDefaultSettings` (แนะนำ 5310/2910/5311/2050), `upsertSettings` | `payroll-settings.ts` | T102 | unit test: `salary_expense_account_code` ที่ไม่ใช่หมวดค่าใช้จ่าย → ปฏิเสธ; `pit_payable_account_code`/`sso_payable_account_code` ที่ไม่ใช่หมวดหนี้สิน → ปฏิเสธ; ลูกค้าใหม่ที่ยังไม่มีแถว settings → `getOrCreateDefaultSettings` คืนค่าแนะนำ 4 ช่องถูกต้อง + 2 ช่องที่เหลือเป็น null |
+| **T106** | UI: `app/chat-audit/accounting/payroll-employees/{page.tsx,PayrollEmployeesPanel.tsx,actions.ts}` — CRUD พนักงาน (มาสก์เลขบัตร 0.12, ปุ่มเผยเลขเต็มต่อแถว) + แท็บตั้งค่าบัญชี (AccountCombobox × 6) | 3 ไฟล์ข้างต้น | T104, T105 | เปิดหน้าจริง เลือกลูกค้า → เพิ่มพนักงานใหม่ → เห็นในตารางเลขบัตรมาสก์เป็นค่าเริ่มต้น → กดปุ่มเผยเห็นเลขเต็ม → ตั้งค่าบัญชี 6 ช่องผ่าน combobox → บันทึกสำเร็จ; ลูกค้านอกสโคปเข้าไม่ได้/แก้ไม่ได้ |
+| **T107** | Migration 0090 — seed บัญชีใหม่ `2050`/`5311` ทุก tenant (additive, ไม่ใส่ `PROTECTED_CODES`) | `0090_payroll_accounts_seed.sql` | - | apply ไม่ error; ทุก tenant มี 2 รหัสใหม่หลัง apply (query นับแถวเทียบ); apply ซ้ำ (idempotent) → ไม่สร้างซ้ำ; แก้ชื่อ/ลบ 2 รหัสนี้ผ่านหน้าจัดการผังเดิมได้ปกติ (self-service) |
+| **T108** | เพิ่มลิงก์หน้า `page.tsx`/`CustomerTabs.tsx` (path พนักงาน) + เทสต์ครบส่วน AC: `payroll-config.test.ts`, `payroll-employees.test.ts`, `payroll-employees-actions.test.ts`, `payroll-settings.test.ts` | หลายไฟล์ | T100-T107 | `npm run test` ผ่านทั้งชุด AC |
+
+**Milestone เฟส 9-AC**: บันทึกทะเบียนพนักงานลูกค้า + ตั้งค่าบัญชีที่จะใช้ได้จริง — ยังคำนวณ/สร้างรอบเงินเดือน
+ไม่ได้ (ส่วน AD ทำถัดไป)
+
+### ส่วน AD — Engine คำนวณ PIT/SSO + สร้างรอบเงินเดือน + JE
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T109** | Migration 0088 — `payroll_runs` + RLS (1.3, unique partial index 0.14) | `0088_payroll_runs.sql` | T101 | apply ไม่ error; สร้างรอบเดือน/ปีเดียวกันซ้ำ (ที่ยังไม่ลบ) → ถูกปฏิเสธ (unique); soft-delete แล้วสร้างใหม่เดือน/ปีเดียวกันได้ (unique เฉพาะแถวที่ยังไม่ลบ); เทสต์เดิมทั้งหมดผ่าน |
+| **T110** | Migration 0089 — `payroll_run_lines` + RLS (1.3) | `0089_payroll_run_lines.sql` | T109, T104 | apply ไม่ error; unique `(run_id, payroll_employee_id)` ทำงานถูกต้อง (กันบรรทัดซ้ำพนักงานเดียวกันในรอบเดียว); ลบ `payroll_runs`/`payroll_employees` ต้นทาง → บรรทัดถูกลบตาม (`on delete cascade`) ตามที่ตั้งใจ; เทสต์เดิมทั้งหมดผ่าน |
+| **T111** | `lib/accounting/payroll-tax.ts` — `expenseDeduction(annualIncome)`, `calcAnnualTax(taxableIncome, brackets)` (progressive, pure), `remainingPeriodsInYear(payDate, startDate)` (0.4), `calcMonthlyPitForRegularIncome(monthlyGross, periodsPerYear, personalAllowance, brackets)` | `payroll-tax.ts` | T100 | unit test: `expenseDeduction`: รายได้ต่อปี 100,000/200,000/1,000,000 → ได้ 50,000/100,000(cap)/100,000(cap); `calcAnnualTax`: เงินได้สุทธิที่ตกแต่ละขั้น (เช่น 140,000→0, 200,000→2,500, 400,000→17,500ตามสูตรสะสม) คำนวณถูกต้องทุกขั้น รวมขั้นสุดท้ายไม่มีเพดาน; `remainingPeriodsInYear`: พนักงานเข้าเก่ากว่าปีปัจจุบัน → 12 เสมอไม่ว่า pay_date เดือนไหน, เข้าใหม่เดือน ก.ค. ปีเดียวกับ pay_date → 6 (ก.ค.-ธ.ค.); `calcMonthlyPitForRegularIncome`: ตัวอย่างเงินเดือน 30,000/เดือน (=360,000/ปี) หักลดหย่อนมาตรฐานรวม 160,000 (ค่าใช้จ่าย100,000cap+ส่วนบุคคล60,000) เหลือ 200,000 → ภาษีปี 2,500 → ต่อเดือน 208.33 (ปัด 2 ตำแหน่ง) ตรงเป๊ะ |
+| **T112** | [⚠️⚠️ FLAG — ต้อง verify ก่อนถือว่าเสร็จ, 0.5] `payroll-tax.ts` — `calcMonthlyPitWithBonus(monthlyRegularGross, bonusThisPeriod, periodsPerYear, personalAllowance, brackets)` ตามคำสั่ง ทป.4/2528 ข้อ 3 | `payroll-tax.ts` | T111 | **ก่อนเขียน implementation จริง: หาตัวอย่างคำนวณอ้างอิงที่เชื่อถือได้จริง (เอกสารประกอบคำสั่ง ทป.4/2528 ฉบับเต็ม หรือแหล่งที่ระบุเลขอ้างอิงชัดเจน — ห้ามใช้บล็อกสรุปทั่วไป) → ใส่เป็น golden test case ใน `payroll-tax.test.ts` พร้อมคอมเมนต์อ้างอิงแหล่งที่มา → implement ให้ผลตรงกับตัวอย่างนั้นเป๊ะก่อนถือว่า T112 เสร็จ; ถ้าหาตัวอย่างที่เชื่อถือได้ไม่ทันตามกำหนดเวลาของรอบนี้ ให้หยุดที่ scope "เงินเดือนปกติเท่านั้น" (T111) ก่อน เปิด backlog 9b สำหรับโบนัส แล้วปฏิเสธ `bonus_amount > 0` ที่ชั้น validate ของ T110/UI ชั่วคราวจนกว่าจะ verify ได้จริง — ห้าม deploy สูตรที่ยังไม่ verify ให้ใช้กับเงินจริง** |
+| **T113** | `payroll-tax.ts` — `calcSsoContribution(grossWage, config)` (clamp floor/ceiling, employee/employer share, 0.6) | `payroll-tax.ts` | T100 | unit test: ค่าจ้างต่ำกว่า floor (1,650) → ใช้ floor เป็นฐาน; ค่าจ้างสูงกว่า ceiling → ใช้ ceiling เป็นฐาน (ทดสอบทั้ง config ceiling 15000 และ 17500); ค่าจ้างอยู่ระหว่าง floor-ceiling → ใช้ค่าจริง; ปัดเศษ 2 ตำแหน่งถูกต้องทุกกรณี |
+| **T114** | `lib/accounting/payroll.ts` — `createDraftRun` (prefill จาก `payroll_employees` active ทั้งหมด, ใช้ `chunkIds` ถ้า query มากกว่า 150 คน), `recalcRunLines` (เรียก T111-T113 ทุกบรรทัด, idempotent — เขียนทับค่า pit/sso/net เดิมได้ตลอดตอน `status='draft'`), `listRuns`/`getRunWithLines` | `payroll.ts` | T109-T113 | unit test: `createDraftRun` กับลูกค้าที่มีพนักงาน active 150+ คน (mock) → สร้างบรรทัดครบทุกคนไม่ตกหล่น, ใช้ query แบบ chunk ไม่ error; `recalcRunLines`: เรียกซ้ำ 2 ครั้งด้วยข้อมูล input เดียวกัน → ผลลัพธ์เหมือนกันเป๊ะ (deterministic); พนักงานที่ `resign_date`/`start_date` อยู่ในช่วงกลางเดือนของรอบ → ยังคำนวณได้ปกติ (ไม่ throw, gross_salary ที่นักบัญชีแก้เองแล้วถูกเคารพ 0.13) |
+| **T115** | `payroll.ts` — `buildPayrollJournalEntry(lines, settings)` (0.8, รวมยอดต่อรหัสบัญชี, ข้ามบรรทัดยอด 0, ปฏิเสธถ้า `other_deductions`>0 แต่ไม่มี `other_deductions_account_code`) + `generateRunJournalEntry(db, tenantId, customerId, runId)` (0.9 atomic claim ผ่าน `manual_entry_id`, เรียก `upsertManualEntry` **draft เสมอ** 0.7, set `status='finalized'`) | `payroll.ts` | T114 | unit test: บรรทัด 5 คน (ยอดต่าง ๆ กัน รวม `other_deductions`>0 บางคน) → JE ที่ได้ `isBalanced()` ผ่านเสมอ (import จาก `manual-journal.ts` เทียบตรง ๆ), จำนวนบรรทัด JE ไม่เกิน 6 บรรทัดไม่ว่าจะมีกี่คน (ทดสอบกับ 150 คน mock ยืนยัน constant); `other_deductions`>0 แต่ settings ไม่มีรหัสบัญชี → ปฏิเสธสร้าง JE พร้อมข้อความชัดเจน; เรียก `generateRunJournalEntry` ซ้ำ (จำลอง 2 request พร้อมกัน) → สร้างได้แค่ครั้งเดียว (claim atomic 0.9); รอบที่ `status='finalized'` แล้ว → `recalcRunLines`/แก้บรรทัดถูกปฏิเสธ (ล็อกหลังสร้าง JE) |
+| **T116** | `payroll.ts` — `markPitFiled`/`unmarkPitFiled`/`markSsoFiled`/`unmarkSsoFiled` (0.3, เฉพาะรอบที่ `status='finalized'`) | `payroll.ts` | T115 | unit test: รอบที่ยัง `draft` (ไม่มี JE) → mark filed ถูกปฏิเสธ; รอบ `finalized` → mark สำเร็จ ตั้ง `*_filed_at`/`*_filed_by` ถูกต้อง; `unmark` รีเซ็ตกลับ `not_filed` ได้ (ไม่ลบ log ประวัติอื่น) |
+| **T117** | เทสต์ครบส่วน AD: `payroll-tax.test.ts` (รวม golden test โบนัส T112), `payroll.test.ts` | 2 ไฟล์ข้างต้น | T109-T116 | `npm run test` ผ่านทั้งชุด AD |
+
+**Milestone เฟส 9-AD**: คำนวณ PIT/SSO ถูกต้อง + สร้าง JE บันทึกเงินเดือนทั้งรอบเป็นยอดรวมได้จริง (engine
+เสร็จสมบูรณ์) — ยังไม่มีหน้าจอให้นักบัญชีใช้งานเอง (ส่วน AE ทำถัดไป)
+
+### ส่วน AE — UI: หน้าจัดการรอบเงินเดือน + สลิป + ปุ่มยื่นแล้ว
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T118** | UI: `app/chat-audit/accounting/payroll/{page.tsx,PayrollRunPanel.tsx,actions.ts}` — list รอบ, wizard สร้างรอบใหม่ (เลือกปี/เดือน/วันจ่าย), ตารางบรรทัดต่อพนักงาน (แก้ additions/bonus/deductions ได้, รองรับ 100+ แถวลื่นไหล), ปุ่ม "คำนวณภาษี+ประกันสังคม", ปุ่ม "สร้างรายการบัญชี (JE)" | 3 ไฟล์ข้างต้น | T114-T116 | เปิดหน้าจริง สร้างรอบใหม่ของลูกค้าที่มีพนักงานอยู่แล้ว → เห็นตารางพนักงานทุกคน prefill gross จาก base_salary → แก้ยอดบางคน → กดคำนวณ → เห็น pit/sso/net ต่อคนถูกต้อง → กดสร้าง JE → เห็น draft ใหม่ที่หน้า journal-entry ยอดรวมตรง → กดซ้ำ → ไม่สร้างซ้ำสอง; ลูกค้านอกสโคปเข้าไม่ได้; ตารางกับพนักงาน 150 แถว (จำลอง/seed ทดสอบ) ยังโหลด/แก้ไขได้ลื่นไม่ค้าง |
+| **T119** | `SlipView.tsx` (สลิปรายบุคคล, หน้าพิมพ์ CSS mirror เฟส 4) + `export/route.ts` (export Excel สรุปรอบทั้งหมด, reuse `exceljs`) | 2 ไฟล์ข้างต้น | T118 | เปิดสลิปพนักงาน 1 คน → พิมพ์/บันทึก PDF ได้ ข้อมูลตรงกับ `payroll_run_lines`; ดาวน์โหลด Excel สรุปรอบ → เปิดได้จริง ตัวเลขตรงกับหน้าจอทุกคน + แถวรวมท้าย |
+| **T120** | ปุ่ม "บันทึกว่ายื่น ภ.ง.ด.1 แล้ว"/"ยื่น สปส.1-10 แล้ว" + ปุ่ม "ยกเลิกสถานะ" ในหน้า `PayrollRunPanel.tsx` (0.3) | `PayrollRunPanel.tsx`, `actions.ts` | T116, T118 | รอบที่ยัง `draft` → ไม่เห็นปุ่มยื่นเลย (หรือ disabled มีคำอธิบาย); รอบ `finalized` → กดยื่นแล้วเห็นสถานะ/วันที่/ผู้กดเปลี่ยนถูกต้อง; กดยกเลิกสถานะ → กลับเป็น `not_filed` ได้ |
+| **T121** | เพิ่มลิงก์หน้า `page.tsx`/`CustomerTabs.tsx` หลัก (path รอบเงินเดือน) + เทสต์ครบส่วน AE: `payroll-actions.test.ts` | หลายไฟล์ | T118-T120 | `npm run test` ผ่านทั้งชุด AE |
+
+**Milestone เฟส 9-AE**: นักบัญชีใช้งานฟีเจอร์เงินเดือนได้ครบวงจรจริงผ่านหน้าจอ ไม่ต้องพึ่ง SQL มือ
+
+### AF — ปิดงานเฟส 9
+
+| รหัส | สิ่งที่ต้องทำ | ขึ้นกับ | เกณฑ์เสร็จ |
+|---|---|---|---|
+| **T122** | regression sweep ข้ามทุกเฟส 1-10 — เปิดทุกหน้าบัญชีเดิม ยืนยัน grep ว่า `journal.ts`/`ledger.ts`/`trial-balance.ts`/`financial-statements.ts`/`cash-flow.ts`/`formal-statements.ts`/`product-stock.ts`/`fixed-assets.ts`/`bill-payments.ts`/`credit-debit-notes.ts` **ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว** (payroll เป็นโมดูลใหม่ล้วน เข้า engine เดิมผ่าน `upsertManualEntry` จุดเดียวเหมือนเฟส 6/7 เท่านั้น) | T100-T121 | ทุกหน้า `/chat-audit/accounting/*` เดิมเปิดได้ปกติไม่ error; ยอด/รายงาน/งบการเงินของลูกค้าที่**ไม่มี**รอบเงินเดือนเลยไม่เปลี่ยนแม้แต่สตางค์เดียวจากก่อนเฟสนี้ (additive ล้วน); เทสต์เดิมของเฟส 1-10 ทั้งหมดยังผ่าน |
+| **T123** | รันชุดตรวจสอบเต็ม + ทดสอบมือรอบสุดท้ายก่อน merge/deploy | T100-T122 | `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด ไม่มี error/warning ใหม่; smoke test มือครบ flow เดียว: สร้างทะเบียนพนักงาน 3-5 คน (รวม 1 คนเข้าใหม่กลางปี) → ตั้งค่าบัญชี → สร้างรอบเดือนนี้ → คำนวณ → ตรวจเลขมือของทุกคนตรงกับที่ระบบคำนวณ → สร้าง JE → ยืนยัน JE ที่หน้า journal-entry → เปิดงบทดลอง/งบกำไรขาดทุนเห็นยอด 5310/5311/2910/2050 ถูกต้อง → กดบันทึกว่ายื่น ภ.ง.ด.1/สปส.1-10 แล้ว → เห็นสถานะเปลี่ยนถูกต้อง |
+
+---
+
+## 3) Definition of Done (เฟส 9 รวม)
+
+- [ ] นักบัญชี/หัวหน้าทีมบันทึกทะเบียนพนักงานของลูกค้าตัวเองได้เอง (ชื่อ, เลขบัตร/passport, เงินเดือนฐาน,
+      วันเริ่มงาน) โดยไม่ต้องพึ่ง admin/แก้โค้ด — เลขบัตรประชาชนมาสก์เป็นค่าเริ่มต้นเสมอ (PDPA, 0.12)
+- [ ] ตั้งค่าบัญชี 6 ช่อง (เงินเดือน/ประกันสังคมนายจ้าง/ประกันสังคมค้างนำส่ง/ภาษีหัก ณ ที่จ่ายค้างจ่าย/
+      หักอื่น ๆ/เงินเดือนสุทธิ) ได้ผ่านหน้าจอ ไม่ hardcode
+- [ ] สร้างรอบเงินเดือนต่อเดือนต่อลูกค้าได้ พร้อม prefill พนักงาน active ทั้งหมด (รองรับ 100+ คนจริง
+      ไม่ค้าง/ไม่ timeout)
+- [ ] คำนวณภาษีหัก ณ ที่จ่าย (มาตรา 50, สูตร annualize) + ประกันสังคม (floor/ceiling ตามวันที่จ่ายจริง)
+      ถูกต้องตรงกับตัวอย่างคำนวณมือทุกเคสทดสอบ
+- [ ] กรณีโบนัส/เงินได้ครั้งเดียว — **ถ้ายังไม่ผ่านการ verify กับตัวอย่างอ้างอิงจริง (T112) ห้ามเปิดให้กรอก
+      `bonus_amount`>0 ใช้กับลูกค้าจริง** (ต้องเลือก backlog 9b ชั่วคราวถ้าจำเป็น — ดู 0.5)
+- [ ] สร้างรายการบัญชี (JE) ของทั้งรอบเป็น**ยอดรวม**ไม่เกิน ~6 บรรทัดไม่ว่าจะมีพนักงานเท่าไหร่ (0.8) เป็น
+      **draft เสมอ** (0.7) — ไม่มีทาง auto-confirm
+- [ ] กดปุ่ม "สร้าง JE" ซ้ำ/สองแท็บพร้อมกัน → ไม่สร้าง JE ซ้ำสอง (atomic claim, 0.9)
+- [ ] ปุ่ม "บันทึกว่ายื่น ภ.ง.ด.1 แล้ว"/"ยื่น สปส.1-10 แล้ว" ใช้งานได้จริง มีปุ่มยกเลิกสถานะ (0.3) — เห็นเฉพาะ
+      รอบที่สร้าง JE แล้ว
+- [ ] สลิปเงินเดือนรายบุคคล + รายงานสรุปรอบ (Excel) ถูกต้องตรงกับข้อมูลที่คำนวณ
+- [ ] `public.employees` เดิม (พนักงานภายใน Finovas) **ไม่ถูกแก้/ขยายเลยแม้แต่คอลัมน์เดียว** (0.2 — grep
+      ยืนยันก่อนปิดงาน)
+- [ ] `journal.ts`/`ledger.ts`/`trial-balance.ts`/`financial-statements.ts`/`cash-flow.ts`/
+      `formal-statements.ts` **ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว** (grep ยืนยัน)
+- [ ] ทุก write path ใหม่ผ่าน `requireAccountingAccess` + `assertCustomerInScope` (derive จาก resource id
+      ที่กำลังเขียนจริงเสมอ — ไม่ซ้ำ pattern IDOR ที่เคยพบในเฟส 3)
+- [ ] ไม่มี `console.log`/log ใดที่มีเลขบัตรประชาชน/ชื่อพนักงาน/เงินเดือน/ชื่อลูกค้า (PDPA)
+- [ ] ไม่มี mock/stub ปนอยู่ใน critical flow ของโค้ด production
+- [ ] เทสต์เดิมของเฟส 1-10 ทั้งหมดยังผ่านหลังเพิ่มตาราง/ไฟล์ใหม่ (ไม่มี regression ข้ามเฟส)
+- [ ] `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด ไม่มี error/warning ใหม่
+
+---
+
+## 4) แนวทางการทดสอบ (สำหรับ tester)
+
+### 4.1 Unit test
+
+**`payroll-tax.ts` (T111-T113) — จุดสำคัญที่สุดของเฟส (เกี่ยวข้องกับเงินจริงของพนักงานลูกค้าโดยตรง):**
+- `expenseDeduction`: รายได้ต่อปี 100,000/200,000/1,000,000 → 50,000/100,000(cap)/100,000(cap)
+- `calcAnnualTax`: ทดสอบเงินได้สุทธิที่ตกกลางแต่ละขั้นทั้ง 8 ขั้น (ไม่ใช่แค่ขั้นแรก/สุดท้าย) เทียบผลกับตาราง
+  ภาษีก้าวหน้าที่คำนวณมือ; ขั้นสุดท้ายไม่มีเพดาน (`income_to=null`) คำนวณถูกต้องไม่ throw
+- `remainingPeriodsInYear`: พนักงานเก่า (start_date ปีก่อน) → 12 เสมอทุกเดือนของปี; พนักงานใหม่เข้าเดือน ก.ค.
+  ปีเดียวกับ pay_date → 6; เข้าเดือน ธ.ค. (เดือนสุดท้าย) → 1; เข้าเดือน ม.ค. → 12 (เท่ากับพนักงานเก่า)
+- `calcMonthlyPitForRegularIncome`: อย่างน้อย 5 เคสระดับเงินเดือนต่างกัน (ต่ำกว่าเกณฑ์เสียภาษี, กลางขั้น 5%,
+  กลางขั้น 10%, ขั้นสูง) เทียบตัวเลขมือทุกเคส
+- `calcMonthlyPitWithBonus` (T112, ★★): **golden test จากตัวอย่างอ้างอิงจริงที่หาได้ (ต้องระบุแหล่งที่มาใน
+  คอมเมนต์เทสต์ชัดเจน)** — ถ้ายังหาไม่ได้ก่อนปิดงาน ห้ามมีเทสต์นี้ผ่านแบบ "เดาแล้วปรับให้ผ่าน" (นั่นไม่ใช่การ
+  verify) ต้องเป็นตัวเลขจากแหล่งอ้างอิงจริงเท่านั้น
+- `calcSsoContribution`: floor/ceiling ทั้ง 2 ช่วงเวลา (15000 กับ 17500), ค่าจ้างระหว่าง floor-ceiling
+
+**`payroll.ts` (T114-T116):**
+- `createDraftRun` กับพนักงาน mock 150+ คน → ไม่ error, ใช้ `chunkIds`
+- `buildPayrollJournalEntry`: สมดุล Dr=Cr ทุกเคส (พิสูจน์พีชคณิตใน 0.8 ต้องจริงในโค้ดด้วย ไม่ใช่แค่ทฤษฎี)
+  รวมเคส `other_deductions`=0 (ไม่มีบรรทัดนั้นเลย) และ >0 (ต้องมีบรรทัดนั้นถ้าตั้งรหัสบัญชีไว้)
+- `generateRunJournalEntry`: เรียกซ้อน 2 ครั้งพร้อมกัน (mock race) → สำเร็จแค่ครั้งเดียว
+- ล็อกแก้บรรทัด/`recalcRunLines` หลัง `status='finalized'` → ปฏิเสธ
+
+**Actions (`payroll-employees-actions.test.ts`/`payroll-actions.test.ts`):**
+- guard สโคป: นักบัญชีนอกสโคปทำรายการของลูกค้าอื่นไม่ได้ (ทุก action)
+- `markFiledAction`/`unmarkFiledAction`: ปฏิเสธถ้ารอบยัง `draft`
+
+### 4.2 Integration/manual (บน dev จริง — ทำต่อเนื่องกันเป็น flow เดียว)
+
+1. สร้างทะเบียนพนักงานลูกค้าทดสอบ 5 คน (รวม 1 คนเงินเดือนสูงเข้าขั้นภาษี 10%+, 1 คนเข้าใหม่เดือนนี้เอง)
+   → ตั้งค่าบัญชี 6 ช่อง (ใช้ค่าแนะนำ 5310/2910 + 5311/2050 ที่ seed ใหม่)
+2. สร้างรอบเงินเดือนเดือนปัจจุบัน (`pay_date`=วันนี้) → เห็นพนักงานทั้ง 5 คน prefill จาก `base_salary`
+3. แก้ยอดพนักงาน 1 คน (เพิ่ม `other_additions` ค่าคอมมิชชั่น) → กด "คำนวณ" → ตรวจ pit/sso/net ต่อคนด้วยมือ
+   เทียบกับที่ระบบคำนวณ (โดยเฉพาะพนักงานเข้าใหม่ที่ `remainingPeriodsInYear` ≠ 12)
+4. กด "สร้าง JE" → เปิดหน้า journal-entry เห็น draft ใหม่ยอดรวมไม่เกิน ~6 บรรทัด ตรงกับผลรวมที่คำนวณด้วยมือ
+   → กดยืนยัน JE → เปิดงบทดลองเห็นยอด 5310/5311/2910/2050 ถูกต้อง
+5. กดปุ่ม "สร้าง JE" ซ้ำที่รอบเดิม → ต้องไม่สร้าง JE ที่สอง (เห็นข้อความ/ลิงก์ JE เดิม)
+6. กด "บันทึกว่ายื่น ภ.ง.ด.1 แล้ว" → เห็นสถานะ/วันที่/ชื่อผู้กดถูกต้อง → กด "ยกเลิกสถานะ" → กลับเป็นยังไม่ยื่น
+   → ทำซ้ำกับ สปส.1-10
+7. เปิดสลิปเงินเดือนพนักงาน 1 คน → พิมพ์/บันทึก PDF → ตรวจเลขตรงกับ `payroll_run_lines`; ดาวน์โหลด Excel
+   สรุปรอบ → ตัวเลขตรงกับหน้าจอทุกคน
+8. staff นักบัญชีที่ไม่ได้ดูแลลูกค้า A → เปิดหน้าทะเบียนพนักงาน/รอบเงินเดือนของลูกค้า A ไม่ได้/แก้ไม่ได้
+9. สร้างพนักงานทดสอบเพิ่มให้ครบ 150+ คน (สคริปต์/seed ทดสอบ) → สร้างรอบใหม่ → วัดเวลาโหลดหน้า/กดคำนวณ/
+   กดสร้าง JE → ต้องไม่ค้าง/timeout และ JE ที่ได้ยังมีแค่ ~6 บรรทัดเหมือนเดิม (0.8 ยืนยันจริงไม่ใช่แค่ทฤษฎี)
+10. regression: เปิดทุกหน้าบัญชีเดิม (เฟส 1-10) ของลูกค้าที่มีข้อมูลครบแต่**ไม่มี**รอบเงินเดือนเลย → ยอด/
+    รายงาน/งบการเงินต้องเหมือนก่อนเฟสนี้ทุกตัวเลข
+
+---
+
+## 5) ความเสี่ยงของแผน & แผนสำรอง
+
+| ความเสี่ยง | แผนสำรอง |
+|---|---|
+| **สับสนระหว่าง `payroll_employees` (พนักงานลูกค้า) กับ `employees` เดิม (พนักงาน Finovas ภายใน)** — ความเสี่ยงสูงสุดของเฟสนี้ (0.2) ถ้าเผลอ join/query ผิดตารางจะรั่วข้อมูลข้าม tenant/ข้าม scope ร้ายแรง | ตั้งชื่อตัวแปร/ฟังก์ชันให้สะกดต่างชัดเจนตั้งแต่ต้น (`payrollEmployee` ไม่ใช่ `employee` เดี่ยว ๆ) + grep ยืนยันก่อนปิดงานทุก task ว่าไฟล์ใหม่ของเฟสนี้ import จาก `payroll-employees.ts` เท่านั้น ไม่มีจุดไหน query ตาราง `employees` ปนกับ `payroll_employees` ในไฟล์เดียวกันโดยไม่ตั้งใจ (ยกเว้น `pit_filed_by`/`sso_filed_by` ที่ตั้งใจ FK ไปยัง `employees` จริง เพราะเป็น "นักบัญชี Finovas ที่กดยืนยัน" ไม่ใช่พนักงานลูกค้า — ต้องมีคอมเมนต์กำกับจุดนี้ชัดเจนว่าทำไมถึงต่างจากตารางอื่นในเฟสนี้ที่ชี้ `payroll_employees`) |
+| **สูตร PIT/SSO ผิดตั้งแต่ต้นเพราะอ้างอิงจากความเข้าใจทั่วไปไม่ใช่ตัวอย่างคำนวณจริง — เกี่ยวข้องกับเงินจริงของพนักงานลูกค้า ผิดแล้วกระทบทั้งพนักงานและความน่าเชื่อถือของ Finovas ต่อกรมสรรพากร/สปส.** | golden test ทุกฟังก์ชันคำนวณเทียบตัวเลขอ้างอิงที่ระบุแหล่งที่มาในคอมเมนต์ (0.4/0.5) — โบนัส (T112) ห้าม deploy จนกว่าจะ verify ได้จริง (ทางเลือก backlog 9b ถ้าจำเป็นเร่งเวลา) — smoke test มือรอบสุดท้าย (T123) ต้องมีนักบัญชีจริงตรวจเลขซ้ำอีกชั้นก่อนเปิดใช้กับลูกค้าจริงรายแรก (ไม่ใช่แค่ unit test ผ่านแล้วถือว่าจบ) |
+| **JE ต่อรอบกลายเป็นหลายสิบ/ร้อยบรรทัดถ้า implement ผิดจาก 0.8 (ลืมรวมยอดต่อรหัสบัญชี) — พังทั้ง performance และหน้าจอ journal-entry เดิมกับลูกค้าที่มีพนักงาน 100+ คน** | unit test บังคับ (T115) ว่าจำนวนบรรทัด JE คงที่ (~4-6 บรรทัด) ไม่ว่า mock พนักงานกี่คน (5 vs 150 ต้องได้จำนวนบรรทัดเท่ากัน) — ถ้า test นี้ fail ถือว่า T115 ยังไม่เสร็จ ไม่ผ่านไปต่อ |
+| **ประกันสังคมเพดานเปลี่ยน 1 ม.ค. 2569 — ถ้า deploy หลังวันนั้นแล้วไม่ seed แถวใหม่ให้ทันจะคำนวณผิดเงียบ ๆ (ใช้ ceiling เก่าเกินเวลา)** | seed ทั้ง 2 ช่วงเวลาไว้ในเฟสนี้เลย (T100 ไม่ต้องรอถึงวันจริงค่อย migrate เพิ่ม) — `getEffectiveSsoConfig` เลือกตาม `pay_date` จริงเสมอ (0.6) ไม่ hardcode ปีในโค้ด — เมื่อกฎหมายเปลี่ยนอีกครั้งในอนาคต (2572/2575) แค่เพิ่ม migration ใหม่ 1 แถว ไม่ต้องแก้โค้ด engine เลย |
+| **พนักงานลาออก/เข้าใหม่กลางเดือนของรอบ ทำให้ `gross_salary`/`remainingPeriodsInYear` ต้องคำนวณเป็นพิเศษ แต่ระบบไม่ auto-prorate (0.13)** | ยอมรับเป็นข้อจำกัดที่ตั้งใจของรอบแรก (นักบัญชีกรอกยอดที่ถูกต้องเองต่องวด) — เอกสาร/ป้ายในหน้าจอต้องระบุชัดว่า "ยอดนี้ไม่ auto-prorate ตามวันทำงาน กรุณาตรวจสอบก่อนคำนวณ" กันนักบัญชีเข้าใจผิดว่าระบบคิดให้อัตโนมัติ |
+| **เลขบัตรประชาชนพนักงานรั่ว/หลุดผ่าน log หรือหน้าจอที่ไม่ได้ตั้งใจ (ข้อมูลอ่อนไหวกว่าที่ระบบเคยเก็บ)** | มาสก์เป็นค่าเริ่มต้นทุกจุดแสดงผล (0.12) + grep ยืนยันไม่มี `console.log` ที่มีตัวแปรเลขบัตรเต็มในทุกไฟล์ใหม่ของเฟสนี้ก่อนปิดงาน (T122) |
+| **จำนวน call site ที่ต้องเพิ่มลิงก์/ปุ่ม (page.tsx/CustomerTabs.tsx) เสี่ยง gap แบบที่เจอซ้ำทุกเฟส** | grep ยืนยันครบก่อนปิดงาน (T122) เหมือนที่ทุกเฟสก่อนหน้าทำสำเร็จมาแล้ว |
+| **ตาราง `pit_tax_brackets`/`sso_contribution_config` ไม่มี `tenant_id` (ต่างจากทุกตารางอื่นในระบบ) อาจถูกเข้าใจผิดว่าเป็นช่องโหว่ RLS ตอน security review** | คอมเมนต์กำกับในทั้ง migration และไฟล์ `payroll-config.ts` อธิบายเหตุผลชัดเจน (0.6 — ข้อมูลกฎหมาย ใช้ร่วมทุก tenant โดยตั้งใจ ไม่ใช่บั๊ก) + RLS ยังปฏิเสธ anon และปฏิเสธการเขียนจาก `authenticated` เสมอ (อ่านได้อย่างเดียว เขียนได้แค่ `service_role`) |
+
+---
+
+## 6) Backlog 9b (นอกสโคปเฟสนี้ — บันทึกไว้เผื่อทำต่อในอนาคต)
+
+1. **ค่าลดหย่อนภาษีอื่นนอกจากมาตรฐาน 60,000 บาท** — คู่สมรส/บุตร/เบี้ยประกันชีวิต/กบข./ดอกเบี้ยกู้ซื้อบ้าน ฯลฯ
+   ที่พนักงานแจ้งเพิ่มเอง (ต้องมีฟอร์มให้พนักงาน/นักบัญชีกรอกค่าลดหย่อนรายบุคคล — เพิ่มความซับซ้อนมาก)
+2. **Auto-prorate เงินเดือนตามวันทำงานจริง** เมื่อเข้าใหม่/ลาออกกลางเดือน (ปัจจุบันนักบัญชีกรอกยอดเอง 0.13)
+3. **รอบจ่ายที่ไม่ใช่รายเดือน** (รายวัน/รายสัปดาห์/ค่าล่วงเวลาแยกรอบ) — `periodsPerYear` คงที่ 12 ในรอบแรก
+4. **ผู้ประกันตนมาตรา 39/40** หรือกรณียกเว้นประกันสังคม (เช่น พนักงานอายุเกิน 60 ที่ตกลงไม่ต่อ) — รอบแรกถือว่า
+   พนักงานทุกคนในระบบเป็นผู้ประกันตนมาตรา 33 ทั้งหมด
+5. **นำเข้ายอด YTD จากนายจ้างเดิม** ของพนักงานที่เพิ่งย้ายมาระหว่างปี (กระทบความแม่นยำของ annualize ถ้า
+   พนักงานมีเงินได้จากที่อื่นมาก่อนในปีเดียวกัน — ปัจจุบันคำนวณจากข้อมูลนายจ้างปัจจุบันเท่านั้น ตามหลักปฏิบัติ
+   มาตรฐานที่ยอมรับได้ แต่ไม่ใช่การ reconcile เต็มรูป)
+6. **ค่าตอบแทนจากการเลิกจ้าง/ชดเชยตามกฎหมายแรงงาน** ที่มีสูตรภาษียกเว้นพิเศษต่างจากเงินเดือนปกติ/โบนัส
+7. **ระบบแจ้งเตือนวันครบกำหนดยื่น ภ.ง.ด.1/สปส.1-10** (ภายในวันที่ 7/15 ของเดือนถัดไปตามกฎหมาย) — รอบแรกมีแค่
+   สถานะยื่นแล้ว/ยังไม่ยื่น ไม่มี reminder อัตโนมัติ
