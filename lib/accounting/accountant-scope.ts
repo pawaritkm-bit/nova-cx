@@ -9,6 +9,7 @@
  * ★ PDPA: ไม่ log ชื่อ/รหัสลูกค้า/นักบัญชี
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { chunkIds } from "@/lib/accounting/id-chunk";
 
 type DB = SupabaseClient;
 
@@ -212,12 +213,18 @@ export async function mapCustomersToAccountant(
   const ids = [...new Set(customerIds.filter((x) => !!x))];
   if (ids.length === 0) return result;
 
-  const { data } = await db
-    .from("chat_groups")
-    .select("customer_id, responsible_employee_id")
-    .eq("tenant_id", tenantId)
-    .in("customer_id", ids)
-    .is("deleted_at", null);
+  // ★ ตัดก้อน (chunkIds) กัน .in() ยาวเกิน limit ของ PostgREST เมื่อลูกค้าในสโคปเยอะ (admin "ทั้งสำนักงาน")
+  const chunks = await Promise.all(
+    chunkIds(ids).map((chunk) =>
+      db
+        .from("chat_groups")
+        .select("customer_id, responsible_employee_id")
+        .eq("tenant_id", tenantId)
+        .in("customer_id", chunk)
+        .is("deleted_at", null)
+    )
+  );
+  const data = chunks.flatMap((r) => r.data ?? []);
 
   // customerId → set(employeeId ที่ไม่ null)
   const empByCust = new Map<string, Set<string>>();

@@ -582,6 +582,56 @@ describe("listBillPayments / listBillPaymentsForEntries", () => {
     const map = await listBillPaymentsForEntries(db, "t1", []);
     expect(map.size).toBe(0);
   });
+
+  it(
+    "entryIds เกิน chunk limit (300 ตัว) → ตัดเป็นก้อนแล้วรวมผลครบ ไม่ตกหล่น (regression ของบั๊ก .in() " +
+      "ยาวเกิน limit ของ PostgREST — ดู commit 7ab9f91, เจอครั้งแรกใน listEntries())",
+    async () => {
+      const entryIds = Array.from({ length: 300 }, (_, i) => `e${i}`);
+      // mock ที่จำลอง PostgREST ปฏิเสธถ้า .in() ยาวเกิน 150 ตัว — พิสูจน์ว่า listBillPaymentsForEntries
+      // ต้องตัดก้อนเอง ไม่ใช่ยัด entryIds ทั้งหมดลง .in() เดียว
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      function qb(): any {
+        let inIds: string[] | null = null;
+        const api: any = {};
+        api.select = () => api;
+        api.eq = () => api;
+        api.is = () => api;
+        api.order = () => api;
+        api.limit = () => api;
+        api.in = (_c: string, v: string[]) => {
+          inIds = v;
+          return api;
+        };
+        api.then = (onF: (v: { data: unknown; error: unknown }) => unknown) => {
+          if (!inIds || inIds.length > 150) {
+            return Promise.resolve({ data: null, error: { message: "Bad Request" } }).then(onF);
+          }
+          const rows = inIds.map((id) => ({
+            id: `p-${id}`,
+            tenant_id: "t1",
+            entry_id: id,
+            customer_id: "c1",
+            pay_date: "2026-08-01",
+            amount: 100,
+            method: "cash",
+            bank_account_id: null,
+            notes: null,
+            created_at: "2026-08-01T00:00:00Z",
+            deleted_at: null,
+          }));
+          return Promise.resolve({ data: rows, error: null }).then(onF);
+        };
+        return api;
+      }
+      const db = { from: () => qb() } as unknown as SupabaseClient;
+      const map = await listBillPaymentsForEntries(db, "t1", entryIds);
+      expect(map.size).toBe(300);
+      for (const id of entryIds) {
+        expect(map.get(id)).toHaveLength(1);
+      }
+    }
+  );
 });
 
 describe("recordBillPayment", () => {

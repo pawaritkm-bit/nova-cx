@@ -531,4 +531,70 @@ describe("listNotes / listNotesForEntries / netAdjustmentByEntry", () => {
     const map = await listNotesForEntries(db, "t1", []);
     expect(map.size).toBe(0);
   });
+
+  it(
+    "entryIds เกิน chunk limit (300 ตัว) → ตัดเป็นก้อนแล้วรวมผลครบ ไม่ตกหล่น (regression ของบั๊ก .in() " +
+      "ยาวเกิน limit ของ PostgREST — ดู commit 7ab9f91, เจอครั้งแรกใน listEntries())",
+    async () => {
+      const entryIds = Array.from({ length: 300 }, (_, i) => `e${i}`);
+      // mock ที่จำลอง PostgREST ปฏิเสธถ้า .in() ยาวเกิน 150 ตัว — ทั้ง query หัว (credit_debit_notes,
+      // .in("entry_id")) และ query บรรทัด (credit_debit_note_lines, .in("note_id")) ต้องตัดก้อนเอง
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      function qb(table: string): any {
+        let inCol: string | null = null;
+        let inIds: string[] | null = null;
+        const api: any = {};
+        api.select = () => api;
+        api.eq = () => api;
+        api.is = () => api;
+        api.order = () => api;
+        api.limit = () => api;
+        api.in = (c: string, v: string[]) => {
+          inCol = c;
+          inIds = v;
+          return api;
+        };
+        api.then = (onF: (v: { data: unknown; error: unknown }) => unknown) => {
+          if (!inIds || inIds.length > 150) {
+            return Promise.resolve({ data: null, error: { message: "Bad Request" } }).then(onF);
+          }
+          let rows: unknown[] = [];
+          if (table === "credit_debit_notes" && inCol === "entry_id") {
+            rows = inIds.map((id) => ({
+              id: `n-${id}`,
+              tenant_id: "t1",
+              entry_id: id,
+              doc_type: "credit_note",
+              doc_no: null,
+              doc_date: "2026-08-01",
+              status: "confirmed",
+              reason: null,
+              created_at: "2026-08-01T00:00:00Z",
+              confirmed_at: "2026-08-01T00:00:00Z",
+            }));
+          } else if (table === "credit_debit_note_lines" && inCol === "note_id") {
+            rows = inIds.map((id) => ({
+              id: `l-${id}`,
+              note_id: id,
+              line_no: 1,
+              description: null,
+              account_code: "4010",
+              account_name: null,
+              amount: 100,
+              vat_amount: 0,
+            }));
+          }
+          return Promise.resolve({ data: rows, error: null }).then(onF);
+        };
+        return api;
+      }
+      const db = { from: (t: string) => qb(t) } as unknown as SupabaseClient;
+      const map = await listNotesForEntries(db, "t1", entryIds);
+      expect(map.size).toBe(300);
+      for (const id of entryIds) {
+        expect(map.get(id)).toHaveLength(1);
+        expect(map.get(id)![0]!.lines).toHaveLength(1);
+      }
+    }
+  );
 });

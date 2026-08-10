@@ -17,6 +17,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { contraAccountFor } from "@/lib/accounting/payment";
+import { chunkIds } from "@/lib/accounting/id-chunk";
 import { round2, summarizeEntry, type EntryType } from "@/lib/accounting/queries";
 import { INPUT_VAT, OUTPUT_VAT, EPSILON } from "@/lib/accounting/statement-config";
 import type { JournalLine } from "@/lib/accounting/journal";
@@ -463,25 +464,38 @@ export async function listNotesForEntries(
 ): Promise<Map<string, CreditDebitNote[]>> {
   const result = new Map<string, CreditDebitNote[]>();
   if (entryIds.length === 0) return result;
-  const { data: heads } = await db
-    .from("credit_debit_notes")
-    .select(NOTE_COLUMNS)
-    .eq("tenant_id", tenantId)
-    .in("entry_id", entryIds)
-    .is("deleted_at", null)
-    .order("doc_date", { ascending: true })
-    .order("created_at", { ascending: true })
-    .limit(BULK_LIST_LIMIT);
-  const rows = (heads ?? []) as unknown as RawHead[];
+  // ★ ตัดก้อน (chunkIds) กัน .in() ยาวเกิน limit ของ PostgREST เมื่อ tenant มีบิล/ใบลดหนี้เพิ่มหนี้สะสม
+  //   มาก (พบจริงใน listEntries() — ดู commit 7ab9f91 และ lib/accounting/id-chunk.ts) — ทั้ง entryIds
+  //   (เข้า) และ ids (บรรทัดที่ 2 ต่อจากนี้ — มาจากผลลัพธ์ query แรก ซึ่งเพดาน BULK_LIST_LIMIT=5000
+  //   สูงกว่าจุดที่ .in() พังพออยู่แล้ว)
+  const headChunks = await Promise.all(
+    chunkIds(entryIds).map((ids) =>
+      db
+        .from("credit_debit_notes")
+        .select(NOTE_COLUMNS)
+        .eq("tenant_id", tenantId)
+        .in("entry_id", ids)
+        .is("deleted_at", null)
+        .order("doc_date", { ascending: true })
+        .order("created_at", { ascending: true })
+        .limit(BULK_LIST_LIMIT)
+    )
+  );
+  const rows = headChunks.flatMap(({ data }) => (data ?? []) as unknown as RawHead[]);
   if (rows.length === 0) return result;
 
   const ids = rows.map((r) => r.id);
-  const { data: lineData } = await db
-    .from("credit_debit_note_lines")
-    .select(LINE_COLUMNS)
-    .eq("tenant_id", tenantId)
-    .in("note_id", ids)
-    .order("line_no", { ascending: true });
+  const lineChunks = await Promise.all(
+    chunkIds(ids).map((noteIds) =>
+      db
+        .from("credit_debit_note_lines")
+        .select(LINE_COLUMNS)
+        .eq("tenant_id", tenantId)
+        .in("note_id", noteIds)
+        .order("line_no", { ascending: true })
+    )
+  );
+  const lineData = lineChunks.flatMap(({ data }) => data ?? []);
   const linesByNote = new Map<string, CreditDebitNoteLine[]>();
   for (const r of (lineData ?? []) as unknown as RawLine[]) {
     const arr = linesByNote.get(r.note_id) ?? [];
