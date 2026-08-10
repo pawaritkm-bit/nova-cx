@@ -61,6 +61,7 @@ export async function createProductAction(
     unit: formData.get("unit"),
     defaultPrice: formData.get("defaultPrice"),
     defaultAccountCode: formData.get("defaultAccountCode"),
+    category: formData.get("category"),
   };
   const res = await withProductAdminWrite((db, tenantId) => createProduct(db, tenantId, input));
   return res.ok ? { ok: true, message: "เพิ่มสินค้าแล้ว" } : res;
@@ -78,6 +79,7 @@ export async function updateProductAction(
     unit: formData.get("unit"),
     defaultPrice: formData.get("defaultPrice"),
     defaultAccountCode: formData.get("defaultAccountCode"),
+    category: formData.get("category"),
   };
   const res = await withProductAdminWrite((db, tenantId) => updateProduct(db, tenantId, id, input));
   return res.ok ? { ok: true, message: "บันทึกแล้ว" } : res;

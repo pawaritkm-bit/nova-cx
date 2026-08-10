@@ -1,4 +1,4 @@
-# 06-accounting-features-roadmap.md — โรดแมปฟีเจอร์บัญชี NOVA-CX (6 เฟส)
+# 06-accounting-features-roadmap.md — โรดแมปฟีเจอร์บัญชี NOVA-CX (8 เฟส)
 
 > ไฟล์กลาง บันทึกแผนละเอียดของฟีเจอร์บัญชีที่ทำต่อจาก FlowAccount sync (`docs/05-flowaccount-integration.md`)
 > ทุกเฟสในไฟล์นี้ต่อเนื่องจาก backlog ท้าย `docs/05-flowaccount-integration.md` หมวด 7
@@ -33,6 +33,19 @@ Note) เป็นเอกสารที่ขาดไปจาก backlog �
 | **4** | งบการเงินเต็มรูป + รายงานเชิงลึก | งบกำไรขาดทุน/งบแสดงฐานะที่พิมพ์/export เป็นทางการ, เทียบช่วงเวลา/ไตรมาส, งบกระแสเงินสด (ต่อยอด `financial-statements.ts` ที่มีพื้นฐานอยู่แล้ว) | **แผนละเอียดในไฟล์นี้ (ด้านล่าง)** |
 | **5** | ขยาย FlowAccount sync | บิลซื้อ/ค่าใช้จ่าย (`entry_type='purchase'`) + sync สินค้า/ผังบัญชีไป FlowAccount ผ่าน mapping table (ตามที่ร่างไว้ใน `docs/05-flowaccount-integration.md` หมวด 6) — **ต้องรอเฟส 1 (ผังบัญชี DB + สินค้า) เสร็จก่อน** เพราะเป็นฐานที่ mapping table ต้องใช้ | **แผนละเอียดในไฟล์นี้ (ด้านล่าง)** |
 | **6** | ขัดเกลา + อัตโนมัติเพิ่มเติม | รายการบันทึกซ้ำ (recurring JE), กระทบยอดธนาคาร (bank reconciliation), งบประมาณ, ทดสอบเต็มระบบรอบสุดท้ายก่อน deploy รวม | **แผนละเอียดในไฟล์นี้ (ด้านล่าง)** |
+| **7** | ทะเบียนทรัพย์สินถาวร + ค่าเสื่อมราคาอัตโนมัติ | เพิ่มจาก gap analysis เทียบ FlowAccount (2026-08-09) — บันทึกทรัพย์สิน, คำนวณ/บันทึกค่าเสื่อมราคาแบบเส้นตรงอัตโนมัติทุกเดือน, จำหน่ายทรัพย์สิน (คำนวณกำไร/ขาดทุน), รายงานทะเบียนทรัพย์สิน | **แผนละเอียดในไฟล์นี้ (ด้านล่าง)** |
+| **8** | สต็อกสินค้าคงเหลือ + ต้นทุนถ่วงเฉลี่ยเคลื่อนที่ | ยืนยันจากผู้ใช้ (2026-08-09) ว่าลูกค้าหลายรายมีสต็อกสินค้าจริง — ยอดยกมาสต็อก, เชื่อมรับ/จ่ายสต็อกจากบิลที่ยืนยันแล้ว (manual-trigger), บัตรสต็อก+รายงานสินค้าคงเหลือแยกหมวด (mirror ตัวอย่างหน้าจอที่ผู้ใช้แนบ) — **เป็นชั้นติดตามคู่ขนาน ไม่ auto-post ต้นทุนขายเข้าบัญชีแยกประเภทเลย** (สอดคล้องกับผังบัญชีเดิมที่ออกแบบตามระบบสต็อกสิ้นงวด) | **แผนละเอียดในไฟล์นี้ (ด้านล่าง)** |
+
+**หมายเหตุการเพิ่มเฟส (2026-08-09):** หลัง merge+deploy เฟส 1-6 แล้ว ผู้ใช้ขอให้ทำ gap analysis เทียบ
+FlowAccount อีกรอบเพื่อยืนยันว่า "copy มาครบทุกฟีเจอร์" — พบว่า **ทะเบียนทรัพย์สินถาวร + ค่าเสื่อมราคาอัตโนมัติ**
+เป็นฟีเจอร์ที่ผู้ใช้เคยขอไว้ตั้งแต่ต้น ("ค่าเสื่อมราคาทรัพย์สินด้วย") แต่ตกหล่นจากแผน 6 เฟสเดิม จึงเพิ่มเป็น
+**เฟส 7** ท้ายไฟล์นี้ ส่วนฟีเจอร์อื่นที่พบว่าขาด (payroll, ระบบคลังสินค้า/สต็อกจริง, multi-currency,
+e-Tax Invoice by Time Stamp) เป็นโมดูลใหญ่ที่ขึ้นกับ business context ของลูกค้าสำนักงานบัญชี — ผู้ใช้ยังไม่ได้
+สั่งให้ทำ ไม่รวมในรอบนี้ (payment gateway/POS/e-commerce integration/mobile app ตัดออกจากสโคปเพราะไม่ตรงกับ
+business model ของ NOVA-CX ที่เป็นเครื่องมือให้สำนักงานบัญชีใช้ ไม่ใช่ให้เจ้าของธุรกิจใช้เอง) — ต่อมาผู้ใช้
+ยืนยันว่าลูกค้าหลายรายมีสต็อกสินค้าจริง (ควรใส่) จึงเพิ่ม **เฟส 8** สต็อกสินค้าคงเหลือ พร้อมส่งตัวอย่างหน้าจอ
+โปรแกรมบัญชีเดสก์ท็อปไทย (product master + FIFO/AVERAGE + บัตรสต็อก + รายงานคงเหลือแยกหมวด) เป็นข้อมูลอ้างอิง
+รูปแบบรายงานที่ต้องการ
 
 # เฟส 1 — แผนละเอียด: โครงพื้นฐานบัญชี
 
@@ -2945,3 +2958,786 @@ notify pgrst, 'reload schema';
 
 ---
 ---
+
+# เฟส 7 — แผนละเอียด: ทะเบียนทรัพย์สินถาวร + ค่าเสื่อมราคาอัตโนมัติ
+
+**สโคป:** ฟีเจอร์เดียวแต่แบ่งเป็น 2 ส่วนย่อย **V → W** (V=โครง+ค่าเสื่อมอัตโนมัติ เสี่ยงน้อยกว่า, W=จำหน่ายทรัพย์สิน
+เสี่ยง/ซับซ้อนกว่าเพราะกระทบ cash-flow classification ด้วย):
+- **(V) ทะเบียนทรัพย์สิน + คำนวณ/บันทึกค่าเสื่อมราคาแบบเส้นตรงอัตโนมัติทุกเดือน** — ต่อยอด pattern ของ
+  `recurring-journal.ts` (เฟส 6 ส่วน R: atomic RPC claim + cron + ปุ่ม "สร้างตอนนี้" + สร้าง manual JE
+  เป็น draft เสมอ) แต่ต่างจาก recurring JE ตรงที่ยอดต่อรอบ **ไม่คงที่ตลอดไป** — ต้องคำนวณจากมูลค่าคงเหลือจริง
+  และ **หยุดเองอัตโนมัติ** เมื่อค่าเสื่อมสะสมครบมูลค่าที่ต้องตัด (ราคาทุน − มูลค่าซาก)
+- **(W) จำหน่ายทรัพย์สิน (Disposal)** — บันทึกการขาย/ตัดจำหน่าย คำนวณมูลค่าตามบัญชี (NBV) ณ วันจำหน่าย และ
+  กำไร/ขาดทุนจากการจำหน่าย สร้าง manual JE ปิดบัญชีทรัพย์สิน/ค่าเสื่อมสะสม
+
+ต่อยอดของที่มีอยู่แล้วในระบบ (ตรวจโค้ดจริงก่อนวางแผน):
+- `lib/accounting/manual-journal.ts::ManualEntryInput`/`upsertManualEntry`/`isBalanced` — ทุก occurrence
+  ค่าเสื่อม/รายการจำหน่าย เข้าทางนี้ทั้งหมด (**ไม่แก้ไฟล์นี้เลยแม้แต่บรรทัดเดียว** — reuse ตรง ๆ เหมือนเฟส 6)
+- `lib/accounting/recurring-journal.ts::addMonthsClamped`/`isValidCalendarDate` (จาก `bank-reconciliation.ts`
+  ที่ export ไว้แล้วให้ข้ามไฟล์ reuse ได้) — reuse ตรง ๆ ไม่เขียนสูตร date arithmetic คู่ขนาน
+- `supabase/migrations/0073_recurring_journal_entries.sql::add_months_clamped()` (SQL function, ประกาศ
+  `public.` แล้ว) — **reuse ฟังก์ชันเดิมตรง ๆ ใน RPC ของเฟสนี้ ไม่สร้างซ้ำ**
+- `supabase/migrations/0063_chart_of_accounts_table.sql` — รหัสสินทรัพย์ถาวร/ค่าเสื่อมสะสม/ค่าเสื่อมราคา
+  ที่ seed ไว้แล้วให้ทุก tenant (ยืนยันจากไฟล์จริง): `1610`(ที่ดิน — ไม่มีคู่ค่าเสื่อมสะสมเพราะที่ดินไม่เสื่อม),
+  `1615`(อาคาร)+`1615.1`(ค่าเสื่อมสะสม-อาคาร), `1640`(อุปกรณ์สำนักงาน)+`1640.1`, `1645`(รถยนต์)+`1645.1`,
+  ฝั่งค่าใช้จ่าย: `5370`(ค่าเสื่อมราคา-อาคาร), `5375`(ค่าเสื่อมราคา-อุปกรณ์สำนักงาน), `5380`(ค่าเสื่อมราคา-รถยนต์)
+  — ใช้เป็น**ตัวเลือกแนะนำ**ใน UI แต่ไม่ hardcode FK (ตาม pattern เดิมทั้งระบบ ผู้ใช้เลือก/สร้างรหัสอื่นเองได้
+  ผ่านหน้าผังบัญชี เฟส 1 ที่มีอยู่แล้ว)
+- `lib/accounting/cash-flow-config.ts::INVESTING_CODES` (เฟส 4) — ปัจจุบันมีแค่รหัสสินทรัพย์หลัก
+  (`1610`/`1615`/`1640`/`1645`) **ไม่มีรหัสค่าเสื่อมสะสม `.1`** — เฟสนี้ต้อง**แก้ไฟล์นี้เพิ่ม** (ดู 0.10 ⚠️)
+- `app/api/cron/generate-recurring-je/route.ts` + `vercel.json` — pattern cron รายวัน (CRON_SECRET
+  fail-closed) ที่มีอยู่แล้ว ใช้เป็นต้นแบบสร้าง cron ใหม่ 1 endpoint
+- `ls supabase/migrations/` ล่าสุด (ยืนยันแล้ว) = `0075_bank_reconciliation.sql` → migration ใหม่ของ
+  เฟสนี้เริ่มที่ `0076`
+- Guard patterns: `requireAccountingAccess`+`assertCustomerInScope` — ทุก action ต้อง derive scope จาก
+  resource id ที่กำลังเขียนจริงเสมอ (ตาม pattern ที่แก้ IDOR ไปแล้วตั้งแต่เฟส 3 — **ห้ามเกิดซ้ำ**)
+
+---
+
+## 0) การตัดสินใจที่ล็อกไว้ก่อนเริ่มโค้ด
+
+### 0.1 วิธีคำนวณค่าเสื่อม — เส้นตรง (Straight-line) เท่านั้นในรอบแรก
+เป็นวิธีที่ SME ไทยใช้มากที่สุดในทางปฏิบัติ (เหตุผลเดียวกับที่เฟส 6 ตัด `weekly` ออกจาก recurring JE — ลด
+สโคปโดยไม่กระทบการใช้งานจริงส่วนใหญ่) สูตร: `ค่าเสื่อมต่อเดือน = (ราคาทุน − มูลค่าซาก) ÷ อายุการใช้งาน (เดือน)`
+**[⚠️ FLAG]** ถ้าต้องการวิธีอื่น (ลดลงเป็นจำนวนเท่า/ยอดผลิตจริง) เป็น backlog แยก ไม่ block เฟสนี้
+
+### 0.2 จุดเริ่มคำนวณ — full-month convention เริ่มเดือนที่ซื้อ ไม่ prorate เป็นวัน
+ค่าเสื่อมเดือนแรกคิดเต็มเดือนตั้งแต่เดือนของ `acquisition_date` (ไม่คำนวณเป็นสัดส่วนวันในเดือน) — เหตุผล:
+ตรงกับ convention ที่ใช้กันทั่วไปในทางปฏิบัติสำหรับบัญชีปิดรายเดือน และสอดคล้องกับหลักความเรียบง่ายที่ระบบ
+ทั้งหมดใช้มาตลอด (recurring JE เฟส 6 ก็ไม่ prorate เป็นวันเช่นกัน) **[⚠️ FLAG]** ถ้าลูกค้าต้องการ prorate
+ตามวันจริงเดือนแรก/เดือนสุดท้าย เป็น backlog แยก
+
+### 0.3 ⚠️ ห้าม auto-confirm เด็ดขาด — mirror หลักการ 0.3 ของเฟส 6 (recurring JE) ทุกประการ
+ค่าเสื่อมที่ generate อัตโนมัติทุกเดือน (และรายการจำหน่ายทรัพย์สิน) ต้องสร้างเป็น **`draft` เสมอ** ผ่าน
+`upsertManualEntry` เดิม — เหตุผลเดียวกับ recurring JE: manual JE ที่ confirmed เข้าบัญชีแยกประเภท/งบการเงิน
+ทันที ถ้าตั้งค่าทรัพย์สินผิด (เช่น เลือกรหัสบัญชีผิด/อายุการใช้งานผิด) ต้องมีคนตรวจก่อนเข้าบัญชีจริงเสมอ
+**ทุก occurrence ต้องผ่านการกดยืนยันของนักบัญชีเหมือน manual JE ปกติทุกใบ ไม่มีทางลัด**
+
+### 0.4 Trigger การสร้างค่าเสื่อม — cron รายวัน + ปุ่ม "สร้างตอนนี้" กันชนด้วย atomic RPC (mirror เฟส 6 ส่วน R)
+- Cron ใหม่ (`/api/cron/generate-fixed-asset-depreciation`, รันวันละครั้ง — mirror `generate-recurring-je`
+  เป๊ะ) สแกนทุกทรัพย์สินที่ `status='active'` และ `next_dep_date is not null` และ `next_dep_date <= วันนี้`
+  ของทุก tenant
+- ปุ่ม "สร้างตอนนี้" ต่อทรัพย์สิน 1 ชิ้น เรียก orchestrator เดียวกับ cron
+- ป้องกันชนกัน (cron + ปุ่มมือ/retry) ด้วย **atomic RPC** `claim_fixed_asset_depreciation(tenant_id,
+  asset_id, today)` (`for update skip locked` — pattern เดียวกับ `claim_recurring_je_occurrence` เฟส 6
+  เป๊ะ) — ถ้า claim ไม่ติด คืน `claimed:false` เฉย ๆ ไม่ throw
+
+### 0.5 ⚠️ ยอดต่อรอบไม่คงที่ตลอดไป — งวดสุดท้ายเป็น "plug" กันเศษสตางค์ค้าง (ต่างจาก recurring JE เฟส 6)
+`monthly_depreciation = round2((cost − salvage) / usefulLifeMonths)` ถูกปัดเศษทุกเดือน → ถ้าคูณตรง ๆ
+ทุกเดือนจนครบจำนวนงวด อาจมีเศษสตางค์เหลือ/ขาดจากการปัดเศษสะสม (ค่าเสื่อมสะสมสุดท้ายไม่เท่ากับ `cost−salvage`
+เป๊ะ) — **แก้โดยงวดสุดท้ายใช้ยอด "ส่วนที่เหลือจริง" แทนยอดคงที่**: `amount = min(monthly_depreciation,
+remaining)` โดย `remaining = cost − salvage − accumulated_depreciation` ก่อนหน้า — รับประกันว่าค่าเสื่อม
+สะสมรวมทั้งหมดเท่ากับ `cost − salvage` เป๊ะเสมอ ไม่มีเศษตกค้าง
+
+### 0.6 ทรัพย์สินที่ตัดค่าเสื่อมครบแล้ว — `next_dep_date=null` แต่ยัง `status='active'` (ยังเป็นเจ้าของอยู่)
+เมื่อค่าเสื่อมสะสม = `cost − salvage` (ครบมูลค่าที่ต้องตัด) → RPC ตั้ง `next_dep_date=null` (ไม่มีรอบถัดไป
+ให้ claim อีก) แต่ `status` ยังเป็น `'active'` เพราะทรัพย์สินยังเป็นของลูกค้าอยู่ ยังไม่ได้จำหน่าย — แสดงใน
+ทะเบียนเป็น "ตัดค่าเสื่อมครบแล้ว" (NBV = มูลค่าซาก) จนกว่าจะถูกจำหน่ายจริงผ่าน (W)
+
+### 0.7 การจำหน่ายทรัพย์สิน (W) — flow แยก, คำนวณ NBV+กำไร/ขาดทุน ณ วันจำหน่าย, ไม่คิดค่าเสื่อมเดือนที่จำหน่าย
+- **ไม่คิดค่าเสื่อมของเดือนที่จำหน่าย** (mirror convention เดียวกับ 0.2 — full-month ตอนซื้อ, ไม่มีเดือน
+  จำหน่ายเลย เพื่อความเรียบง่ายสมมาตรกัน) — `disposeAsset()` เคลียร์ `next_dep_date=null` ตรง ๆ โดยไม่ generate
+  ค่าเสื่อมงวดสุดท้ายเพิ่มก่อน (ใช้ `accumulated_depreciation` ณ ปัจจุบันตรง ๆ เป็นฐานคำนวณ NBV)
+- `NBV ณ วันจำหน่าย = cost − accumulated_depreciation` (ค่า ณ ตอนนั้น)
+- `กำไร/ขาดทุนจากการจำหน่าย = ราคาที่ได้รับจริง (proceeds) − NBV`
+- Journal ที่สร้าง (draft เสมอ ตาม 0.3): `Dr accum_dep_account_code = accumulated_depreciation` (ล้างค่าเสื่อม
+  สะสม), `Dr/Cr เงินสด/บัญชีที่ได้รับ = proceeds` (ผู้ใช้เลือกรหัสบัญชีที่รับเงิน — เงินสด/ธนาคาร/ลูกหนี้),
+  `Cr asset_account_code = cost` (ตัดสินทรัพย์ออกที่ราคาทุน), และปรับสมดุลด้วยรหัสบัญชี "กำไร/ขาดทุนจากการ
+  จำหน่ายทรัพย์สิน" ที่ผู้ใช้เลือกเอง (ไม่ hardcode/ไม่ seed รหัสใหม่ — ให้เลือกจากผังบัญชีเดิมหรือไปสร้างเอง
+  ที่หน้าผังบัญชี เฟส 1 ถ้ายังไม่มี, ตาม pattern self-service เดิมทั้งระบบ)
+- จำหน่ายแล้ว `status='disposed'` ล็อกแก้ทะเบียนไม่ได้อีก (แก้ผิดต้องยกเลิกรายการจำหน่าย — ดู 0.8)
+
+### 0.8 ยกเลิกการจำหน่าย (undo disposal) — reset กลับเป็น active ได้ถ้า disposal JE ยัง draft/ถูกยกเลิกยืนยันแล้ว
+ถ้ากรอกข้อมูลจำหน่ายผิด (proceeds/วันที่ผิด) และ manual JE ที่สร้างยัง `draft` (ยังไม่ confirm) — อนุญาตให้
+"ยกเลิกการจำหน่าย" (`undisposeAsset`) กลับเป็น `status='active'` + ลบ/soft-delete manual JE draft นั้น +
+คืน `next_dep_date` เป็นเดือนถัดไปจาก `accumulated_depreciation` เดิม — **ถ้า manual JE ถูก confirm ไปแล้ว
+ห้าม undo** (ต้องยกเลิกการยืนยัน JE ก่อนตามกฎเดิมของ manual-journal.ts เอง แล้วค่อย undo disposal)
+
+### 0.9 เชื่อม occurrence/disposal JE กลับไปทรัพย์สินต้นทาง — คอลัมน์ใหม่บน `manual_journal_entries` (metadata ล้วน)
+`manual_journal_entries.fixed_asset_id` (nullable, FK `on delete set null`) — ใช้แค่แสดง badge "ค่าเสื่อม/
+จำหน่ายทรัพย์สิน: ⟨ชื่อทรัพย์สิน⟩" + ลิงก์กลับทะเบียนทรัพย์สินในหน้า UI **ไม่มี mapper ไหน (`toJournalLines`/
+`toJournalPosting`) ต้องแก้เลย** (เหมือน `recurring_template_id` ของเฟส 6 — เป็น metadata ล้วน)
+
+### 0.10 ⚠️ ต้องแก้ `cash-flow-config.ts` (เฟส 4) เพิ่มรหัสค่าเสื่อมสะสม `.1` เข้า `INVESTING_CODES`
+**[⚠️ FLAG — แตะไฟล์ของเฟสก่อนหน้า]** รายการค่าเสื่อมราคาปกติ (Dr ค่าเสื่อม/Cr ค่าเสื่อมสะสม) ไม่มีขาไหนแตะ
+เงินสดเลย จึงไม่ปรากฏในงบกระแสเงินสดโดยธรรมชาติของข้อมูล (ตามที่เฟส 4 ตัดสินใจไว้แล้ว ข้อ 0.7 เดิม — ยังถูกต้อง
+สำหรับกรณีนี้ ไม่ต้องแก้) **แต่รายการจำหน่ายทรัพย์สิน (W) มีขาเงินสดจริง** (`proceeds`) พร้อมขาไม่ใช่เงินสดสอง
+ขาที่ต้องจัดกิจกรรมเป็น "ลงทุน" ทั้งคู่ให้สอดคล้องกัน: ขาสินทรัพย์ (`asset_account_code`, มีอยู่แล้วใน
+`INVESTING_CODES`) และ **ขาค่าเสื่อมสะสม** (`accum_dep_account_code` = รหัส `.1` — **ยังไม่อยู่ใน
+`INVESTING_CODES` ปัจจุบัน** จะตกไปเป็น `operating` โดย fallback ผิดประเภท) — ต้องเพิ่ม `1615.1`/`1640.1`/
+`1645.1` เข้า `INVESTING_CODES` ในเฟสนี้ เพื่อให้เงินสดจากการจำหน่ายทรัพย์สินแสดงเป็น "กิจกรรมลงทุน" ครบทั้งขา
+สอดคล้องกับการนำเสนองบกระแสเงินสดมาตรฐาน (ไม่แตะ `FINANCING_CODES`/`classifyCashFlowActivity()` เลย เพิ่ม
+แค่ 3 รหัสในลิสต์เดิม) — ส่วนขา "กำไร/ขาดทุนจากการจำหน่าย" (0.7) ปล่อยตาม fallback เดิม (`operating`, เพราะ
+เป็นรหัสหมวด 4/5 ตามปกติ — ยอมรับได้ในทางปฏิบัติ ไม่ block เฟสนี้)
+
+### 0.11 รหัสบัญชี — ไม่ hardcode FK เหมือนเดิมทั้งระบบ, ใช้ seed เดิมเป็นตัวเลือกแนะนำเท่านั้น
+`asset_account_code`/`accum_dep_account_code`/`dep_expense_account_code` เลือกผ่าน `AccountCombobox` เดิม
+(เฟส 1) จากผังบัญชีจริงของ tenant — validate แค่ **หมวดถูกต้อง** (`asset_account_code`/`accum_dep_account_code`
+ต้องเป็นหมวด "สินทรัพย์", `dep_expense_account_code` ต้องเป็นหมวด "ค่าใช้จ่าย") ไม่ validate ความสัมพันธ์
+parent-child ของรหัส (เช่นบังคับว่า `1640` ต้องคู่กับ `1640.1` เท่านั้น) — ปล่อยให้นักบัญชีเลือกเองอย่างอิสระ
+เหมือนที่ระบบอื่นทั้งหมดทำ
+
+### 0.12 การแก้ไข/ลบทะเบียนทรัพย์สิน — แก้ได้เฉพาะก่อนมีประวัติค่าเสื่อม (`accumulated_depreciation=0`)
+mirror หลักการ "แก้ได้เฉพาะตอน draft" ของ manual JE — ทรัพย์สินที่ยังไม่เคย generate ค่าเสื่อมเลย
+(`accumulated_depreciation=0` และ `status='active'`) แก้ไข/ลบ (soft-delete) ได้อิสระ — ถ้ามีประวัติค่าเสื่อม
+แล้วแม้แต่งวดเดียว ห้ามแก้ตัวเลขราคาทุน/มูลค่าซาก/อายุการใช้งานย้อนหลัง (จะทำให้ยอดที่ generate ไปแล้วขัดแย้ง
+กับสูตรใหม่) — ถ้าตั้งค่าผิดจริงต้องยกเลิกยืนยัน JE ค่าเสื่อมทุกใบที่เกี่ยวข้องก่อน (ตามกฎ manual JE เดิม)
+แล้วค่อย soft-delete ทะเบียนทั้งชิ้นทิ้งแล้วสร้างใหม่ **[⚠️ FLAG]** ไม่ทำฟีเจอร์ "แก้ไขทะเบียนแบบมีผลย้อนหลัง
+อัตโนมัติ" ในเฟสนี้ (ซับซ้อนเกินจำเป็น เสี่ยงคำนวณผิดเงียบ ๆ)
+
+### 0.13 สิทธิ์ — reuse `requireAccountingAccess`+`assertCustomerInScope` เดิมทั้งหมด ไม่มี admin-only ใหม่
+นักบัญชี/หัวหน้าทีมที่ดูแลลูกค้ารายนั้นทำได้เอง (สร้าง/แก้/ลบทะเบียน, สร้างค่าเสื่อมตอนนี้, จำหน่ายทรัพย์สิน)
+เหมือนหน้า manual JE/recurring JE เดิมทุกประการ — ทุก action ที่รับ resource id ตรง ๆ (เช่น
+`deleteAssetAction`/`disposeAssetAction`) ต้อง derive scope จาก resource นั้นเองก่อนเขียนเสมอ (ตาม pattern
+ที่แก้ IDOR ไปแล้วตั้งแต่เฟส 3 — grep ยืนยันก่อนปิดงานว่าไม่มี action ไหนรับ `customerId` เป็นพารามิเตอร์แยก
+ที่ไม่ผูกกับ id ของทรัพย์สินที่กำลังเขียนจริง)
+
+### 0.14 ยืนยันเลข migration จริงจาก `ls supabase/migrations/` (ไฟล์ล่าสุด = `0075_bank_reconciliation.sql`)
+เฟสนี้ใช้ `0076` เท่านั้น (1 ไฟล์ — ไม่ต้องแก้ schema เดิมนอกจาก ALTER `manual_journal_entries` เพิ่ม 1
+คอลัมน์) — ให้เช็คซ้ำอีกครั้งก่อน apply จริงเผื่อมีการแก้ไขคาบเกี่ยวระหว่างทาง
+
+---
+
+## 1) โครงสร้างไฟล์ (ใหม่/แก้) — เฟส 7
+
+```
+supabase/migrations/
+  0076_fixed_assets.sql   [ใหม่] fixed_assets + fixed_asset_depreciation_log + RPC
+                                    claim_fixed_asset_depreciation() (reuse add_months_clamped จาก 0073
+                                    ตรงๆ ไม่สร้างซ้ำ) + ALTER manual_journal_entries เพิ่ม fixed_asset_id + RLS
+
+lib/
+  accounting/
+    fixed-assets.ts        [ใหม่] ชนิด FixedAsset/FixedAssetInput/DepreciationLogEntry, validate
+                                    (reuse isValidCalendarDate จาก bank-reconciliation.ts, isBalanced
+                                    concept ไม่ต้องใช้เพราะไม่ใช่ input แบบ manual JE ตรงๆ),
+                                    monthlyDepreciationAmount()/netBookValue() (pure), CRUD data layer
+                                    (listAssets/upsertAsset/softDeleteAsset — เฉพาะก่อนมีประวัติ 0.12),
+                                    generateOne()/generateDueDepreciation() (orchestrator, mirror
+                                    generateOne ของ recurring-journal.ts เป๊ะ รวมการแยก claimErr จริง vs
+                                    ยังไม่ถึงรอบ — ★ ต้องทำถูกตั้งแต่ต้น ไม่ทำผิดซ้ำแบบที่เฟส 6 เคยพลาดแล้วแก้),
+                                    disposeAsset()/undisposeAsset() (0.7/0.8)
+    cash-flow-config.ts     [แก้] INVESTING_CODES เพิ่ม '1615.1','1640.1','1645.1' (0.10 — จุดเดียวที่แก้
+                                    ไฟล์เฟส 4 เดิม ไม่แก้ classifyCashFlowActivity()/FINANCING_CODES เลย)
+
+app/
+  api/cron/generate-fixed-asset-depreciation/route.ts  [ใหม่] cron รายวัน (mirror
+                                    generate-recurring-je — CRON_SECRET fail-closed) เรียก
+                                    generateDueDepreciation ทุก tenant
+
+  chat-audit/accounting/
+    fixed-assets/
+      page.tsx               [ใหม่] เลือกลูกค้า (mirror recurring-journal/page.tsx) → list ทะเบียน
+                                    ทรัพย์สิน (active/disposed แยกกลุ่ม) + NBV ปัจจุบันต่อชิ้น
+      FixedAssetsPanel.tsx   [ใหม่] client component: ฟอร์มสร้าง/แก้ทะเบียน (AccountCombobox × 3, ล็อกแก้
+                                    เมื่อมีประวัติค่าเสื่อมแล้ว 0.12), ปุ่ม "สร้างค่าเสื่อมตอนนี้" ต่อชิ้น,
+                                    ปุ่ม/dialog "จำหน่ายทรัพย์สิน" (proceeds+รหัสบัญชีรับเงิน+รหัสบัญชี
+                                    กำไร/ขาดทุน), ปุ่ม "ยกเลิกการจำหน่าย" (0.8), ประวัติค่าเสื่อมต่อชิ้น
+                                    ลิงก์กลับ journal-entry
+      actions.ts               [ใหม่] server actions guard requireAccountingAccess+assertCustomerInScope
+                                    (upsertAssetAction/deleteAssetAction/generateNowAction/
+                                    disposeAssetAction/undisposeAssetAction) — ทุกตัว derive scope จาก
+                                    asset id ที่กำลังเขียนจริง (0.13)
+      export/route.ts          [ใหม่] export Excel รายงานทะเบียนทรัพย์สิน (reuse exceljs pattern จาก
+                                    budget/export/route.ts)
+
+  chat-audit/accounting/page.tsx, CustomerTabs.tsx  [แก้] เพิ่มลิงก์ "ทะเบียนทรัพย์สิน" (จุดเดียวกับ
+                                    opening/reports/flowaccount-map/budget/recurring-journal เดิม)
+
+vercel.json                       [แก้] เพิ่ม cron entry "/api/cron/generate-fixed-asset-depreciation"
+                                    (schedule รายวัน เช่น "0 3 * * *" — เยื้องเวลาจาก recurring-je เดิม
+                                    กันโหลด service-role DB ชนกันพร้อมกัน)
+
+tests/
+  accounting/fixed-assets.test.ts          [ใหม่] validate ทุก branch (หมวดบัญชีผิด/cost≤0/salvage≥cost/
+                                    useful_life≤0/วันที่ผิดปฏิทิน), monthlyDepreciationAmount/
+                                    netBookValue, งวดสุดท้ายเป็น plug (ทดสอบผลรวมค่าเสื่อมสะสม = cost−salvage
+                                    เป๊ะ ไม่มีเศษตกค้าง), generateOne/generateDueDepreciation (claimErr จริง
+                                    vs ยังไม่ถึงรอบ แยกกันถูกต้อง — regression guard เทียบกับที่เฟส 6 แก้แล้ว),
+                                    disposeAsset/undisposeAsset (NBV/กำไร-ขาดทุนถูกต้องทุกทิศทาง)
+  accounting/fixed-assets-actions.test.ts  [ใหม่] guard สโคปครบทุก action (นอกสโคปทำไม่ได้), ป้องกันแก้/ลบ
+                                    ทะเบียนที่มีประวัติค่าเสื่อมแล้ว, undisposeAsset ปฏิเสธถ้า JE confirmed แล้ว
+  accounting/cash-flow-config.test.ts      [แก้] เพิ่มเทสต์ classifyCashFlowActivity('1615.1'/'1640.1'/
+                                    '1645.1') → 'investing' (regression guard เทียบ INVESTING_CODES เดิม
+                                    ไม่เปลี่ยนพฤติกรรมของรหัสอื่น)
+  accounting/cash-flow.test.ts             [แก้] เพิ่มเทสต์ end-to-end: รายการจำหน่ายทรัพย์สิน (เงินสด+
+                                    ค่าเสื่อมสะสม+สินทรัพย์+กำไร/ขาดทุน) → ขาสินทรัพย์และค่าเสื่อมสะสมจัดเป็น
+                                    'investing' ทั้งคู่ ผลรวม investing ตรงกับ proceeds เป๊ะ (ปรับตาม
+                                    allocation 0.8 ของเฟส 4)
+```
+
+### 1.1 Schema ใหม่ (migration 0076) — ร่าง SQL
+
+```sql
+-- เฟส 7 (docs/06, หมวด 0.1–0.13) — ทะเบียนทรัพย์สินถาวร + ค่าเสื่อมราคาอัตโนมัติ
+
+create table if not exists public.fixed_assets (
+  id                       uuid primary key default gen_random_uuid(),
+  tenant_id                uuid not null references public.tenants(id) on delete cascade,
+  customer_id              uuid not null references public.customers(id) on delete cascade,
+  name                     text not null,
+  asset_account_code       text not null,
+  accum_dep_account_code   text not null,
+  dep_expense_account_code text not null,
+  acquisition_date         date not null,
+  cost                     numeric(14,2) not null check (cost > 0),
+  salvage_value            numeric(14,2) not null default 0 check (salvage_value >= 0),
+  useful_life_months       int not null check (useful_life_months > 0),
+  monthly_depreciation     numeric(14,2) not null,  -- คำนวณ+เก็บตอนสร้าง (0.1) — งวดสุดท้ายเป็น plug (0.5)
+  accumulated_depreciation numeric(14,2) not null default 0,
+  -- null = ไม่มีรอบถัดไปให้สร้าง (ตัดค่าเสื่อมครบแล้ว 0.6 หรือจำหน่ายแล้ว) — advance โดย RPC claim เท่านั้น
+  next_dep_date            date,
+  status                   text not null default 'active' check (status in ('active','disposed')),
+  disposal_date            date,
+  disposal_proceeds        numeric(14,2),
+  disposal_entry_id        uuid references public.manual_journal_entries(id) on delete set null,
+  created_at               timestamptz not null default now(),
+  updated_at               timestamptz not null default now(),
+  deleted_at               timestamptz,
+  constraint fixed_assets_salvage_lt_cost check (salvage_value < cost)
+);
+create index if not exists idx_fixed_assets_tenant_customer
+  on public.fixed_assets (tenant_id, customer_id) where deleted_at is null;
+create index if not exists idx_fixed_assets_due
+  on public.fixed_assets (tenant_id, next_dep_date)
+  where deleted_at is null and status = 'active' and next_dep_date is not null;
+
+create table if not exists public.fixed_asset_depreciation_log (
+  id               uuid primary key default gen_random_uuid(),
+  tenant_id        uuid not null references public.tenants(id) on delete cascade,
+  asset_id         uuid not null references public.fixed_assets(id) on delete cascade,
+  period           date not null,  -- เดือนที่คิดค่าเสื่อม (วันที่ 1 ของเดือนนั้น)
+  amount           numeric(14,2),
+  status           text not null check (status in ('generated','failed')),
+  message          text,
+  manual_entry_id  uuid references public.manual_journal_entries(id) on delete set null,
+  created_at       timestamptz not null default now()
+);
+create index if not exists idx_fixed_asset_dep_log_asset
+  on public.fixed_asset_depreciation_log (tenant_id, asset_id, period);
+
+-- ★ link occurrence/disposal → ทรัพย์สินต้นทาง (metadata ล้วน — ไม่กระทบ mapper ใด ๆ, ดู 0.9)
+alter table public.manual_journal_entries
+  add column if not exists fixed_asset_id uuid
+    references public.fixed_assets(id) on delete set null;
+
+drop trigger if exists trg_fixed_assets_updated on public.fixed_assets;
+create trigger trg_fixed_assets_updated before update on public.fixed_assets
+  for each row execute function public.set_updated_at();
+
+-- ★ 0.4/0.5: claim แบบ atomic (for update skip locked) — กัน cron/ปุ่มมือชนกันสร้างซ้ำ
+--   reuse public.add_months_clamped() ที่มีอยู่แล้วจาก migration 0073 ตรง ๆ ไม่สร้างฟังก์ชันซ้ำ
+create or replace function public.claim_fixed_asset_depreciation(
+  p_tenant_id  uuid,
+  p_asset_id   uuid,
+  p_today      date
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_row public.fixed_assets%rowtype;
+  v_remaining numeric(14,2);
+  v_amount numeric(14,2);
+  v_new_accum numeric(14,2);
+  v_new_next date;
+begin
+  select * into v_row
+  from public.fixed_assets
+  where id = p_asset_id and tenant_id = p_tenant_id
+    and deleted_at is null and status = 'active'
+    and next_dep_date is not null and next_dep_date <= p_today
+  for update skip locked;
+
+  if not found then
+    return jsonb_build_object('claimed', false);
+  end if;
+
+  v_remaining := round((v_row.cost - v_row.salvage_value - v_row.accumulated_depreciation)::numeric, 2);
+  if v_remaining <= 0 then
+    -- กันเคสผิดปกติ (ไม่ควรเกิดถ้า invariant ถูกรักษาไว้เสมอ) — เคลียร์รอบถัดไปแทนสร้างยอด 0
+    update public.fixed_assets set next_dep_date = null where id = p_asset_id and tenant_id = p_tenant_id;
+    return jsonb_build_object('claimed', false);
+  end if;
+
+  v_amount := least(v_row.monthly_depreciation, v_remaining);  -- ★ 0.5 งวดสุดท้ายเป็น plug
+  v_new_accum := round((v_row.accumulated_depreciation + v_amount)::numeric, 2);
+
+  if round((v_row.cost - v_row.salvage_value - v_new_accum)::numeric, 2) <= 0 then
+    v_new_next := null;  -- ★ 0.6 ตัดค่าเสื่อมครบแล้ว — ไม่มีรอบถัดไป
+  else
+    v_new_next := public.add_months_clamped(v_row.next_dep_date, 1);
+  end if;
+
+  update public.fixed_assets
+     set accumulated_depreciation = v_new_accum, next_dep_date = v_new_next
+   where id = p_asset_id and tenant_id = p_tenant_id;
+
+  return jsonb_build_object(
+    'claimed', true,
+    'period', v_row.next_dep_date,
+    'amount', v_amount,
+    'customer_id', v_row.customer_id,
+    'name', v_row.name,
+    'dep_expense_account_code', v_row.dep_expense_account_code,
+    'accum_dep_account_code', v_row.accum_dep_account_code
+  );
+end;
+$$;
+
+revoke all on function public.claim_fixed_asset_depreciation(uuid, uuid, date) from public;
+grant execute on function public.claim_fixed_asset_depreciation(uuid, uuid, date) to service_role;
+
+comment on function public.claim_fixed_asset_depreciation(uuid, uuid, date) is
+  'สร้างรายการค่าเสื่อมราคาอัตโนมัติแบบ atomic — increment accumulated_depreciation + advance next_dep_date
+   ในทีเดียว (เฟส 7, 0.4/0.5) — mirror claim_recurring_je_occurrence ของเฟส 6';
+
+alter table public.fixed_assets                  enable row level security;
+alter table public.fixed_asset_depreciation_log   enable row level security;
+create policy tenant_read on public.fixed_assets for select to authenticated
+  using (tenant_id = public.current_tenant_id());
+create policy tenant_read on public.fixed_asset_depreciation_log for select to authenticated
+  using (tenant_id = public.current_tenant_id());
+revoke all on public.fixed_assets                from anon;
+revoke all on public.fixed_asset_depreciation_log from anon;
+grant select on public.fixed_assets                to authenticated;
+grant select on public.fixed_asset_depreciation_log to authenticated;
+grant all    on public.fixed_assets                to service_role;
+grant all    on public.fixed_asset_depreciation_log to service_role;
+
+notify pgrst, 'reload schema';
+```
+
+---
+
+## 2) งานย่อยเรียงลำดับ (เฟส 7)
+
+เลขงาน: ต่อจากเฟส 6 (T38–T56) → เริ่มที่ **T57**
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T57** | Migration 0076 — `fixed_assets`+`fixed_asset_depreciation_log` + RPC `claim_fixed_asset_depreciation()` (reuse `add_months_clamped` เดิม) + `fixed_asset_id` บน `manual_journal_entries` + RLS | `supabase/migrations/0076_fixed_assets.sql` | - | ⚠️ ก่อนสร้างไฟล์ ให้ `ls supabase/migrations/` เช็คว่า 0075 ยังล่าสุดจริง; apply ไม่ error; ทดสอบ SQL ตรง: สร้างทรัพย์สินทดสอบ cost=10000,salvage=1000,useful_life=9 → เรียก RPC 9 ครั้ง (จำลอง 9 เดือน) → เดือนที่ 1-8 ได้ `amount=1000` เป๊ะ, เดือนที่ 9 (สุดท้าย) ได้ plug =1000 พอดี (ไม่มีเศษ) และ `next_dep_date=null` หลังเดือนที่ 9; เรียกซ้อน 2 session พร้อมกันกับ asset เดียวกัน → มีแค่ session เดียว claim สำเร็จ; เทสต์เดิมทั้งหมดผ่าน |
+| **T58** | `lib/accounting/fixed-assets.ts` — types, `validateFixedAssetInput` (reuse `isValidCalendarDate` จาก `bank-reconciliation.ts`, ตรวจหมวดบัญชีตาม 0.11), `monthlyDepreciationAmount()`/`netBookValue()` (pure), CRUD data layer (`listAssets`/`upsertAsset`/`softDeleteAsset` — ล็อกแก้/ลบเมื่อมีประวัติค่าเสื่อมแล้ว 0.12) | `fixed-assets.ts` | T57 | unit test: validate ปฏิเสธ `asset_account_code`/`accum_dep_account_code` ที่ไม่ใช่หมวดสินทรัพย์, `dep_expense_account_code` ที่ไม่ใช่หมวดค่าใช้จ่าย, `salvage_value >= cost`, `useful_life_months <= 0`, วันที่ซื้อผิดปฏิทิน (เช่น "2026-02-30"); `monthlyDepreciationAmount(10000,1000,9)` = 1000 พอดี; `upsertAsset` แก้ไม่ได้เมื่อ `accumulated_depreciation>0` (คืน error ชัดเจน) แต่ลบ/แก้ได้ปกติเมื่อยังไม่มีประวัติ |
+| **T59** | เพิ่มใน `fixed-assets.ts`: `generateOne(db,tenantId,assetId,today)` เรียก RPC claim → ถ้า `claimErr` จริง (ไม่ใช่แค่ `!claimed`) → log `status:'failed'`+message คืน `{status:'failed',...}` (**ต้องแยก 2 กรณีถูกตั้งแต่ต้น — ดูบั๊กที่เฟส 6 เคยพลาดแล้วแก้ทีหลัง อย่าพลาดซ้ำ**) → ถ้า claim สำเร็จ สร้าง `ManualEntryInput` (docType='JV', lines: Dr `dep_expense_account_code`/Cr `accum_dep_account_code` = amount) → `upsertManualEntry` (draft เสมอ ตาม 0.3) → ผูก `fixed_asset_id` บน entry ที่สร้าง → log `status:'generated'`; `generateDueDepreciation(db,tenantId,today)` วนทุกทรัพย์สิน active ที่ถึงกำหนดของ tenant ครอบ try/catch ต่อชิ้น (ไม่ throw ทั้ง batch) | `fixed-assets.ts` | T58 | unit test: ทรัพย์สินถึงกำหนด+ผังบัญชีครบ → สร้าง draft+log `generated`; ทรัพย์สินที่ `dep_expense_account_code` ถูกลบไปแล้ว → generate ไม่สำเร็จ log `failed` แต่ทรัพย์สินอื่นที่ตามมายัง generate ต่อได้ (ไม่ throw ทั้ง batch); RPC คืน error จริง (mock `claimErr≠null`) → `status:'failed'`+log ทันที (ไม่ใช่ `skipped` เงียบๆแบบที่เฟส 6 เคยพลาด); ยังไม่ถึงรอบ (`claimed:false`,`error:null`) → skip เงียบไม่ log |
+| **T60** | เพิ่มใน `fixed-assets.ts`: `disposeAsset(db,tenantId,customerId,assetId,{disposalDate,proceeds,cashAccountCode,gainLossAccountCode})` (0.7) คำนวณ NBV+กำไร/ขาดทุน → สร้าง `ManualEntryInput` (Dr accum_dep=accumulated, Dr/Cr cash=proceeds, Cr asset=cost, ปรับสมดุลด้วย gain/loss leg) → `upsertManualEntry` draft → update `status='disposed'`,`disposal_date`,`disposal_proceeds`,`disposal_entry_id`,`next_dep_date=null`; `undisposeAsset()` (0.8) — reset กลับ `active` เฉพาะถ้า `disposal_entry_id` ยัง draft (ไม่ confirmed) | `fixed-assets.ts` | T58, T59 | unit test: จำหน่ายที่ proceeds>NBV → กำไร (เครดิต gain/loss leg) สมดุลถูกต้อง; proceeds<NBV → ขาดทุน (เดบิต) สมดุลถูกต้อง; proceeds=NBV เป๊ะ → ไม่มี gain/loss leg หรือ leg=0 (ตัดสินใจเรื่อง edge case นี้ให้ชัดในโค้ด: ถ้า gainLoss=0 ไม่ต้องเพิ่ม leg ที่ยอด 0 เข้าไปเลย); `undisposeAsset` สำเร็จเมื่อ JE ยัง draft, ปฏิเสธชัดเจนเมื่อ JE confirmed แล้ว; ทรัพย์สินที่ `status='disposed'` แก้ทะเบียนไม่ได้อีก (ทั้ง `upsertAsset`/`generateOne` ปฏิเสธ) |
+| **T61** | `app/api/cron/generate-fixed-asset-depreciation/route.ts` (mirror `generate-recurring-je` — CRON_SECRET fail-closed, คืน 200 เสมอกัน retry loop, วนทุก tenant ที่มีทรัพย์สินถึงกำหนดจริง) + `vercel.json` เพิ่ม cron entry (schedule เยื้องจาก recurring-je เดิม) | 2 ไฟล์ข้างต้น | T59 | ไม่ตั้ง `CRON_SECRET` → 503; auth ผิด → 401; auth ถูก → เรียก `generateDueDepreciation` ทุก tenant ที่มีทรัพย์สินถึงกำหนดจริง คืน 200 พร้อมสรุปจำนวน; error ภายใน → catch แล้วคืน 200 |
+| **T62** | ⚠️ แก้ `lib/accounting/cash-flow-config.ts::INVESTING_CODES` เพิ่ม `'1615.1'`,`'1640.1'`,`'1645.1'` (0.10) — **ไม่แก้ไฟล์อื่นของเฟส 4 เลย** | `cash-flow-config.ts` | - | unit test เดิมของ `cash-flow-config.test.ts` ยังผ่านครบ (regression) + เทสต์ใหม่: `classifyCashFlowActivity('1615.1'/'1640.1'/'1645.1')` → `'investing'`; เทสต์ `cash-flow.test.ts` เพิ่มเคส end-to-end จำหน่ายทรัพย์สิน → ขาสินทรัพย์+ค่าเสื่อมสะสมจัดเป็น investing ทั้งคู่ ผลรวม investing ตรงกับ proceeds |
+| **T63** | UI: `app/chat-audit/accounting/fixed-assets/{page.tsx,FixedAssetsPanel.tsx,actions.ts}` — CRUD ทะเบียน (AccountCombobox×3), ปุ่ม "สร้างค่าเสื่อมตอนนี้", dialog "จำหน่ายทรัพย์สิน"+"ยกเลิกการจำหน่าย", ประวัติค่าเสื่อมต่อชิ้น ลิงก์กลับ journal-entry | 3 ไฟล์ข้างต้น | T58-T60 | สร้างทะเบียนทรัพย์สินใหม่ → เห็นในลิสต์พร้อม NBV; กด "สร้างค่าเสื่อมตอนนี้" (ถึงกำหนดวันนี้พอดี) → เห็น draft ใหม่ในหน้า journal-entry มี badge เชื่อมทรัพย์สิน; จำหน่ายทรัพย์สิน → เห็นสถานะเปลี่ยนเป็น "จำหน่ายแล้ว" + draft JE กำไร/ขาดทุน; ยกเลิกการจำหน่าย (ก่อน confirm) → กลับเป็น active ปกติ; ลูกค้านอกสโคปเข้าไม่ได้; typecheck/lint ผ่าน |
+| **T64** | `app/chat-audit/accounting/fixed-assets/export/route.ts` — export Excel รายงานทะเบียนทรัพย์สิน (reuse `exceljs` pattern จาก `budget/export/route.ts`) | `export/route.ts` | T63 | ดาวน์โหลดไฟล์ .xlsx เปิดได้จริง มีคอลัมน์ชื่อ/ราคาทุน/ค่าเสื่อมสะสม/NBV/สถานะตรงกับหน้าจอ; guard สิทธิ์เดียวกับหน้า |
+| **T65** | เพิ่มลิงก์หน้า `page.tsx`/`CustomerTabs.tsx` หลัก + เทสต์ครบ: `tests/accounting/fixed-assets.test.ts`, `fixed-assets-actions.test.ts` (guard สโคป+undo confirmed-blocked) | หลายไฟล์ | T57-T64 | `npm run test` ผ่านทั้งชุดเฟส 7 |
+| **T66** | รันชุดตรวจสอบเต็ม + regression sweep ข้ามเฟส 1-7 + ทดสอบมือรอบสุดท้าย | ทั้งหมด | T57-T65 | `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด; grep `fixed_asset_id`/`fixed-assets.ts` ยืนยันไม่มีจุดตกหล่น; เทียบตัวเลขงบการเงิน/กระแสเงินสดของลูกค้าทดสอบก่อน-หลังเฟส 7 (ที่ไม่มีทรัพย์สินใหม่) ต้องเท่ากันเป๊ะ (ฟีเจอร์นี้ additive ล้วน) |
+
+**Milestone**:
+- **เฟส 7-V (V, ทะเบียน+ค่าเสื่อมอัตโนมัติ)**: T57–T61, T63(บางส่วน)–T65 — ใช้งานได้จริงครบวงจร
+- **เฟส 7-W (W, จำหน่ายทรัพย์สิน+cash-flow fix)**: T60, T62 — พึ่ง V (ต้องมีทะเบียน+accumulated_depreciation
+  ก่อนจะจำหน่ายได้) ทำหลัง V เสร็จ
+- **เฟส 7-verify**: T66 — ปิดงาน
+
+---
+
+## 3) Definition of Done (เฟส 7 รวม)
+
+- [ ] นักบัญชี/หัวหน้าทีมสร้างทะเบียนทรัพย์สินของลูกค้าตัวเองได้เอง (ชื่อ, ราคาทุน, มูลค่าซาก, อายุการใช้งาน,
+      รหัสบัญชี 3 ตัว) โดยไม่ต้องพึ่ง admin/แก้โค้ด
+- [ ] cron รายวันสร้างรายการค่าเสื่อมเป็น **draft เสมอ** เมื่อถึงกำหนด — ไม่มีทาง auto-confirm เข้าบัญชีจริง
+      โดยไม่มีคนกดยืนยัน
+- [ ] ปุ่ม "สร้างค่าเสื่อมตอนนี้" ใช้งานได้ ไม่สร้างซ้ำเมื่อกดพร้อมกับ cron (claim atomic)
+- [ ] ค่าเสื่อมสะสมรวมทุกงวดของทรัพย์สินหนึ่งชิ้น เท่ากับ `cost − salvage` เป๊ะเสมอ (งวดสุดท้ายเป็น plug
+      ไม่มีเศษสตางค์ตกค้างจากการปัดเศษสะสม)
+- [ ] ทรัพย์สินที่ตัดค่าเสื่อมครบแล้วหยุดสร้างรายการเองอัตโนมัติ (`next_dep_date=null`) ไม่ generate เกินมูลค่า
+- [ ] ทรัพย์สินที่ `dep_expense_account_code`/บัญชีอื่นถูกลบไปหลังตั้งทะเบียน → generate ไม่สำเร็จมี log ให้เห็น
+      ชัดเจน ไม่เงียบหาย ไม่ทำให้ทรัพย์สินอื่นพังตาม
+- [ ] จำหน่ายทรัพย์สินได้จริง คำนวณ NBV+กำไร/ขาดทุนถูกต้อง สร้าง draft JE ให้ตรวจก่อนยืนยันเสมอ
+- [ ] ยกเลิกการจำหน่ายได้ถ้า JE ยัง draft (ป้องกันแก้ไม่ได้เมื่อ JE confirmed แล้ว)
+- [ ] ทะเบียนที่มีประวัติค่าเสื่อมแล้ว (แม้แต่งวดเดียว) แก้ตัวเลขราคาทุน/มูลค่าซาก/อายุการใช้งานย้อนหลังไม่ได้
+- [ ] เงินสดจากการจำหน่ายทรัพย์สินแสดงเป็น "กิจกรรมลงทุน" ในงบกระแสเงินสดครบทั้งขา (สินทรัพย์+ค่าเสื่อมสะสม)
+- [ ] รายการค่าเสื่อมปกติ (ไม่ใช่จำหน่าย) ยังคงไม่ปรากฏในงบกระแสเงินสดเลย (ไม่มีขาเงินสด) เหมือนที่เฟส 4
+      ตัดสินใจไว้แล้ว — ไม่ regression
+- [ ] ทุก write path ใหม่ผ่าน `requireAccountingAccess` + `assertCustomerInScope` (derive จาก resource id
+      ที่กำลังเขียนจริงเสมอ — ไม่ซ้ำ pattern IDOR ที่เคยพบในเฟส 3)
+- [ ] ไม่มี `console.log`/log ใดที่มีตัวเลข/ชื่อทรัพย์สิน/ชื่อลูกค้า (PDPA)
+- [ ] ไม่มี mock/stub ปนอยู่ใน critical flow ของโค้ด production
+- [ ] เทสต์เดิมของเฟส 1-6 ทั้งหมดยังผ่านหลังเพิ่มคอลัมน์/ตารางใหม่ (ไม่มี regression ข้ามเฟส) โดยเฉพาะ
+      `cash-flow-config.test.ts`/`cash-flow.test.ts` ที่ถูกแก้
+- [ ] `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด ไม่มี error/warning ใหม่
+
+---
+
+## 4) แนวทางการทดสอบ (สำหรับ tester)
+
+### 4.1 Unit test
+
+**`fixed-assets.ts` (T58-T60) — จุดสำคัญที่สุดของเฟส:**
+- `monthlyDepreciationAmount`/plug งวดสุดท้าย: ทดสอบเคสที่หารไม่ลงตัว (เช่น cost=10000,salvage=0,
+  useful_life=7 → ต่อเดือน=1428.57 ปัด 2 ตำแหน่ง → รวม 7 งวดต้องได้ 10000.00 เป๊ะ ไม่ใช่ 10000.01/9999.99)
+- `generateOne`: แยก `claimErr` (RPC error จริง) ออกจาก `!claimed` (ยังไม่ถึงรอบ) ให้ถูกต้องตั้งแต่ต้น —
+  เทียบกับ regression test ที่เฟส 6 เคยเขียนไว้หลังแก้บั๊กเดียวกัน (`tests/accounting/recurring-journal.test.ts`)
+  ใช้เป็นต้นแบบเทสต์เคสนี้
+- `disposeAsset`: proceeds>NBV (กำไร), proceeds<NBV (ขาดทุน), proceeds=NBV เป๊ะ (ไม่มี gain/loss leg หรือ
+  leg=0 ไม่ทำให้ไม่สมดุล), disposal ก่อนมีประวัติค่าเสื่อมเลย (accumulated=0, NBV=cost เต็ม)
+
+**`cash-flow-config.ts`/`cash-flow.ts` (T62):**
+- `classifyCashFlowActivity` ทุกรหัส `.1` ใหม่ → `'investing'`
+- end-to-end: journal line ของรายการจำหน่ายทรัพย์สิน (เงินสด+ค่าเสื่อมสะสม+สินทรัพย์+กำไร/ขาดทุน) →
+  `buildCashFlowStatement` จัด `investing` รวมตรงกับ `proceeds` เป๊ะ, `reconciled=true`
+
+**Actions (`fixed-assets-actions.test.ts`):**
+- guard สโคป: นักบัญชีนอกสโคปทำรายการของลูกค้าอื่นไม่ได้ (ทุก action)
+- แก้/ลบทะเบียนที่มีประวัติค่าเสื่อมแล้ว → ปฏิเสธ
+- `undisposeAssetAction` เมื่อ JE confirmed แล้ว → ปฏิเสธชัดเจน
+
+### 4.2 Integration/manual (บน dev จริง — ทำต่อเนื่องกันเป็น flow เดียว)
+
+1. สร้างทะเบียนทรัพย์สิน (เช่น "คอมพิวเตอร์สำนักงาน" ราคาทุน 30,000 มูลค่าซาก 0 อายุ 36 เดือน วันที่ซื้อ
+   เดือนปัจจุบัน) → กด "สร้างค่าเสื่อมตอนนี้" → เห็น draft ใน journal-entry (30000/36 ≈ 833.33) พร้อม badge
+   เชื่อมทรัพย์สิน → กดยืนยัน → เห็นผลในงบทดลอง/งบการเงิน
+2. รัน cron มือ (`curl` endpoint ด้วย `CRON_SECRET`) ซ้ำวันเดียวกัน → ต้อง**ไม่**สร้าง occurrence ซ้ำสอง
+3. สร้างทรัพย์สินทดสอบอายุสั้น (เช่น 2 เดือน) → generate ค่าเสื่อมครบ 2 งวด → ตรวจว่างวดที่ 2 (สุดท้าย) ได้ยอด
+   plug ที่ถูกต้อง (ไม่ใช่ยอดคงที่ปัดเศษ) และ `next_dep_date` กลายเป็นว่าง (ไม่มีปุ่มให้ generate ต่อ)
+4. จำหน่ายทรัพย์สินในข้อ 1 (proceeds สูงกว่า NBV เล็กน้อยเพื่อทดสอบกำไร) → ตรวจ draft JE ที่ได้ → ยืนยัน →
+   เปิดหน้างบกระแสเงินสดของงวดนั้น → เห็นเงินสดที่ได้รับจัดอยู่ใน "กิจกรรมลงทุน" ครบ (ไม่ตกไปอยู่ operating)
+5. ทดสอบยกเลิกการจำหน่ายก่อนยืนยัน JE → ทรัพย์สินกลับเป็น active ปกติ ประวัติค่าเสื่อมเดิมไม่หาย
+6. staff นักบัญชีที่ไม่ได้ดูแลลูกค้า A → เปิดหน้าทะเบียนทรัพย์สินของลูกค้า A ไม่ได้/แก้ไม่ได้
+7. regression: เปิดหน้าบัญชีเดิมทุกหน้า (เฟส 1-6) ของลูกค้าที่มีข้อมูลครบ → ยอด/รายงาน/งบกระแสเงินสดต้อง
+   เหมือนก่อนเฟส 7 เป๊ะ (ทดสอบด้วยลูกค้าที่ไม่มีทรัพย์สินใหม่เลย)
+
+---
+
+## 5) ความเสี่ยงของแผน & แผนสำรอง
+
+| ความเสี่ยง | แผนสำรอง |
+|---|---|
+| **การปัดเศษสะสมทำให้ค่าเสื่อมรวมไม่เท่า `cost−salvage` เป๊ะ** (0.5) ถ้าไม่ทำ plug งวดสุดท้ายให้ถูก จะมีเศษสตางค์ค้างเงียบๆ ยากสังเกต | ออกแบบ `amount = min(monthly_depreciation, remaining)` ไว้ในทั้ง RPC (SQL) และตรวจซ้ำด้วย unit test เทียบผลรวมสะสมทั้งหมดต่อทรัพย์สิน ต้อง = `cost−salvage` เป๊ะทุกเคสทดสอบ (รวมเคสหารไม่ลงตัว) |
+| **ซ้ำบั๊กเดิมของเฟส 6**: `generateOne` รวม RPC error จริงเข้ากับ "ยังไม่ถึงรอบ" เป็นกรณีเดียวกัน (`skipped` เงียบๆ) — เคยเกิดจริงใน `recurring-journal.ts` มาก่อนแล้วแก้ | เขียนแยก 2 branch ให้ถูกตั้งแต่แรก (ไม่ต้องรอ QC จับ) — อ้างอิงโค้ดที่แก้แล้วของ `recurring-journal.ts::generateOne` เป็นต้นแบบตรงๆ ก่อนเขียนของเฟส 7 |
+| **cron/ปุ่มมือชนกันสร้าง occurrence ซ้ำสอง** | atomic RPC (`for update skip locked` + advance ในทีเดียว) เหมือน pattern เฟส 6; มีเทสต์ยิงพร้อมกัน 2 เส้นทางยืนยันว่า claim สำเร็จแค่ครั้งเดียว |
+| **แก้ `cash-flow-config.ts` (ไฟล์เฟส 4 เดิม) กระทบ regression ของงบกระแสเงินสดที่ deploy ใช้งานจริงแล้ว** | แก้แค่เพิ่ม 3 รหัสเข้า `INVESTING_CODES` (ไม่แก้ logic/`classifyCashFlowActivity()`/`FINANCING_CODES` เลย) — รัน `cash-flow.test.ts`/`cash-flow-config.test.ts` เดิมทั้งหมดต้องผ่าน 100% ก่อนถือว่า T62 เสร็จ (regression gate เดียวกับที่ทุกเฟสก่อนหน้าใช้) |
+| **ทรัพย์สินถูกลบ/ปิดใช้งานรหัสบัญชีหลังตั้งทะเบียนแล้ว** ทำให้ generate ค่าเสื่อมล้มเหลวเรื่อยๆทุกเดือน | `generateOne` ครอบ try/catch ต่อชิ้น + log `failed` ชัดเจนทุกครั้งที่ล้ม (0.8 เดิมของเฟส 6) ให้นักบัญชีเห็นในหน้าทะเบียนแล้วไปแก้รหัสบัญชี/สร้างรหัสใหม่เอง ไม่มี auto-retry เงียบๆ |
+| **แก้ทะเบียนที่มีประวัติค่าเสื่อมแล้วโดยไม่ตั้งใจ ทำให้ยอดที่ generate ไปแล้วขัดแย้งกับสูตรใหม่** | ล็อกแก้ราคาทุน/มูลค่าซาก/อายุการใช้งานทันทีที่ `accumulated_depreciation>0` (0.12) — ไม่มีทาง bypass ผ่าน UI ปกติ ต้องยกเลิกยืนยัน JE ทุกใบที่เกี่ยวข้องก่อนแล้ว soft-delete ทะเบียนทั้งชิ้นทิ้งเท่านั้น |
+| **จำหน่ายทรัพย์สินผิด (proceeds/วันที่ผิด) แล้วยืนยัน JE ไปแล้ว** — undo ไม่ได้ตามกฎ 0.8 | เหมือนหลักการเดิมทั้งระบบ (manual JE/CN-DN) — ต้องยกเลิกยืนยัน JE ก่อน (กลับเป็น draft) แล้ว `undisposeAsset` จึงทำได้ ข้อความ error ต้องบอกขั้นตอนที่ถูกต้องชัดเจน ไม่ใช่แค่ปฏิเสธเงียบๆ |
+
+---
+
+*(เฟส 7 เป็นฟีเจอร์เพิ่มหลัง merge+deploy เฟส 1-6 แล้ว — ทำตาม pattern เดียวกัน: implement → QC (review+
+security+test) → แก้ไขทุกข้อที่พบ → verify เต็มรูป → รวมเข้า branch เดิม/branch ใหม่ → merge+deploy อีกรอบ
+เมื่อผู้ใช้ยืนยัน)*
+
+# เฟส 8 — แผนละเอียด: สต็อกสินค้าคงเหลือ + ต้นทุนถ่วงเฉลี่ยเคลื่อนที่ (Inventory / Stock)
+
+**สโคป:** เพิ่มจาก gap analysis เทียบ FlowAccount (2026-08-09) — ผู้ใช้ยืนยันแล้วว่าลูกค้าหลายรายของสำนักงาน
+บัญชีนี้เป็นธุรกิจซื้อมาขายไป/มีสต็อกสินค้าจริง และให้ตัวอย่างหน้าจอโปรแกรมบัญชีเดสก์ท็อปไทย (ผังหน้าจอ
+รายละเอียดสินค้า/กลุ่มบัญชีสินค้า FIFO/AVERAGE/บัตรสต็อก/รายงานสินค้าคงเหลือแยกหมวด) เป็นตัวอ้างอิงรูปแบบ
+รายงานที่ต้องการ — เฟสนี้แบ่งเป็น 2 ส่วน **X → Y**:
+- **(X) โครงสต็อก + คำนวณต้นทุนถ่วงเฉลี่ยเคลื่อนที่ (Moving Average) + รายงานบัตรสต็อก/สินค้าคงเหลือ** —
+  งานหลัก เสี่ยงปานกลาง (คำนวณ replay ล้วน ไม่มี write path ที่กระทบบัญชีจริงเลย)
+- **(Y) เชื่อมกับบิลที่ยืนยันแล้ว (สร้างรายการเข้า/ออกสต็อกจากบิล) + ยอดยกมาสต็อก** — เสี่ยงต่ำกว่า X แต่ทำ
+  หลัง X เพราะต้องมีโครงคำนวณก่อน
+
+ต่อยอดของที่มีอยู่แล้วในระบบ (ตรวจโค้ดจริงก่อนวางแผน):
+- `lib/accounting/products.ts::Product` (เฟส 1 ส่วน B) — master data มี `sku`/`name`/`unit`/`defaultPrice`/
+  `defaultAccountCode` อยู่แล้ว **ไม่มีคอลัมน์จำนวนคงเหลือเลย** (ยืนยันจากไฟล์จริง) — เฟสนี้**ไม่แก้ตาราง
+  `products` เดิม** เพิ่มตารางสต็อกแยกต่างหากที่ผูก `product_id` แทน (mirror หลักการเดิมทั้งระบบ: แยกตาราง
+  ใหม่เมื่อโครงสร้างข้อมูลต่างกันจริง — เหมือนที่ manual JE/bill_payments/CN-DN แยกจาก bill_entries)
+- `supabase/migrations/0065_bill_entry_lines_product_id.sql` — `bill_entry_lines.product_id` มีอยู่แล้ว
+  (เลือกผ่าน combobox ใน `EntryEditor.tsx` เวลาแก้บิล) **แต่ `bill_entry_lines` ไม่มีคอลัมน์จำนวน (quantity)
+  เลย** (ยืนยันจากการ grep schema จริง — บิลเป็นแบบ VAT invoice ตัดยอดเป็นเงิน ไม่ใช่ qty×unit-price) — เฟสนี้
+  ต้องเพิ่มคอลัมน์ `quantity` (nullable) ให้บรรทัดบิลที่ต้องการให้กระทบสต็อก
+- `lib/accounting/sales-documents.ts` (เฟส 3 ส่วน K) — มี `quantity`/`unitPrice` ต่อบรรทัดอยู่แล้วจริง แต่
+  คอมเมนต์ในไฟล์เองยืนยันว่า **"เป็นแค่ตัวช่วยแสดงผล ไม่บังคับ"** และเป็นเอกสารก่อน/ระหว่างขาย-ซื้อ (ใบเสนอ
+  ราคา/PO/ใบวางบิล) **ไม่ใช่เอกสารทางบัญชีจริง** (0.11 ของเฟส 3 ยืนยันว่าไม่กระทบ engine บัญชีเลย) — เฟสนี้
+  **ไม่ใช้ `sales_documents` เป็นแหล่งกระทบสต็อกเด็ดขาด** (เอกสารยังไม่เกิดขึ้นจริงทางบัญชี) ใช้ `bill_entries`
+  ที่ยืนยันแล้วเท่านั้น (0.7 ด้านล่าง)
+- `supabase/migrations/0063_chart_of_accounts_table.sql` — seed เดิมมี `5010 ซื้อสินค้า` เป็น**หมวดค่าใช้จ่าย**
+  (ไม่มีรหัส "สินค้าคงเหลือ"/"ต้นทุนขาย" แยกเป็นสินทรัพย์เลย) — **นี่คือหลักฐานว่าระบบทั้งชุดออกแบบตาม
+  แนวคิดบัญชีสต็อกแบบ "สิ้นงวด (Periodic)" มาตั้งแต่ต้น** (ซื้อ = ลงค่าใช้จ่ายตรง ๆ, ต้นทุนขายคำนวณตอนปิดงวด
+  จาก สต็อกต้นงวด+ซื้อ−สต็อกปลายงวด) ไม่ใช่ "ต่อเนื่อง (Perpetual)" ที่ตัดต้นทุนทุกครั้งที่ขาย — เฟสนี้จึง
+  **ออกแบบให้สอดคล้องกับของเดิม** (0.6 ด้านล่าง — สำคัญที่สุดของทั้งเฟส)
+- `lib/accounting/opening-balance.ts`+`0054_account_opening_balances.sql` (ก่อนเฟส 1) — pattern "ยอดยกมา
+  ต่อบัญชีต่อลูกค้า" ไม่มีวันที่ (ถือเป็น "ก่อนรายการทั้งหมด" เสมอ) ใช้เป็นต้นแบบตรงๆสำหรับ `product_opening_
+  balances` (0.11)
+- `lib/accounting/statement-inputs.ts`/`trial-balance.ts`/`cash-flow.ts` (เฟส 4) — **ทุกงบคำนวณจากการ replay
+  ข้อมูลดิบใหม่ทุกครั้ง ไม่มีการเก็บยอดสะสม/cache ไว้เลยแม้แต่จุดเดียว** — เฟสนี้ยึดหลักการเดียวกันเป๊ะสำหรับ
+  ยอดคงเหลือ/ต้นทุนถ่วงเฉลี่ย (0.5 ด้านล่าง) กันบั๊ก backdated-entry ทั้งหมดตั้งแต่ต้น (ไม่ต้องมี invalidate
+  cache logic ให้พลาดได้)
+- `docs/05-flowaccount-integration.md`/M1-M2 (FlowAccount sync) — precedent "manual-trigger ต่อเอกสาร" (กด
+  ปุ่มส่งทีละใบ ไม่ auto-sync พื้นหลัง) — เฟสนี้ใช้ precedent เดียวกันสำหรับการ "ดึงรายการเข้า/ออกสต็อกจากบิล
+  ที่ยืนยันแล้ว" (0.7) เพื่อเลี่ยงการแก้ `app/chat-audit/accounting/actions.ts::saveEntryAction` (ไฟล์ที่
+  ซับซ้อนที่สุด/ใช้งานหนักที่สุดในระบบ ใช้งานจริงมาตั้งแต่ก่อนเฟส 1) — ไม่แตะไฟล์นี้เลยแม้แต่บรรทัดเดียว
+- ตัวอย่างหน้าจอที่ผู้ใช้แนบมา (โปรแกรมบัญชีเดสก์ท็อปไทย) — มี "กลุ่มบัญชีสินค้า" ให้เลือก FIFO/AVERAGE
+  ต่อสินค้า, หน่วยย่อย/ใหญ่/ซื้อ/ขาย (unit conversion), หลายคลังสินค้า, ล็อตสินค้า, บัตรสต็อก, รายงานสินค้า
+  คงเหลือแยกหมวด — เฟสนี้ **ตัดสโคปเหลือ**: ต้นทุนถ่วงเฉลี่ยเคลื่อนที่วิธีเดียว (0.1), คลังเดียว/ไม่มีล็อต
+  (0.2), หน่วยเดียว (0.3 — `products.unit` เดิมพอแล้ว) แต่**คงรายงานบัตรสต็อก+สินค้าคงเหลือแยกหมวดไว้ตรงตาม
+  รูปแบบตัวอย่าง** (0.10)
+
+---
+
+## 0) การตัดสินใจที่ล็อกไว้ก่อนเริ่มโค้ด
+
+### 0.1 ⚠️ วิธีคำนวณต้นทุน — ถ่วงเฉลี่ยเคลื่อนที่ (Moving Average) เท่านั้นในรอบแรก ไม่รองรับ FIFO
+ตัวอย่างหน้าจอที่ผู้ใช้แนบมาให้เลือกได้ทั้ง FIFO และ AVERAGE ต่อสินค้า (ผ่าน "กลุ่มบัญชีสินค้า") — แต่ FIFO
+ต้องเก็บ **cost layer แยกเป็นชุด ๆ ตามรอบที่ซื้อเข้า** (ตัดออกจากชุดที่เก่าสุดก่อน, แบ่งชุดที่ตัดไม่พอดี ฯลฯ)
+ซับซ้อนกว่าถ่วงเฉลี่ยเคลื่อนที่มาก (แค่ยอดรวม+ราคาต่อหน่วยเฉลี่ยตัวเดียว อัปเดตทุกครั้งที่รับเข้า) — เลือก
+ถ่วงเฉลี่ยเท่านั้นในรอบแรก (ตรงกับตัวอย่างที่ผู้ใช้แนบ "ST02 สินค้าสำเร็จรูป AVERAGE" และเป็นวิธีที่ SME ไทย
+ใช้มากที่สุดในทางปฏิบัติ) **[⚠️ FLAG]** ถ้าลูกค้าบางรายต้องใช้ FIFO จริง (เช่น สินค้าที่ต้นทุนผันแปรมาก/มี
+วันหมดอายุ) เป็น backlog แยกที่ต้องออกแบบ cost-layer table เพิ่มต่างหาก ไม่ block เฟสนี้
+
+### 0.2 ขอบเขต — คลังสินค้าเดียว (default) ไม่มีล็อต/ซีเรียล/หลายคลัง
+ตัดฟีเจอร์ "คลังสินค้า <F8>"/"ล็อตสินค้า <F7>" ของตัวอย่างออกจากสโคปนี้ — สำนักงานบัญชีบันทึกรายการหลังเกิด
+เหตุจริงแล้ว (ไม่ได้บริหารคลังหน้างานเอง) ความละเอียดระดับหลายคลัง/ล็อตไม่จำเป็นต่อการปิดงบให้ถูกต้อง
+**[⚠️ FLAG]** ถ้าลูกค้าต้องการแยกยอดคงเหลือตามสาขา/คลังจริง เป็น backlog แยก
+
+### 0.3 ขอบเขต — หน่วยเดียวต่อสินค้า (reuse `products.unit` เดิม) ไม่มีตัวคูณแปลงหน่วยย่อย/ใหญ่/ซื้อ/ขาย
+`products.unit` (เฟส 1) มีอยู่แล้วเป็น text เดียว (เช่น "ชุด") — เฟสนี้ใช้หน่วยเดียวกันทั้งซื้อ/ขาย/สต็อก
+ไม่ทำระบบแปลงหน่วย (เช่น 1 ลัง = 12 ชิ้น) **[⚠️ FLAG]** เป็น backlog แยกถ้าจำเป็นจริง
+
+### 0.4 ⚠️ `bill_entry_lines` ต้องเพิ่มคอลัมน์ `quantity` (nullable) — ไม่มีอยู่เดิม
+บิลปัจจุบันเป็นแบบ VAT invoice (ตัดยอดเป็นเงินต่อบรรทัด ไม่ใช่ qty×unit-price) — บรรทัดที่ผูก `product_id`
+ไว้แล้ว (เฟส 1) แต่**ไม่มีจำนวน**เลย ทำให้อ้างอิงเป็นรายการสต็อกไม่ได้ ต้องเพิ่มคอลัมน์ `quantity numeric`
+(nullable — บิลเดิม/บรรทัดที่ไม่สนใจสต็อกยังคงว่างได้ตามปกติ ไม่กระทบ flow เดิมแม้แต่จุดเดียว) นักบัญชีกรอก
+จำนวนเพิ่มเฉพาะบรรทัดที่มี `product_id` และต้องการให้กระทบสต็อก (ไม่บังคับกรอกทุกบรรทัด)
+
+### 0.5 ⚠️ คำนวณยอดคงเหลือ/ต้นทุนถ่วงเฉลี่ยด้วยการ "replay" ประวัติทั้งหมดใหม่ทุกครั้ง — ไม่เก็บยอดสะสม/cache
+mirror หลักการที่ใช้กับ ledger/trial-balance/cash-flow ทั้งหมด (เฟส 4): **ไม่มีคอลัมน์ "ยอดคงเหลือปัจจุบัน"
+เก็บไว้บนแถวไหนเลย** — ทุกครั้งที่ต้องรู้ยอดคงเหลือ/ต้นทุนเฉลี่ย ณ จุดใดจุดหนึ่ง ให้ดึงรายการเคลื่อนไหวทั้งหมด
+ของสินค้านั้น (`product_opening_balances` + `product_stock_movements`) มาเรียงตามวันที่ (แล้ว `created_at`
+กันชนวันเดียวกัน) แล้ว "เล่นซ้ำ" คำนวณยอด/ต้นทุนเฉลี่ยไปเรื่อย ๆ ตั้งแต่ต้น (pure function, ไม่แตะ DB) —
+**ข้อดี: แก้/ลบรายการย้อนหลัง (backdated entry) ไม่มีทางทำให้ยอดค้างผิดเงียบ ๆ เลย เพราะคำนวณใหม่จากศูนย์ทุก
+ครั้งเสมอ** (ต่างจากถ้าเก็บ running balance ต่อแถวซึ่งต้อง invalidate/recompute ท่อนที่เหลือทุกครั้งที่มีการ
+แก้ไขย้อนหลัง — เสี่ยงบั๊กสูงกว่ามาก และเฟสนี้เลือกไม่เสี่ยงแบบนั้น)
+
+### 0.6 ⚠️⚠️ ที่สำคัญที่สุดของทั้งเฟส: **ไม่ auto-post ต้นทุนขาย (COGS) เข้าบัญชีแยกประเภทเลย**
+ผังบัญชีเดิมของทั้งระบบ (migration 0063) ออกแบบตามแนวคิดบัญชีสต็อกแบบ **สิ้นงวด (Periodic)** อยู่แล้ว (`5010
+ซื้อสินค้า` เป็นค่าใช้จ่ายตรง ไม่มีรหัส "สินค้าคงเหลือ" เป็นสินทรัพย์แยก) — ถ้าเฟสนี้ auto-post COGS แบบ
+ต่อเนื่อง (Perpetual: Dr ต้นทุนขาย/Cr สินค้าคงเหลือ ทุกครั้งที่ขาย) จะ**ขัดกับโครงสร้างบัญชีเดิมทั้งระบบ**
+ต้องเพิ่มรหัสบัญชีใหม่+เปลี่ยนวิธีลงบัญชีซื้อของทุกบิลที่ผูก `product_id` ไปด้วย (breaking change กับ flow
+เดิมที่ deploy ใช้งานจริงแล้ว) — **ตัดสินใจ: เฟสนี้เป็น "ชั้นติดตามจำนวน+มูลค่าคงเหลือ" คู่ขนานเท่านั้น ไม่มี
+write path กระทบบัญชีแยกประเภท/งบการเงินเลยแม้แต่จุดเดียว** — นักบัญชียังคงลงบัญชีซื้อแบบเดิมทุกประการ (Dr
+`5010`/ค่าใช้จ่ายอื่น) แล้วใช้ **รายงานสินค้าคงเหลือของเฟสนี้** เป็นตัวเลขอ้างอิงตอนปิดงวด (สิ้นเดือน/สิ้นปี)
+ไปสร้าง **manual JE เอง** ผ่านฟีเจอร์เดิม (เฟส 1 ส่วน C) เพื่อปรับปรุงต้นทุนขาย/สินค้าคงเหลือตามสูตร
+periodic (`ต้นทุนขาย = สต็อกต้นงวด + ซื้อ − สต็อกปลายงวด`) — **[⚠️ FLAG — decision สำคัญที่สุด ต้องแจ้งผู้ใช้
+ให้รับทราบชัดเจน]** ถ้าในอนาคตต้องการ auto-post COGS แบบ perpetual จริง ต้องมีรอบคุยเรื่องรหัสบัญชีใหม่+
+ผลกระทบต่อ flow ซื้อเดิมก่อน เป็นงานแยกที่ใหญ่กว่าเฟสนี้มาก
+
+### 0.7 จุดกระทบสต็อก — เฉพาะ `bill_entries` ที่ `status='confirmed'` เท่านั้น ไม่ใช่ `sales_documents`
+`sales_documents` (เฟส 3 ส่วน K: ใบเสนอราคา/PO/ใบวางบิล) เป็นเอกสารก่อน/ระหว่างขาย-ซื้อ ยังไม่ใช่รายการที่
+เกิดขึ้นจริงทางบัญชี (0.11 ของเฟส 3 เขียนไว้ชัดว่า "ไม่กระทบ engine บัญชีเลย") — เฟสนี้ **ไม่ใช้เป็นแหล่ง
+กระทบสต็อกเด็ดขาด** ใช้แค่ `bill_entries`+`bill_entry_lines` ที่ `entry_type∈{sale,purchase}` และ
+`status='confirmed'` และบรรทัดมี `product_id`+`quantity` ครบเท่านั้น: `purchase`→เข้าสต็อก (IN),
+`sale`→ออกสต็อก (OUT)
+
+### 0.8 ⚠️ Trigger การสร้างรายการสต็อกจากบิล — **manual-trigger ต่อบิล (ปุ่มกดเอง) ไม่ hook เข้า `saveEntryAction`**
+mirror precedent ของ FlowAccount sync (M1/M2, `docs/05`) ที่เป็น "กดส่งทีละใบ" ไม่ auto-sync พื้นหลัง — เหตุผล
+เดียวกัน: `app/chat-audit/accounting/actions.ts::saveEntryAction` เป็นไฟล์ที่ซับซ้อนและใช้งานหนักที่สุดใน
+ระบบ (จัดการ draft/confirm/แก้บิลที่ยืนยันแล้ว/payment method ฯลฯ พร้อมกัน) — **เฟสนี้ไม่แก้ไฟล์นี้เลยแม้แต่
+บรรทัดเดียว** เพื่อไม่เสี่ยง regression กับ flow หลักที่ deploy ใช้งานจริงมานานที่สุดในระบบ — แทนที่ด้วยปุ่ม
+แยก "บันทึกรับ/จ่ายสต็อกจากบิลนี้" ที่หน้ารายการบิล (mirror ปุ่ม FlowAccount sync ที่มีอยู่แล้วในหน้าเดียวกัน)
+กดแล้วสร้าง `product_stock_movements` จากบรรทัดที่มี `product_id`+`quantity` ของบิลนั้น (atomic claim กันกด
+ซ้ำสร้างซ้ำสอง — เหมือน `flowaccount_sync_log`/recurring JE) — **ไม่มีทาง auto-trigger จากการยืนยันบิลเลย**
+
+### 0.9 บิลที่ถูกแก้/ยกเลิกยืนยันหลังสร้างรายการสต็อกไปแล้ว — ไม่ auto-sync คีย์ แต่ต้อง "ยกเลิก" รายการสต็อกเอง
+ถ้าบิลถูกแก้ไขจำนวน/ยกเลิกยืนยันหลังกดสร้างรายการสต็อกไปแล้ว (0.8) — รายการสต็อกที่สร้างไว้แล้ว**ไม่ auto-
+sync ตาม** (mirror หลักการ 0.16 ของ bank reconciliation เฟส 6 — ไม่ auto-repair) นักบัญชีต้องกด "ยกเลิกรายการ
+สต็อก" (soft-delete movement นั้น) เองก่อนแล้วกด "บันทึกรับ/จ่ายสต็อก" ใหม่ให้ตรงกับบิลที่แก้แล้ว — หน้า
+รายการสต็อกของบิลนั้นแสดง badge เตือนถ้าตรวจพบว่ายอด/จำนวนในบิลไม่ตรงกับที่เคยสร้าง movement ไว้ (เทียบ
+snapshot คล้าย 0.15/0.16 ของ bank reconciliation)
+
+**✅ implemented (2026-08-10, แก้จาก QC finding 🟡):** เพิ่ม `bill_entries.stock_synced_at` เข้า
+`BillEntry.stockSync` (`lib/accounting/queries.ts` — `StockSyncInfo`/`mapStockSync`, best-effort pattern
+เดียวกับ `flowaccountSync`) เทียบกับ `bill_entries.updated_at` — `updated_at > stock_synced_at` →
+`needsResync=true` → badge ส้ม "บิลถูกแก้ — สต็อกอาจไม่ตรง" ที่ `RowActions.tsx` (ข้าง ๆ ปุ่ม "บันทึกรับ/
+จ่ายสต็อก") ไม่ block ปุ่มใด ๆ — เป็นแค่ป้ายเตือนให้นักบัญชีไปตรวจ/ยกเลิก+บันทึกใหม่เอง
+
+### 0.10 รายงาน — บัตรสต็อก (Stock Card) + สินค้าคงเหลือแยกหมวด (mirror รูปแบบตัวอย่างที่ผู้ใช้แนบ)
+- **บัตรสต็อกต่อสินค้า**: รายการเคลื่อนไหวเรียงตามวันที่ (รับ/จ่าย/คงเหลือ พร้อมจำนวน+ราคาต่อหน่วย+มูลค่า
+  ต่อรายการ, อ้างอิงเอกสารต้นทาง) — mirror โครงสร้างตัวอย่างที่แนบมาเป๊ะ (คอลัมน์ วันที่/เลขที่/รายการรับ/
+  รายการจ่าย/คงเหลือ/เอกสารอ้างอิง)
+- **สินค้าคงเหลือแยกตามหมวดสินค้า ณ วันที่**: รวมทุกสินค้า จัดกลุ่มตามหมวด (ใช้ `products` ไม่มีหมวดเดิม —
+  เฟสนี้เพิ่ม `category` เป็น text อิสระที่นักบัญชีกรอกเอง ไม่ผูก FK, ค่า default = "สินค้า" ถ้าไม่กรอก) แสดง
+  จำนวน/ราคาต่อหน่วยเฉลี่ย/มูลค่ารวมต่อสินค้า+รวมยอดหมวด+รวมทั้งสิ้น
+- export Excel ทั้ง 2 รายงาน (reuse `exceljs` pattern เดิม)
+
+### 0.11 ยอดยกมาสต็อก (Opening Balance) — ตารางใหม่ mirror `account_opening_balances` เป๊ะ (ไม่มีวันที่)
+`product_opening_balances` (tenant, customer, product_id, quantity, unit_cost, note) — **ไม่มีคอลัมน์วันที่**
+(ถือเป็น "ก่อนรายการเคลื่อนไหวทั้งหมดเสมอ" เหมือนยอดยกมาบัญชีเดิม) ใช้เป็นจุดเริ่มการ replay (0.5) เสมอ —
+unique ต่อ (customer, product) เหมือน `account_opening_balances`
+
+### 0.12 สต็อกติดลบ — อนุญาต ไม่ hard-block แต่แสดงคำเตือนชัดเจน
+เฟสนี้เป็นชั้นติดตาม/รายงานคู่ขนาน (0.6) ไม่ใช่ตัวควบคุมทางการเงินที่บังคับกฎเข้มงวด — ถ้าคำนวณแล้วยอด
+คงเหลือติดลบ (เช่น บันทึกขายก่อนบันทึกซื้อที่มาก่อนจริง เพราะข้อมูลย้อนหลัง/AI อ่านไม่ครบ) **ไม่ block การ
+สร้างรายการ** แต่แสดง badge เตือนชัดเจนในบัตรสต็อก/รายงาน ("คงเหลือติดลบ — ตรวจสอบรายการที่ตกหล่น") ให้
+นักบัญชีไปหาสาเหตุเอง (ตรงกับหลักการ "ไม่ auto-repair/ไม่ปิดบังความผิดปกติ" ที่ใช้ทั้งไฟล์นี้)
+
+### 0.13 สิทธิ์ — reuse `requireAccountingAccess`+`assertCustomerInScope` เดิมทั้งหมด ไม่มี admin-only ใหม่
+เหมือนฟีเจอร์อื่นทุกตัว — ทุก action ที่รับ resource id ตรง ๆ (เช่น ลบ movement/แก้ opening balance) ต้อง
+derive scope จาก resource นั้นเองก่อนเขียนเสมอ (pattern IDOR-safe ตั้งแต่เฟส 3 — ห้ามเกิดซ้ำ)
+
+### 0.14 ยืนยันเลข migration จริงจาก `ls supabase/migrations/` ก่อน apply จริง
+ณ วันที่วางแผน (2026-08-09) ไฟล์ล่าสุดคือ `0076_fixed_assets.sql` (เฟส 7 ที่กำลังทำคู่ขนานอยู่) → เฟสนี้ควร
+ใช้ `0077` **แต่ต้องเช็ค `ls supabase/migrations/` ซ้ำอีกครั้งก่อน apply จริงเสมอ** เพราะเฟส 7 อาจสร้าง
+migration เพิ่มระหว่างทาง (คนละ agent ทำงานคู่ขนานกันอยู่ในเซสชันนี้)
+
+---
+
+## 1) โครงสร้างไฟล์ (ใหม่/แก้) — เฟส 8
+
+```
+supabase/migrations/
+  00XX_product_stock.sql   [ใหม่] ★ ยืนยันเลขจริงก่อนสร้าง (0.14) — bill_entry_lines เพิ่มคอลัมน์ quantity
+                                     (nullable) + products เพิ่มคอลัมน์ category (nullable text, 0.10) +
+                                     product_opening_balances (mirror 0054) + product_stock_movements
+                                     (movement_type, quantity, unit_cost, source_bill_entry_line_id
+                                     nullable FK, memo, movement_date) + RLS
+
+lib/
+  accounting/
+    product-stock.ts        [ใหม่] ชนิด StockMovement/StockMovementInput/StockLedgerRow, validate
+                                     (quantity>0, unit_cost>=0 เมื่อเป็น IN-type, movement_date ผิดปฏิทิน
+                                     reuse isValidCalendarDate จาก bank-reconciliation.ts), pure:
+                                     computeStockLedger(openingBalance, movements) → replay ตามลำดับ
+                                     วันที่+created_at คำนวณ moving-average ต่อจุด (0.5), buildStockCard()
+                                     (mirror ตัวอย่างที่แนบ), buildInventoryValuationReport(allProducts
+                                     ledgers) (จัดกลุ่มตาม category, 0.10), data layer: listMovements/
+                                     createManualAdjustment/createMovementsFromBill(billEntryId — 0.7/0.8,
+                                     atomic claim กันกดซ้ำ mirror flowaccount_sync_log)/softDeleteMovement/
+                                     upsertProductOpeningBalance/listProductOpeningBalances
+
+app/chat-audit/accounting/
+  inventory/
+    page.tsx                 [ใหม่] เลือกลูกค้า (mirror budget/page.tsx) → แท็บ "บัตรสต็อก" (เลือกสินค้า)
+                                     / "สินค้าคงเหลือแยกหมวด" (ทั้งหมด ณ วันที่)
+    InventoryPanel.tsx        [ใหม่] client: ตารางบัตรสต็อก (mirror ตัวอย่างที่แนบ), ตารางสินค้าคงเหลือ
+                                     แยกหมวด+รวมยอด, ปุ่ม "บันทึกปรับปรุงสต็อก" (manual adjustment เข้า/ออก),
+                                     ฟอร์มยอดยกมาต่อสินค้า, badge เตือนสต็อกติดลบ (0.12)
+    actions.ts                [ใหม่] server actions guard requireAccountingAccess+assertCustomerInScope
+                                     (createAdjustmentAction/deleteMovementAction/upsertOpeningBalanceAction)
+    export/route.ts            [ใหม่] export Excel ทั้ง 2 รายงาน (reuse exceljs pattern จาก budget/export)
+
+  RowActions.tsx              [แก้] เพิ่มปุ่ม "บันทึกรับ/จ่ายสต็อก" ต่อแถวบิล (เฉพาะ confirmed + มีบรรทัดที่
+                                     product_id+quantity ครบอย่างน้อย 1 บรรทัด) — mirror ปุ่ม FlowAccount
+                                     sync ที่มีอยู่แล้วในไฟล์เดียวกัน (0.8 — **ไม่แก้ actions.ts/saveEntryAction
+                                     เลย** action ใหม่แยกไฟล์ต่างหาก)
+  stock-sync-actions.ts       [ใหม่] server action เดียว `syncStockFromBillAction(entryId)` — โหลดบิล+บรรทัด
+                                     ที่ product_id+quantity ครบ → เรียก createMovementsFromBill (atomic)
+  page.tsx, CustomerTabs.tsx  [แก้] เพิ่มลิงก์ "สต็อกสินค้า" (จุดเดียวกับ opening/reports/budget/
+                                     recurring-journal/fixed-assets เดิม)
+
+app/chat-audit/admin/products/
+  ProductsPanel.tsx           [แก้] เพิ่มช่องกรอก "หมวดสินค้า" (category, text อิสระ 0.10)
+  actions.ts                  [แก้] รับ category เพิ่มใน upsert (validate ความยาว, ไม่บังคับกรอก)
+
+tests/
+  accounting/product-stock.test.ts        [ใหม่] validate ทุก branch, computeStockLedger (ถ่วงเฉลี่ย
+                                     เคลื่อนที่ถูกต้องทุกกรณี รวม backdated-entry ที่ replay ใหม่ได้ถูกต้อง
+                                     เสมอ — พิสูจน์ไม่มีบั๊ก cache), buildStockCard/buildInventoryValuationReport
+                                     (จัดกลุ่มหมวดถูกต้อง), createMovementsFromBill (atomic กันกดซ้ำ, กรอง
+                                     เฉพาะบรรทัดที่ product_id+quantity ครบ), สต็อกติดลบไม่ throw มีคำเตือน
+  chat-admin/inventory-actions.test.ts    [ใหม่] guard สโคปครบทุก action
+  chat-admin/products-actions.test.ts     [แก้] เพิ่มเทสต์ category field (ไม่ regression ของเดิม)
+```
+
+---
+
+## 2) งานย่อยเรียงลำดับ (เฟส 8)
+
+เลขงาน: ต่อจากเฟส 7 (T57–T66) → เริ่มที่ **T67**
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T67** | Migration ใหม่ — ⚠️ ยืนยันเลขไฟล์ล่าสุดจริงก่อนสร้าง (0.14) — `bill_entry_lines.quantity` (nullable) + `products.category` (nullable) + `product_opening_balances`(mirror 0054) + `product_stock_movements` + RLS | migration ใหม่ | - | apply ไม่ error; insert บิลเดิม/บรรทัดเดิมที่ไม่มี quantity ยังทำงานปกติ (ค่า null ไม่กระทบ flow เดิม); เทสต์เดิมทั้งหมดผ่าน 100% |
+| **T68** | `lib/accounting/product-stock.ts` — types, validate, `computeStockLedger()` (pure — ★ จุดสำคัญที่สุด) | `product-stock.ts` | T67 | unit test: ถ่วงเฉลี่ยเคลื่อนที่ถูกต้องทุกกรณี (รับหลายรอบราคาต่างกัน → ราคาเฉลี่ยเปลี่ยนถูกต้องตามสูตร ตรงกับตัวอย่างบัตรสต็อกที่ผู้ใช้แนบ: รับ200@70→เฉลี่ย68.333 ตรงกับตัวอย่างจริง); แทรกรายการย้อนหลัง (backdated) แล้ว replay ใหม่ → ยอด/เฉลี่ยถูกต้องเสมอ (ไม่มีบั๊ก cache); สต็อกติดลบไม่ throw คืน flag เตือน |
+| **T69** | เพิ่มใน `product-stock.ts`: `buildStockCard()`/`buildInventoryValuationReport()` (0.10) + data layer `listMovements`/`upsertProductOpeningBalance`/`listProductOpeningBalances`/`createManualAdjustment`/`softDeleteMovement` | `product-stock.ts` | T68 | unit test: บัตรสต็อกเรียงตามวันที่ถูกต้องตรงรูปแบบตัวอย่าง; รายงานคงเหลือจัดกลุ่มหมวดถูกต้อง+รวมยอดถูก; opening balance ใช้เป็นจุดเริ่ม replay ก่อนรายการอื่นเสมอไม่ว่า movement_date จะเป็นอะไร |
+| **T70** | เพิ่มใน `product-stock.ts`: `createMovementsFromBill(db,tenantId,entryId)` (0.7/0.8 — atomic claim กันกดซ้ำ mirror `flowaccount_sync_log`, กรองเฉพาะบรรทัดที่ `product_id`+`quantity` ครบของบิลนั้น, purchase→IN ใช้ `unit_cost` จาก amount/quantity ต่อบรรทัด, sale→OUT ไม่ต้องมี unit_cost — ใช้ moving-average ตอน replay) | `product-stock.ts` | T68 | unit test: บิลซื้อ 1 ใบมีหลายบรรทัด (บางบรรทัดไม่มี product_id/quantity → ข้าม ไม่สร้าง movement) → สร้าง movement เฉพาะบรรทัดที่ครบ; กดซ้ำ (จำลอง 2 request พร้อมกัน) → สร้างได้แค่ครั้งเดียว; บิล sale สร้าง OUT ถูกต้อง |
+| **T71** | `app/chat-audit/accounting/stock-sync-actions.ts` [ใหม่ไฟล์เดียว] `syncStockFromBillAction(entryId)` guard `requireAccountingAccess`+`assertCustomerInScope` (derive scope จาก entry จริง) + `RowActions.tsx` [แก้] เพิ่มปุ่ม "บันทึกรับ/จ่ายสต็อก" (0.8 — **ห้ามแก้ `actions.ts`/`saveEntryAction` เด็ดขาด**) | 2 ไฟล์ข้างต้น | T70 | เปิดหน้าบิลจริง (confirmed, มีบรรทัด product_id+quantity ครบ) → เห็นปุ่มใหม่ → กด → เห็นรายการในหน้าสต็อก; กดซ้ำ → ไม่สร้างซ้ำสอง (แจ้งข้อความชัดเจน); บิลที่ไม่มีบรรทัดครบเงื่อนไข → ไม่เห็นปุ่มเลย; grep ยืนยัน `saveEntryAction`/`actions.ts` ไม่ถูกแก้แม้แต่บรรทัดเดียว |
+| **T72** | UI: `app/chat-audit/accounting/inventory/{page.tsx,InventoryPanel.tsx,actions.ts}` — เลือกลูกค้า → แท็บบัตรสต็อก/สินค้าคงเหลือแยกหมวด, ปุ่มบันทึกปรับปรุงสต็อกมือ, ฟอร์มยอดยกมา, badge เตือนติดลบ | 3 ไฟล์ข้างต้น | T69 | เปิดหน้าจริง เลือกสินค้า → เห็นบัตรสต็อกตรงรูปแบบตัวอย่างที่แนบ; ตั้งยอดยกมา → บัตรสต็อกเริ่มจากยอดนั้นถูกต้อง; บันทึกปรับปรุงมือ (เช่น สินค้าเสียหาย) → เห็นผลในบัตรสต็อกทันที; ลูกค้านอกสโคปเข้าไม่ได้ |
+| **T73** | `app/chat-audit/accounting/inventory/export/route.ts` — export Excel ทั้ง 2 รายงาน (reuse `exceljs` pattern จาก `budget/export/route.ts`) | `export/route.ts` | T72 | ดาวน์โหลด .xlsx เปิดได้จริง ตัวเลขตรงกับหน้าจอ |
+| **T74** | `app/chat-audit/admin/products/{ProductsPanel.tsx,actions.ts}` [แก้] เพิ่มช่องกรอก/รับค่า `category` (0.10) — **ไม่แก้ field อื่นของ product เดิมเลย** | 2 ไฟล์ข้างต้น | T67 | เพิ่ม/แก้หมวดสินค้าได้ผ่านหน้าเดิม; สินค้าที่ไม่กรอกหมวด → default "สินค้า" ในรายงาน (0.10); เทสต์เดิมของ `products-actions.test.ts` ยังผ่านครบ |
+| **T75** | เพิ่มลิงก์หน้า `page.tsx`/`CustomerTabs.tsx` หลัก + เทสต์ครบ: `tests/accounting/product-stock.test.ts`, `tests/chat-admin/inventory-actions.test.ts` | หลายไฟล์ | T67-T74 | `npm run test` ผ่านทั้งชุดเฟส 8 |
+| **T76** | รันชุดตรวจสอบเต็ม + regression sweep ข้ามเฟส 1-8 + ทดสอบมือรอบสุดท้าย | ทั้งหมด | T67-T75 | `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด; grep ยืนยัน `saveEntryAction`/`app/chat-audit/accounting/actions.ts` ไม่ถูกแก้เลย (0.8); ไม่มี write path ใดของเฟสนี้กระทบ `journal.ts`/`ledger.ts`/`statements.ts`/`cash-flow.ts` เลย (0.6 — grep ยืนยัน `product-stock.ts` ไม่ import ไฟล์เหล่านี้แม้แต่บรรทัดเดียว) |
+
+**Milestone**:
+- **เฟส 8-X (โครง+รายงาน)**: T67–T69, T72–T75(บางส่วน) — ใช้งานได้จริงด้วยการปรับปรุงมือ+ยอดยกมาก่อน
+- **เฟส 8-Y (เชื่อมบิล)**: T70–T71 — เพิ่มความสะดวก ไม่ block X
+- **เฟส 8-verify**: T76 — ปิดงาน
+
+---
+
+## 3) Definition of Done (เฟส 8 รวม)
+
+- [ ] นักบัญชี/หัวหน้าทีมตั้งยอดยกมาสต็อกต่อสินค้าของลูกค้าตัวเองได้เอง
+- [ ] กดปุ่ม "บันทึกรับ/จ่ายสต็อก" จากบิลที่ยืนยันแล้ว (มีบรรทัด product_id+quantity ครบ) สร้างรายการสต็อกได้
+      จริง กดซ้ำไม่สร้างซ้ำสอง (atomic)
+- [ ] บัตรสต็อกต่อสินค้าแสดงประวัติรับ/จ่าย/คงเหลือ+ต้นทุนถ่วงเฉลี่ยเคลื่อนที่ถูกต้องตรงตามตัวอย่างที่ผู้ใช้
+      ให้มา — ตรวจเทียบเลขมือ
+- [ ] รายงานสินค้าคงเหลือแยกหมวด รวมยอดถูกต้องตรงกับบัตรสต็อกรายตัว
+- [ ] บันทึกปรับปรุงสต็อกมือได้ (สินค้าเสียหาย/นับสต็อกจริงต่างจากระบบ ฯลฯ)
+- [ ] **ไม่มี write path ใดของเฟสนี้กระทบบัญชีแยกประเภท/งบการเงิน/งบกระแสเงินสดเลยแม้แต่จุดเดียว** (0.6) —
+      ตัวเลขงบการเงินของลูกค้าทดสอบก่อน-หลังเฟส 8 ต้องเท่ากันเป๊ะ (additive ล้วน)
+- [ ] **`app/chat-audit/accounting/actions.ts`/`saveEntryAction` ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว** (0.8) — grep
+      ยืนยันก่อนปิดงาน
+- [ ] สต็อกติดลบไม่ทำให้ระบบ error/throw มีคำเตือนให้เห็นชัดเจนในรายงาน
+- [ ] แก้/ยกเลิกยืนยันบิลหลังสร้างรายการสต็อกแล้ว ไม่ auto-sync ตาม (0.9) นักบัญชีต้องจัดการเองผ่านปุ่มยกเลิก
+      รายการสต็อก
+- [ ] ทุก write path ใหม่ผ่าน `requireAccountingAccess` + `assertCustomerInScope` (derive จาก resource id
+      ที่กำลังเขียนจริงเสมอ — ไม่ซ้ำ pattern IDOR ที่เคยพบในเฟส 3)
+- [ ] ไม่มี `console.log`/log ใดที่มีจำนวน/มูลค่า/ชื่อสินค้า/ชื่อลูกค้า (PDPA)
+- [ ] ไม่มี mock/stub ปนอยู่ใน critical flow ของโค้ด production
+- [ ] เทสต์เดิมของเฟส 1-7 ทั้งหมดยังผ่านหลังเพิ่มคอลัมน์/ตารางใหม่ (ไม่มี regression ข้ามเฟส)
+- [ ] `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด ไม่มี error/warning ใหม่
+
+---
+
+## 4) แนวทางการทดสอบ (สำหรับ tester)
+
+### 4.1 Unit test
+
+**`product-stock.ts::computeStockLedger` (T68) — จุดสำคัญที่สุดของเฟส:**
+- reproduce ตัวอย่างบัตรสต็อกที่ผู้ใช้แนบมาตรงๆด้วยตัวเลขเดียวกัน: ยอดยกมา 100@65.000 → รับ 200@70.000
+  (คงเหลือ 300@68.333) → จ่าย 50@68.333 (คงเหลือ 250@69.000... **ตรวจสูตรจริงจากตัวอย่างให้ตรงเป๊ะ** เพราะ
+  ตัวเลข "ราคาต่อหน่วยคงเหลือ" ในภาพเปลี่ยนแม้ตอนจ่ายออก (ไม่ใช่แค่ตอนรับเข้า) — ต้องตรวจว่าตัวอย่างใช้สูตร
+  ถ่วงเฉลี่ยเคลื่อนที่แบบ "คำนวณเฉลี่ยใหม่ทุกครั้งที่มีการรับเข้าเท่านั้น ค่าเฉลี่ยไม่เปลี่ยนตอนจ่ายออก" หรือ
+  แบบอื่น — ถ้าตัวเลขไม่ตรงให้ปรับสูตรใน `computeStockLedger` จนกว่าจะ reproduce ตัวอย่างได้เป๊ะทุกแถว)
+- แทรกรายการย้อนหลัง (backdated) ระหว่างรายการที่มีอยู่แล้ว → replay ใหม่ → ยอด/เฉลี่ยของรายการที่ตามมา
+  เปลี่ยนถูกต้องตามลำดับใหม่ (พิสูจน์ 0.5)
+- สต็อกติดลบ (จ่ายมากกว่าที่มี) → ไม่ throw, คืน flag เตือนในแถวที่ติดลบ
+
+**`buildInventoryValuationReport`**: จัดกลุ่มตาม `category` ถูกต้อง, สินค้าไม่มี category → เข้ากลุ่ม default
+"สินค้า", รวมยอดต่อหมวด+รวมทั้งสิ้นถูกต้อง
+
+**`createMovementsFromBill` (T70)**: บิลผสม (บางบรรทัดมี product_id+quantity บางบรรทัดไม่มี) → สร้าง movement
+เฉพาะบรรทัดที่ครบเงื่อนไข; เรียกซ้อน 2 ครั้งพร้อมกัน (จำลอง double-click) → สร้างสำเร็จแค่ครั้งเดียว
+
+**Actions**: guard สโคปครบทุก action, `syncStockFromBillAction` derive scope จาก entry id จริงเสมอ (ไม่รับ
+customerId แยกที่ไม่ผูกกับ entry)
+
+### 4.2 Integration/manual (บน dev จริง)
+
+1. ตั้งหมวดสินค้าที่หน้า Product Master เดิม (เฟส 1) → ตั้งยอดยกมาสต็อกสินค้า 1 ตัว → เปิดบัตรสต็อก เห็นยอด
+   ยกมาถูกต้อง
+2. สร้างบิลซื้อยืนยันแล้ว มีบรรทัดผูก product_id+quantity → กดปุ่ม "บันทึกรับสต็อก" → เห็นรายการรับใหม่ใน
+   บัตรสต็อก ราคาเฉลี่ยเปลี่ยนถูกต้อง
+3. สร้างบิลขายยืนยันแล้ว (สินค้าเดียวกัน) → กดปุ่ม "บันทึกจ่ายสต็อก" → เห็นรายการจ่าย คงเหลือลดถูกต้อง
+4. เปิดรายงาน "สินค้าคงเหลือแยกหมวด" → ตรวจยอด/มูลค่าตรงกับบัตรสต็อกของสินค้านั้น
+5. แก้ไขบิลซื้อในข้อ 2 (เปลี่ยนจำนวน) หลังสร้าง movement ไปแล้ว → เปิดหน้าสต็อกของบิลนั้น → เห็น badge เตือน
+   ไม่ตรงกัน (0.9) → กด "ยกเลิกรายการสต็อก" แล้วกด "บันทึกรับสต็อก" ใหม่ → ตรงกันแล้ว
+6. export Excel ทั้ง 2 รายงาน → เปิดไฟล์ตรวจคอลัมน์/ตัวเลขตรงกับหน้าจอ
+7. staff นักบัญชีที่ไม่ได้ดูแลลูกค้า A → เปิดหน้าสต็อกของลูกค้า A ไม่ได้
+8. regression: เปิดหน้าบัญชีเดิมทุกหน้า (เฟส 1-7) ของลูกค้าที่มีข้อมูลครบ → ยอด/รายงาน/งบการเงิน/งบกระแส
+   เงินสดต้องเหมือนก่อนเฟส 8 เป๊ะ (ฟีเจอร์นี้เป็นชั้นคู่ขนานล้วน ไม่กระทบบัญชีจริงเลย ตาม 0.6)
+
+---
+
+## 5) ความเสี่ยงของแผน & แผนสำรอง
+
+| ความเสี่ยง | แผนสำรอง |
+|---|---|
+| **สูตรถ่วงเฉลี่ยเคลื่อนที่ที่ implement ไม่ตรงกับตัวอย่างที่ผู้ใช้ให้มา** (มีรายละเอียดปลีกย่อยหลายแบบว่าคำนวณเฉลี่ยใหม่ตอนไหนบ้าง) | reproduce ตัวเลขจากตัวอย่างภาพที่แนบมาให้ตรงเป๊ะเป็น unit test บังคับก่อนถือว่า T68 เสร็จ (ไม่ใช่แค่เขียนสูตรตามความเข้าใจทั่วไปแล้วผ่าน) |
+| **auto-post COGS แบบ perpetual โดยไม่ตั้งใจ ขัดกับผังบัญชีเดิม** (0.6) — ถ้า implement พลาดไปเรียก `upsertManualEntry` หรือ engine บัญชีใดๆจาก `product-stock.ts` | grep ยืนยันก่อนปิดงาน (T76) ว่า `product-stock.ts` ไม่ import `manual-journal.ts`/`journal.ts`/`ledger.ts`/`statements.ts` เลยแม้แต่บรรทัดเดียว — เหมือน pattern ที่ `sales-documents.ts` เฟส 3 ใช้ยืนยันตัวเองว่าไม่กระทบ engine |
+| **แก้ `saveEntryAction`/`actions.ts` โดยไม่ตั้งใจ (ไฟล์ที่เสี่ยงสูงสุดในระบบ)** | ออกแบบ action สต็อกเป็นไฟล์แยกใหม่ทั้งหมด (`stock-sync-actions.ts`) ไม่แก้ `actions.ts` เดิมเลย — grep ยืนยันก่อนปิดงาน |
+| **backdated entry ทำให้ replay ผิดถ้า sort ผิดลำดับ** (วันเดียวกันหลายรายการ) | sort ด้วย `movement_date` แล้ว `created_at` เป็น tiebreak เสมอ (เหมือน `bank-reconciliation.ts::buildBookLines` ที่แก้ปัญหาคีย์ชนกันแบบเดียวกันมาแล้ว) + unit test ยืนยันลำดับ deterministic |
+| **สินค้าที่ไม่มี category เดิม (ก่อนเฟสนี้) ทำให้รายงานแยกหมวดดูรกเพราะเข้ากลุ่ม default ทั้งหมด** | ไม่ใช่บั๊ก เป็นพฤติกรรมที่ยอมรับได้ตาม 0.10 (default="สินค้า") — นักบัญชีไปตั้งหมวดเพิ่มเองทีละสินค้าได้ผ่านหน้า Product Master เดิม ไม่ต้อง migration data ย้อนหลัง |
+| **จำนวน call site ที่ต้องเพิ่มปุ่ม/ลิงก์ (RowActions/page.tsx/CustomerTabs) เสี่ยง gap แบบที่เจอซ้ำทุกเฟส** | grep ยืนยันครบก่อนปิดงาน (T76) เหมือนที่ L1/H1/T54/T66 ของเฟสก่อนหน้าทำสำเร็จมาแล้วทุกครั้ง |
+
+---
+
+*(เฟส 8 เป็นฟีเจอร์เพิ่มหลังเฟส 7 — ทำตาม pattern เดียวกัน: implement → QC (review+security+test) → แก้ไข
+ทุกข้อที่พบ → verify เต็มรูป → รวมเข้า branch → merge+deploy เมื่อผู้ใช้ยืนยัน)*

@@ -44,6 +44,8 @@ export default function CustomerTabs({
   recurringJournalHref,
   budgetHref,
   bankReconciliationHref,
+  fixedAssetsHref,
+  inventoryHref,
   tables,
   shareCircle,
   shareCircleCount,
@@ -86,6 +88,10 @@ export default function CustomerTabs({
   budgetHref?: string;
   /** กระทบยอดธนาคาร — เทียบยอดบัญชีเงินฝากกับ statement ธนาคารจริง (เฟส 6 ส่วน T) */
   bankReconciliationHref?: string;
+  /** ทะเบียนทรัพย์สินถาวร + ค่าเสื่อมราคาอัตโนมัติ (เฟส 7 ส่วน V) */
+  fixedAssetsHref?: string;
+  /** สต็อกสินค้าคงเหลือ — บัตรสต็อก/สินค้าคงเหลือแยกหมวด (เฟส 8 ส่วน X) */
+  inventoryHref?: string;
   tables: Record<EntryType, ReactNode>;
   /** เนื้อในแท็บ "วงแชร์" — undefined = ลูกค้ารายนี้ไม่ใช่ท้าวแชร์ (ไม่โชว์แท็บ) */
   shareCircle?: ReactNode;
@@ -231,6 +237,14 @@ export default function CustomerTabs({
             {/* กระทบยอดธนาคาร — เทียบยอดบัญชีเงินฝากกับ statement ธนาคารจริง (เฟส 6 ส่วน T) */}
             {bankReconciliationHref ? (
               <a href={bankReconciliationHref} className="btn btn-ghost">กระทบยอดธนาคาร</a>
+            ) : null}
+            {/* ทะเบียนทรัพย์สินถาวร + ค่าเสื่อมราคาอัตโนมัติ (เฟส 7 ส่วน V) */}
+            {fixedAssetsHref ? (
+              <a href={fixedAssetsHref} className="btn btn-ghost">ทรัพย์สินถาวร</a>
+            ) : null}
+            {/* สต็อกสินค้าคงเหลือ — บัตรสต็อก/สินค้าคงเหลือแยกหมวด (เฟส 8 ส่วน X) */}
+            {inventoryHref ? (
+              <a href={inventoryHref} className="btn btn-ghost">สต็อกสินค้า</a>
             ) : null}
           </>
         ) : null}

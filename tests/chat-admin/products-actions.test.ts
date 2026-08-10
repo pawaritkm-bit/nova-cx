@@ -86,7 +86,18 @@ describe("createProductAction", () => {
       unit: "ชิ้น",
       defaultPrice: "100",
       defaultAccountCode: "4010",
+      category: null, // ★ ไม่กรอกหมวดสินค้า (FormData.get คืน null) — เฟส 8 ส่วน X, 0.10
     });
+  });
+
+  it("★ [เฟส 8] กรอกหมวดสินค้ามาด้วย → ส่งต่อ category ให้ data layer เป๊ะ (0.10)", async () => {
+    const res = await createProductAction(
+      null,
+      fd({ name: "สินค้าทดสอบ", category: "อุปกรณ์สำนักงาน" })
+    );
+    expect(res.ok).toBe(true);
+    const [, , input] = createProductMock.mock.calls[0];
+    expect(input.category).toBe("อุปกรณ์สำนักงาน");
   });
 
   it("data layer ปฏิเสธ (เช่น sku ซ้ำ) → คืนข้อความจาก data layer ตรง ๆ", async () => {
@@ -120,6 +131,12 @@ describe("updateProductAction", () => {
     const res = await updateProductAction(null, fd({ id: "prod-1", name: "" }));
     expect(res.ok).toBe(false);
     expect(res.message).toMatch(/ชื่อสินค้า/);
+  });
+
+  it("★ [เฟส 8] แก้หมวดสินค้า → ส่งต่อ category ให้ data layer เป๊ะ (0.10)", async () => {
+    await updateProductAction(null, fd({ id: "prod-1", name: "สินค้า", category: "วัตถุดิบ" }));
+    const [, , , input] = updateProductMock.mock.calls[0];
+    expect(input.category).toBe("วัตถุดิบ");
   });
 });
 

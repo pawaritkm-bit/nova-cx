@@ -531,6 +531,17 @@
 }
 .nova-dash .acc-product-clear:hover { color: var(--navy-800); }
 
+/* ช่องกรอกจำนวนสต็อกต่อบรรทัด (เฟส 8 ส่วน Y) — โชว์เฉพาะบรรทัดที่เลือกสินค้าไว้แล้ว */
+.nova-dash .acc-qty-input {
+  flex: 0 0 64px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: right;
+}
+
 /* ============================================================
    ป้ายช่วยตรวจ (AI ลงให้ก่อน — นักบัญชีตรวจ)
    ============================================================ */

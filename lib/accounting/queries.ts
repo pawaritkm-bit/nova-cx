@@ -42,6 +42,13 @@ export type BillEntryLine = {
    *     (mapLine() ของจริงจาก DB จะเซ็ตให้เสมอ — ไม่มีทางเป็น undefined จากข้อมูลจริง)
    */
   productId?: string | null;
+  /**
+   * จำนวนสินค้าต่อบรรทัด (เฟส 8 ส่วน Y, migration 0077) — ใช้กระทบสต็อกเท่านั้น (ปุ่ม "บันทึกรับ/จ่าย
+   *   สต็อก" ที่หน้ารายการบิล) ★ ไม่กระทบการคำนวณของ engine เลย — amount/vat/wht ต่อบรรทัดยังเป็นของจริง
+   *   เหมือนเดิม · null/undefined = ไม่ได้กรอก (บรรทัดเดิม/บรรทัดที่ไม่สนใจสต็อก)
+   *   ★ optional เหมือน productId — กันกระทบ fixture เทสต์เดิมจำนวนมากที่ยังไม่รู้จักฟิลด์นี้
+   */
+  quantity?: number | null;
   amount: number;
   vatAmount: number;
   whtRate: number;
@@ -100,6 +107,13 @@ export type BillEntry = {
   inputTaxMonth: string | null;
   /** ผลส่งไป FlowAccount ล่าสุด (M1 — บิลขาย confirmed เท่านั้น) */
   flowaccountSync: FlowAccountSyncInfo;
+  /**
+   * ผลบันทึกสต็อกล่าสุดจากบิลนี้ (เฟส 8 ส่วน Y, 0.9, migration 0078)
+   *   needsResync=true = เคยบันทึกสต็อกแล้ว แต่บิลถูกแก้ไขทีหลัง → ตัวเลขสต็อกอาจไม่ตรงกับบิลอีกต่อไป
+   *   ★ optional เหมือน quantity ของ BillEntryLine — กันกระทบ fixture เทสต์เดิมจำนวนมากที่ยังไม่รู้จักฟิลด์นี้
+   *     (mapLine ของจริงจาก DB จะเซ็ตให้เสมอ — ไม่มีทางเป็น undefined จากข้อมูลจริง)
+   */
+  stockSync?: StockSyncInfo;
   createdAt: string;
   confirmedAt: string | null;
   lines: BillEntryLine[];
@@ -133,6 +147,19 @@ export function defaultFlowAccountSync(): FlowAccountSyncInfo {
     lastError: null,
     needsResync: false,
   };
+}
+
+/** ผลบันทึกสต็อกล่าสุดของบิล (เฟส 8 ส่วน Y, 0.9) */
+export type StockSyncInfo = {
+  /** เวลาที่กดปุ่ม "บันทึกรับ/จ่ายสต็อก" ล่าสุด · null = ยังไม่เคยบันทึก */
+  syncedAt: string | null;
+  /** true = เคยบันทึกสต็อกแล้วแต่บิลถูกแก้ไขทีหลัง (updated_at ใหม่กว่า syncedAt) — ตัวเลขสต็อกอาจไม่ตรงกับบิลแล้ว */
+  needsResync: boolean;
+};
+
+/** ค่าเริ่มต้น (ยังไม่เคยบันทึก/คอลัมน์ยังไม่ apply migration) */
+export function defaultStockSync(): StockSyncInfo {
+  return { syncedAt: null, needsResync: false };
 }
 
 /** สรุปยอดต่อประเภท (ภาษีซื้อ/ขาย) */
@@ -275,6 +302,7 @@ type RawLine = {
   account_code: string | null;
   account_name: string | null;
   product_id: string | null;
+  quantity: number | string | null;
   amount: number | string | null;
   vat_amount: number | string | null;
   wht_rate: number | string | null;
@@ -311,6 +339,19 @@ type RawEntry = {
   created_at: string;
   confirmed_at: string | null;
 };
+
+/** แถวสถานะบันทึกสต็อก (best-effort — คอลัมน์ stock_synced_at เพิ่ง add ใน migration 0078) */
+type RawStockSync = {
+  id: string;
+  stock_synced_at: string | null;
+  updated_at: string | null;
+};
+
+function mapStockSync(r: RawStockSync): StockSyncInfo {
+  const syncedAt = r.stock_synced_at ?? null;
+  const needsResync = !!syncedAt && !!r.updated_at && r.updated_at > syncedAt;
+  return { syncedAt, needsResync };
+}
 
 /** แถวเดือนที่ใช้ภาษี (best-effort — คอลัมน์ input_tax_month เพิ่ง add ใน 0060) */
 type RawInputTaxMonth = { id: string; input_tax_month: string | null };
@@ -364,6 +405,7 @@ function mapLine(r: RawLine): BillEntryLine {
     accountCode: r.account_code,
     accountName: r.account_name,
     productId: r.product_id,
+    quantity: r.quantity === null || r.quantity === undefined ? null : num(r.quantity),
     amount: num(r.amount),
     vatAmount: num(r.vat_amount),
     whtRate: num(r.wht_rate),
@@ -507,11 +549,29 @@ export async function listEntries(
     // คอลัมน์ยังไม่ apply → คงเป็น default (not_synced) ทั้งหมด
   }
 
+  // สถานะบันทึกสต็อก (migration 0078, เฟส 8 ส่วน Y 0.9) — ★ best-effort เหมือน flowaccountSync ข้างบน
+  //   คอลัมน์ยังไม่ apply → select error → ทุก entry ได้ default (ยังไม่บันทึก) แทน ไม่ทำ list ทั้งหน้าพัง
+  const stockSyncByEntry = new Map<string, StockSyncInfo>();
+  try {
+    const { data: ssData, error: ssErr } = await db
+      .from("bill_entries")
+      .select("id, stock_synced_at, updated_at")
+      .eq("tenant_id", tenantId)
+      .in("id", entryIds);
+    if (!ssErr) {
+      for (const r of (ssData ?? []) as unknown as RawStockSync[]) {
+        stockSyncByEntry.set(r.id, mapStockSync(r));
+      }
+    }
+  } catch {
+    // คอลัมน์ยังไม่ apply → คงเป็น default (ยังไม่บันทึก) ทั้งหมด
+  }
+
   // lines ของ entry เหล่านี้
   const { data: lineData } = await db
     .from("bill_entry_lines")
     .select(
-      "id, entry_id, line_no, vat_type, description, account_code, account_name, product_id, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence"
+      "id, entry_id, line_no, vat_type, description, account_code, account_name, product_id, quantity, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence"
     )
     .eq("tenant_id", tenantId)
     .in("entry_id", entryIds)
@@ -600,6 +660,7 @@ export async function listEntries(
     notes: e.notes,
     inputTaxMonth: inputTaxMonthByEntry.get(e.id) ?? null,
     flowaccountSync: flowaccountSyncByEntry.get(e.id) ?? defaultFlowAccountSync(),
+    stockSync: stockSyncByEntry.get(e.id) ?? defaultStockSync(),
     createdAt: e.created_at,
     confirmedAt: e.confirmed_at,
     lines: linesByEntry.get(e.id) ?? [],

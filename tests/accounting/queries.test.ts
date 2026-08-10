@@ -262,6 +262,8 @@ function makeListEntriesDb(spec: {
   entries: RawEntryRow[];
   flowaccount?: Record<string, unknown>[] | "error";
   inputTaxMonth?: Record<string, unknown>[] | "error";
+  /** แถวดิบ stock sync (เฟส 8 ส่วน Y, 0.9 — คอลัมน์ bill_entries 4) — ไม่ส่ง = [] (ยังไม่มีข้อมูล) */
+  stockSync?: Record<string, unknown>[] | "error";
   /** แถวดิบ bill_entry_lines (เฟส 1 ส่วน B: ทดสอบ mapping product_id) — ไม่ส่ง = [] (ไม่มี line) */
   lines?: Record<string, unknown>[];
 }): SupabaseClient {
@@ -290,6 +292,11 @@ function makeListEntriesDb(spec: {
             spec.flowaccount === "error"
               ? { data: null, error: { code: "42703" } }
               : { data: spec.flowaccount ?? [], error: null };
+        } else if (idx === 4) {
+          result =
+            spec.stockSync === "error"
+              ? { data: null, error: { code: "42703" } }
+              : { data: spec.stockSync ?? [], error: null };
         }
       } else if (table === "bill_entry_lines") {
         result = { data: spec.lines ?? [], error: null };
@@ -380,6 +387,47 @@ describe("listEntries — flowaccountSync (T7)", () => {
     const res = await listEntries(db, "t1", {});
     expect(res.entries[0]!.flowaccountSync.status).toBe("failed");
     expect(res.entries[0]!.flowaccountSync.lastError).toBe("เชื่อมต่อ FlowAccount หมดเวลา");
+  });
+});
+
+describe("listEntries — stockSync (เฟส 8 ส่วน Y, 0.9, migration 0078)", () => {
+  it("ยังไม่เคยบันทึกสต็อก → default syncedAt=null, needsResync=false", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      stockSync: [],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.stockSync).toEqual({ syncedAt: null, needsResync: false });
+  });
+
+  it("บันทึกสต็อกแล้ว บิลไม่ถูกแก้ไขซ้ำ (updated_at = stock_synced_at) → needsResync=false", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      stockSync: [{ id: "e1", stock_synced_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z" }],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.stockSync).toEqual({ syncedAt: "2026-08-01T00:00:00Z", needsResync: false });
+  });
+
+  it("บันทึกสต็อกแล้ว แต่บิลถูกแก้ไขทีหลัง (updated_at ใหม่กว่า stock_synced_at) → needsResync=true", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      stockSync: [{ id: "e1", stock_synced_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-05T00:00:00Z" }],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.stockSync).toEqual({ syncedAt: "2026-08-01T00:00:00Z", needsResync: true });
+  });
+
+  it("คอลัมน์ยังไม่ apply migration (select error) → ไม่ทำ list พัง, stockSync = default", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" }), rawEntryRow({ id: "e2" })],
+      stockSync: "error",
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries).toHaveLength(2);
+    for (const e of res.entries) {
+      expect(e.stockSync).toEqual({ syncedAt: null, needsResync: false });
+    }
   });
 });
 

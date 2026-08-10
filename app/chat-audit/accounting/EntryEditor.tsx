@@ -46,6 +46,11 @@ type LineRow = {
   accountName: string;
   /** สินค้า/บริการที่เลือกไว้ (เฟส 1 ส่วน B) — แค่ tag อ้างอิง เอาออกได้โดยไม่กระทบ description/accountCode ที่เติมไว้แล้ว */
   productId: string | null;
+  /**
+   * จำนวนที่รับ/จ่ายสต็อกจากบรรทัดนี้ (เฟส 8 ส่วน Y) — ไม่บังคับ, เก็บเป็นข้อความเหมือน amount/vatAmount
+   *   โชว์เฉพาะบรรทัดที่เลือกสินค้าไว้แล้ว (mirror เงื่อนไข ProductCell) — ปล่อยว่างได้ตามปกติ
+   */
+  quantity: string;
   amount: string;
   vatAmount: string;
   whtRate: string;
@@ -91,7 +96,7 @@ function thaiToIso(s: string): string {
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
     return [
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, quantity: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ];
   }
   return entry.lines.map((l) => ({
@@ -102,6 +107,8 @@ function initLines(entry: BillEntry): LineRow[] {
     accountCode: l.accountCode ?? "",
     accountName: l.accountName ?? "",
     productId: l.productId ?? null,
+    // จำนวนสต็อก (เฟส 8 ส่วน Y) — reuse numToInput เหมือนช่องตัวเลขอื่น (null/0 → ว่าง)
+    quantity: numToInput(l.quantity ?? 0),
     amount: numToInput(l.amount),
     vatAmount: numToInput(l.vatAmount),
     whtRate: numToInput(l.whtRate),
@@ -258,7 +265,7 @@ export default function EntryEditor({
   const addLine = () => {
     setLines((prev) => [
       ...prev,
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, quantity: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ]);
   };
 
@@ -316,6 +323,8 @@ export default function EntryEditor({
         accountCode: l.accountCode.trim() || null,
         accountName: l.accountName.trim() || null,
         productId: l.productId,
+        // จำนวนสต็อก (เฟส 8 ส่วน Y) — reuse parseAmountInput เหมือน amount/vatAmount (server จะเช็ค ≤0 → null)
+        quantity: parseAmountInput(l.quantity),
         amount: parseAmountInput(l.amount),
         vatAmount: parseAmountInput(l.vatAmount),
         whtRate: parseAmountInput(l.whtRate),
@@ -659,6 +668,19 @@ export default function EntryEditor({
                             });
                           }}
                           onClear={() => patchLine(l.key, { productId: null })}
+                        />
+                      ) : null}
+                      {/* จำนวนสต็อก (เฟส 8 ส่วน Y) — โชว์เฉพาะบรรทัดที่เลือกสินค้าไว้แล้ว (mirror เงื่อนไข ProductCell ด้านบน) */}
+                      {!locked && l.productId ? (
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          className="acc-qty-input"
+                          value={l.quantity}
+                          onChange={(e) => patchLine(l.key, { quantity: e.target.value })}
+                          placeholder="จำนวน"
+                          aria-label="จำนวนสต็อก"
+                          title="จำนวนที่รับ/จ่ายสต็อกจากบรรทัดนี้ (ไม่บังคับ)"
                         />
                       ) : null}
                       <select

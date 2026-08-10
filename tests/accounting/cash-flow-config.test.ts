@@ -78,10 +78,14 @@ describe("cash-flow-config — classifyCashFlowActivity (0.7)", () => {
     }
   });
 
-  it("รหัสค่าเสื่อมสะสม (.1) ไม่รวมใน investing → fallback operating", () => {
-    expect(classifyCashFlowActivity("1615.1")).toBe("operating");
-    expect(classifyCashFlowActivity("1640.1")).toBe("operating");
-    expect(classifyCashFlowActivity("1645.1")).toBe("operating");
+  it("★ เฟส 7 (0.10): รหัสค่าเสื่อมสะสม (.1) ตอนนี้อยู่ใน investing แล้ว (เดิมเคย fallback operating — เปลี่ยน\n" +
+    "    เพราะขาค่าเสื่อมสะสมของรายการจำหน่ายทรัพย์สินต้องจัดเป็นลงทุนคู่กับขาสินทรัพย์เดิม)", () => {
+    expect(classifyCashFlowActivity("1615.1")).toBe("investing");
+    expect(classifyCashFlowActivity("1640.1")).toBe("investing");
+    expect(classifyCashFlowActivity("1645.1")).toBe("investing");
+    for (const code of ["1615.1", "1640.1", "1645.1"]) {
+      expect(INVESTING_CODES).toContain(code);
+    }
   });
 
   it("3010/2110/2035 (ทุนเรือนหุ้น/หุ้นกู้/เงินปันผลค้างจ่าย) → financing", () => {

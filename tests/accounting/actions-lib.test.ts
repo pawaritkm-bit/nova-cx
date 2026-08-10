@@ -193,6 +193,21 @@ describe("addLine — auto-calc WHT", () => {
     const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
     expect(ins.payload!.product_id).toBeNull();
   });
+
+  it("ส่ง quantity (เฟส 8 ส่วน Y) → เก็บ quantity ตรง ๆ", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    const res = await addLine(db, "t1", "e1", { amount: 100, productId: "prod-1", quantity: 5 });
+    expect(res.ok).toBe(true);
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
+    expect(ins.payload!.quantity).toBe(5);
+  });
+
+  it("ไม่ส่ง quantity → quantity เป็น null (ไม่ผูกจำนวนสต็อก)", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    await addLine(db, "t1", "e1", { amount: 100 });
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
+    expect(ins.payload!.quantity).toBeNull();
+  });
 });
 
 describe("updateLine", () => {
@@ -254,6 +269,37 @@ describe("updateLine", () => {
     await updateLine(db, "t1", "l1", { amount: 500 });
     const upd = ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
     expect("product_id" in (upd.payload ?? {})).toBe(false);
+  });
+
+  it("ส่ง quantity (เฟส 8 ส่วน Y) → แก้ quantity ด้วย", async () => {
+    const { db, ops } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "draft" },
+    });
+    const res = await updateLine(db, "t1", "l1", { quantity: 12 });
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
+    expect(upd.payload!.quantity).toBe(12);
+  });
+
+  it("ส่ง quantity เป็น null → ล้างค่า", async () => {
+    const { db, ops } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "draft" },
+    });
+    await updateLine(db, "t1", "l1", { quantity: null });
+    const upd = ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
+    expect(upd.payload!.quantity).toBeNull();
+  });
+
+  it("ไม่ส่ง quantity → ไม่แตะ quantity เดิม (undefined = ไม่อยู่ใน patch)", async () => {
+    const { db, ops } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "draft" },
+    });
+    await updateLine(db, "t1", "l1", { amount: 500 });
+    const upd = ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
+    expect("quantity" in (upd.payload ?? {})).toBe(false);
   });
 });
 

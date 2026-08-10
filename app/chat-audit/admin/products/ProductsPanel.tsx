@@ -74,6 +74,7 @@ function AddProductForm({ chart }: { chart: ChartAccount[] }) {
         placeholder="ราคาเริ่มต้น"
         style={{ width: 130 }}
       />
+      <input name="category" placeholder="หมวดสินค้า (ไม่บังคับ)" maxLength={100} style={{ width: 150 }} />
       <AccountCodeSelect chart={chart} defaultValue="" />
       <button type="submit" className="btn">เพิ่มสินค้า</button>
       <Msg state={state} />
@@ -98,7 +99,7 @@ function ProductRowItem({ product, chart }: { product: ProductRow; chart: ChartA
   if (editing) {
     return (
       <tr>
-        <td colSpan={6}>
+        <td colSpan={7}>
           <form action={updAction} className="inline-form" style={{ flexWrap: "wrap" }}>
             <input type="hidden" name="id" value={product.id} />
             <input name="sku" defaultValue={product.sku ?? ""} placeholder="รหัส/SKU" maxLength={60} style={{ width: 110 }} />
@@ -111,6 +112,13 @@ function ProductRowItem({ product, chart }: { product: ProductRow; chart: ChartA
               min="0"
               defaultValue={product.defaultPrice ?? ""}
               style={{ width: 120 }}
+            />
+            <input
+              name="category"
+              defaultValue={product.category ?? ""}
+              placeholder="หมวดสินค้า (ไม่บังคับ)"
+              maxLength={100}
+              style={{ width: 140 }}
             />
             <AccountCodeSelect chart={chart} defaultValue={product.defaultAccountCode ?? ""} />
             <button type="submit" className="btn">บันทึก</button>
@@ -129,6 +137,7 @@ function ProductRowItem({ product, chart }: { product: ProductRow; chart: ChartA
       <td>{product.unit || "—"}</td>
       <td className="num">{product.defaultPrice != null ? product.defaultPrice.toLocaleString("th-TH") : "—"}</td>
       <td>{product.defaultAccountCode || "—"}</td>
+      <td>{product.category || "—"}</td>
       <td className="center">
         <div className="inline-form" style={{ justifyContent: "center", flexWrap: "wrap" }}>
           <button type="button" className="btn" onClick={() => setEditing(true)}>แก้ไข</button>
@@ -199,6 +208,7 @@ export default function ProductsPanel({
             <th>หน่วย</th>
             <th className="num">ราคาเริ่มต้น</th>
             <th>รหัสบัญชี</th>
+            <th>หมวดสินค้า</th>
             <th className="center">จัดการ</th>
           </tr>
         </thead>
@@ -208,7 +218,7 @@ export default function ProductsPanel({
           ))}
           {filtered.length === 0 ? (
             <tr>
-              <td colSpan={6} className="muted center">ไม่พบสินค้าที่ตรงกับคำค้น</td>
+              <td colSpan={7} className="muted center">ไม่พบสินค้าที่ตรงกับคำค้น</td>
             </tr>
           ) : null}
         </tbody>

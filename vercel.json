@@ -37,6 +37,10 @@
     {
       "path": "/api/cron/generate-recurring-je",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/generate-fixed-asset-depreciation",
+      "schedule": "0 3 * * *"
     }
   ],
   "functions": {
