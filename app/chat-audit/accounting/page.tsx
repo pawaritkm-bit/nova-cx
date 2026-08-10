@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
+import { chunkIds } from "@/lib/accounting/id-chunk";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess } from "@/lib/accounting/access";
 import {
@@ -313,13 +314,16 @@ async function fetchCustomerCodes(
   const map = new Map<string, string | null>();
   if (ids.length === 0) return map;
   try {
-    const { data } = await service
-      .from("customers")
-      .select("id, customer_code")
-      .eq("tenant_id", tenantId)
-      .in("id", ids);
-    for (const c of (data ?? []) as { id: string; customer_code: string | null }[]) {
-      map.set(c.id, c.customer_code);
+    // ★ ตัดก้อน (chunkIds) กัน .in() ยาวเกิน limit ของ PostgREST เมื่อลูกค้าในสโคปเยอะ (admin "ทั้งสำนักงาน")
+    const chunks = await Promise.all(
+      chunkIds(ids).map((chunk) =>
+        service.from("customers").select("id, customer_code").eq("tenant_id", tenantId).in("id", chunk)
+      )
+    );
+    for (const { data } of chunks) {
+      for (const c of (data ?? []) as { id: string; customer_code: string | null }[]) {
+        map.set(c.id, c.customer_code);
+      }
     }
   } catch {
     // backend blip ชั่วคราว → คืน map ว่าง (หน้ายังขึ้น แค่ไม่มีรหัสลูกค้าให้แสดงชั่วคราว)
@@ -336,13 +340,15 @@ async function fetchCustomerTaxIds(
   const map = new Map<string, string | null>();
   if (ids.length === 0) return map;
   try {
-    const { data } = await service
-      .from("customers")
-      .select("id, tax_id")
-      .eq("tenant_id", tenantId)
-      .in("id", ids);
-    for (const c of (data ?? []) as { id: string; tax_id: string | null }[]) {
-      map.set(c.id, c.tax_id);
+    const chunks = await Promise.all(
+      chunkIds(ids).map((chunk) =>
+        service.from("customers").select("id, tax_id").eq("tenant_id", tenantId).in("id", chunk)
+      )
+    );
+    for (const { data } of chunks) {
+      for (const c of (data ?? []) as { id: string; tax_id: string | null }[]) {
+        map.set(c.id, c.tax_id);
+      }
     }
   } catch {
     // backend blip ชั่วคราว → คืน map ว่าง (ช่องเลขภาษีเริ่มว่าง กรอกใหม่ได้)
@@ -362,14 +368,16 @@ async function fetchCustomerAddresses(
   const map = new Map<string, string | null>();
   if (ids.length === 0) return map;
   try {
-    const { data, error } = await service
-      .from("customers")
-      .select("id, address")
-      .eq("tenant_id", tenantId)
-      .in("id", ids);
-    if (error) return map; // คอลัมน์ยังไม่มี → ปล่อยว่าง
-    for (const c of (data ?? []) as { id: string; address: string | null }[]) {
-      map.set(c.id, c.address);
+    const chunks = await Promise.all(
+      chunkIds(ids).map((chunk) =>
+        service.from("customers").select("id, address").eq("tenant_id", tenantId).in("id", chunk)
+      )
+    );
+    for (const { data, error } of chunks) {
+      if (error) continue; // คอลัมน์ยังไม่มี → ข้ามก้อนนี้
+      for (const c of (data ?? []) as { id: string; address: string | null }[]) {
+        map.set(c.id, c.address);
+      }
     }
   } catch {
     // คอลัมน์ address ยังไม่ apply / blip → คืน map ว่าง
@@ -390,14 +398,16 @@ async function fetchCustomerPhones(
   const map = new Map<string, string | null>();
   if (ids.length === 0) return map;
   try {
-    const { data, error } = await service
-      .from("customers")
-      .select("id, phone")
-      .eq("tenant_id", tenantId)
-      .in("id", ids);
-    if (error) return map; // คอลัมน์ยังไม่มี → ปล่อยว่าง
-    for (const c of (data ?? []) as { id: string; phone: string | null }[]) {
-      map.set(c.id, c.phone);
+    const chunks = await Promise.all(
+      chunkIds(ids).map((chunk) =>
+        service.from("customers").select("id, phone").eq("tenant_id", tenantId).in("id", chunk)
+      )
+    );
+    for (const { data, error } of chunks) {
+      if (error) continue; // คอลัมน์ยังไม่มี → ข้ามก้อนนี้
+      for (const c of (data ?? []) as { id: string; phone: string | null }[]) {
+        map.set(c.id, c.phone);
+      }
     }
   } catch {
     // คอลัมน์ phone ยังไม่ apply / blip → คืน map ว่าง
@@ -425,20 +435,26 @@ async function fetchCustomerFlowAccountStatus(
   const map = new Map<string, FlowAccountCustomerStatus>();
   if (ids.length === 0) return map;
   try {
-    const { data, error } = await service
-      .from("customers")
-      .select("id, flowaccount_client_id, flowaccount_client_secret_enc")
-      .eq("tenant_id", tenantId)
-      .in("id", ids);
-    if (error) return map; // คอลัมน์ยังไม่มี → ปล่อยว่าง
-    for (const c of (data ?? []) as {
-      id: string;
-      flowaccount_client_id: string | null;
-      flowaccount_client_secret_enc: string | null;
-    }[]) {
-      const clientId = c.flowaccount_client_id?.trim() || null;
-      const hasSecret = !!(c.flowaccount_client_secret_enc && c.flowaccount_client_secret_enc.trim());
-      map.set(c.id, { clientId, hasSecret });
+    const chunks = await Promise.all(
+      chunkIds(ids).map((chunk) =>
+        service
+          .from("customers")
+          .select("id, flowaccount_client_id, flowaccount_client_secret_enc")
+          .eq("tenant_id", tenantId)
+          .in("id", chunk)
+      )
+    );
+    for (const { data, error } of chunks) {
+      if (error) continue; // คอลัมน์ยังไม่มี → ข้ามก้อนนี้
+      for (const c of (data ?? []) as {
+        id: string;
+        flowaccount_client_id: string | null;
+        flowaccount_client_secret_enc: string | null;
+      }[]) {
+        const clientId = c.flowaccount_client_id?.trim() || null;
+        const hasSecret = !!(c.flowaccount_client_secret_enc && c.flowaccount_client_secret_enc.trim());
+        map.set(c.id, { clientId, hasSecret });
+      }
     }
   } catch {
     // คอลัมน์ยังไม่ apply / blip → คืน map ว่าง (ถือว่ายังไม่ตั้งค่า)

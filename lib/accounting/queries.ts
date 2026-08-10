@@ -8,6 +8,7 @@
  * ★ PDPA: ไม่ log เนื้อบิล/ตัวเลข
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { chunkIds } from "@/lib/accounting/id-chunk";
 
 type DB = SupabaseClient;
 
@@ -469,19 +470,6 @@ export function dateRange(
   if (!f && !t) return null;
   if (f && t && f > t) return { start: t, end: f };
   return { start: f, end: t };
-}
-
-/**
- * ตัด id list เป็นก้อนละ ≤ CHUNK_SIZE — กัน `.in("id", ids)` สร้าง URL ยาวเกิน limit ของ PostgREST
- *   (พบจริง: tenant ที่มีบิลสะสมมาก — มุมมอง "ทั้งสำนักงาน" มี entryIds หลักร้อย/พัน → รวมเป็น query string
- *   ยาวเกิน request-URI limit → PostgREST ตอบ 400 Bad Request เงียบ ๆ กลายเป็น "ทุกยอดเงินหาย" ทั้งหน้า)
- *   ใช้ร่วมกันทุก query ที่ทำ .in("id"/"entry_id", entryIds) ใน listEntries() ด้านล่าง
- */
-const ID_CHUNK_SIZE = 150;
-function chunkIds(ids: string[]): string[][] {
-  const out: string[][] = [];
-  for (let i = 0; i < ids.length; i += ID_CHUNK_SIZE) out.push(ids.slice(i, i + ID_CHUNK_SIZE));
-  return out;
 }
 
 /**

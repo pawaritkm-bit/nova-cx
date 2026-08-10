@@ -20,6 +20,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { contraAccountFor, asPaymentMethod } from "@/lib/accounting/payment";
+import { chunkIds } from "@/lib/accounting/id-chunk";
 import {
   round2,
   summarizeEntry,
@@ -441,16 +442,22 @@ export async function listBillPaymentsForEntries(
 ): Promise<Map<string, BillPayment[]>> {
   const result = new Map<string, BillPayment[]>();
   if (entryIds.length === 0) return result;
-  const { data } = await db
-    .from("bill_payments")
-    .select(PAYMENT_COLUMNS)
-    .eq("tenant_id", tenantId)
-    .in("entry_id", entryIds)
-    .is("deleted_at", null)
-    .order("pay_date", { ascending: true })
-    .order("created_at", { ascending: true })
-    .limit(BULK_LIST_LIMIT);
-  const rows = (data ?? []) as unknown as RawPayment[];
+  // ★ ตัดก้อน (chunkIds) กัน .in("entry_id", entryIds) ยาวเกิน limit ของ PostgREST เมื่อ tenant มีบิล
+  //   สะสมมาก (พบจริงใน listEntries() — ดู commit 7ab9f91 และ lib/accounting/id-chunk.ts)
+  const chunks = await Promise.all(
+    chunkIds(entryIds).map((ids) =>
+      db
+        .from("bill_payments")
+        .select(PAYMENT_COLUMNS)
+        .eq("tenant_id", tenantId)
+        .in("entry_id", ids)
+        .is("deleted_at", null)
+        .order("pay_date", { ascending: true })
+        .order("created_at", { ascending: true })
+        .limit(BULK_LIST_LIMIT)
+    )
+  );
+  const rows = chunks.flatMap(({ data }) => (data ?? []) as unknown as RawPayment[]);
   if (rows.length === 0) return result;
   const bankIds = [...new Set(rows.map((r) => r.bank_account_id).filter((x): x is string => !!x))];
   const codeByBankAccount = await resolveBankAccountCodes(db, tenantId, bankIds);
