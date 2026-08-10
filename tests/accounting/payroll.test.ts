@@ -189,6 +189,21 @@ describe("createDraftRun (T114)", () => {
     expect(res.ok).toBe(false);
     expect(tables.payroll_runs).toHaveLength(0);
   });
+
+  // ★★ แก้บั๊ก QC เฟส 9 (ปัญหาที่ 2): เดิม insert บรรทัด prefill ไม่เช็ค error — chunk ล้มเหลวแล้วฟังก์ชันยังคืน
+  //   สำเร็จปกติทำให้รอบเงินเดือนขาดพนักงานไปแบบไม่มีใครรู้ — ตอนนี้ต้องคืน ok:false + rollback รอบที่สร้างไปแล้ว
+  it("★★ insert บรรทัดพนักงานล้มเหลว (DB error จำลอง) → คืน ok:false ไม่ใช่สำเร็จเงียบ ๆ + rollback รอบที่สร้างไปแล้ว", async () => {
+    const { db, forceErrors } = makeInMemoryDb(tables);
+    seedEmployees(tables, 5);
+    forceErrors.push({ table: "payroll_run_lines", mode: "insert", message: "DB error ชั่วคราว (จำลองเทสต์)" });
+    const res = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" });
+    expect(res.ok).toBe(false);
+    // ★ ไม่มีบรรทัดพนักงานตกหล่นค้างอยู่ — insert ล้มเหลวทั้ง chunk ไม่มีบรรทัดถูกสร้างเลย
+    expect(tables.payroll_run_lines).toHaveLength(0);
+    // ★ รอบที่สร้างไปแล้วต้องถูก rollback (soft-delete) กันสภาพข้อมูลครึ่ง ๆ กลาง ๆ ค้างเป็น draft ใช้งานได้
+    const runRow = tables.payroll_runs[0];
+    expect(runRow.deleted_at).toBeTruthy();
+  });
 });
 
 describe("recalcRunLines (T114) — idempotent", () => {
@@ -276,6 +291,54 @@ describe("recalcRunLines (T114) — idempotent", () => {
     const { db } = makeInMemoryDb(tables);
     const res = await recalcRunLines(db, TENANT, CUSTOMER_B, runId);
     expect(res.ok).toBe(false);
+  });
+
+  // ★★ แก้บั๊ก QC เฟส 9 (ปัญหาที่ 1ข): ป้องกันที่ต้นเหตุ — net_pay ต่อพนักงานติดลบ (other_deductions มากกว่า
+  //   รายรับสุทธิ) ต้องถูกปฏิเสธตั้งแต่ recalcRunLines ไม่ปล่อยให้บันทึกลง DB แล้วไปพังตอนสร้าง JE ทีหลัง
+  it("★★ other_deductions มากกว่ารายรับสุทธิ (net_pay จะติดลบ) → ปฏิเสธพร้อมชื่อพนักงาน+สาเหตุชัดเจน ไม่บันทึกผลคำนวณ", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const lineId = tables.payroll_run_lines[0].id as string;
+    // gross=20000, sso_employee=875 (คำนวณจาก wage 20000 > ceiling 17500), pit=0 → other_deductions=25000
+    // ทำให้ net_pay = 20000-0-875-25000 = -5875 < 0
+    const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+      { id: lineId, grossSalary: 20000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 25000 },
+    ]);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.message).toContain("พนักงาน 0");
+      expect(res.message).toContain("ติดลบ");
+    }
+    // ★ ผลคำนวณ pit/sso/net_pay ต้องไม่ถูกบันทึกเลย (ยังเป็นค่าเริ่มต้น 0 จาก createDraftRun) — ไม่ปล่อยครึ่ง ๆ กลาง ๆ
+    const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+    expect(line.net_pay).toBe(0);
+    expect(line.pit_withheld).toBe(0);
+  });
+
+  // ★★ แก้บั๊ก QC เฟส 9 (ปัญหาที่ 2): เดิม loop update ยอดที่แก้ต่อบรรทัดไม่เช็ค error — ถ้า update ล้มเหลว
+  //   ฟังก์ชันยังคืนสำเร็จเหมือนบันทึกครบทุกบรรทัด (silent error swallowing)
+  it("★★ update ยอดที่แก้ (lineEdits) ล้มเหลว (DB error จำลอง) → คืน ok:false ไม่ใช่สำเร็จเงียบ ๆ", async () => {
+    const { db, forceErrors } = makeInMemoryDb(tables);
+    const lineId = tables.payroll_run_lines[0].id as string;
+    forceErrors.push({ table: "payroll_run_lines", mode: "update", message: "DB error ชั่วคราว (จำลองเทสต์)" });
+    const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+      { id: lineId, grossSalary: 50000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0 },
+    ]);
+    expect(res.ok).toBe(false);
+    // ★ ยอดเดิมต้องไม่เปลี่ยน — update ล้มเหลวจริง ไม่ใช่บันทึกไปแล้วแค่ลืมเช็ค error
+    const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+    expect(line.gross_salary).toBe(20000);
+  });
+
+  // ★★ แก้บั๊ก QC เฟส 9 (ปัญหาที่ 2): เดิม loop update ผล pit/sso/net ต่อบรรทัดไม่เช็ค error เช่นกัน
+  it("★★ update ผลคำนวณ pit/sso/net ล้มเหลว (DB error จำลอง) → คืน ok:false ไม่ใช่สำเร็จเงียบ ๆ", async () => {
+    const { db, forceErrors } = makeInMemoryDb(tables);
+    // ★ ไม่ส่ง lineEdits (array ว่าง) → loop แรกไม่ถูกเรียกเลย บังคับ error ตกที่ loop คำนวณ pit/sso/net โดยเฉพาะ
+    forceErrors.push({ table: "payroll_run_lines", mode: "update", message: "DB error ชั่วคราว (จำลองเทสต์)" });
+    const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId);
+    expect(res.ok).toBe(false);
+    const line = tables.payroll_run_lines[0];
+    expect(line.pit_withheld).toBe(0);
+    expect(line.net_pay).toBe(0);
   });
 });
 
@@ -385,6 +448,35 @@ describe("buildPayrollJournalEntry (T115, 0.8) — pure", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.lines.some((l) => l.accountCode === DEFAULT_SETTINGS.ssoEmployerExpenseAccountCode)).toBe(false);
+      expect(isBalanced(toNumericLines(res.lines))).toBe(true);
+    }
+  });
+
+  // ★★ แก้บั๊ก QC เฟส 9 (ปัญหาที่ 1ก, defense-in-depth): ปกติ recalcRunLines กันไว้แล้วไม่ให้ net_pay ต่อ
+  //   พนักงานติดลบหลุดมาถึงชั้นนี้ — แต่ทดสอบ pure function นี้ตรง ๆ ด้วย netPayTotal ติดลบ (จำลองข้อมูลเก่า/
+  //   หลุด validation) ต้องยังคง Dr=Cr เสมอ ไม่ใช่ตัดบรรทัดทิ้งหรือใส่ credit ติดลบ
+  it("★★ netPayTotal ติดลบ (สุดวิสัย) → กลับขั้วเป็น Dr net_pay แทน Cr ติดลบ ยังคง Dr=Cr เสมอ", () => {
+    const lines = [
+      line({ grossSalary: 20000, ssoEmployee: 875, ssoEmployer: 875, otherDeductions: 25000, netPay: -5875 }),
+    ];
+    const res = buildPayrollJournalEntry(lines, DEFAULT_SETTINGS);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const netPayLine = res.lines.find((l) => l.accountCode === DEFAULT_SETTINGS.netPayAccountCode);
+      expect(netPayLine).toBeTruthy();
+      // ★ ต้องเป็น Dr (ไม่ใช่ Cr ติดลบ) ด้วยยอด abs(netPayTotal)
+      expect(Number(netPayLine?.credit ?? 0)).toBe(0);
+      expect(Number(netPayLine?.debit ?? 0)).toBe(5875);
+      expect(isBalanced(toNumericLines(res.lines))).toBe(true);
+    }
+  });
+
+  it("netPayTotal = 0 พอดี (net pay ของทุกคนรวมกันเป็น 0) → ข้ามบรรทัด net_pay ไปเลย ยังคง Dr=Cr", () => {
+    const lines = [line({ grossSalary: 1000, otherDeductions: 1000, netPay: 0 })];
+    const res = buildPayrollJournalEntry(lines, DEFAULT_SETTINGS);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.lines.some((l) => l.accountCode === DEFAULT_SETTINGS.netPayAccountCode)).toBe(false);
       expect(isBalanced(toNumericLines(res.lines))).toBe(true);
     }
   });

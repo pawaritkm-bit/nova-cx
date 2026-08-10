@@ -208,7 +208,17 @@ export async function createDraftRun(
       sso_employer: 0,
       net_pay: 0,
     }));
-    if (rows.length > 0) await db.from("payroll_run_lines").insert(rows);
+    if (rows.length > 0) {
+      const { error: lineErr } = await db.from("payroll_run_lines").insert(rows);
+      // ★★ แก้บั๊ก QC เฟส 9: เดิมไม่เช็ค error ปล่อยผ่านเงียบ ๆ — ถ้า insert chunk ใดล้มเหลว (เช่น DB blip
+      //   ชั่วคราว) ฟังก์ชันยังคืนสำเร็จปกติ ทำให้รอบเงินเดือนมีพนักงานไม่ครบแบบไม่มีใครรู้ — compensating
+      //   rollback: ลบรอบที่เพิ่งสร้าง (ยังเป็น draft สด ๆ ไม่มี JE แน่นอน จึง soft-delete ตรงได้ปลอดภัย ไม่ต้อง
+      //   ผ่าน softDeleteRun ที่เช็ค status ซ้ำอีกชั้น) กันสภาพข้อมูลครึ่ง ๆ กลาง ๆ ให้นักบัญชีลองสร้างใหม่ได้สะอาด
+      if (lineErr) {
+        await db.from("payroll_runs").update({ deleted_at: new Date().toISOString() }).eq("id", runId).eq("tenant_id", tenantId);
+        return { ok: false, message: "สร้างรอบเงินเดือนไม่สำเร็จ (บันทึกพนักงานไม่ครบ) กรุณาลองใหม่" };
+      }
+    }
   }
 
   return { ok: true, id: runId };
@@ -471,6 +481,12 @@ export type RecalcResult = { ok: true; lineCount: number } | { ok: false; messag
  *   ★ ปฏิเสธถ้ารอบ status='finalized' แล้ว (ล็อกแก้หลังสร้าง JE, T115)
  *   ★ grossThisPeriod ที่ annualize = gross_salary + other_additions (ไม่รวม bonus — 0.5 ยังปิดสวิตช์
  *   บังคับเป็น 0 อยู่แล้วจาก validateLineAmountEdits ด้านบน)
+ *   ★★ แก้บั๊ก QC เฟส 9: net_pay ไม่มี DB check constraint `>=0` และไม่มีชั้นไหนกันไว้มาก่อน — ถ้า
+ *   other_deductions ที่นักบัญชีกรอกมากกว่ารายรับสุทธิของพนักงานคนนั้นจริง (gross+add+bonus−pit−sso_employee
+ *   −other_deductions < 0) จะทำให้ net_pay ติดลบ แล้วภายหลัง buildPayrollJournalEntry ตัดบรรทัด Cr net_pay
+ *   ทิ้ง (เพราะเช็คแค่ `>0`) ทำ JE ไม่สมดุลแบบเงียบ ๆ — ป้องกันที่ต้นเหตุตรงนี้แทน: คำนวณทุกบรรทัดก่อน (ยังไม่เขียน
+ *   DB) แล้วตรวจ net_pay ติดลบทั้งชุดก่อนเขียนบรรทัดใดเลย ถ้าพบให้ปฏิเสธทั้งชุดพร้อมชื่อพนักงาน+สาเหตุชัดเจน
+ *   (เหมือน pattern ปฏิเสธทั้งชุดของ validateLineAmountEdits/0.5 ด้านบน — ไม่บันทึกครึ่ง ๆ กลาง ๆ)
  */
 export async function recalcRunLines(
   db: DB,
@@ -490,7 +506,7 @@ export async function recalcRunLines(
     const v = validateLineAmountEdits(lineEdits);
     if (!v.ok) return { ok: false, message: v.message };
     for (const e of v.value) {
-      await db
+      const { error } = await db
         .from("payroll_run_lines")
         .update({
           gross_salary: e.grossSalary,
@@ -501,6 +517,9 @@ export async function recalcRunLines(
         .eq("id", e.id)
         .eq("tenant_id", tenantId)
         .eq("run_id", runId);
+      // ★★ แก้บั๊ก QC เฟส 9: เดิมไม่เช็ค error ปล่อยผ่านเงียบ ๆ — ถ้า update บรรทัดใดล้มเหลว ยอดที่นักบัญชี
+      //   แก้ไม่ครบทุกบรรทัดแต่ฟังก์ชันคืนสำเร็จเหมือนเดิม (idempotent — เรียกซ้ำได้ ไม่เสี่ยง data loss ถาวร)
+      if (error) return { ok: false, message: "บันทึกยอดที่แก้ไขไม่สำเร็จ กรุณาลองใหม่" };
     }
   }
 
@@ -526,6 +545,9 @@ export async function recalcRunLines(
     }
   }
 
+  // ★★ ชั้น 1: คำนวณทุกบรรทัดก่อน (ยังไม่เขียน DB) — ให้ตรวจ net_pay ติดลบได้ทั้งชุดก่อนบันทึกจริงบรรทัดใดเลย
+  type Computed = { rawId: string; payrollEmployeeId: string; pit: number; ssoEmployee: number; ssoEmployer: number; netPay: number };
+  const computed: Computed[] = [];
   for (const raw of rawLines) {
     const amounts = mapLineAmounts(raw);
     const periodsPerYear = remainingPeriodsInYear(run.payDate, startDateByEmp.get(raw.payroll_employee_id) ?? null);
@@ -536,17 +558,45 @@ export async function recalcRunLines(
     const netPay = round2(
       amounts.grossSalary + amounts.otherAdditions + amounts.bonusAmount - pit - sso.employeeContribution - amounts.otherDeductions
     );
-    await db
+    computed.push({
+      rawId: raw.id,
+      payrollEmployeeId: raw.payroll_employee_id,
+      pit,
+      ssoEmployee: sso.employeeContribution,
+      ssoEmployer: sso.employerContribution,
+      netPay,
+    });
+  }
+
+  // ★★ แก้บั๊ก QC เฟส 9 (ต้นเหตุ): net_pay ต่อพนักงานติดลบต้องถูกปฏิเสธที่นี่เลย ไม่ปล่อยให้บันทึกลง DB แล้วไป
+  //   พังตอนสร้าง JE ทีหลังแบบไม่บอกสาเหตุจริง — ระบุชื่อพนักงานคนแรกที่พบให้นักบัญชีแก้ตรงจุดได้ทันที
+  //   (ข้อความนี้คืนกลับตรง ๆ ให้นักบัญชีที่กำลังทำรอบเงินเดือนของลูกค้ารายนี้อยู่แล้วเห็นเป็น toast/inline เท่านั้น
+  //   ไม่ใช่การ log ลงที่เก็บถาวรใด ๆ — ไม่ขัดกับ PDPA note ด้านบนไฟล์ที่ห้าม log ชื่อพนักงาน)
+  const negative = computed.find((c) => c.netPay < 0);
+  if (negative) {
+    const names = await fetchEmployeeNames(db, tenantId, customerId, [negative.payrollEmployeeId]);
+    const name = names.get(negative.payrollEmployeeId)?.fullName ?? "(ไม่พบพนักงาน)";
+    return {
+      ok: false,
+      message: `เงินเดือนสุทธิของพนักงาน "${name}" ติดลบ (${negative.netPay.toFixed(2)} บาท) — ยอดหักอื่น ๆ อาจมากกว่ารายรับสุทธิ กรุณาตรวจสอบยอดหักอื่น ๆ ของพนักงานคนนี้`,
+    };
+  }
+
+  for (const c of computed) {
+    const { error } = await db
       .from("payroll_run_lines")
       .update({
-        pit_withheld: pit,
-        sso_employee: sso.employeeContribution,
-        sso_employer: sso.employerContribution,
-        net_pay: netPay,
+        pit_withheld: c.pit,
+        sso_employee: c.ssoEmployee,
+        sso_employer: c.ssoEmployer,
+        net_pay: c.netPay,
       })
-      .eq("id", raw.id)
+      .eq("id", c.rawId)
       .eq("tenant_id", tenantId)
       .eq("run_id", runId);
+    // ★★ แก้บั๊ก QC เฟส 9: เดิมไม่เช็ค error ปล่อยผ่านเงียบ ๆ — ถ้า update บรรทัดใดล้มเหลว ผลคำนวณไม่ครบทุกบรรทัด
+    //   แต่ฟังก์ชันคืนสำเร็จเหมือนเดิม (idempotent — เรียกซ้ำได้ปลอดภัย ไม่เสี่ยง data loss ถาวร)
+    if (error) return { ok: false, message: "บันทึกผลคำนวณภาษี/ประกันสังคมไม่สำเร็จ กรุณาลองใหม่" };
   }
 
   return { ok: true, lineCount: rawLines.length };
@@ -578,6 +628,8 @@ export type BuildJournalResult = { ok: true; lines: ManualEntryLineInput[] } | {
  *   ★ Dr รวม = Cr รวมเสมอทางพีชคณิต (net_pay = gross+add+bonus−pit−sso_employee−other_deductions ทำให้
  *   Σ(pit)+Σ(sso_employee+sso_employer)+Σ(other_deductions)+Σ(net_pay) = Σ(gross+add+bonus)+Σ(sso_employer)
  *   เป๊ะ — การข้ามบรรทัดที่ยอด=0 ไม่กระทบผลรวม เพราะบวก 0 เข้า/ไม่เข้า ผลรวมเท่ากันเสมอ)
+ *   ★★ แก้บั๊ก QC เฟส 9: ถ้า Σ(net_pay) ติดลบ (สุดวิสัย — recalcRunLines กันไว้แล้วไม่ให้ net_pay ต่อพนักงานติดลบ
+ *   ตั้งแต่ต้นเหตุ) บรรทัดนี้กลับขั้วเป็น Dr แทน (ห้ามใส่ credit ติดลบ — ดูคอมเมนต์เต็มในฟังก์ชันตรงเงื่อนไข)
  */
 export function buildPayrollJournalEntry(
   lines: PayrollRunLineAmounts[],
@@ -626,8 +678,31 @@ export function buildPayrollJournalEntry(
   if (otherDeductionsPayable > 0 && settings.otherDeductionsAccountCode) {
     out.push({ accountCode: settings.otherDeductionsAccountCode, accountName: null, description: "รายการหักอื่น ๆ", debit: 0, credit: otherDeductionsPayable });
   }
-  if (netPayTotal > 0) {
-    out.push({ accountCode: settings.netPayAccountCode, accountName: null, description: "เงินเดือนสุทธิรวมทั้งรอบ", debit: 0, credit: netPayTotal });
+  // ★★ แก้บั๊ก QC เฟส 9: เดิมใช้ `if (netPayTotal > 0)` เฉย ๆ — ถ้า netPayTotal เป็น 0 หรือติดลบ (net_pay ต่อ
+  //   พนักงานติดลบ เช่น other_deductions มากกว่ารายรับสุทธิ) โค้ดเดิมจะไม่ใส่บรรทัด Cr net_pay เข้า JE เลย
+  //   ทำให้ Dr รวม ≠ Cr รวม แล้ว upsertManualEntry ปฏิเสธด้วยข้อความ generic ที่ไม่บอกสาเหตุจริง — ตอนนี้ป้องกัน
+  //   ที่ต้นเหตุแล้วใน recalcRunLines (ปฏิเสธไม่ให้ net_pay ต่อพนักงานติดลบตั้งแต่คำนวณ) แต่ยังกันไว้ที่ชั้นนี้ด้วย
+  //   (defense-in-depth เผื่อข้อมูลเก่าก่อนมี validation หลุดเข้ามา):
+  //   - netPayTotal = 0 พอดี (พนักงานทุกคนสุทธิ 0 บาทเป๊ะ) ก็ยังต้องมีรหัสบัญชีตั้งไว้ (เช็คแล้วด้านบนสุดของฟังก์ชัน)
+  //     แต่ไม่ต้องใส่บรรทัด (0 บาทไม่มีความหมายทางบัญชี, 0.11)
+  //   - netPayTotal < 0 (สุดวิสัย — ไม่ควรเกิดขึ้นจริงเพราะกันไว้แล้วที่ recalcRunLines) ห้ามใส่ credit ติดลบเด็ดขาด
+  //     (manual-journal.ts::asAmount clamp ค่าติดลบเป็น 0 ทำให้บรรทัดว่างทั้ง debit/credit แล้วโดนปฏิเสธด้วย
+  //     ข้อความ generic "ต้องระบุยอดเดบิตหรือเครดิต" ที่ไม่บอกสาเหตุจริงเหมือนเดิม) — กลับขั้วเป็น Dr แทน ยังคง
+  //     Dr รวม = Cr รวม ทางพีชคณิตเดิมเสมอ (พิสูจน์: Dr_total = salaryExpense+ssoEmployerExpense,
+  //     Cr_total_อื่น = pitPayable+ssoPayable+otherDeductionsPayable = Dr_total − netPayTotal ตามสูตร netPay
+  //     ด้านบน — ถ้า netPayTotal ติดลบ Cr_total_อื่น > Dr_total อยู่ |netPayTotal| พอดี ต้องเพิ่ม Dr ฝั่งนี้เท่านั้นถึงจะสมดุล)
+  if (settings.netPayAccountCode && netPayTotal !== 0) {
+    if (netPayTotal > 0) {
+      out.push({ accountCode: settings.netPayAccountCode, accountName: null, description: "เงินเดือนสุทธิรวมทั้งรอบ", debit: 0, credit: netPayTotal });
+    } else {
+      out.push({
+        accountCode: settings.netPayAccountCode,
+        accountName: null,
+        description: "เงินเดือนสุทธิรวมทั้งรอบ (ติดลบ — พบยอดหักเกินรายรับสุทธิ กรุณาตรวจสอบยอดหักของพนักงาน)",
+        debit: -netPayTotal,
+        credit: 0,
+      });
+    }
   }
 
   return { ok: true, lines: out };

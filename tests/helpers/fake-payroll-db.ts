@@ -47,13 +47,25 @@ export type UniqueIndex = {
   where?: (row: Row) => boolean;
 };
 
+/** ★ ใช้จำลอง DB error ชั่วคราวที่ precheck ตรวจไม่พบ (เช่น insert/update chunk ใดชิ้นหนึ่งล้มเหลว) — consume
+ *   ครั้งเดียวแล้วลบทิ้ง (ครั้งต่อไป table+mode เดียวกันทำงานปกติ) mirror pattern เดียวกับ
+ *   tests/accounting/fixed-assets.test.ts::ForceError */
+export type ForceError = { table: string; mode: "insert" | "update" | "delete" | "select"; message: string };
+
 /** สร้าง fake DB in-memory — `tables` เป็น object อ้างอิง (mutate ได้ตรง ๆ จากเทสต์เพื่อ setup ข้อมูลล่วงหน้า) */
 export function makeInMemoryDb(
   tables: Tables,
-  opts: { uniqueIndexes?: UniqueIndex[]; idPrefix?: string } = {}
-): { db: SupabaseClient; tables: Tables } {
+  opts: { uniqueIndexes?: UniqueIndex[]; idPrefix?: string; forceErrors?: ForceError[] } = {}
+): { db: SupabaseClient; tables: Tables; forceErrors: ForceError[] } {
   let seq = 1;
   const nextId = (table: string) => `${opts.idPrefix ?? table}-${seq++}`;
+  const forceErrors: ForceError[] = opts.forceErrors ?? [];
+  function consumeForceError(table: string, mode: string): string | null {
+    const idx = forceErrors.findIndex((f) => f.table === table && f.mode === mode);
+    if (idx === -1) return null;
+    const [f] = forceErrors.splice(idx, 1);
+    return f.message;
+  }
 
   function checkUniqueViolation(table: string, row: Row, excludeId?: string): boolean {
     const indexes = (opts.uniqueIndexes ?? []).filter((u) => u.table === table);
@@ -145,6 +157,8 @@ export function makeInMemoryDb(
 
     function commit(): { rows: Row[]; error: { code?: string; message: string } | null } {
       tables[table] ??= [];
+      const forced = consumeForceError(table, mode);
+      if (forced) return { rows: [], error: { message: forced } };
       if (mode === "insert") {
         const arr = (Array.isArray(payload) ? payload : [payload]) as Row[];
         const now = new Date().toISOString();
@@ -195,5 +209,5 @@ export function makeInMemoryDb(
   }
 
   const db = { from: (t: string) => qb(t) } as unknown as SupabaseClient;
-  return { db, tables };
+  return { db, tables, forceErrors };
 }
