@@ -262,6 +262,8 @@ function makeListEntriesDb(spec: {
   entries: RawEntryRow[];
   flowaccount?: Record<string, unknown>[] | "error";
   inputTaxMonth?: Record<string, unknown>[] | "error";
+  /** แถวดิบ stock sync (เฟส 8 ส่วน Y, 0.9 — คอลัมน์ bill_entries 4) — ไม่ส่ง = [] (ยังไม่มีข้อมูล) */
+  stockSync?: Record<string, unknown>[] | "error";
   /** แถวดิบ bill_entry_lines (เฟส 1 ส่วน B: ทดสอบ mapping product_id) — ไม่ส่ง = [] (ไม่มี line) */
   lines?: Record<string, unknown>[];
 }): SupabaseClient {
@@ -290,6 +292,11 @@ function makeListEntriesDb(spec: {
             spec.flowaccount === "error"
               ? { data: null, error: { code: "42703" } }
               : { data: spec.flowaccount ?? [], error: null };
+        } else if (idx === 4) {
+          result =
+            spec.stockSync === "error"
+              ? { data: null, error: { code: "42703" } }
+              : { data: spec.stockSync ?? [], error: null };
         }
       } else if (table === "bill_entry_lines") {
         result = { data: spec.lines ?? [], error: null };
@@ -380,6 +387,180 @@ describe("listEntries — flowaccountSync (T7)", () => {
     const res = await listEntries(db, "t1", {});
     expect(res.entries[0]!.flowaccountSync.status).toBe("failed");
     expect(res.entries[0]!.flowaccountSync.lastError).toBe("เชื่อมต่อ FlowAccount หมดเวลา");
+  });
+});
+
+describe("listEntries — stockSync (เฟส 8 ส่วน Y, 0.9, migration 0078)", () => {
+  it("ยังไม่เคยบันทึกสต็อก → default syncedAt=null, needsResync=false", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      stockSync: [],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.stockSync).toEqual({ syncedAt: null, needsResync: false });
+  });
+
+  it("บันทึกสต็อกแล้ว บิลไม่ถูกแก้ไขซ้ำ (updated_at = stock_synced_at) → needsResync=false", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      stockSync: [{ id: "e1", stock_synced_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z" }],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.stockSync).toEqual({ syncedAt: "2026-08-01T00:00:00Z", needsResync: false });
+  });
+
+  it("บันทึกสต็อกแล้ว แต่บิลถูกแก้ไขทีหลัง (updated_at ใหม่กว่า stock_synced_at) → needsResync=true", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      stockSync: [{ id: "e1", stock_synced_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-05T00:00:00Z" }],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.stockSync).toEqual({ syncedAt: "2026-08-01T00:00:00Z", needsResync: true });
+  });
+
+  it("คอลัมน์ยังไม่ apply migration (select error) → ไม่ทำ list พัง, stockSync = default", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" }), rawEntryRow({ id: "e2" })],
+      stockSync: "error",
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries).toHaveLength(2);
+    for (const e of res.entries) {
+      expect(e.stockSync).toEqual({ syncedAt: null, needsResync: false });
+    }
+  });
+
+  it("updated_at ห่างจาก stock_synced_at แค่ไม่กี่ร้อย ms (clock skew ระหว่าง JS Date.now() กับ DB now() ตอน commit — พบจริงตอน sync) → needsResync=false (ไม่ใช่แก้จริง)", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      stockSync: [
+        { id: "e1", stock_synced_at: "2026-08-10T07:03:58.034Z", updated_at: "2026-08-10T07:03:58.147Z" },
+      ],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.stockSync!.needsResync).toBe(false);
+  });
+});
+
+/**
+ * listEntries — chunkIds regression (พบจริงระหว่าง manual UI test เฟส 8, 2026-08-10)
+ *   บั๊กจริง: tenant ที่มีบิลสะสมมาก (เช่นมุมมอง "ทั้งสำนักงาน") → entryIds ยาวหลักร้อย/พัน →
+ *   .in("entry_id", entryIds) ตัวเดียวสร้าง URL ยาวเกิน limit ของ PostgREST → 400 Bad Request เงียบ ๆ
+ *   (ไม่ throw — แค่ error ใน response) → ทุกยอดเงิน/VAT/quantity/productId หายไปทั้งหน้า (แสดง 0.00 หมด)
+ *   แม้ข้อมูลจริงใน DB ถูกต้อง 100% — แก้โดยตัด entryIds เป็นก้อน (chunkIds) แล้วรวมผลลัพธ์
+ *   ★ mock นี้ต่างจาก makeListEntriesDb ข้างบน — จำลอง .in() ให้กรองจริงตาม id ที่ส่งมา (ไม่ใช่แค่นับ call
+ *     ลำดับ) เพื่อพิสูจน์ว่า "แบ่งก้อนแล้วรวมผลถูกต้องครบ ไม่ตกหล่น ไม่ซ้ำ" จริง ๆ
+ */
+describe("listEntries — chunkIds (กัน .in() ยาวเกิน limit เมื่อ entryIds เยอะ)", () => {
+  function makeChunkTestDb(entryCount: number): SupabaseClient {
+    const ids = Array.from({ length: entryCount }, (_, i) => `e${i}`);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function qb(table: string): any {
+      let inCol: string | null = null;
+      let inIds: string[] | null = null;
+      const api: any = {};
+      api.select = () => api;
+      api.eq = () => api;
+      api.is = () => api;
+      api.order = () => api;
+      api.limit = () => api;
+      api.in = (col: string, values: string[]) => {
+        inCol = col;
+        inIds = values;
+        return api;
+      };
+      api.then = (onFulfilled: (v: { data: unknown; error: unknown }) => unknown) => {
+        let result: { data: unknown; error: unknown } = { data: [], error: null };
+        if (table === "bill_entries" && !inCol) {
+          // query หลัก (ไม่มี .in) → entries ทั้งหมด
+          result = {
+            data: ids.map((id) => ({
+              id,
+              tenant_id: "t1",
+              attachment_id: null,
+              customer_id: null,
+              upload_path: null,
+              upload_name: null,
+              upload_mime: null,
+              entry_type: "sale",
+              doc_date: "2026-07-01",
+              doc_no: id,
+              counterparty_name: null,
+              counterparty_tax_id: null,
+              seller_name: null,
+              seller_tax_id: null,
+              buyer_name: null,
+              buyer_tax_id: null,
+              wht_form: null,
+              payment_method: null,
+              payment_bank_account_id: null,
+              due_date: null,
+              status: "confirmed",
+              source: "manual",
+              ai_confidence: null,
+              notes: null,
+              created_at: "2026-07-01T00:00:00Z",
+              confirmed_at: null,
+            })),
+            error: null,
+          };
+        } else if (table === "bill_entries" && inCol === "id") {
+          // best-effort queries (input_tax_month/flowaccount/stockSync) — ไม่ทดสอบละเอียด แค่ไม่พัง
+          result = { data: (inIds ?? []).map((id) => ({ id })), error: null };
+        } else if (table === "bill_entry_lines") {
+          if (!inIds || inIds.length > 150) {
+            // ★ จำลองบั๊กจริง: PostgREST ปฏิเสธถ้า .in() ยาวเกิน chunk limit
+            return Promise.resolve({ data: null, error: { message: "Bad Request" } }).then(onFulfilled);
+          }
+          // แต่ละ entry มี 1 line, amount = index ของ entry (เช็คว่าไม่ตกหล่น/ไม่ซ้ำตอนรวมก้อน)
+          result = {
+            data: inIds.map((id) => ({
+              id: `l-${id}`,
+              entry_id: id,
+              line_no: 1,
+              vat_type: "vat",
+              description: null,
+              account_code: null,
+              account_name: null,
+              product_id: null,
+              quantity: null,
+              amount: Number(id.slice(1)) + 1,
+              vat_amount: 0,
+              wht_rate: 0,
+              wht_amount: 0,
+              ai_filled: false,
+              ai_low_confidence: false,
+            })),
+            error: null,
+          };
+        }
+        return Promise.resolve(result).then(onFulfilled);
+      };
+      return api;
+    }
+    return { from: (t: string) => qb(t) } as unknown as SupabaseClient;
+  }
+
+  it("entryIds ≤ 150 (เท่า chunk เดียว) → ยังทำงานปกติ ไม่มีอะไรหาย", async () => {
+    const db = makeChunkTestDb(50);
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries).toHaveLength(50);
+    for (const e of res.entries) {
+      expect(e.lines).toHaveLength(1);
+      expect(e.lines[0]!.amount).toBe(Number(e.id.slice(1)) + 1);
+    }
+  });
+
+  it("entryIds เกิน chunk limit (300 ตัว) → ตัดเป็นหลายก้อนแล้วรวมผลครบ ไม่ตกหล่น ไม่ซ้ำ (regression ของบั๊กจริง)", async () => {
+    const db = makeChunkTestDb(300);
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries).toHaveLength(300);
+    // ★ นี่คือจุดที่บั๊กเดิมจะพัง: ก่อนแก้ (query เดียวไม่ตัดก้อน) ทุก entry.lines จะว่างเปล่า (amount กลายเป็น 0.00)
+    let withLines = 0;
+    for (const e of res.entries) {
+      if (e.lines.length === 1 && e.lines[0]!.amount === Number(e.id.slice(1)) + 1) withLines++;
+    }
+    expect(withLines).toBe(300);
   });
 });
 

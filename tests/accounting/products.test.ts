@@ -109,19 +109,37 @@ describe("validateProductInput", () => {
       unit: "ชิ้น",
       defaultPrice: 200,
       defaultAccountCode: "4010",
+      category: null,
     });
   });
 
   it("sku/unit/defaultAccountCode ว่าง → เก็บเป็น null (optional)", () => {
     const v = validateProductInput({ name: "บริการ C" });
-    expect(v).toEqual({ sku: null, name: "บริการ C", unit: null, defaultPrice: null, defaultAccountCode: null });
+    expect(v).toEqual({
+      sku: null,
+      name: "บริการ C",
+      unit: null,
+      defaultPrice: null,
+      defaultAccountCode: null,
+      category: null,
+    });
+  });
+
+  it("★ [เฟส 8] กรอกหมวดสินค้ามาด้วย → เก็บ category ที่ trim แล้ว (0.10)", () => {
+    const v = validateProductInput({ name: "สินค้า A", category: "  อุปกรณ์ไอที  " });
+    expect(v?.category).toBe("อุปกรณ์ไอที");
+  });
+
+  it("★ [เฟส 8] ไม่กรอกหมวดสินค้า → category เป็น null (ไม่บังคับ, default ตอนแสดงรายงาน = 'สินค้า')", () => {
+    const v = validateProductInput({ name: "สินค้า A" });
+    expect(v?.category).toBeNull();
   });
 });
 
 describe("searchProducts — pure, ใช้ใน combobox", () => {
   const list: Product[] = [
-    { id: "p1", sku: "SKU-1", name: "ที่ปรึกษาบัญชี", unit: "ชม.", defaultPrice: 500, defaultAccountCode: "4010" },
-    { id: "p2", sku: "SKU-2", name: "จัดทำบัญชีรายเดือน", unit: "เดือน", defaultPrice: 3000, defaultAccountCode: null },
+    { id: "p1", sku: "SKU-1", name: "ที่ปรึกษาบัญชี", unit: "ชม.", defaultPrice: 500, defaultAccountCode: "4010", category: null },
+    { id: "p2", sku: "SKU-2", name: "จัดทำบัญชีรายเดือน", unit: "เดือน", defaultPrice: 3000, defaultAccountCode: null, category: null },
   ];
 
   it("q ว่าง → คืนทั้งหมด", () => {
@@ -156,8 +174,18 @@ describe("listProducts — เฉพาะที่ active (สำหรับ p
     });
     const res = await listProducts(db, "t1");
     expect(res).toEqual([
-      { id: "p1", sku: "SKU-1", name: "สินค้า A", unit: "ชิ้น", defaultPrice: 150.5, defaultAccountCode: "4010" },
+      { id: "p1", sku: "SKU-1", name: "สินค้า A", unit: "ชิ้น", defaultPrice: 150.5, defaultAccountCode: "4010", category: null },
     ]);
+  });
+
+  it("★ [เฟส 8] map category ถูกต้อง (0.10)", async () => {
+    const { db } = makeDb({
+      "products:list": [
+        { id: "p1", sku: "SKU-1", name: "สินค้า A", unit: "ชิ้น", default_price: "100", default_account_code: "4010", category: "อุปกรณ์ไอที" },
+      ],
+    });
+    const res = await listProducts(db, "t1");
+    expect(res[0].category).toBe("อุปกรณ์ไอที");
   });
 });
 
@@ -170,7 +198,7 @@ describe("listProductsAdmin — รวม inactive", () => {
     });
     const res = await listProductsAdmin(db, "t1");
     expect(res).toEqual([
-      { id: "p1", sku: null, name: "สินค้า B", unit: null, defaultPrice: null, defaultAccountCode: null, isActive: false },
+      { id: "p1", sku: null, name: "สินค้า B", unit: null, defaultPrice: null, defaultAccountCode: null, category: null, isActive: false },
     ]);
   });
 });
@@ -191,6 +219,13 @@ describe("createProduct", () => {
     expect(ins.payload!.tenant_id).toBe("t1");
     expect(ins.payload!.name).toBe("สินค้า A");
     expect(ins.payload!.default_price).toBe(100);
+  });
+
+  it("★ [เฟส 8] ส่งหมวดสินค้ามาด้วย → insert พร้อม category (0.10)", async () => {
+    const { db, ops } = makeDb({});
+    await createProduct(db, "t1", { name: "สินค้า A", category: "อุปกรณ์ไอที" });
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "products")!;
+    expect(ins.payload!.category).toBe("อุปกรณ์ไอที");
   });
 
   it("sku ซ้ำ (DB unique constraint 23505) → ข้อความสุภาพ", async () => {

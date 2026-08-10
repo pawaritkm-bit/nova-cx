@@ -52,6 +52,8 @@ export type LineInput = {
   accountName?: string | null;
   /** สินค้า/บริการที่เลือก (เฟส 1 ส่วน B) — undefined = ไม่แตะ (update) · null = ล้าง */
   productId?: string | null;
+  /** จำนวนสต็อกของบรรทัดนี้ (เฟส 8 ส่วน Y) — undefined = ไม่แตะ (update) · null = ล้าง */
+  quantity?: number | null;
   amount?: number | null;
   vatAmount?: number | null;
   whtRate?: number | null;
@@ -213,6 +215,7 @@ export async function addLine(
       account_code: input.accountCode ?? null,
       account_name: input.accountName ?? null,
       product_id: input.productId ?? null,
+      quantity: input.quantity ?? null,
       amount,
       vat_amount: safeAmount(input.vatAmount),
       wht_rate: wht.rate,
@@ -250,6 +253,7 @@ export async function updateLine(
   if (input.accountCode !== undefined) patch.account_code = input.accountCode;
   if (input.accountName !== undefined) patch.account_name = input.accountName;
   if (input.productId !== undefined) patch.product_id = input.productId;
+  if (input.quantity !== undefined) patch.quantity = input.quantity;
   if (input.lineNo !== undefined) patch.line_no = input.lineNo;
   if (input.amount !== undefined) patch.amount = safeAmount(input.amount);
   if (input.vatAmount !== undefined) patch.vat_amount = safeAmount(input.vatAmount);

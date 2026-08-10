@@ -668,6 +668,8 @@ function EntryTable({
                       customerId={e.customerId}
                       hasWht={e.lines.some((l) => l.whtAmount > 0)}
                       isCreditEligible={isCreditEligibleForPayment(e)}
+                      canSyncStock={e.lines.some((l) => !!l.productId && !!l.quantity && l.quantity > 0)}
+                      stockSync={e.stockSync}
                     />
                   </td>
                   {showFlowAccountCol ? (
@@ -1224,6 +1226,12 @@ export default async function AccountingPage({
         budgetHref={g.customerId ? `/chat-audit/accounting/budget?customerId=${g.customerId}` : undefined}
         bankReconciliationHref={
           g.customerId ? `/chat-audit/accounting/bank-reconciliation?customerId=${g.customerId}` : undefined
+        }
+        fixedAssetsHref={
+          g.customerId ? `/chat-audit/accounting/fixed-assets?customerId=${g.customerId}` : undefined
+        }
+        inventoryHref={
+          g.customerId ? `/chat-audit/accounting/inventory?customerId=${g.customerId}` : undefined
         }
         paymentsHref={g.customerId ? `/chat-audit/accounting/payments?customerId=${g.customerId}` : undefined}
         agingHref={g.customerId ? `/chat-audit/accounting/ar-ap-aging?customer=${g.customerId}` : undefined}

@@ -42,6 +42,13 @@ export type BillEntryLine = {
    *     (mapLine() ของจริงจาก DB จะเซ็ตให้เสมอ — ไม่มีทางเป็น undefined จากข้อมูลจริง)
    */
   productId?: string | null;
+  /**
+   * จำนวนสินค้าต่อบรรทัด (เฟส 8 ส่วน Y, migration 0077) — ใช้กระทบสต็อกเท่านั้น (ปุ่ม "บันทึกรับ/จ่าย
+   *   สต็อก" ที่หน้ารายการบิล) ★ ไม่กระทบการคำนวณของ engine เลย — amount/vat/wht ต่อบรรทัดยังเป็นของจริง
+   *   เหมือนเดิม · null/undefined = ไม่ได้กรอก (บรรทัดเดิม/บรรทัดที่ไม่สนใจสต็อก)
+   *   ★ optional เหมือน productId — กันกระทบ fixture เทสต์เดิมจำนวนมากที่ยังไม่รู้จักฟิลด์นี้
+   */
+  quantity?: number | null;
   amount: number;
   vatAmount: number;
   whtRate: number;
@@ -100,6 +107,13 @@ export type BillEntry = {
   inputTaxMonth: string | null;
   /** ผลส่งไป FlowAccount ล่าสุด (M1 — บิลขาย confirmed เท่านั้น) */
   flowaccountSync: FlowAccountSyncInfo;
+  /**
+   * ผลบันทึกสต็อกล่าสุดจากบิลนี้ (เฟส 8 ส่วน Y, 0.9, migration 0078)
+   *   needsResync=true = เคยบันทึกสต็อกแล้ว แต่บิลถูกแก้ไขทีหลัง → ตัวเลขสต็อกอาจไม่ตรงกับบิลอีกต่อไป
+   *   ★ optional เหมือน quantity ของ BillEntryLine — กันกระทบ fixture เทสต์เดิมจำนวนมากที่ยังไม่รู้จักฟิลด์นี้
+   *     (mapLine ของจริงจาก DB จะเซ็ตให้เสมอ — ไม่มีทางเป็น undefined จากข้อมูลจริง)
+   */
+  stockSync?: StockSyncInfo;
   createdAt: string;
   confirmedAt: string | null;
   lines: BillEntryLine[];
@@ -133,6 +147,19 @@ export function defaultFlowAccountSync(): FlowAccountSyncInfo {
     lastError: null,
     needsResync: false,
   };
+}
+
+/** ผลบันทึกสต็อกล่าสุดของบิล (เฟส 8 ส่วน Y, 0.9) */
+export type StockSyncInfo = {
+  /** เวลาที่กดปุ่ม "บันทึกรับ/จ่ายสต็อก" ล่าสุด · null = ยังไม่เคยบันทึก */
+  syncedAt: string | null;
+  /** true = เคยบันทึกสต็อกแล้วแต่บิลถูกแก้ไขทีหลัง (updated_at ใหม่กว่า syncedAt) — ตัวเลขสต็อกอาจไม่ตรงกับบิลแล้ว */
+  needsResync: boolean;
+};
+
+/** ค่าเริ่มต้น (ยังไม่เคยบันทึก/คอลัมน์ยังไม่ apply migration) */
+export function defaultStockSync(): StockSyncInfo {
+  return { syncedAt: null, needsResync: false };
 }
 
 /** สรุปยอดต่อประเภท (ภาษีซื้อ/ขาย) */
@@ -275,6 +302,7 @@ type RawLine = {
   account_code: string | null;
   account_name: string | null;
   product_id: string | null;
+  quantity: number | string | null;
   amount: number | string | null;
   vat_amount: number | string | null;
   wht_rate: number | string | null;
@@ -311,6 +339,31 @@ type RawEntry = {
   created_at: string;
   confirmed_at: string | null;
 };
+
+/** แถวสถานะบันทึกสต็อก (best-effort — คอลัมน์ stock_synced_at เพิ่ง add ใน migration 0078) */
+type RawStockSync = {
+  id: string;
+  stock_synced_at: string | null;
+  updated_at: string | null;
+};
+
+/**
+ * ★ tolerance กันเตือนหลอก (พบจริงระหว่าง manual UI test เฟส 8, 2026-08-10): `stock_synced_at` เซ็ตด้วย
+ *   `new Date().toISOString()` ฝั่ง JS (createMovementsFromBill) แต่ `updated_at` เซ็ตด้วย DB trigger
+ *   `now()` ตอน commit — คนละนาฬิกา คนละจังหวะ (JS สร้างค่าก่อน network round-trip ไปถึง DB เสมอ) ทำให้
+ *   `updated_at` ช้ากว่า `stock_synced_at` เล็กน้อยเสมอ (พบจริง ~112ms) แม้ไม่มีใครแก้บิลเลย — ถ้าเทียบ
+ *   `>` ตรง ๆ badge จะโชว์ทุกครั้งหลัง sync ทันที (false positive) ไม่ใช่แค่ตอนแก้จริง จึงต้องเผื่อช่วงเวลา
+ *   ที่มากกว่าความคลาดเคลื่อนระหว่างนาฬิกา/เครือข่ายแน่ ๆ (การแก้บิลจริงผ่าน UI ใช้เวลาเป็นวินาทีขึ้นไปเสมอ)
+ */
+const STOCK_RESYNC_TOLERANCE_MS = 5000;
+function mapStockSync(r: RawStockSync): StockSyncInfo {
+  const syncedAt = r.stock_synced_at ?? null;
+  const needsResync =
+    !!syncedAt &&
+    !!r.updated_at &&
+    new Date(r.updated_at).getTime() - new Date(syncedAt).getTime() > STOCK_RESYNC_TOLERANCE_MS;
+  return { syncedAt, needsResync };
+}
 
 /** แถวเดือนที่ใช้ภาษี (best-effort — คอลัมน์ input_tax_month เพิ่ง add ใน 0060) */
 type RawInputTaxMonth = { id: string; input_tax_month: string | null };
@@ -364,6 +417,7 @@ function mapLine(r: RawLine): BillEntryLine {
     accountCode: r.account_code,
     accountName: r.account_name,
     productId: r.product_id,
+    quantity: r.quantity === null || r.quantity === undefined ? null : num(r.quantity),
     amount: num(r.amount),
     vatAmount: num(r.vat_amount),
     whtRate: num(r.wht_rate),
@@ -415,6 +469,19 @@ export function dateRange(
   if (!f && !t) return null;
   if (f && t && f > t) return { start: t, end: f };
   return { start: f, end: t };
+}
+
+/**
+ * ตัด id list เป็นก้อนละ ≤ CHUNK_SIZE — กัน `.in("id", ids)` สร้าง URL ยาวเกิน limit ของ PostgREST
+ *   (พบจริง: tenant ที่มีบิลสะสมมาก — มุมมอง "ทั้งสำนักงาน" มี entryIds หลักร้อย/พัน → รวมเป็น query string
+ *   ยาวเกิน request-URI limit → PostgREST ตอบ 400 Bad Request เงียบ ๆ กลายเป็น "ทุกยอดเงินหาย" ทั้งหน้า)
+ *   ใช้ร่วมกันทุก query ที่ทำ .in("id"/"entry_id", entryIds) ใน listEntries() ด้านล่าง
+ */
+const ID_CHUNK_SIZE = 150;
+function chunkIds(ids: string[]): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += ID_CHUNK_SIZE) out.push(ids.slice(i, i + ID_CHUNK_SIZE));
+  return out;
 }
 
 /**
@@ -473,12 +540,13 @@ export async function listEntries(
   //   ถือเป็น null ทั้งหมด (degrade เงียบ ไม่ทำ list พัง = ยึดเดือน doc_date ตามเดิม)
   const inputTaxMonthByEntry = new Map<string, string | null>();
   try {
-    const { data: itmData, error: itmErr } = await db
-      .from("bill_entries")
-      .select("id, input_tax_month")
-      .eq("tenant_id", tenantId)
-      .in("id", entryIds);
-    if (!itmErr) {
+    const itmChunks = await Promise.all(
+      chunkIds(entryIds).map((ids) =>
+        db.from("bill_entries").select("id, input_tax_month").eq("tenant_id", tenantId).in("id", ids)
+      )
+    );
+    for (const { data: itmData, error: itmErr } of itmChunks) {
+      if (itmErr) continue;
       for (const r of (itmData ?? []) as unknown as RawInputTaxMonth[]) {
         inputTaxMonthByEntry.set(r.id, r.input_tax_month ?? null);
       }
@@ -491,14 +559,19 @@ export async function listEntries(
   //   คอลัมน์ยังไม่ apply → select error → ทุก entry ได้ default (not_synced) แทน ไม่ทำ list ทั้งหน้าพัง
   const flowaccountSyncByEntry = new Map<string, FlowAccountSyncInfo>();
   try {
-    const { data: faData, error: faErr } = await db
-      .from("bill_entries")
-      .select(
-        "id, flowaccount_sync_status, flowaccount_doc_type, flowaccount_doc_id, flowaccount_doc_no, flowaccount_synced_at, flowaccount_last_error, flowaccount_needs_resync"
+    const faChunks = await Promise.all(
+      chunkIds(entryIds).map((ids) =>
+        db
+          .from("bill_entries")
+          .select(
+            "id, flowaccount_sync_status, flowaccount_doc_type, flowaccount_doc_id, flowaccount_doc_no, flowaccount_synced_at, flowaccount_last_error, flowaccount_needs_resync"
+          )
+          .eq("tenant_id", tenantId)
+          .in("id", ids)
       )
-      .eq("tenant_id", tenantId)
-      .in("id", entryIds);
-    if (!faErr) {
+    );
+    for (const { data: faData, error: faErr } of faChunks) {
+      if (faErr) continue;
       for (const r of (faData ?? []) as unknown as RawFlowAccountSync[]) {
         flowaccountSyncByEntry.set(r.id, mapFlowAccountSync(r));
       }
@@ -507,21 +580,50 @@ export async function listEntries(
     // คอลัมน์ยังไม่ apply → คงเป็น default (not_synced) ทั้งหมด
   }
 
-  // lines ของ entry เหล่านี้
-  const { data: lineData } = await db
-    .from("bill_entry_lines")
-    .select(
-      "id, entry_id, line_no, vat_type, description, account_code, account_name, product_id, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence"
-    )
-    .eq("tenant_id", tenantId)
-    .in("entry_id", entryIds)
-    .order("line_no", { ascending: true });
+  // สถานะบันทึกสต็อก (migration 0078, เฟส 8 ส่วน Y 0.9) — ★ best-effort เหมือน flowaccountSync ข้างบน
+  //   คอลัมน์ยังไม่ apply → select error → ทุก entry ได้ default (ยังไม่บันทึก) แทน ไม่ทำ list ทั้งหน้าพัง
+  const stockSyncByEntry = new Map<string, StockSyncInfo>();
+  try {
+    const ssChunks = await Promise.all(
+      chunkIds(entryIds).map((ids) =>
+        db.from("bill_entries").select("id, stock_synced_at, updated_at").eq("tenant_id", tenantId).in("id", ids)
+      )
+    );
+    for (const { data: ssData, error: ssErr } of ssChunks) {
+      if (ssErr) continue;
+      for (const r of (ssData ?? []) as unknown as RawStockSync[]) {
+        stockSyncByEntry.set(r.id, mapStockSync(r));
+      }
+    }
+  } catch {
+    // คอลัมน์ยังไม่ apply → คงเป็น default (ยังไม่บันทึก) ทั้งหมด
+  }
+
+  // lines ของ entry เหล่านี้ — ★ ตัดก้อน (chunkIds) เหมือนข้างบน กัน .in() ยาวเกิน limit เมื่อ entryIds เยอะ
   const linesByEntry = new Map<string, BillEntryLine[]>();
-  for (const r of (lineData ?? []) as unknown as RawLine[]) {
-    const l = mapLine(r);
-    const arr = linesByEntry.get(l.entryId) ?? [];
-    arr.push(l);
-    linesByEntry.set(l.entryId, arr);
+  const lineChunks = await Promise.all(
+    chunkIds(entryIds).map((ids) =>
+      db
+        .from("bill_entry_lines")
+        .select(
+          "id, entry_id, line_no, vat_type, description, account_code, account_name, product_id, quantity, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence"
+        )
+        .eq("tenant_id", tenantId)
+        .in("entry_id", ids)
+        .order("line_no", { ascending: true })
+    )
+  );
+  for (const { data: lineData, error: lineErr } of lineChunks) {
+    if (lineErr) {
+      console.warn(`[accounting] list entry lines error code=${(lineErr as { code?: string }).code ?? "?"}`);
+      continue;
+    }
+    for (const r of (lineData ?? []) as unknown as RawLine[]) {
+      const l = mapLine(r);
+      const arr = linesByEntry.get(l.entryId) ?? [];
+      arr.push(l);
+      linesByEntry.set(l.entryId, arr);
+    }
   }
 
   // ชื่อลูกค้า (customers.name เป็น plain text — ไม่เข้ารหัส)
@@ -600,6 +702,7 @@ export async function listEntries(
     notes: e.notes,
     inputTaxMonth: inputTaxMonthByEntry.get(e.id) ?? null,
     flowaccountSync: flowaccountSyncByEntry.get(e.id) ?? defaultFlowAccountSync(),
+    stockSync: stockSyncByEntry.get(e.id) ?? defaultStockSync(),
     createdAt: e.created_at,
     confirmedAt: e.confirmed_at,
     lines: linesByEntry.get(e.id) ?? [],

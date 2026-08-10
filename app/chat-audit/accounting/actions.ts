@@ -108,6 +108,16 @@ function asNumber(v: unknown): number {
 }
 
 /**
+ * จำนวนสต็อกต่อบรรทัด (เฟส 8 ส่วน Y) — field เสริมสำหรับสต็อกเท่านั้น ไม่ใช่ field บังคับของบิล
+ *   ไม่ใช่ตัวเลข หรือ ≤0 → null (ไม่ throw ไม่ block การบันทึกบิล) · จำกัดช่วงกันค่าเวอร์เหมือน asNumber
+ */
+function asQuantity(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(n, 1_000_000_000);
+}
+
+/**
  * เซตของ productId ที่มีอยู่จริงใน tenant นี้ (ไม่ถูกลบ) — ใช้กัน productId ปลอม/ข้าม tenant
  *   จาก client ก่อนผูกกับ bill_entry_lines.product_id (เฟส 1 ส่วน B)
  *   ★ ไม่เช็ค is_active — สินค้าที่ปิดใช้งานแล้วยังผูกกับบรรทัดเก่าได้ตามปกติ (แค่ไม่โชว์ในตัวเลือกใหม่)
@@ -159,6 +169,11 @@ export type EditableLineInput = {
   accountName?: string | null;
   /** สินค้า/บริการที่เลือกไว้ (เฟส 1 ส่วน B) — null/undefined = ไม่ผูกสินค้า */
   productId?: string | null;
+  /**
+   * จำนวนที่รับ/จ่ายสต็อกจากบรรทัดนี้ (เฟส 8 ส่วน Y) — optional, ไม่บังคับ
+   *   ไม่ใช่ตัวเลข/≤0 = ไม่ผูกจำนวน (เก็บ null) — ไม่ block การบันทึกบิล
+   */
+  quantity?: number | null;
   amount: number;
   vatAmount: number;
   whtRate: number;
@@ -315,6 +330,8 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
         accountName: clampText(l.accountName, 200),
         // ★ สินค้า/บริการที่เลือก (เฟส 1 ส่วน B) — แค่ tag อ้างอิง ไม่กระทบการคำนวณ · ต้องอยู่ใน tenant นี้
         productId: isUuid(l.productId) && validProductIds.has(l.productId) ? l.productId : null,
+        // ★ จำนวนสต็อก (เฟส 8 ส่วน Y) — optional field เสริม ไม่ใช่ field บังคับของบิล
+        quantity: asQuantity(l.quantity),
         amount: asNumber(l.amount),
         vatAmount: asNumber(l.vatAmount),
         whtRate: asNumber(l.whtRate),

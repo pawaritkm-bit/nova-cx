@@ -4,14 +4,23 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { moveEntryTypeAction, deleteEntryAction } from "./actions";
-import type { EntryType, EntryStatus } from "@/lib/accounting/queries";
+import { syncStockFromBillAction } from "./stock-sync-actions";
+import type { EntryType, EntryStatus, StockSyncInfo } from "@/lib/accounting/queries";
 
 /**
- * ปุ่มจัดการต่อแถว (client) — ปุ่มลัด "ย้ายไปซื้อ/ขาย" + ลบ + ลิงก์ตรวจ/แก้
+ * ปุ่มจัดการต่อแถว (client) — ปุ่มลัด "ย้ายไปซื้อ/ขาย" + ลบ + ลิงก์ตรวจ/แก้ + บันทึกรับ/จ่ายสต็อก
  *
  * ★ ย้ายประเภท: โชว์เฉพาะปลายทางที่ ≠ ประเภทปัจจุบัน และเฉพาะ entry ที่ยังไม่ยืนยัน
  *   (ยืนยันแล้วแก้ไม่ได้ — actions-lib กันไว้ ฝั่ง UI ซ่อนปุ่มด้วย)
  * ★ ลบ: ยืนยันก่อนเสมอ (soft delete) — คืนสถานะ ไม่ throw
+ * ★ บันทึกรับ/จ่ายสต็อก (เฟส 8 ส่วน Y, T71, 0.7/0.8) — mirror ปุ่ม "ส่งไป FlowAccount" (manual-trigger
+ *   ต่อบิล ไม่ auto-hook เข้า saveEntryAction) — เรียก stock-sync-actions.ts แยกไฟล์ต่างหาก ไม่แก้
+ *   actions.ts เดิมเลย · แสดงเฉพาะบิล confirmed ที่มีบรรทัด product_id+quantity ครบอย่างน้อย 1 บรรทัด
+ *   (canSyncStock คำนวณจาก page.tsx ตาม pattern เดียวกับ hasWht) · กดซ้ำ → atomic claim ปฏิเสธพร้อม
+ *   ข้อความสุภาพ ไม่สร้างซ้ำสอง
+ * ★ ป้ายเตือน "บิลถูกแก้หลังบันทึกสต็อก" (0.9) — โชว์เมื่อ stockSync.needsResync (บิล updated_at ใหม่กว่า
+ *   stock_synced_at) เตือนว่าตัวเลขสต็อกที่บันทึกไว้อาจไม่ตรงกับบิลปัจจุบันแล้ว (silent drift) — ไม่บล็อกปุ่ม
+ *   กดซ้ำได้ตามปกติ (สร้าง movement ใหม่จากบิลปัจจุบันไม่ทับของเดิม — นักบัญชีตรวจ stock ledger เองว่าถูกไหม)
  * ★ ระหว่างทำงาน disable กันกดซ้ำ + refresh หน้าเมื่อสำเร็จ
  */
 export default function RowActions({
@@ -22,6 +31,8 @@ export default function RowActions({
   customerId,
   hasWht,
   isCreditEligible,
+  canSyncStock,
+  stockSync,
 }: {
   entryId: string;
   entryType: EntryType;
@@ -33,6 +44,10 @@ export default function RowActions({
   hasWht?: boolean;
   /** true = บิลเชื่อที่ยืนยันแล้ว (isCreditEligibleForPayment) — ใช้โชว์ปุ่ม "ใบลดหนี้/เพิ่มหนี้" (เฟส 3 ส่วน J, 0.3) */
   isCreditEligible?: boolean;
+  /** true = มีอย่างน้อย 1 บรรทัด productId+quantity ครบ — ใช้โชว์ปุ่ม "บันทึกรับ/จ่ายสต็อก" (เฟส 8 ส่วน Y, T71) */
+  canSyncStock?: boolean;
+  /** ผลบันทึกสต็อกล่าสุดของบิลนี้ — ใช้โชว์ป้ายเตือน needsResync (เฟส 8 ส่วน Y, 0.9) */
+  stockSync?: StockSyncInfo;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -65,6 +80,15 @@ export default function RowActions({
       } else {
         setMsg({ ok: res.ok, text: res.message });
       }
+    });
+  }
+
+  function syncStock() {
+    setMsg(null);
+    startTransition(async () => {
+      const res = await syncStockFromBillAction(entryId);
+      setMsg({ ok: res.ok, text: res.message });
+      if (res.ok) router.refresh();
     });
   }
 
@@ -114,6 +138,27 @@ export default function RowActions({
           >
             ใบลดหนี้/เพิ่มหนี้
           </a>
+        ) : null}
+        {/* บันทึกรับ/จ่ายสต็อกจากบิลนี้ — เฉพาะ confirmed + มีบรรทัด product_id+quantity ครบ (เฟส 8 ส่วน Y, T71) */}
+        {confirmed && canSyncStock ? (
+          <button
+            type="button"
+            className="acc-mini-btn"
+            onClick={syncStock}
+            disabled={pending}
+            title="สร้างรายการรับ/จ่ายสต็อกจากบรรทัดที่ผูกสินค้า+จำนวนของบิลนี้"
+          >
+            บันทึกรับ/จ่ายสต็อก
+          </button>
+        ) : null}
+        {/* ป้ายเตือน: บิลถูกแก้ไขหลังบันทึกสต็อกไปแล้ว — ตัวเลขสต็อกอาจไม่ตรงกับบิลปัจจุบัน (0.9) */}
+        {confirmed && canSyncStock && stockSync?.needsResync ? (
+          <span
+            className="fa-sync-badge fa-sync-badge-warn"
+            title="บิลนี้ถูกแก้ไขหลังกดบันทึกสต็อกล่าสุด — ตัวเลขสต็อกที่บันทึกไว้อาจไม่ตรงกับบิลแล้ว ตรวจสอบ/บันทึกซ้ำได้"
+          >
+            บิลถูกแก้ — สต็อกอาจไม่ตรง
+          </span>
         ) : null}
         {!confirmed
           ? moveTargets.map((t) => (

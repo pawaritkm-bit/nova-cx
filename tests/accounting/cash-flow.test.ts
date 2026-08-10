@@ -285,6 +285,56 @@ describe("buildCashFlowStatement — reconciled=true เสมอเมื่อ
   });
 });
 
+describe("buildCashFlowStatement — เฟส 7 (0.10): จำหน่ายทรัพย์สินถาวร → investing ครบทั้งขาสินทรัพย์+ค่าเสื่อมสะสม", () => {
+  it("จำหน่ายอุปกรณ์สำนักงาน ได้รับเท่ากับ NBV เป๊ะ (ไม่มีกำไร/ขาดทุน) — ขาสินทรัพย์+ค่าเสื่อมสะสมจัดเป็น investing ทั้งคู่ ผลรวม investing ตรงกับ proceeds เป๊ะ", () => {
+    // ราคาทุน 30000, ค่าเสื่อมสะสม 10000 → NBV = 20000 = proceeds (ไม่มีขากำไร/ขาดทุนในธุรกรรมนี้)
+    const lines: JournalLine[] = [
+      // Dr ค่าเสื่อมสะสม 10000 (ล้างค่าเสื่อมสะสม)
+      line({ entryId: "je-dispose", accountCode: "1640.1", debit: 10000, credit: 0 }),
+      // Dr เงินสด 20000 (ได้รับจริง = NBV เป๊ะ)
+      line({ entryId: "je-dispose", accountCode: "1010", debit: 20000, credit: 0 }),
+      // Cr สินทรัพย์ 30000 (ตัดที่ราคาทุน)
+      line({ entryId: "je-dispose", accountCode: "1640", debit: 0, credit: 30000 }),
+    ];
+    const cf = buildCashFlowStatement(lines, 10000, chartByCode, TEST_CHART);
+
+    // ★ ขาสินทรัพย์ (1640) + ขาค่าเสื่อมสะสม (1640.1) ต้องจัดเป็น investing ทั้งคู่ (0.10)
+    const investingCodes = cf.investing.map((l) => l.accountCode).sort();
+    expect(investingCodes).toEqual(["1640", "1640.1"]);
+    expect(cf.investing.find((l) => l.accountCode === "1640.1")).toMatchObject({ amount: -10000 });
+    expect(cf.investing.find((l) => l.accountCode === "1640")).toMatchObject({ amount: 30000 });
+    // ★ ผลรวม investing (30000 − 10000 = 20000) ตรงกับ proceeds เป๊ะ — เงินสดที่ได้รับจากการจำหน่าย
+    //   แสดงเป็น "กิจกรรมลงทุน" ครบทั้งขา ไม่ตกไปเป็น operating ผิดประเภท
+    expect(cf.totalInvesting).toBe(20000);
+    expect(cf.operating).toHaveLength(0);
+    expect(cf.netChange).toBe(20000);
+    expect(cf.closingCash).toBe(10000 + 20000);
+    expect(cf.reconciled).toBe(true);
+  });
+
+  it("จำหน่ายรถยนต์ ขาดทุน (proceeds < NBV) — ขาสินทรัพย์+ค่าเสื่อมสะสมยังจัดเป็น investing ครบ (รวม = NBV), ขาดทุนตกไป operating (fallback ตาม 0.10) รวมกันแล้วเท่ากับ proceeds เป๊ะ", () => {
+    // ราคาทุน 500000, ค่าเสื่อมสะสม 100000 → NBV = 400000, ได้รับจริง (proceeds) = 300000 → ขาดทุน 100000
+    const lines: JournalLine[] = [
+      line({ entryId: "je-dispose2", accountCode: "1645.1", debit: 100000, credit: 0 }),
+      line({ entryId: "je-dispose2", accountCode: "1020", debit: 300000, credit: 0 }),
+      line({ entryId: "je-dispose2", accountCode: "5365", debit: 100000, credit: 0 }), // ขาดทุนจากการจำหน่าย
+      line({ entryId: "je-dispose2", accountCode: "1645", debit: 0, credit: 500000 }),
+    ];
+    const cf = buildCashFlowStatement(lines, 0, chartByCode, TEST_CHART);
+
+    const investingCodes = cf.investing.map((l) => l.accountCode).sort();
+    expect(investingCodes).toEqual(["1645", "1645.1"]);
+    expect(cf.totalInvesting).toBe(400000); // = NBV (500000 − 100000)
+    expect(cf.operating).toHaveLength(1);
+    expect(cf.operating[0]).toMatchObject({ accountCode: "5365", amount: -100000 });
+    expect(cf.totalOperating).toBe(-100000);
+    // ★ investing + operating รวมกันเท่ากับ proceeds เป๊ะ (400000 − 100000 = 300000) — สอดคล้องกับ
+    //   เงินสดที่ได้รับจริงทั้งหมดของธุรกรรมนี้ แม้ขากำไร/ขาดทุนตกไปอยู่ operating (0.10 ยอมรับไว้)
+    expect(cf.totalInvesting + cf.totalOperating).toBe(300000);
+    expect(cf.reconciled).toBe(true);
+  });
+});
+
 describe("aggregateCashFlowLines — รวมยอดต่อรหัสบัญชี (ใช้กับ mergeCompareLines)", () => {
   it("รวม CashFlowLine[] หลายรายการรหัสเดียวกันเป็นแถวเดียว", () => {
     const lines = [

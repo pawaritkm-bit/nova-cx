@@ -22,6 +22,8 @@ export const SKU_MAX = 60;
 export const NAME_MAX = 200;
 export const UNIT_MAX = 30;
 export const ACCOUNT_CODE_MAX = 20;
+/** หมวดสินค้า (เฟส 8 ส่วน X, 0.10) — text อิสระ ไม่ผูก FK, ไม่บังคับกรอก (ค่า default ตอนแสดงรายงาน = "สินค้า") */
+export const CATEGORY_MAX = 100;
 /** เพดานราคา (กันค่าเวอร์ผิดปกติ — ธุรกิจ SME ทั่วไปไม่เกินนี้) */
 export const PRICE_MAX = 1_000_000_000;
 
@@ -37,6 +39,8 @@ export type Product = {
   defaultPrice: number | null;
   /** รหัสบัญชีเริ่มต้น (ตรงตัวกับ chart_of_accounts.code) — null = ยังไม่ผูก */
   defaultAccountCode: string | null;
+  /** หมวดสินค้า (เฟส 8 ส่วน X, 0.10) — text อิสระ null = ยังไม่ตั้ง (รายงานสต็อกเข้ากลุ่ม default "สินค้า") */
+  category: string | null;
 };
 
 /** แถวสินค้าสำหรับหน้า admin (มี isActive เพิ่มจาก Product) */
@@ -77,6 +81,7 @@ type RawProduct = {
   unit: string | null;
   default_price: number | string | null;
   default_account_code: string | null;
+  category?: string | null;
 };
 
 function mapProduct(r: RawProduct): Product {
@@ -87,6 +92,7 @@ function mapProduct(r: RawProduct): Product {
     unit: r.unit,
     defaultPrice: num(r.default_price),
     defaultAccountCode: r.default_account_code,
+    category: r.category ?? null,
   };
 }
 
@@ -98,7 +104,7 @@ function mapProduct(r: RawProduct): Product {
 export async function listProducts(db: DB, tenantId: string): Promise<Product[]> {
   const { data, error } = await db
     .from("products")
-    .select("id, sku, name, unit, default_price, default_account_code")
+    .select("id, sku, name, unit, default_price, default_account_code, category")
     .eq("tenant_id", tenantId)
     .eq("is_active", true)
     .is("deleted_at", null)
@@ -112,7 +118,7 @@ export async function listProducts(db: DB, tenantId: string): Promise<Product[]>
 export async function listProductsAdmin(db: DB, tenantId: string): Promise<ProductRow[]> {
   const { data, error } = await db
     .from("products")
-    .select("id, sku, name, unit, default_price, default_account_code, is_active")
+    .select("id, sku, name, unit, default_price, default_account_code, category, is_active")
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
     .order("name", { ascending: true })
@@ -140,6 +146,7 @@ export type ValidatedProductInput = {
   unit: string | null;
   defaultPrice: number | null;
   defaultAccountCode: string | null;
+  category: string | null;
 };
 
 /**
@@ -154,6 +161,7 @@ export function validateProductInput(input: {
   unit?: unknown;
   defaultPrice?: unknown;
   defaultAccountCode?: unknown;
+  category?: unknown;
 }): ValidatedProductInput | null {
   const name = normText(input.name, NAME_MAX);
   if (!name) return null;
@@ -173,6 +181,7 @@ export function validateProductInput(input: {
     unit: normOptionalText(input.unit, UNIT_MAX),
     defaultPrice,
     defaultAccountCode: normOptionalText(input.defaultAccountCode, ACCOUNT_CODE_MAX),
+    category: normOptionalText(input.category, CATEGORY_MAX),
   };
 }
 
@@ -180,7 +189,14 @@ export function validateProductInput(input: {
 export async function createProduct(
   db: DB,
   tenantId: string,
-  input: { sku?: unknown; name: unknown; unit?: unknown; defaultPrice?: unknown; defaultAccountCode?: unknown }
+  input: {
+    sku?: unknown;
+    name: unknown;
+    unit?: unknown;
+    defaultPrice?: unknown;
+    defaultAccountCode?: unknown;
+    category?: unknown;
+  }
 ): Promise<ProductActionResult> {
   const v = validateProductInput(input);
   if (!v) return { ok: false, message: "กรุณากรอกชื่อสินค้า/บริการ (และตรวจว่าราคาไม่ติดลบ)" };
@@ -194,6 +210,7 @@ export async function createProduct(
       unit: v.unit,
       default_price: v.defaultPrice,
       default_account_code: v.defaultAccountCode,
+      category: v.category,
     })
     .select("id")
     .maybeSingle();
@@ -210,7 +227,14 @@ export async function updateProduct(
   db: DB,
   tenantId: string,
   id: string,
-  input: { sku?: unknown; name: unknown; unit?: unknown; defaultPrice?: unknown; defaultAccountCode?: unknown }
+  input: {
+    sku?: unknown;
+    name: unknown;
+    unit?: unknown;
+    defaultPrice?: unknown;
+    defaultAccountCode?: unknown;
+    category?: unknown;
+  }
 ): Promise<ProductActionResult> {
   const v = validateProductInput(input);
   if (!v) return { ok: false, message: "กรุณากรอกชื่อสินค้า/บริการ (และตรวจว่าราคาไม่ติดลบ)" };
@@ -223,6 +247,7 @@ export async function updateProduct(
       unit: v.unit,
       default_price: v.defaultPrice,
       default_account_code: v.defaultAccountCode,
+      category: v.category,
     })
     .eq("id", id)
     .eq("tenant_id", tenantId)
