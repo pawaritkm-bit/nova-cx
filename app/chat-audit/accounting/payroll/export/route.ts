@@ -31,7 +31,9 @@ function buildPayrollWorkbook(
     "รายรับเพิ่มเติม",
     "โบนัส",
     "หักอื่น ๆ",
+    "ค่าชดเชยเลิกจ้าง",
     "ภาษีหัก ณ ที่จ่าย",
+    "ภาษีหัก ณ ที่จ่าย (ค่าชดเชย)",
     "ประกันสังคม (ลูกจ้าง)",
     "ประกันสังคม (นายจ้าง)",
     "เงินเดือนสุทธิ",
@@ -39,7 +41,18 @@ function buildPayrollWorkbook(
   headRow.font = { bold: true };
   headRow.alignment = { vertical: "middle", horizontal: "center" };
 
-  let totals = { gross: 0, additions: 0, bonus: 0, deductions: 0, pit: 0, ssoEmp: 0, ssoEmpr: 0, net: 0 };
+  let totals = {
+    gross: 0,
+    additions: 0,
+    bonus: 0,
+    deductions: 0,
+    severance: 0,
+    pit: 0,
+    severancePit: 0,
+    ssoEmp: 0,
+    ssoEmpr: 0,
+    net: 0,
+  };
   for (const l of lines) {
     ws.addRow([
       l.employeeCode ?? "",
@@ -48,7 +61,9 @@ function buildPayrollWorkbook(
       l.otherAdditions,
       l.bonusAmount,
       l.otherDeductions,
+      l.severanceAmount,
       l.pitWithheld,
+      l.severancePitWithheld,
       l.ssoEmployee,
       l.ssoEmployer,
       l.netPay,
@@ -58,7 +73,9 @@ function buildPayrollWorkbook(
       additions: totals.additions + l.otherAdditions,
       bonus: totals.bonus + l.bonusAmount,
       deductions: totals.deductions + l.otherDeductions,
+      severance: totals.severance + l.severanceAmount,
       pit: totals.pit + l.pitWithheld,
+      severancePit: totals.severancePit + l.severancePitWithheld,
       ssoEmp: totals.ssoEmp + l.ssoEmployee,
       ssoEmpr: totals.ssoEmpr + l.ssoEmployer,
       net: totals.net + l.netPay,
@@ -71,15 +88,17 @@ function buildPayrollWorkbook(
     totals.additions,
     totals.bonus,
     totals.deductions,
+    totals.severance,
     totals.pit,
+    totals.severancePit,
     totals.ssoEmp,
     totals.ssoEmpr,
     totals.net,
   ]);
   totalRow.font = { bold: true };
 
-  ws.columns.forEach((c, i) => (c.width = [14, 26, 16, 14, 12, 12, 16, 16, 16, 16][i] ?? 14));
-  [3, 4, 5, 6, 7, 8, 9, 10].forEach((col) => (ws.getColumn(col).numFmt = NUMBER_FMT));
+  ws.columns.forEach((c, i) => (c.width = [14, 26, 16, 14, 12, 12, 16, 16, 18, 16, 16, 16][i] ?? 14));
+  [3, 4, 5, 6, 7, 8, 9, 10, 11, 12].forEach((col) => (ws.getColumn(col).numFmt = NUMBER_FMT));
 
   return wb.xlsx.writeBuffer() as unknown as Promise<Buffer>;
 }

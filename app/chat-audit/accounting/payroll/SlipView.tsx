@@ -39,8 +39,19 @@ export default function SlipView({
             <tr><td>เงินเดือน/ค่าจ้าง</td><td className="num">{formatMoney(line.grossSalary)}</td></tr>
             <tr><td>รายรับเพิ่มเติม</td><td className="num">{formatMoney(line.otherAdditions)}</td></tr>
             <tr><td>โบนัส</td><td className="num">{formatMoney(line.bonusAmount)}</td></tr>
-            <tr><td className="strong">รวมเงินได้</td><td className="num strong">{formatMoney(line.grossSalary + line.otherAdditions + line.bonusAmount)}</td></tr>
+            {line.severanceAmount > 0 ? (
+              <tr><td>ค่าชดเชยเลิกจ้าง</td><td className="num">{formatMoney(line.severanceAmount)}</td></tr>
+            ) : null}
+            <tr>
+              <td className="strong">รวมเงินได้</td>
+              <td className="num strong">
+                {formatMoney(line.grossSalary + line.otherAdditions + line.bonusAmount + line.severanceAmount)}
+              </td>
+            </tr>
             <tr><td>หัก: ภาษีหัก ณ ที่จ่าย</td><td className="num">{formatMoney(line.pitWithheld)}</td></tr>
+            {line.severanceAmount > 0 ? (
+              <tr><td>หัก: ภาษีหัก ณ ที่จ่าย (ค่าชดเชย)</td><td className="num">{formatMoney(line.severancePitWithheld)}</td></tr>
+            ) : null}
             <tr><td>หัก: ประกันสังคม (ลูกจ้าง)</td><td className="num">{formatMoney(line.ssoEmployee)}</td></tr>
             <tr><td>หัก: รายการหักอื่น ๆ</td><td className="num">{formatMoney(line.otherDeductions)}</td></tr>
             <tr className="acc-total"><td className="strong">เงินเดือนสุทธิ (รับจริง)</td><td className="num strong">{formatMoney(line.netPay)}</td></tr>

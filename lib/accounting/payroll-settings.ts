@@ -44,6 +44,10 @@ export type PayrollSettings = {
   /** ★ เฟส 9b กลุ่ม BC (0.5) — 'monthly' (default) = สร้างรอบซ้ำเดือน/ปีเดียวกันไม่ได้เหมือนก่อนเฟสนี้เป๊ะ,
    *   'non_monthly' = เปิดสร้างหลายรอบ/เดือนได้ (ลูกค้าตั้งค่าเองเท่านั้น) */
   payFrequency: PayFrequency;
+  /** ★ เฟส 9b กลุ่ม BF (T160) — รหัสบัญชีค่าใช้จ่ายค่าชดเชยเลิกจ้าง (nullable, mirror
+   *   otherDeductionsAccountCode) — บังคับตั้งค่าก่อนสร้าง JE ได้จริงเฉพาะตอนมี severance_amount > 0
+   *   เท่านั้น (validate ที่ buildPayrollJournalEntry ใน payroll.ts) */
+  severanceExpenseAccountCode: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -59,6 +63,7 @@ export type PayrollSettingsInput = {
   /** ★ เฟส 9b กลุ่ม BC — ไม่ส่งมา/ค่าอื่นที่ไม่ใช่ 'non_monthly' เป๊ะ ๆ = default 'monthly' (regression-safe
    *   กับโค้ดเดิมก่อนเฟสนี้ที่ไม่รู้จักฟิลด์นี้เลย) */
   payFrequency?: unknown;
+  severanceExpenseAccountCode?: unknown;
 };
 
 type ValidatedPayrollSettings = {
@@ -70,6 +75,7 @@ type ValidatedPayrollSettings = {
   netPayAccountCode: string | null;
   netPayIsPaidImmediately: boolean;
   payFrequency: PayFrequency;
+  severanceExpenseAccountCode: string | null;
 };
 
 export type PayrollSettingsValidationResult =
@@ -158,6 +164,13 @@ export function validatePayrollSettingsInput(
   ]);
   if (!r6.ok) return r6;
 
+  // ★ เฟส 9b กลุ่ม BF (T160) — nullable เหมือน other_deductions/net_pay (ยังไม่ตั้งได้ตอนเริ่มต้น)
+  const severanceRaw = clampText(input.severanceExpenseAccountCode, ACCOUNT_CODE_MAX);
+  const r7 = requireOptionalAccountInCategory(severanceRaw, "รหัสบัญชีค่าชดเชยเลิกจ้าง", chartByCode, [
+    "ค่าใช้จ่าย",
+  ]);
+  if (!r7.ok) return r7;
+
   const netPayIsPaidImmediately = !!input.netPayIsPaidImmediately;
   // ★ เฟส 9b กลุ่ม BC — ต้องเป็น 'non_monthly' เป๊ะ ๆ ถึงจะเปิดโหมดใหม่ ค่าอื่นใดรวมถึง undefined/ไม่ส่งมา
   //   (โค้ดเก่าก่อนเฟสนี้ทั้งหมด) = default 'monthly' เสมอ (regression-safe)
@@ -175,6 +188,7 @@ export function validatePayrollSettingsInput(
       netPayAccountCode: r6.value,
       netPayIsPaidImmediately,
       payFrequency,
+      severanceExpenseAccountCode: r7.value,
     },
   };
 }
@@ -195,12 +209,14 @@ type RawRow = {
   net_pay_account_code: string | null;
   net_pay_is_paid_immediately: boolean;
   pay_frequency: string | null;
+  /** ★ BF — undefined ถ้า migration 0100 ยังไม่ apply บน DB นี้ (defensive, ไม่ควรเกิดในโปรดักชัน) */
+  severance_expense_account_code?: string | null;
   created_at: string;
   updated_at: string;
 };
 
 const COLUMNS =
-  "id, tenant_id, customer_id, salary_expense_account_code, sso_employer_expense_account_code, sso_payable_account_code, pit_payable_account_code, other_deductions_account_code, net_pay_account_code, net_pay_is_paid_immediately, pay_frequency, created_at, updated_at";
+  "id, tenant_id, customer_id, salary_expense_account_code, sso_employer_expense_account_code, sso_payable_account_code, pit_payable_account_code, other_deductions_account_code, net_pay_account_code, net_pay_is_paid_immediately, pay_frequency, severance_expense_account_code, created_at, updated_at";
 
 function mapRow(r: RawRow): PayrollSettings {
   return {
@@ -217,6 +233,7 @@ function mapRow(r: RawRow): PayrollSettings {
     // ★ แถวเก่าก่อน migration 0093 (ถ้าหลุดมาไม่มีคอลัมน์นี้จริง — ไม่ควรเกิดเพราะ DB default 'monthly'
     //   เสมอ) ก็ยัง fallback เป็น 'monthly' (regression-safe)
     payFrequency: r.pay_frequency === "non_monthly" ? "non_monthly" : "monthly",
+    severanceExpenseAccountCode: r.severance_expense_account_code ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -258,6 +275,7 @@ export async function getOrCreateDefaultSettings(
     net_pay_account_code: null,
     net_pay_is_paid_immediately: false,
     pay_frequency: "monthly",
+    severance_expense_account_code: null,
   };
   const { data, error } = await db
     .from("payroll_settings")
@@ -294,6 +312,7 @@ export async function upsertSettings(
     net_pay_account_code: v.value.netPayAccountCode,
     net_pay_is_paid_immediately: v.value.netPayIsPaidImmediately,
     pay_frequency: v.value.payFrequency,
+    severance_expense_account_code: v.value.severanceExpenseAccountCode,
   };
 
   const existing = await getSettings(db, tenantId, customerId);

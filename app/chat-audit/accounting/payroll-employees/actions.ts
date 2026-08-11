@@ -198,9 +198,11 @@ export type SaveSettingsInput = {
   netPayIsPaidImmediately: unknown;
   /** ★ เฟส 9b กลุ่ม BC (T140) — 'monthly' (default) / 'non_monthly' */
   payFrequency?: unknown;
+  /** ★ เฟส 9b กลุ่ม BF (T160) */
+  severanceExpenseAccountCode?: unknown;
 };
 
-/** บันทึกตั้งค่าบัญชี 6 ช่องของลูกค้า 1 ราย (0.11) */
+/** บันทึกตั้งค่าบัญชี 6 ช่อง (+ ค่าชดเชยเลิกจ้าง, BF) ของลูกค้า 1 ราย (0.11) */
 export async function upsertSettingsAction(input: SaveSettingsInput): Promise<PayrollSaveResult> {
   try {
     const authed = await createClient();
@@ -222,6 +224,7 @@ export async function upsertSettingsAction(input: SaveSettingsInput): Promise<Pa
       netPayAccountCode: input.netPayAccountCode,
       netPayIsPaidImmediately: input.netPayIsPaidImmediately,
       payFrequency: input.payFrequency,
+      severanceExpenseAccountCode: input.severanceExpenseAccountCode,
     };
 
     const res = await upsertSettings(service, ctx.tenantId, input.customerId, settingsInput, chartByCode);

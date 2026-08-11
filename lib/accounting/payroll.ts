@@ -51,6 +51,10 @@ import {
   remainingPeriodsInYear,
   PERSONAL_ALLOWANCE_STANDARD,
   ENABLE_EXTRA_DEDUCTIONS_IN_PIT,
+  calcStatutorySeveranceDays,
+  calcYearsOfServiceForTaxFormula,
+  calcSeveranceWithholding,
+  ENABLE_SEVERANCE_TAX_CALC,
 } from "@/lib/accounting/payroll-tax";
 import { calcProratedGrossSalary } from "@/lib/accounting/payroll-prorate";
 import { listEmployees } from "@/lib/accounting/payroll-employees";
@@ -70,6 +74,17 @@ const LINE_LIST_LIMIT = 5000;
 function parseMoney(v: unknown): number | null {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? round2(n) : null;
+}
+
+/** ★ เฟส 9b กลุ่ม BF (T165) — จำนวนวันตามปฏิทินระหว่าง 2 วันที่ (YYYY-MM-DD) — คืน 0 ถ้าวันที่ผิดรูปแบบ/
+ *   ไม่มี start/end หรือ end ก่อนหน้า start (ไม่ throw) — ใช้แค่แปลงเป็นปีทศนิยมป้อนเข้า
+ *   calcStatutorySeveranceDays (เครื่องคำนวณช่วยเหลือ, ไม่บังคับ) */
+function daysBetweenIsoDates(start: string | null, end: string | null): number {
+  if (!start || !end || !DATE_RE.test(start) || !DATE_RE.test(end)) return 0;
+  const s = Date.parse(`${start}T00:00:00Z`);
+  const e = Date.parse(`${end}T00:00:00Z`);
+  if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return 0;
+  return Math.round((e - s) / 86400000);
 }
 
 // ---------------------------------------------------------------------
@@ -126,6 +141,11 @@ export type PayrollRunLine = {
   pitWithheld: number;
   ssoEmployee: number;
   ssoEmployer: number;
+  /** ★ เฟส 9b กลุ่ม BF — ค่าชดเชยเลิกจ้าง (ก่อนหักภาษี) ที่นักบัญชีกรอกได้เสมอ เหมือน bonus_amount */
+  severanceAmount: number;
+  /** ★★★ เฟส 9b กลุ่ม BF (0.2) — ภาษีหัก ณ ที่จ่ายของค่าชดเชย เป็น 0 เสมอถ้า ENABLE_SEVERANCE_TAX_CALC=false
+   *   ไม่ว่า severanceAmount จะมากเท่าไหร่ (ดู recalcRunLines) */
+  severancePitWithheld: number;
   netPay: number;
   /** ★ เฟส 9b กลุ่ม BB — ข้อมูล badge "prorate อัตโนมัติ" (คำนวณสด ๆ จาก start_date/resign_date ของ
    *   พนักงานเทียบกับงวดของรอบนี้เสมอ — ไม่ผูกกับว่ายอด gross_salary ปัจจุบันถูกแก้ทับไปแล้วหรือไม่ เป็นแค่
@@ -142,6 +162,14 @@ export type PayrollRunLine = {
   personalAllowancePreview: number;
   /** จุดที่ถูกตัดยอดเพราะชนเพดานค่าลดหย่อน (ถ้ามี) — แสดงเป็น notice ในหน้าจอ */
   deductionWarnings: string[];
+  /** ★ เฟส 9b กลุ่ม BF (T165, 0.7) — เครื่องคำนวณช่วยเหลือ (ไม่บังคับ): จำนวนวันค่าชดเชยตาม ม.118 คำนวณสด ๆ
+   *   จาก start_date/resign_date ของพนักงานเทียบกับวันที่จ่ายของรอบนี้ (resign_date ยังไม่กรอก → ใช้ pay_date
+   *   แทนชั่วคราว เพื่อให้เห็นตัวเลขระหว่างทาง) — ไม่ผูกกับ severance_amount ที่บันทึกจริงเลย */
+  statutorySeveranceDaysHelper: number;
+  /** ★★★ เฟส 9b กลุ่ม BF (T165, 0.2) — preview ภาษีค่าชดเชยตามสูตร calcSeveranceWithholding คำนวณสด ๆ
+   *   ตอนแสดงผลเสมอ (ไม่ว่า flag เปิด/ปิด) เพื่อให้นักบัญชีเห็นประโยชน์ของสูตรที่เขียนเสร็จแล้ว — ★ ไม่ใช่ยอดที่
+   *   หักจริง (ดู severancePitWithheld ที่บันทึกจริงข้างบน) — UI ต้องระบุชัดว่าเป็น preview เท่านั้นตอน flag=false */
+  severancePitWithheldPreview: number;
 };
 
 /** ผลลัพธ์ที่ server action ใช้แสดง toast/inline */
@@ -291,6 +319,8 @@ export async function createDraftRun(
         pit_withheld: 0,
         sso_employee: 0,
         sso_employer: 0,
+        severance_amount: 0,
+        severance_pit_withheld: 0,
         net_pay: 0,
       };
     });
@@ -478,11 +508,14 @@ type RawLineRow = {
   pit_withheld: number | string;
   sso_employee: number | string;
   sso_employer: number | string;
+  /** ★ เฟส 9b กลุ่ม BF — undefined ถ้า migration 0100 ยังไม่ apply บน DB นี้ (defensive) */
+  severance_amount?: number | string | null;
+  severance_pit_withheld?: number | string | null;
   net_pay: number | string;
 };
 
 const LINE_COLUMNS =
-  "id, run_id, payroll_employee_id, gross_salary, other_additions, bonus_amount, other_deductions, pit_withheld, sso_employee, sso_employer, net_pay";
+  "id, run_id, payroll_employee_id, gross_salary, other_additions, bonus_amount, other_deductions, pit_withheld, sso_employee, sso_employer, severance_amount, severance_pit_withheld, net_pay";
 
 async function fetchRawLines(db: DB, tenantId: string, runId: string): Promise<RawLineRow[]> {
   const { data } = await db
@@ -551,10 +584,7 @@ async function fetchEmployeeInfo(db: DB, tenantId: string, customerId: string, i
   return map;
 }
 
-function mapLineAmounts(
-  r: RawLineRow
-): Omit<
-  PayrollRunLine,
+type LineAmountFields =
   | "employeeFullName"
   | "employeeCode"
   | "isProrated"
@@ -563,7 +593,10 @@ function mapLineAmounts(
   | "extraDeductionsPreviewTotal"
   | "personalAllowancePreview"
   | "deductionWarnings"
-> {
+  | "statutorySeveranceDaysHelper"
+  | "severancePitWithheldPreview";
+
+function mapLineAmounts(r: RawLineRow): Omit<PayrollRunLine, LineAmountFields> {
   return {
     id: r.id,
     runId: r.run_id,
@@ -575,6 +608,8 @@ function mapLineAmounts(
     pitWithheld: round2(Number(r.pit_withheld)),
     ssoEmployee: round2(Number(r.sso_employee)),
     ssoEmployer: round2(Number(r.sso_employer)),
+    severanceAmount: round2(Number(r.severance_amount ?? 0)),
+    severancePitWithheld: round2(Number(r.severance_pit_withheld ?? 0)),
     netPay: round2(Number(r.net_pay)),
   };
 }
@@ -613,6 +648,9 @@ export async function getRunWithLines(
     rawLines.map((l) => l.payroll_employee_id),
     run.payPeriodYear
   );
+  // ★★★ เฟส 9b กลุ่ม BF (T165) — ต้องใช้ขั้นภาษี ณ วันที่จ่ายของรอบนี้ เพื่อคำนวณ preview ภาษีค่าชดเชย
+  //   (severancePitWithheldPreview) แบบสด ๆ ตอนแสดงผล — ไม่มีขั้นภาษี (null) → preview=0 ทุกบรรทัด ไม่ throw
+  const brackets = await getEffectivePitBrackets(db, run.payDate);
   const lines: PayrollRunLine[] = rawLines
     .map((r) => {
       const amounts = mapLineAmounts(r);
@@ -641,6 +679,16 @@ export async function getRunWithLines(
       }));
       const capped = sumAndCapDeductions(deductionRows, annualIncomeEstimate);
 
+      // ★★★ BF (T165, 0.7) — เครื่องคำนวณช่วยเหลือ+preview: ใช้ resign_date ถ้ามี (ตกลงเลิกจ้างแล้ว) ไม่มี →
+      //   ใช้ pay_date ของรอบนี้แทนชั่วคราว (ยังไม่ตกลงวันที่ลาออกจริง) เพื่อให้เห็นตัวเลขระหว่างทาง — เป็นแค่
+      //   ตัวช่วยแสดงผล ไม่ผูกกับ severance_amount/severance_pit_withheld ที่บันทึกจริงเลย
+      const tenureEndDate = emp?.resignDate ?? run.payDate;
+      const totalDaysOfService = daysBetweenIsoDates(emp?.startDate ?? null, tenureEndDate);
+      const statutorySeveranceDaysHelper = calcStatutorySeveranceDays(totalDaysOfService / 365);
+      const yearsForTaxFormula = calcYearsOfServiceForTaxFormula(emp?.startDate ?? null, tenureEndDate);
+      const severancePitWithheldPreview = brackets
+        ? calcSeveranceWithholding(amounts.severanceAmount, amounts.grossSalary, yearsForTaxFormula, brackets).tax
+        : 0;
       return {
         ...amounts,
         employeeFullName: emp?.fullName ?? "(ไม่พบพนักงาน)",
@@ -651,6 +699,8 @@ export async function getRunWithLines(
         extraDeductionsPreviewTotal: capped.totalOtherAllowance,
         personalAllowancePreview: round2(PERSONAL_ALLOWANCE_STANDARD + capped.totalOtherAllowance),
         deductionWarnings: capped.warnings,
+        statutorySeveranceDaysHelper,
+        severancePitWithheldPreview,
       };
     })
     .sort((a, b) => a.employeeFullName.localeCompare(b.employeeFullName, "th"));
@@ -668,6 +718,9 @@ export type LineAmountEdit = {
   otherAdditions: unknown;
   bonusAmount: unknown;
   otherDeductions: unknown;
+  /** ★ เฟส 9b กลุ่ม BF — undefined (input เก่า/ทดสอบเดิมก่อนเฟสนี้) → default 0 เสมอ ไม่ throw
+   *   (backward compatible เหมือน ssoExempt/priorEmployerYtd* ของ BA/BD) */
+  severanceAmount?: unknown;
 };
 
 type ValidatedLineAmountEdit = {
@@ -676,6 +729,7 @@ type ValidatedLineAmountEdit = {
   otherAdditions: number;
   bonusAmount: number;
   otherDeductions: number;
+  severanceAmount: number;
 };
 
 /**
@@ -697,7 +751,17 @@ function validateLineAmountEdits(
     if (bonus === null || bonus < 0) return { ok: false, message: "โบนัสต้องเป็นตัวเลขไม่ติดลบ" };
     const deductions = parseMoney(e.otherDeductions);
     if (deductions === null || deductions < 0) return { ok: false, message: "รายการหักอื่น ๆ ต้องเป็นตัวเลขไม่ติดลบ" };
-    out.push({ id: e.id, grossSalary: gross, otherAdditions: additions, bonusAmount: bonus, otherDeductions: deductions });
+    // ★ เฟส 9b กลุ่ม BF — undefined (ไม่ส่งมา) → default 0 เสมอ (backward compatible)
+    const severance = e.severanceAmount === undefined ? 0 : parseMoney(e.severanceAmount);
+    if (severance === null || severance < 0) return { ok: false, message: "ค่าชดเชยเลิกจ้างต้องเป็นตัวเลขไม่ติดลบ" };
+    out.push({
+      id: e.id,
+      grossSalary: gross,
+      otherAdditions: additions,
+      bonusAmount: bonus,
+      otherDeductions: deductions,
+      severanceAmount: severance,
+    });
   }
   return { ok: true, value: out };
 }
@@ -743,6 +807,7 @@ export async function recalcRunLines(
           other_additions: e.otherAdditions,
           bonus_amount: e.bonusAmount,
           other_deductions: e.otherDeductions,
+          severance_amount: e.severanceAmount,
         })
         .eq("id", e.id)
         .eq("tenant_id", tenantId)
@@ -768,11 +833,13 @@ export async function recalcRunLines(
   const ssoExemptByEmp = new Map<string, boolean>();
   // ★★ เฟส 9b กลุ่ม BE (0.2, T150) — ยอดประมาณเงินได้ทั้งปีที่นักบัญชีกรอกเอง (nullable)
   const annualIncomeOverrideByEmp = new Map<string, number | null>();
+  // ★★★ เฟส 9b กลุ่ม BF — โหลด resign_date คู่กัน (ใช้เป็นวันสิ้นสุดงานสำหรับ calcYearsOfServiceForTaxFormula)
+  const resignDateByEmp = new Map<string, string | null>();
   const chunks = await Promise.all(
     chunkIds([...new Set(empIds)]).map((chunk) =>
       db
         .from("payroll_employees")
-        .select("id, start_date, sso_exempt, annual_income_estimate_override")
+        .select("id, start_date, resign_date, sso_exempt, annual_income_estimate_override")
         .eq("tenant_id", tenantId)
         .eq("customer_id", customerId)
         .in("id", chunk)
@@ -782,10 +849,12 @@ export async function recalcRunLines(
     for (const r of (data ?? []) as {
       id: string;
       start_date: string | null;
+      resign_date: string | null;
       sso_exempt: boolean | null;
       annual_income_estimate_override?: number | string | null;
     }[]) {
       startDateByEmp.set(r.id, r.start_date);
+      resignDateByEmp.set(r.id, r.resign_date);
       ssoExemptByEmp.set(r.id, !!r.sso_exempt);
       annualIncomeOverrideByEmp.set(
         r.id,
@@ -804,13 +873,22 @@ export async function recalcRunLines(
   const deductionsByEmployee = await listDeductionsForEmployees(db, tenantId, [...new Set(empIds)], run.payPeriodYear);
 
   // ★★ ชั้น 1: คำนวณทุกบรรทัดก่อน (ยังไม่เขียน DB) — ให้ตรวจ net_pay ติดลบได้ทั้งชุดก่อนบันทึกจริงบรรทัดใดเลย
-  type Computed = { rawId: string; payrollEmployeeId: string; pit: number; ssoEmployee: number; ssoEmployer: number; netPay: number };
+  type Computed = {
+    rawId: string;
+    payrollEmployeeId: string;
+    pit: number;
+    ssoEmployee: number;
+    ssoEmployer: number;
+    severancePitWithheld: number;
+    netPay: number;
+  };
   const computed: Computed[] = [];
   for (const raw of rawLines) {
     const amounts = mapLineAmounts(raw);
     const periodsPerYear = remainingPeriodsInYear(run.payDate, startDateByEmp.get(raw.payroll_employee_id) ?? null);
-    // ★ grossThisPeriod (ฐาน annualize เงินได้ประจำ + ฐาน SSO) ไม่รวม bonusAmount เสมอ — bonus ถูกส่งเข้า
-    //   calcMonthlyPitWithBonus แยกเป็นพารามิเตอร์ของตัวเอง (0.5, verify แล้ว) ไม่ผสมเข้า grossThisPeriod
+    // ★ grossThisPeriod (ฐาน annualize เงินได้ประจำ + ฐาน SSO) ไม่รวม bonusAmount/severanceAmount เสมอ —
+    //   bonus/severance คำนวณแยกเป็นเงินได้ครั้งเดียวคนละสูตร (0.5 verify แล้ว / BF ดูข้างล่าง) ไม่ผสมเข้า
+    //   grossThisPeriod (0.2 กฎเหล็ก — severance ต้องแยกจากเงินได้ประจำโดยสิ้นเชิง)
     const grossThisPeriod = round2(amounts.grossSalary + amounts.otherAdditions);
 
     // ★★ BE — personalAllowancePreview คำนวณเสมอ (ไม่ว่า flag เปิด/ปิด) เพื่อใช้เมื่อ flag=true เท่านั้น —
@@ -834,8 +912,32 @@ export async function recalcRunLines(
     const sso = isSsoExempt
       ? { wageBase: 0, employeeContribution: 0, employerContribution: 0 }
       : calcSsoContribution(grossThisPeriod, ssoConfig);
+    // ★★★ เฟส 9b กลุ่ม BF (0.2, ★★★ เสี่ยงกฎหมายสูงสุด) — severance_pit_withheld ต้องเป็น 0 เสมอถ้า
+    //   ENABLE_SEVERANCE_TAX_CALC=false ไม่ว่า severanceAmount จะกรอกมากเท่าไหร่ก็ตาม (นักบัญชีกรอกภาษีเอง
+    //   ผ่าน other_deductions เดิมได้ถ้าต้องการ จนกว่าจะ verify สูตร) — คำนวณ years เฉพาะตอน flag=true เท่านั้น
+    //   (กัน side-effect จากการเรียก calcYearsOfServiceForTaxFormula/calcSeveranceWithholding เมื่อไม่จำเป็น)
+    let severancePitWithheld = 0;
+    if (ENABLE_SEVERANCE_TAX_CALC && amounts.severanceAmount > 0) {
+      const yearsForTaxFormula = calcYearsOfServiceForTaxFormula(
+        startDateByEmp.get(raw.payroll_employee_id) ?? null,
+        resignDateByEmp.get(raw.payroll_employee_id) ?? run.payDate
+      );
+      severancePitWithheld = calcSeveranceWithholding(
+        amounts.severanceAmount,
+        amounts.grossSalary,
+        yearsForTaxFormula,
+        brackets
+      ).tax;
+    }
     const netPay = round2(
-      amounts.grossSalary + amounts.otherAdditions + amounts.bonusAmount - pit - sso.employeeContribution - amounts.otherDeductions
+      amounts.grossSalary +
+        amounts.otherAdditions +
+        amounts.bonusAmount +
+        amounts.severanceAmount -
+        pit -
+        sso.employeeContribution -
+        amounts.otherDeductions -
+        severancePitWithheld
     );
     computed.push({
       rawId: raw.id,
@@ -843,6 +945,7 @@ export async function recalcRunLines(
       pit,
       ssoEmployee: sso.employeeContribution,
       ssoEmployer: sso.employerContribution,
+      severancePitWithheld,
       netPay,
     });
   }
@@ -868,6 +971,7 @@ export async function recalcRunLines(
         pit_withheld: c.pit,
         sso_employee: c.ssoEmployee,
         sso_employer: c.ssoEmployer,
+        severance_pit_withheld: c.severancePitWithheld,
         net_pay: c.netPay,
       })
       .eq("id", c.rawId)
@@ -893,20 +997,26 @@ export type PayrollRunLineAmounts = {
   pitWithheld: number;
   ssoEmployee: number;
   ssoEmployer: number;
+  /** ★ เฟส 9b กลุ่ม BF — ค่าชดเชยเลิกจ้าง (ก่อนหักภาษี) */
+  severanceAmount: number;
+  /** ★ เฟส 9b กลุ่ม BF — ภาษีหัก ณ ที่จ่ายของค่าชดเชย (รวมเข้า Cr pit_payable เดียวกับ PIT ปกติ) */
+  severancePitWithheld: number;
   netPay: number;
 };
 
 export type BuildJournalResult = { ok: true; lines: ManualEntryLineInput[] } | { ok: false; message: string };
 
 /**
- * รวมยอดต่อรหัสบัญชี (SUM) ก่อนสร้างบรรทัด JE เสมอ (0.8) — ได้ 4-6 บรรทัดคงที่ไม่ว่าจะมีพนักงานกี่คน:
+ * รวมยอดต่อรหัสบัญชี (SUM) ก่อนสร้างบรรทัด JE เสมอ (0.8) — ได้ 4-7 บรรทัดคงที่ไม่ว่าจะมีพนักงานกี่คน:
  *   Dr salary_expense = Σ(gross+additions+bonus) · Dr sso_employer_expense = Σ(sso_employer) [ข้ามถ้า 0]
- *   Cr pit_payable = Σ(pit) [ข้ามถ้า 0] · Cr sso_payable = Σ(sso_employee+sso_employer) [ข้ามถ้า 0]
+ *   Dr severance_expense = Σ(severanceAmount) [ข้ามถ้า 0 — ถ้า >0 แต่ไม่มีรหัสบัญชีตั้งไว้ → ปฏิเสธ, เฟส 9b BF]
+ *   Cr pit_payable = Σ(pit+severancePitWithheld) [ข้ามถ้า 0] · Cr sso_payable = Σ(sso_employee+sso_employer) [ข้ามถ้า 0]
  *   Cr other_deductions = Σ(other_deductions) [ข้ามถ้า 0 — ถ้า >0 แต่ไม่มีรหัสบัญชีตั้งไว้ → ปฏิเสธ]
  *   Cr net_pay = Σ(net_pay) [ข้ามถ้า 0 — ต้องมีรหัสบัญชีตั้งไว้เสมอไม่ว่าผลรวมจะเป็น 0 หรือไม่ก็ตาม, 0.11]
- *   ★ Dr รวม = Cr รวมเสมอทางพีชคณิต (net_pay = gross+add+bonus−pit−sso_employee−other_deductions ทำให้
- *   Σ(pit)+Σ(sso_employee+sso_employer)+Σ(other_deductions)+Σ(net_pay) = Σ(gross+add+bonus)+Σ(sso_employer)
- *   เป๊ะ — การข้ามบรรทัดที่ยอด=0 ไม่กระทบผลรวม เพราะบวก 0 เข้า/ไม่เข้า ผลรวมเท่ากันเสมอ)
+ *   ★ Dr รวม = Cr รวมเสมอทางพีชคณิต (net_pay = gross+add+bonus+severanceAmount−pit−sso_employee−
+ *   other_deductions−severancePitWithheld ทำให้ Σ(pit+severancePitWithheld)+Σ(sso_employee+sso_employer)+
+ *   Σ(other_deductions)+Σ(net_pay) = Σ(gross+add+bonus+severanceAmount)+Σ(sso_employer) เป๊ะ — การข้ามบรรทัด
+ *   ที่ยอด=0 ไม่กระทบผลรวม เพราะบวก 0 เข้า/ไม่เข้า ผลรวมเท่ากันเสมอ)
  *   ★★ แก้บั๊ก QC เฟส 9: ถ้า Σ(net_pay) ติดลบ (สุดวิสัย — recalcRunLines กันไว้แล้วไม่ให้ net_pay ต่อพนักงานติดลบ
  *   ตั้งแต่ต้นเหตุ) บรรทัดนี้กลับขั้วเป็น Dr แทน (ห้ามใส่ credit ติดลบ — ดูคอมเมนต์เต็มในฟังก์ชันตรงเงื่อนไข)
  */
@@ -920,6 +1030,7 @@ export function buildPayrollJournalEntry(
 
   let salaryExpense = 0;
   let ssoEmployerExpense = 0;
+  let severanceExpense = 0;
   let pitPayable = 0;
   let ssoPayable = 0;
   let otherDeductionsPayable = 0;
@@ -928,7 +1039,8 @@ export function buildPayrollJournalEntry(
   for (const l of lines) {
     salaryExpense = round2(salaryExpense + l.grossSalary + l.otherAdditions + l.bonusAmount);
     ssoEmployerExpense = round2(ssoEmployerExpense + l.ssoEmployer);
-    pitPayable = round2(pitPayable + l.pitWithheld);
+    severanceExpense = round2(severanceExpense + l.severanceAmount);
+    pitPayable = round2(pitPayable + l.pitWithheld + l.severancePitWithheld);
     ssoPayable = round2(ssoPayable + l.ssoEmployee + l.ssoEmployer);
     otherDeductionsPayable = round2(otherDeductionsPayable + l.otherDeductions);
     netPayTotal = round2(netPayTotal + l.netPay);
@@ -940,6 +1052,14 @@ export function buildPayrollJournalEntry(
       message: "มีรายการหักอื่น ๆ แต่ยังไม่ได้ตั้งรหัสบัญชีหักอื่น ๆ ในตั้งค่า — กรุณาตั้งค่าก่อนสร้างรายการบัญชี",
     };
   }
+  // ★★★ เฟส 9b กลุ่ม BF (T164) — mirror other_deductions เดิม: มี severance_amount>0 แต่ไม่ตั้งรหัสบัญชี
+  //   ค่าชดเชย → ปฏิเสธสร้าง JE (ไม่มีทางบันทึกค่าใช้จ่ายก้อนนี้แบบไม่มีรหัสบัญชีไปได้)
+  if (severanceExpense > 0 && !settings.severanceExpenseAccountCode) {
+    return {
+      ok: false,
+      message: "มีค่าชดเชยเลิกจ้างแต่ยังไม่ได้ตั้งรหัสบัญชีค่าชดเชยในตั้งค่า — กรุณาตั้งค่าก่อนสร้างรายการบัญชี",
+    };
+  }
 
   const out: ManualEntryLineInput[] = [];
   if (salaryExpense > 0) {
@@ -947,6 +1067,9 @@ export function buildPayrollJournalEntry(
   }
   if (ssoEmployerExpense > 0) {
     out.push({ accountCode: settings.ssoEmployerExpenseAccountCode, accountName: null, description: "เงินสมทบประกันสังคม (ส่วนนายจ้าง)", debit: ssoEmployerExpense, credit: 0 });
+  }
+  if (severanceExpense > 0 && settings.severanceExpenseAccountCode) {
+    out.push({ accountCode: settings.severanceExpenseAccountCode, accountName: null, description: "ค่าชดเชยเลิกจ้างพนักงาน", debit: severanceExpense, credit: 0 });
   }
   if (pitPayable > 0) {
     out.push({ accountCode: settings.pitPayableAccountCode, accountName: null, description: "ภาษีหัก ณ ที่จ่าย (ภ.ง.ด.1)", debit: 0, credit: pitPayable });
