@@ -288,6 +288,15 @@ export async function upsertDeductionAction(input: SaveDeductionInput): Promise<
     const ctx = await requireAccountingAccess(authed, service);
     assertCustomerInScope(ctx, input.customerId);
 
+    // ★ defense-in-depth (0.15) — เช็คสโคปซ้ำสองชั้นเหมือน listDeductionsAction: ครั้งแรกเช็ค customerId
+    //   ที่ client ส่งมา ครั้งที่สองเช็ค scope.customerId ที่ derive จาก employeeId จริง (กัน customerId
+    //   ปลอมที่อยู่ในสโคปนักบัญชีแต่ไม่ตรงกับพนักงานจริง — data layer เช็คซ้ำอยู่แล้วก็จริง แต่เช็คที่ชั้น
+    //   action ด้วยทำให้ปฏิเสธเร็วกว่า ไม่ต้องพึ่งพา data layer อย่างเดียว)
+    const scope = await getEmployeeScope(service, ctx.tenantId, input.employeeId);
+    if (!scope) return { ok: false, message: "ไม่พบพนักงาน (อาจถูกลบไปแล้ว)" };
+    assertCustomerInScope(ctx, scope.customerId);
+    if (scope.customerId !== input.customerId) return { ok: false, message: "ลูกค้าไม่ตรงกับพนักงานเดิม" };
+
     const deductionInput: PayrollEmployeeDeductionInput = {
       taxYear: input.taxYear,
       deductionType: input.deductionType,
@@ -314,6 +323,13 @@ export async function deleteDeductionAction(id: string, employeeId: string, cust
     const service = createServiceRoleClient();
     const ctx = await requireAccountingAccess(authed, service);
     assertCustomerInScope(ctx, customerId);
+
+    // ★ defense-in-depth (0.15) — เช็คสโคปซ้ำสองชั้นเหมือน listDeductionsAction (ดูคอมเมนต์เต็มใน
+    //   upsertDeductionAction ด้านบน)
+    const scope = await getEmployeeScope(service, ctx.tenantId, employeeId);
+    if (!scope) return { ok: false, message: "ไม่พบพนักงาน (อาจถูกลบไปแล้ว)" };
+    assertCustomerInScope(ctx, scope.customerId);
+    if (scope.customerId !== customerId) return { ok: false, message: "ลูกค้าไม่ตรงกับพนักงานเดิม" };
 
     const res = await deleteDeduction(service, ctx.tenantId, customerId, employeeId, id);
     if (!res.ok) return { ok: false, message: res.message };

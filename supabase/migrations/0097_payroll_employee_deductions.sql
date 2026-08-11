@@ -34,7 +34,13 @@ create table if not exists public.payroll_employee_deductions (
   deduction_type       text not null check (deduction_type in (
                           'spouse_no_income',
                           'child',
-                          'life_insurance',
+                          -- ★ แก้บั๊ก QC ก่อน merge (ฟีเจอร์ยังไม่ deploy จริง จึงแก้ enum ในไฟล์ migration
+                          --   เดิมได้เลยโดยไม่ต้องเพิ่ม migration ใหม่แยก): เดิมมี 'life_insurance' ตัวเดียว
+                          --   เก็บเบี้ยประกันของผู้มีเงินได้เอง+คู่สมรสก้อนเดียวกัน ทำให้ cap ผิดกฎหมายจริง
+                          --   เมื่อยอดไม่ได้แบ่งสัดส่วนตรงกับที่โค้ดสมมติ — แยกเป็น 2 ค่าเพื่อ cap อิสระคนละ
+                          --   ก้อนใน lib/accounting/payroll-deductions.ts::sumAndCapDeductions
+                          'life_insurance_self',
+                          'life_insurance_spouse',
                           'provident_fund',
                           'mortgage_interest'
                         )),

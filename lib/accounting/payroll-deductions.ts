@@ -25,11 +25,17 @@ type DB = SupabaseClient;
 const LIST_LIMIT = 5000;
 const NOTE_MAX = 300;
 
-/** ประเภทค่าลดหย่อนที่ระบบรองรับ (closed list — ตรงกับ check constraint ของ migration 0097) */
+/** ประเภทค่าลดหย่อนที่ระบบรองรับ (closed list — ตรงกับ check constraint ของ migration 0097)
+ *   ★ แก้บั๊ก QC (พบโดย independent code reviewer): เดิมมี `life_insurance` ตัวเดียวเก็บเบี้ยประกันของ
+ *   ผู้มีเงินได้เอง+คู่สมรสเป็นก้อนเดียว แล้วเดา cap จากยอดรวม (`min(sum, 100000|110000)`) — ผิดกฎหมายจริง
+ *   เมื่อยอดไม่ได้แบ่งสัดส่วนตรงกับที่โค้ดสมมติ (เช่น own=30,000+spouse=100,000 → โค้ดเดิมให้ 110,000 ทั้งที่
+ *   กฎหมายให้แค่ 40,000 = min(30000,100000)+min(100000,10000)) — แยกเป็น `life_insurance_self`/
+ *   `life_insurance_spouse` คนละประเภท cap อิสระกันแทน (ดู `sumAndCapDeductions` ด้านล่าง) */
 export const DEDUCTION_TYPES = [
   "spouse_no_income",
   "child",
-  "life_insurance",
+  "life_insurance_self",
+  "life_insurance_spouse",
   "provident_fund",
   "mortgage_interest",
 ] as const;
@@ -308,9 +314,12 @@ export async function deleteDeduction(
 
 /** เพดานค่าลดหย่อนแต่ละประเภท (บาท) — อ้างอิงแหล่งที่มาเต็มด้านล่างฟังก์ชัน `sumAndCapDeductions` */
 export const SPOUSE_NO_INCOME_CAP = 60000;
+/** เพดานเบี้ยประกันชีวิตของผู้มีเงินได้เอง (deduction_type='life_insurance_self') */
 export const LIFE_INSURANCE_CAP = 100000;
-/** ★ เพิ่มอีก 10,000 เมื่อมีคู่สมรสไม่มีเงินได้ (spouse_no_income>0 อยู่ในชุดข้อมูลเดียวกัน) รวมเป็น 110,000 */
-export const LIFE_INSURANCE_CAP_WITH_SPOUSE = 110000;
+/** ★ เพดานเบี้ยประกันชีวิตของคู่สมรส (deduction_type='life_insurance_spouse') — cap อิสระคนละก้อนจาก
+ *   ของผู้มีเงินได้เอง (ไม่ใช่ "เพดานรวม" แบบเดิม) และ**มีผลก็ต่อเมื่อ**มีแถว spouse_no_income>0 อยู่ใน
+ *   ชุดข้อมูลเดียวกันเท่านั้น (คู่สมรสไม่มีเงินได้ — ต้องเลือก checkbox/กรอกยืนยันก่อนจึงหักได้ตามกฎหมาย) */
+export const LIFE_INSURANCE_SPOUSE_CAP = 10000;
 export const PROVIDENT_FUND_ABS_CAP = 500000;
 export const PROVIDENT_FUND_INCOME_RATIO = 0.3;
 export const MORTGAGE_INTEREST_CAP = 100000;
@@ -332,9 +341,18 @@ export type SumAndCapDeductionsResult = {
  *   - `spouse_no_income`: รวมทุกแถว แล้ว cap ที่ 60,000 บาท (เผื่อกรอกซ้ำ/ผิดพลาดหลายแถว)
  *   - `child`: รวมทุกแถวตรง ๆ **ไม่มี cap อัตโนมัติ** (นักบัญชี/หน้าจอเลือก 30,000 หรือ 60,000 ต่อคนเอง
  *     ตามกติกาปีเกิด/ลำดับบุตรที่ระบบไม่ auto-derive เพราะซับซ้อนเกินกว่าจะทำอัตโนมัติได้อย่างปลอดภัย)
- *   - `life_insurance`: รวมทุกแถว แล้ว cap ที่ 100,000 บาท — **ขยับเป็น 110,000 บาท** ถ้าในชุดข้อมูลเดียวกัน
- *     มีแถว `spouse_no_income` ที่ amount > 0 ด้วย (คู่สมรสไม่มีเงินได้ → มีสิทธิหักเบี้ยประกันชีวิตของคู่สมรส
- *     เพิ่มอีกไม่เกิน 10,000 บาท)
+ *   - `life_insurance_self`/`life_insurance_spouse` (★ แก้บั๊ก QC — เดิมเก็บเป็น `life_insurance` ก้อนเดียว
+ *     แล้ว cap จากยอดรวมทั้งสองฝ่าย `min(sum, hasSpouseNoIncome?110000:100000)` ซึ่งผิดกฎหมายจริงเมื่อยอด
+ *     ไม่ได้แบ่งสัดส่วนตรงกับที่โค้ดสมมติ — เช่น own=30,000+spouse=100,000 โค้ดเดิมให้ 110,000 ทั้งที่กฎหมาย
+ *     ให้แค่ 40,000): แยก cap อิสระคนละก้อน —
+ *       · `life_insurance_self`: รวมทุกแถว แล้ว cap ที่ LIFE_INSURANCE_CAP (100,000 บาท) เสมอ ไม่ว่าจะมี
+ *         คู่สมรสไม่มีเงินได้หรือไม่
+ *       · `life_insurance_spouse`: รวมทุกแถว แล้ว cap ที่ LIFE_INSURANCE_SPOUSE_CAP (10,000 บาท) — **มีผล
+ *         ก็ต่อเมื่อ**ในชุดข้อมูลเดียวกันมีแถว `spouse_no_income` ที่ amount > 0 ด้วย (คู่สมรสไม่มีเงินได้ —
+ *         ต้องยืนยันเงื่อนไขนี้ก่อนจึงมีสิทธิหักได้ตามกฎหมาย) ไม่มี spouse_no_income>0 → cap = 0 (หักไม่ได้เลย
+ *         แม้จะกรอกยอดไว้)
+ *     ผลรวม = min(self,100000) + min(spouse, hasSpouseNoIncome?10000:0) — cap ของทั้งสองก้อนเป็นอิสระจากกัน
+ *     ไม่ผสมยอดข้ามฝั่งก่อน cap เหมือนโค้ดเดิม
  *   - `provident_fund` (ครอบคลุม PVD + RMF + กบข รวมเป็นก้อนเดียวตามที่ระบบออกแบบไว้ ดู T152/migration 0097):
  *     รวมทุกแถว แล้ว cap ที่ `min(500,000, 30% ของ annualIncomeEstimate)` — annualIncomeEstimate ≤0/ไม่ใช่
  *     ตัวเลข → ถือเป็น 0 (cap เป็น 0 ทันที ไม่ throw)
@@ -356,8 +374,10 @@ export type SumAndCapDeductionsResult = {
  *          "ผู้มีเงินได้จ่ายเบี้ยประกันชีวิต 100,000 บาท คู่สมรสจ่ายเบี้ยประกันชีวิต 100,000 บาท ถ้าความเป็น
  *          คู่สมรสได้มีอยู่ตลอดปีภาษี ผู้มีเงินได้หักลดหย่อน...สำหรับผู้มีเงินได้ 100,000 บาท และผู้มีเงินได้หัก
  *          ลดหย่อนคู่สมรส 10,000 บาท" (รวม 110,000 บาท) — ยืนยัน LIFE_INSURANCE_CAP = 100,000 และ
- *          LIFE_INSURANCE_CAP_WITH_SPOUSE = 110,000 **ตรงเป๊ะกับตัวเลขที่ระบบคำนวณได้** (golden test ใน
- *          payroll-deductions.test.ts ใช้ตัวอย่างนี้ตรง ๆ)
+ *          LIFE_INSURANCE_SPOUSE_CAP = 10,000 (แยกคนละก้อน — ตัวอย่างนี้บังเอิญสมมาตร (100,000/100,000) จึง
+ *          **ยืนยันได้แค่กรณีสมมาตรเท่านั้น** ไม่ได้ยืนยันว่า cap รวมแบบเดิม (110,000 จากยอดรวม) ถูกในกรณี
+ *          ไม่สมมาตร — ดู golden test เพิ่มเติมกรณี own=30,000+spouse=100,000 ใน payroll-deductions.test.ts
+ *          ที่พิสูจน์ว่าต้อง cap แยกอิสระ (ได้ 40,000) ไม่ใช่ cap จากยอดรวม (จะผิดเป็น 110,000)
  *        - ข้อ 10.4 (RMF): "ยกเว้นเท่าที่ได้จ่าย...ในอัตราไม่เกินร้อยละ 30 ของเงินได้พึงประเมิน...เฉพาะส่วนที่
  *          ไม่เกิน 500,000 บาทสำหรับปีภาษีนั้น...เมื่อรวมกับเงินสะสมที่จ่ายเข้ากองทุนสำรองเลี้ยงชีพ กองทุน
  *          บำเหน็จบำนาญข้าราชการ หรือกองทุนสงเคราะห์ ต้องไม่เกิน 500,000 บาท" — ยืนยัน
@@ -367,8 +387,8 @@ export type SumAndCapDeductionsResult = {
  *        ได้จ่ายเป็นดอกเบี้ยเงินกู้ยืม...เพื่อซื้อ เช่าซื้อ หรือสร้างอาคารที่อยู่อาศัย โดยจำนองอาคาร...เป็น
  *        ประกันการกู้ยืมนั้น ตามจำนวนที่จ่ายจริงแต่ไม่เกิน 100,000 บาท" — ยืนยัน MORTGAGE_INTEREST_CAP =
  *        100,000 (กฎกระทรวง ฉบับที่ 126 ข้อ 2(53) ตามที่แก้ไข)
- *   → เงื่อนไข 0.2 ข้อ 4 (golden test verify กับตัวอย่างคำนวณจากแหล่งที่เชื่อถือได้จริง) ผ่านครบทุกเพดานที่
- *   มีสูตร/เงื่อนไข — จึงเปิด ENABLE_EXTRA_DEDUCTIONS_IN_PIT = true ในคอมมิตเดียวกัน (payroll-tax.ts)
+ *   → ยังไม่เปิด ENABLE_EXTRA_DEDUCTIONS_IN_PIT (payroll-tax.ts) — engine/cap ครบสมบูรณ์แล้ว แต่รอ verify
+ *   เพิ่ม/ทดสอบกับนักบัญชีจริงอีกรอบก่อนเปิดใช้จริง (ดูคอมเมนต์เต็มใน payroll-tax.ts)
  */
 export function sumAndCapDeductions(rows: DeductionRowForCalc[], annualIncomeEstimate: number): SumAndCapDeductionsResult {
   const warnings: string[] = [];
@@ -386,11 +406,22 @@ export function sumAndCapDeductions(rows: DeductionRowForCalc[], annualIncomeEst
   // ★ child ไม่มี cap อัตโนมัติ (T152) — รวมตรง ๆ
   const childSum = sumOf("child");
 
-  const lifeInsuranceCap = hasSpouseNoIncome ? LIFE_INSURANCE_CAP_WITH_SPOUSE : LIFE_INSURANCE_CAP;
-  const lifeSum = sumOf("life_insurance");
-  const lifeCapped = Math.min(lifeSum, lifeInsuranceCap);
-  if (lifeSum > lifeInsuranceCap) {
-    warnings.push(`ค่าเบี้ยประกันชีวิตเกินเพดาน ${lifeInsuranceCap.toLocaleString("th-TH")} บาท — ตัดยอดส่วนเกินออก`);
+  // ★ แก้บั๊ก QC — cap ประกันชีวิตของตัวเองกับของคู่สมรสแยกอิสระคนละก้อน ไม่รวมยอดก่อน cap เหมือนโค้ดเดิม
+  const lifeSelfSum = sumOf("life_insurance_self");
+  const lifeSelfCapped = Math.min(lifeSelfSum, LIFE_INSURANCE_CAP);
+  if (lifeSelfSum > LIFE_INSURANCE_CAP) {
+    warnings.push(`ค่าเบี้ยประกันชีวิตของผู้มีเงินได้เองเกินเพดาน ${LIFE_INSURANCE_CAP.toLocaleString("th-TH")} บาท — ตัดยอดส่วนเกินออก`);
+  }
+
+  const lifeSpouseCap = hasSpouseNoIncome ? LIFE_INSURANCE_SPOUSE_CAP : 0;
+  const lifeSpouseSum = sumOf("life_insurance_spouse");
+  const lifeSpouseCapped = Math.min(lifeSpouseSum, lifeSpouseCap);
+  if (lifeSpouseSum > lifeSpouseCap) {
+    if (!hasSpouseNoIncome) {
+      warnings.push("ค่าเบี้ยประกันชีวิตของคู่สมรสหักไม่ได้ — ยังไม่มีรายการยืนยันคู่สมรสไม่มีเงินได้ในปีภาษีนี้");
+    } else {
+      warnings.push(`ค่าเบี้ยประกันชีวิตของคู่สมรสเกินเพดาน ${LIFE_INSURANCE_SPOUSE_CAP.toLocaleString("th-TH")} บาท — ตัดยอดส่วนเกินออก`);
+    }
   }
 
   const income = Number.isFinite(annualIncomeEstimate) && annualIncomeEstimate > 0 ? annualIncomeEstimate : 0;
@@ -409,6 +440,6 @@ export function sumAndCapDeductions(rows: DeductionRowForCalc[], annualIncomeEst
     warnings.push(`ดอกเบี้ยเงินกู้ยืมที่อยู่อาศัยเกินเพดาน ${MORTGAGE_INTEREST_CAP.toLocaleString("th-TH")} บาท — ตัดยอดส่วนเกินออก`);
   }
 
-  const totalOtherAllowance = round2(spouseCapped + childSum + lifeCapped + pvdCapped + mortgageCapped);
+  const totalOtherAllowance = round2(spouseCapped + childSum + lifeSelfCapped + lifeSpouseCapped + pvdCapped + mortgageCapped);
   return { totalOtherAllowance, warnings };
 }

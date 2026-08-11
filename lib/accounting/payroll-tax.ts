@@ -33,18 +33,21 @@ export const PERSONAL_ALLOWANCE_STANDARD = 60000;
  *   `payroll-deductions.ts::sumAndCapDeductions`) เข้าสูตรคำนวณภาษีหัก ณ ที่จ่ายจริงใน
  *   `payroll.ts::recalcRunLines`
  *
- *   `true` = เปิดใช้จริงแล้ว — เงื่อนไขที่ทำให้เปิดได้ (0.2 ข้อ 4, verify แล้ว, T157): เพดานค่าลดหย่อนทุก
- *   ประเภทที่ระบบใช้ (SPOUSE_NO_INCOME_CAP/CHILD_ALLOWANCE_AMOUNTS/LIFE_INSURANCE_CAP(_WITH_SPOUSE)/
- *   PROVIDENT_FUND_ABS_CAP+INCOME_RATIO/MORTGAGE_INTEREST_CAP ใน payroll-deductions.ts) ตรวจสอบแล้วตรงกับ
- *   "วิธีกรอกแบบแสดงรายการภาษีเงินได้บุคคลธรรมดา ปีภาษี 2568" ที่กรมสรรพากรเผยแพร่เอง (rd.go.th/fileadmin/
- *   tax_pdf/pit/2568/Ins90_241268.pdf) รวมถึงตัวอย่างตัวเลขจริงกรณีประกันชีวิต+คู่สมรสไม่มีเงินได้ (110,000
- *   บาท) ที่ golden test ใน payroll-deductions.test.ts ใช้ตรง ๆ (ดูคอมเมนต์เต็มใน
- *   payroll-deductions.ts::sumAndCapDeductions) — ห้ามเปลี่ยนกลับเป็น false โดยไม่มีเหตุผลบันทึกไว้
- *   ★ ถึงแม้ flag=true แล้ว การไม่มีแถวใน `payroll_employee_deductions` ของพนักงาน/ปีภาษีใดเลย (ค่า
- *   default ของทุกคนก่อนนักบัญชีกรอกเพิ่ม) ทำให้ personalAllowance ยังเท่ากับ PERSONAL_ALLOWANCE_STANDARD
- *   เป๊ะเหมือนก่อนเฟสนี้ — ไม่กระทบยอดภาษีของลูกค้าเดิมที่ไม่มีใครกรอกข้อมูลเพิ่มเลย (regression-safe)
+ *   `false` = ยังไม่เปิดใช้จริง (คงค่าเดิมตาม DoD, docs/06-accounting-features-roadmap.md:5416-5417 —
+ *   engine ครบสมบูรณ์พร้อม flag=false ถือว่าปิดงานได้ตามปกติ ไม่ใช่ความล้มเหลว) — เหตุผลที่ยังไม่เปิด
+ *   (พบโดย independent code reviewer รอบ QC, ยืนยันเป็นบั๊กจริง):
+ *   1) golden test เดิมที่อ้างว่า "verify แล้ว" ยืนยันได้จริงแค่ 1 ใน 5 ประเภทค่าลดหย่อน (ไม่ใช่ตัวอย่างรวม
+ *      หลายประเภทพร้อมกันตามที่ T157 ต้องการจริง ๆ)
+ *   2) ที่สำคัญกว่านั้น พบ**บั๊กคำนวณจริง**ในสูตร life_insurance เดิม (เก็บเบี้ยประกันของผู้มีเงินได้เอง+
+ *      คู่สมรสเป็นก้อนเดียวแล้วเดา cap จากยอดรวม — ผิดกฎหมายจริงเมื่อยอดไม่ได้แบ่งสัดส่วนตรงกับที่โค้ดสมมติ)
+ *      ซึ่งบังเอิญ golden test เดิมจับไม่ได้เพราะใช้ตัวเลขที่สมมาตรเป๊ะ (100,000+100,000) — แก้แล้วใน
+ *      `payroll-deductions.ts::sumAndCapDeductions` (แยก `life_insurance_self`/`life_insurance_spouse`
+ *      cap อิสระคนละก้อน) แต่ยังต้อง verify เพิ่ม/ทดสอบกับนักบัญชีจริงอีกรอบก่อนเปิด flag นี้เป็น true
+ *   ★ เมื่อ flag=false: personalAllowance ที่ใช้จริงยังเท่ากับ PERSONAL_ALLOWANCE_STANDARD เสมอ ไม่ว่า
+ *   นักบัญชีจะกรอกข้อมูลใน `payroll_employee_deductions` ไว้เท่าไหร่ก็ตาม (แสดงเป็นแค่ "preview" ในหน้าจอ)
+ *   — ไม่กระทบยอดภาษีของลูกค้าเดิมเลย (regression-safe)
  */
-export let ENABLE_EXTRA_DEDUCTIONS_IN_PIT = true;
+export let ENABLE_EXTRA_DEDUCTIONS_IN_PIT = false;
 
 // ---------------------------------------------------------------------
 // PIT (มาตรา 50) — annualize ต่องวด

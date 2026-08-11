@@ -9,7 +9,7 @@ import {
   sumAndCapDeductions,
   SPOUSE_NO_INCOME_CAP,
   LIFE_INSURANCE_CAP,
-  LIFE_INSURANCE_CAP_WITH_SPOUSE,
+  LIFE_INSURANCE_SPOUSE_CAP,
   PROVIDENT_FUND_ABS_CAP,
   PROVIDENT_FUND_INCOME_RATIO,
   MORTGAGE_INTEREST_CAP,
@@ -245,10 +245,28 @@ describe("sumAndCapDeductions (T152) — self-consistent", () => {
     expect(res.warnings.length).toBe(0);
   });
 
-  it("life_insurance เกิน 100,000 โดยไม่มีคู่สมรสไม่มีเงินได้ → cap ที่ 100,000 เป๊ะ", () => {
-    const res = sumAndCapDeductions([{ deductionType: "life_insurance", amount: 150000 }], 1000000);
+  it("life_insurance_self เกิน 100,000 โดยไม่มีคู่สมรสไม่มีเงินได้ → cap ที่ 100,000 เป๊ะ", () => {
+    const res = sumAndCapDeductions([{ deductionType: "life_insurance_self", amount: 150000 }], 1000000);
     expect(res.totalOtherAllowance).toBe(LIFE_INSURANCE_CAP);
     expect(res.warnings.length).toBe(1);
+  });
+
+  it("★ life_insurance_spouse โดยไม่มีคู่สมรสไม่มีเงินได้เลย → cap = 0 (หักไม่ได้แม้กรอกยอดไว้)", () => {
+    const res = sumAndCapDeductions([{ deductionType: "life_insurance_spouse", amount: 10000 }], 1000000);
+    expect(res.totalOtherAllowance).toBe(0);
+    expect(res.warnings.some((w) => w.includes("ยืนยันคู่สมรสไม่มีเงินได้"))).toBe(true);
+  });
+
+  it("★ life_insurance_spouse มีคู่สมรสไม่มีเงินได้ แต่ยอดเกิน 10,000 → cap ที่ 10,000 เป๊ะ", () => {
+    const res = sumAndCapDeductions(
+      [
+        { deductionType: "spouse_no_income", amount: 60000 },
+        { deductionType: "life_insurance_spouse", amount: 20000 },
+      ],
+      1000000
+    );
+    expect(res.totalOtherAllowance).toBe(60000 + LIFE_INSURANCE_SPOUSE_CAP);
+    expect(res.warnings.some((w) => w.includes("เบี้ยประกันชีวิตของคู่สมรสเกินเพดาน"))).toBe(true);
   });
 
   it("provident_fund เกิน 500,000 แต่ยังไม่ถึง 30% ของเงินได้ → cap ที่ 500,000", () => {
@@ -324,39 +342,62 @@ describe("sumAndCapDeductions (T152) — self-consistent", () => {
    *     เบี้ยประกันชีวิต 100,000 บาท ถ้าความเป็นคู่สมรสได้มีอยู่ตลอดปีภาษี ผู้มีเงินได้หักลดหย่อนและยกเว้น
    *     ภาษีสำหรับผู้มีเงินได้ 100,000 บาท และผู้มีเงินได้หักลดหย่อนคู่สมรส 10,000 บาท" — รวม 110,000 บาท
    *
-   *   ระบบนี้ไม่แยกเก็บ "เบี้ยประกันชีวิตของผู้มีเงินได้เอง" กับ "ของคู่สมรส" เป็นคนละประเภท (deduction_type
-   *   เดียวกันคือ life_insurance, นักบัญชีกรอกยอดรวมทั้งสองก้อน) — สิ่งที่ verify ได้ตรงคือ **ยอดรวมสุดท้าย
-   *   หลัง cap ต้องตรงกับ 110,000 บาทตามตัวอย่างทางการ** เมื่อมีเงื่อนไข "คู่สมรสไม่มีเงินได้" (มี
-   *   deduction_type='spouse_no_income' amount>0 อยู่ในชุดข้อมูลเดียวกัน) — ตรงตามที่ทดสอบด้านล่าง
+   *   ★ แก้บั๊ก QC (ยืนยันเป็นบั๊กจริงโดย independent code reviewer) — ระบบเดิมเก็บ "เบี้ยประกันชีวิตของ
+   *   ผู้มีเงินได้เอง" กับ "ของคู่สมรส" เป็น deduction_type เดียวกัน (life_insurance) แล้วเดา cap จากยอดรวม
+   *   `min(sum, 110000)` ซึ่งตัวอย่างทางการข้างบนบังเอิญสมมาตรพอดี (100,000/100,000 → 200,000 → cap 110,000)
+   *   golden test เดิมจึงผ่านทั้งที่สูตรผิด — ตัวอย่างที่พิสูจน์ว่าสูตรเดิมผิดจริงคือกรณีไม่สมมาตร เช่น
+   *   own=30,000+spouse=100,000: สูตรเดิม min(130000,110000)=110,000 (ผิด) ในขณะที่กฎหมายให้แค่
+   *   min(30000,100000)+min(100000,10000)=40,000 — ระบบใหม่แยกเก็บ deduction_type เป็น
+   *   `life_insurance_self`/`life_insurance_spouse` คนละก้อน cap อิสระกัน แก้บั๊กนี้ตรงจุด (ดู test ถัดไป)
    */
-  it("★★★ golden test — ประกันชีวิต 100,000+100,000 (คู่สมรสไม่มีเงินได้) → cap ที่ 110,000 ตรงตามตัวอย่างทางการของกรมสรรพากร (rd.go.th, Ins90_241268.pdf ข้อ 7.2(2))", () => {
+  it("★★★ golden test — ประกันชีวิต self=100,000 + spouse=100,000 (คู่สมรสไม่มีเงินได้) → cap รวม 110,000 ตรงตามตัวอย่างทางการของกรมสรรพากร (rd.go.th, Ins90_241268.pdf ข้อ 7.2(2))", () => {
     const res = sumAndCapDeductions(
       [
         { deductionType: "spouse_no_income", amount: 60000 },
-        // ผู้มีเงินได้จ่าย 100,000 + คู่สมรสจ่าย 100,000 = 200,000 รวมกันในชุดข้อมูลเดียว (ระบบไม่แยกฝ่าย)
-        { deductionType: "life_insurance", amount: 200000 },
+        { deductionType: "life_insurance_self", amount: 100000 },
+        { deductionType: "life_insurance_spouse", amount: 100000 },
       ],
       1000000
     );
-    // ยอดรวมของทั้ง 2 ประเภท = 60,000 (คู่สมรส, ไม่เกิน cap ไม่ตัด) + 110,000 (ประกันชีวิต, cap ขยับจาก
-    // 100,000 → 110,000 เพราะมีคู่สมรสไม่มีเงินได้) = 170,000 — ส่วนย่อยของประกันชีวิตต้อง = 110,000 เป๊ะ
-    // ตรงกับตัวอย่างทางการข้างต้น (verify แยกด้วยการคำนวณ isolate เฉพาะ life_insurance ด้านล่าง)
-    const lifeInsuranceOnly = sumAndCapDeductions(
-      [
-        { deductionType: "spouse_no_income", amount: 60000 },
-        { deductionType: "life_insurance", amount: 200000 },
-      ],
-      1000000
-    ).totalOtherAllowance - 60000; // หัก spouse cap ออกเพื่อ isolate ยอดประกันชีวิตล้วน ๆ
-    expect(lifeInsuranceOnly).toBe(LIFE_INSURANCE_CAP_WITH_SPOUSE);
+    // ยอดรวมของทั้ง 2 ประเภท = 60,000 (คู่สมรส, ไม่เกิน cap ไม่ตัด) + 100,000 (self, ไม่เกิน cap) +
+    // 10,000 (spouse, cap ตัดจาก 100,000 เพราะเกิน 10,000) = 170,000 — ส่วนย่อยของประกันชีวิตรวมกันต้อง
+    // = 110,000 เป๊ะ ตรงกับตัวอย่างทางการข้างต้น
+    const lifeInsuranceOnly = res.totalOtherAllowance - 60000; // หัก spouse_no_income cap ออกเพื่อ isolate
+    expect(lifeInsuranceOnly).toBe(LIFE_INSURANCE_CAP + LIFE_INSURANCE_SPOUSE_CAP);
     expect(lifeInsuranceOnly).toBe(110000);
     expect(res.totalOtherAllowance).toBe(60000 + 110000);
-    expect(res.warnings.some((w) => w.includes("ประกันชีวิต"))).toBe(true);
+    expect(res.warnings.some((w) => w.includes("คู่สมรสเกินเพดาน"))).toBe(true);
   });
 
-  it("golden test เดียวกัน แต่ไม่มีคู่สมรสไม่มีเงินได้ → cap ที่ 100,000 เท่านั้น (ไม่ขยับเป็น 110,000)", () => {
-    const res = sumAndCapDeductions([{ deductionType: "life_insurance", amount: 200000 }], 1000000);
+  it("golden test เดียวกัน แต่ไม่มีคู่สมรสไม่มีเงินได้ → หักได้แค่ส่วนของตัวเอง 100,000 (spouse cap=0 หักไม่ได้เลย)", () => {
+    const res = sumAndCapDeductions(
+      [
+        { deductionType: "life_insurance_self", amount: 100000 },
+        { deductionType: "life_insurance_spouse", amount: 100000 },
+      ],
+      1000000
+    );
     expect(res.totalOtherAllowance).toBe(LIFE_INSURANCE_CAP);
     expect(res.totalOtherAllowance).toBe(100000);
+  });
+
+  /**
+   * ★★★ Regression test สำหรับบั๊กที่ QC พบจริง (independent code reviewer) — กรณีไม่สมมาตรที่พิสูจน์ว่า
+   *   ต้อง cap แยกอิสระคนละก้อน ไม่ใช่ cap จากยอดรวมทั้งสองฝ่ายเหมือนสูตรเดิม:
+   *   own=30,000 + spouse=100,000 → ต้องได้ min(30000,100000) + min(100000,10000) = 40,000 เท่านั้น
+   *   (สูตรเดิมที่ผิดจะให้ min(130000, 110000) = 110,000 — ผิดกฎหมายจริง)
+   */
+  it("★★★ กันบั๊กเดิมกลับมา — own=30,000+spouse=100,000 (ไม่สมมาตร) → ต้องได้ 40,000 ไม่ใช่ 110,000", () => {
+    const res = sumAndCapDeductions(
+      [
+        { deductionType: "spouse_no_income", amount: 60000 },
+        { deductionType: "life_insurance_self", amount: 30000 },
+        { deductionType: "life_insurance_spouse", amount: 100000 },
+      ],
+      1000000
+    );
+    const lifeInsuranceOnly = res.totalOtherAllowance - 60000;
+    expect(lifeInsuranceOnly).toBe(40000); // = min(30000,100000) + min(100000,10000)
+    expect(lifeInsuranceOnly).not.toBe(110000); // สูตรเดิมที่ผิดจะให้ค่านี้ (ยืนยันว่าบั๊กถูกแก้จริง)
   });
 });
