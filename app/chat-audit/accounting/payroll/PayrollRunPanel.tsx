@@ -24,6 +24,10 @@ import SlipView from "./SlipView";
  *   (สถานะยื่นตัวจริงอยู่ที่ระดับหน่วยยื่นรายเดือนแล้ว ไม่ใช่ระดับรอบ) — ที่นี่แสดงสถานะแบบ read-only เท่านั้น
  *   พร้อมลิงก์ไปหน้านั้น (สำหรับลูกค้า monthly เดิม เดือนหนึ่งมีแค่ 1 รอบเสมอ — ผลลัพธ์การกดยื่นเหมือนเดิม
  *   ทุกประการจากมุมมอง UX)
+ * ★★★ เฟส 9b กลุ่ม BF (T165, 0.2) — ช่องกรอก "ค่าชดเชยเลิกจ้าง" เปิดใช้เสมอ (นักบัญชีกรอกยอดก่อนหักภาษีได้)
+ *   แต่ยอดภาษีที่หักจริง (severancePitWithheld) ยังคง 0 จนกว่า `severanceTaxCalcEnabled` (server prop, mirror
+ *   `ENABLE_SEVERANCE_TAX_CALC`) เป็น true — ระหว่างนี้แสดง preview ที่คำนวณสด ๆ จาก server
+ *   (severancePitWithheldPreview) พร้อมข้อความชัดเจนว่ายังไม่มีผลต่อยอดหักจริง (0.2 ข้อ 5)
  */
 
 const MONTH_LABELS = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
@@ -40,16 +44,26 @@ function currentBuddhistYear(): number {
   return new Date().getFullYear() + 543;
 }
 
-type LineEditState = { grossSalary: string; otherAdditions: string; bonusAmount: string; otherDeductions: string };
+type LineEditState = {
+  grossSalary: string;
+  otherAdditions: string;
+  bonusAmount: string;
+  otherDeductions: string;
+  severanceAmount: string;
+};
 
 export default function PayrollRunPanel({
   customerId,
   runs,
   detail,
+  severanceTaxCalcEnabled,
 }: {
   customerId: string;
   runs: PayrollRun[];
   detail: { run: PayrollRun; lines: PayrollRunLine[] } | null;
+  /** ★★★ เฟส 9b กลุ่ม BF (0.2) — mirror ค่า ENABLE_SEVERANCE_TAX_CALC จาก server (page.tsx) — ตอนนี้ยังเป็น
+   *   false เสมอ (ยังไม่ verify golden test) ใช้แค่ควบคุมข้อความ/preview ในหน้าจอเท่านั้น ไม่ผูกกับยอดที่บันทึกจริง */
+  severanceTaxCalcEnabled: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -90,6 +104,7 @@ export default function PayrollRunPanel({
       otherAdditions: String(l.otherAdditions),
       bonusAmount: String(l.bonusAmount),
       otherDeductions: String(l.otherDeductions),
+      severanceAmount: String(l.severanceAmount),
     };
 
   // ★ ต้องรับ line เดิม (ไม่ใช่แค่ id) — ตอนแก้ฟิลด์ใดฟิลด์หนึ่งเป็นครั้งแรกของแถวนี้ (m[id] ยังไม่มี)
@@ -104,7 +119,17 @@ export default function PayrollRunPanel({
 
   const totals = useMemo(() => {
     if (!detail) return null;
-    let gross = 0, additions = 0, bonus = 0, deductions = 0, extraDeductionsPreview = 0, pit = 0, ssoEmp = 0, ssoEmpr = 0, net = 0;
+    let gross = 0,
+      additions = 0,
+      bonus = 0,
+      deductions = 0,
+      extraDeductionsPreview = 0,
+      pit = 0,
+      ssoEmp = 0,
+      ssoEmpr = 0,
+      severance = 0,
+      severancePit = 0,
+      net = 0;
     for (const l of detail.lines) {
       gross += l.grossSalary;
       additions += l.otherAdditions;
@@ -114,9 +139,11 @@ export default function PayrollRunPanel({
       pit += l.pitWithheld;
       ssoEmp += l.ssoEmployee;
       ssoEmpr += l.ssoEmployer;
+      severance += l.severanceAmount;
+      severancePit += l.severancePitWithheld;
       net += l.netPay;
     }
-    return { gross, additions, bonus, deductions, extraDeductionsPreview, pit, ssoEmp, ssoEmpr, net };
+    return { gross, additions, bonus, deductions, extraDeductionsPreview, pit, ssoEmp, ssoEmpr, severance, severancePit, net };
   }, [detail]);
 
   const recalc = () => {
@@ -130,6 +157,7 @@ export default function PayrollRunPanel({
         otherAdditions: parseAmountInput(e.otherAdditions),
         bonusAmount: parseAmountInput(e.bonusAmount),
         otherDeductions: parseAmountInput(e.otherDeductions),
+        severanceAmount: parseAmountInput(e.severanceAmount),
       };
     });
     startTransition(async () => {
@@ -252,6 +280,15 @@ export default function PayrollRunPanel({
             ) : null}
           </div>
 
+          {!severanceTaxCalcEnabled ? (
+            <div className="action-msg" style={{ marginBottom: 10 }}>
+              ⚠️ เครื่องคำนวณภาษีค่าชดเชยเลิกจ้าง (มาตรา 48(5)) ยังไม่เปิดใช้กับการคำนวณภาษีจริง อยู่ระหว่างตรวจสอบความถูกต้อง —
+              กรอกยอด &quot;ค่าชดเชยเลิกจ้าง&quot; (ก่อนหักภาษี) ได้ตามปกติ แต่ยอดภาษีหัก ณ ที่จ่ายของค่าชดเชยที่บันทึกจริงยังคง 0 บาท
+              (คอลัมน์ &quot;ภาษี (ค่าชดเชย)&quot; ที่แสดงเป็น preview เท่านั้น) — หากต้องการหักภาษีค่าชดเชยระหว่างรอเปิดใช้จริง
+              กรุณากรอกยอดเองผ่านช่อง &quot;หักอื่น ๆ&quot;
+            </div>
+          ) : null}
+
           {isFinalized ? (
             <div className="card" style={{ marginBottom: 10 }}>
               <div className="section-title"><span>สถานะยื่นภาษี/ประกันสังคม</span></div>
@@ -297,7 +334,23 @@ export default function PayrollRunPanel({
                   >
                     ค่าลดหย่อนอื่น{ENABLE_EXTRA_DEDUCTIONS_IN_PIT ? "" : " (preview)"}
                   </th>
+                  <th
+                    className="num"
+                    title="ค่าชดเชยเลิกจ้าง (ก่อนหักภาษี) — กรอกได้เสมอ ตัวช่วยคำนวณวันตาม ม.118 แสดงในคอลัมน์ชื่อพนักงาน"
+                  >
+                    ค่าชดเชยเลิกจ้าง
+                  </th>
                   <th className="num">ภาษีหัก ณ ที่จ่าย</th>
+                  <th
+                    className="num"
+                    title={
+                      severanceTaxCalcEnabled
+                        ? "ภาษีหัก ณ ที่จ่ายของค่าชดเชย (มาตรา 48(5)) — คำนวณจริงแล้ว"
+                        : "ยอด preview เท่านั้น — ยังไม่เปิดใช้กับการคำนวณภาษีจริง อยู่ระหว่างตรวจสอบความถูกต้อง (0 บาทเสมอในคอลัมน์ภาษีหัก ณ ที่จ่ายด้านซ้าย)"
+                    }
+                  >
+                    ภาษี (ค่าชดเชย){!severanceTaxCalcEnabled ? " [preview]" : ""}
+                  </th>
                   <th className="num">ประกันสังคม (ลูกจ้าง)</th>
                   <th className="num">ประกันสังคม (นายจ้าง)</th>
                   <th className="num">เงินเดือนสุทธิ</th>
@@ -318,6 +371,15 @@ export default function PayrollRunPanel({
                             title="ยอด prefill คำนวณตามสัดส่วนวันทำงานจริง — ฐานประกันสังคมยังคำนวณจากยอดที่ prorate แล้วตามปกติ (floor/ceiling ไม่เปลี่ยนพฤติกรรม) นักบัญชียืนยัน/แก้ไขยอดได้ก่อนคำนวณจริง"
                           >
                             prorate อัตโนมัติ ({l.proratedDaysWorked}/{l.proratedDaysInMonth} วัน)
+                          </span>
+                        ) : null}
+                        {l.statutorySeveranceDaysHelper > 0 ? (
+                          <span
+                            className="st-badge st-draft"
+                            style={{ marginLeft: 6 }}
+                            title="เครื่องคำนวณช่วยเหลือตาม ม.118 พ.ร.บ.คุ้มครองแรงงาน — ไม่บังคับใช้ นักบัญชีกรอกยอดค่าชดเชยเองได้เสมอ (อ้างอิงวันที่เริ่มงาน/ลาออก เทียบวันที่จ่ายของรอบนี้)"
+                          >
+                            ม.118: ควรจ่ายอย่างน้อย {l.statutorySeveranceDaysHelper} วัน
                           </span>
                         ) : null}
                       </td>
@@ -368,7 +430,20 @@ export default function PayrollRunPanel({
                         {formatMoney(l.extraDeductionsPreviewTotal)}
                         {l.deductionWarnings.length > 0 ? " ⚠️" : ""}
                       </td>
+                      <td className="num">
+                        <input
+                          className="num"
+                          inputMode="decimal"
+                          style={{ width: 100 }}
+                          disabled={!isDraft}
+                          value={e.severanceAmount}
+                          onChange={(ev) => setEdit(l, { severanceAmount: ev.target.value })}
+                        />
+                      </td>
                       <td className="num">{formatMoney(l.pitWithheld)}</td>
+                      <td className="num" title={severanceTaxCalcEnabled ? undefined : "preview เท่านั้น — ยอดที่บันทึกจริงคือ 0 บาทจนกว่าจะเปิดใช้"}>
+                        {severanceTaxCalcEnabled ? formatMoney(l.severancePitWithheld) : `(${formatMoney(l.severancePitWithheldPreview)})`}
+                      </td>
                       <td className="num">{formatMoney(l.ssoEmployee)}</td>
                       <td className="num">{formatMoney(l.ssoEmployer)}</td>
                       <td className="num strong">{formatMoney(l.netPay)}</td>
@@ -386,7 +461,9 @@ export default function PayrollRunPanel({
                     <td className="num strong">{formatMoney(totals.bonus)}</td>
                     <td className="num strong">{formatMoney(totals.deductions)}</td>
                     <td className="num strong">{formatMoney(totals.extraDeductionsPreview)}</td>
+                    <td className="num strong">{formatMoney(totals.severance)}</td>
                     <td className="num strong">{formatMoney(totals.pit)}</td>
+                    <td className="num strong">{formatMoney(totals.severancePit)}</td>
                     <td className="num strong">{formatMoney(totals.ssoEmp)}</td>
                     <td className="num strong">{formatMoney(totals.ssoEmpr)}</td>
                     <td className="num strong">{formatMoney(totals.net)}</td>

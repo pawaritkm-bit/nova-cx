@@ -34,6 +34,7 @@ const PAYROLL_CHART = [
   ...TEST_CHART,
   { code: "2050", name: "เงินสมทบประกันสังคมค้างนำส่ง", category: "หนี้สิน" },
   { code: "5311", name: "เงินสมทบประกันสังคม (ส่วนนายจ้าง)", category: "ค่าใช้จ่าย" },
+  { code: "5312", name: "ค่าชดเชยเลิกจ้างพนักงาน", category: "ค่าใช้จ่าย" },
 ];
 const chartByCode = buildChartByCode(PAYROLL_CHART);
 
@@ -53,6 +54,7 @@ const DEFAULT_SETTINGS: PayrollSettings = {
   netPayAccountCode: "2040",
   netPayIsPaidImmediately: false,
   payFrequency: "monthly",
+  severanceExpenseAccountCode: "5312",
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -92,6 +94,7 @@ function baseTables(): Tables {
         net_pay_account_code: DEFAULT_SETTINGS.netPayAccountCode,
         net_pay_is_paid_immediately: DEFAULT_SETTINGS.netPayIsPaidImmediately,
         pay_frequency: DEFAULT_SETTINGS.payFrequency,
+        severance_expense_account_code: DEFAULT_SETTINGS.severanceExpenseAccountCode,
         created_at: DEFAULT_SETTINGS.createdAt,
         updated_at: DEFAULT_SETTINGS.updatedAt,
       },
@@ -447,6 +450,64 @@ describe("recalcRunLines (T114) — idempotent", () => {
     expect(line.pit_withheld).toBe(0);
     expect(line.net_pay).toBe(0);
   });
+
+  // ★★★ เฟส 9b กลุ่ม BF (T164, ★★★ 0.2 gate) — ค่าตอบแทนเลิกจ้าง/ชดเชย
+  describe("★★★ BF: severance_amount/severance_pit_withheld (0.2 gate — ENABLE_SEVERANCE_TAX_CALC=false เสมอในคอมมิตนี้)", () => {
+    it("กรอก severance_amount > 0 ขณะ flag=false → severance_pit_withheld ต้องเป็น 0 เสมอ", async () => {
+      const { db } = makeInMemoryDb(tables);
+      const lineId = tables.payroll_run_lines[0].id as string;
+      const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 20000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0, severanceAmount: 700000 },
+      ]);
+      expect(res.ok).toBe(true);
+      const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+      expect(line.severance_amount).toBe(700000);
+      expect(line.severance_pit_withheld).toBe(0);
+      // ★ net_pay ต้องรวม severance_amount เข้าไปด้วย (บวกเต็มจำนวนเพราะ severance_pit_withheld=0)
+      expect(line.net_pay).toBe(Number(line.gross_salary) + 700000 - Number(line.pit_withheld) - Number(line.sso_employee));
+    });
+
+    it("severanceAmount undefined (ไม่ส่งมา — backward compatible กับ lineEdits เดิมก่อนเฟสนี้) → default 0 ไม่ throw", async () => {
+      const { db } = makeInMemoryDb(tables);
+      const lineId = tables.payroll_run_lines[0].id as string;
+      const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 20000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0 },
+      ]);
+      expect(res.ok).toBe(true);
+      const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+      expect(line.severance_amount).toBe(0);
+      expect(line.severance_pit_withheld).toBe(0);
+    });
+
+    it("severanceAmount ติดลบ → ปฏิเสธ (validate เหมือนช่องเงินอื่น ๆ)", async () => {
+      const { db } = makeInMemoryDb(tables);
+      const lineId = tables.payroll_run_lines[0].id as string;
+      const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 20000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0, severanceAmount: -100 },
+      ]);
+      expect(res.ok).toBe(false);
+    });
+
+    it("★ กฎเหล็ก — แก้ severance_amount ไม่กระทบ pit_withheld ของเงินเดือน/โบนัสปกติเลย (แยกสูตรกันเด็ดขาด)", async () => {
+      const { db } = makeInMemoryDb(tables);
+      const lineId = tables.payroll_run_lines[0].id as string;
+      // baseline: ไม่มี severance
+      await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 60000, otherAdditions: 0, bonusAmount: 90000, otherDeductions: 0 },
+      ]);
+      const baselinePit = tables.payroll_run_lines.find((l) => l.id === lineId)!.pit_withheld;
+      expect(baselinePit).toBe(16541.67); // เทียบเท่าเทสต์ 0.5 เดิมด้านบน (ไม่ถูกกระทบจาก severance เลย)
+
+      // เพิ่ม severance_amount เข้าไปในบรรทัดเดียวกัน — pit_withheld (เงินเดือน/โบนัส) ต้องเท่าเดิมเป๊ะ
+      await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 60000, otherAdditions: 0, bonusAmount: 90000, otherDeductions: 0, severanceAmount: 500000 },
+      ]);
+      const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+      expect(line.pit_withheld).toBe(baselinePit);
+      expect(line.severance_amount).toBe(500000);
+      expect(line.severance_pit_withheld).toBe(0); // flag=false
+    });
+  });
 });
 
 // ★★★ เฟส 9b กลุ่ม BE (0.2 ★★★ gate, T154/T156) — ค่าลดหย่อนภาษีอื่นต้องไม่กระทบยอดจริงเลยตราบใด flag=false
@@ -664,6 +725,8 @@ describe("buildPayrollJournalEntry (T115, 0.8) — pure", () => {
       pitWithheld: 0,
       ssoEmployee: 0,
       ssoEmployer: 0,
+      severanceAmount: 0,
+      severancePitWithheld: 0,
       netPay: 0,
       ...p,
     };
@@ -776,6 +839,91 @@ describe("buildPayrollJournalEntry (T115, 0.8) — pure", () => {
       expect(res.lines.some((l) => l.accountCode === DEFAULT_SETTINGS.netPayAccountCode)).toBe(false);
       expect(isBalanced(toNumericLines(res.lines))).toBe(true);
     }
+  });
+
+  // ★★★ เฟส 9b กลุ่ม BF (T164) — ค่าตอบแทนเลิกจ้าง/ชดเชย ใน JE
+  describe("★★★ BF: severance_amount/severance_pit_withheld", () => {
+    it("severance_amount > 0 + ตั้งรหัสบัญชีค่าชดเชยแล้ว → Dr severance_expense เข้า JE, Dr=Cr เสมอ", () => {
+      const lines = [
+        line({
+          grossSalary: 20000,
+          pitWithheld: 0,
+          ssoEmployee: 875,
+          ssoEmployer: 875,
+          severanceAmount: 500000,
+          severancePitWithheld: 0,
+          netPay: 20000 - 875 + 500000,
+        }),
+      ];
+      const res = buildPayrollJournalEntry(lines, DEFAULT_SETTINGS);
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        const severanceLine = res.lines.find((l) => l.accountCode === DEFAULT_SETTINGS.severanceExpenseAccountCode);
+        expect(severanceLine).toBeTruthy();
+        expect(Number(severanceLine?.debit ?? 0)).toBe(500000);
+        expect(isBalanced(toNumericLines(res.lines))).toBe(true);
+      }
+    });
+
+    it("severance_amount > 0 แต่ไม่ได้ตั้งรหัสบัญชีค่าชดเชย → ปฏิเสธสร้าง JE พร้อมข้อความชัดเจน (mirror other_deductions)", () => {
+      const lines = [line({ grossSalary: 20000, severanceAmount: 500000, netPay: 520000 })];
+      const settingsNoSeverance: PayrollSettings = { ...DEFAULT_SETTINGS, severanceExpenseAccountCode: null };
+      const res = buildPayrollJournalEntry(lines, settingsNoSeverance);
+      expect(res.ok).toBe(false);
+    });
+
+    it("severance_amount = 0 ทุกคน → ข้ามบรรทัด severance_expense ไปเลย (ไม่มีบรรทัดค่าชดเชย)", () => {
+      const lines = [line({ grossSalary: 20000, pitWithheld: 100, ssoEmployee: 750, ssoEmployer: 750, netPay: 19150 })];
+      const res = buildPayrollJournalEntry(lines, DEFAULT_SETTINGS);
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.lines.some((l) => l.accountCode === DEFAULT_SETTINGS.severanceExpenseAccountCode)).toBe(false);
+        expect(isBalanced(toNumericLines(res.lines))).toBe(true);
+      }
+    });
+
+    it("severance_pit_withheld > 0 (จำลอง flag=true) → รวมเข้า Cr pit_payable เดียวกับ pit ปกติ, Dr=Cr เสมอ", () => {
+      const lines = [
+        line({
+          grossSalary: 30000,
+          pitWithheld: 200,
+          ssoEmployee: 750,
+          ssoEmployer: 750,
+          severanceAmount: 2000000,
+          severancePitWithheld: 68000,
+          netPay: 30000 - 200 - 750 + 2000000 - 68000,
+        }),
+      ];
+      const res = buildPayrollJournalEntry(lines, DEFAULT_SETTINGS);
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        const pitLine = res.lines.find((l) => l.accountCode === DEFAULT_SETTINGS.pitPayableAccountCode);
+        expect(Number(pitLine?.credit ?? 0)).toBe(200 + 68000);
+        expect(isBalanced(toNumericLines(res.lines))).toBe(true);
+      }
+    });
+
+    it("หลายพนักงานผสมกัน (บางคนมี severance บางคนไม่มี) → รวมยอด Σ severance_amount ถูกต้อง, Dr=Cr เสมอ, จำนวนบรรทัด JE ยังคงที่ (≤7)", () => {
+      const lines = [
+        line({ grossSalary: 20000, pitWithheld: 0, ssoEmployee: 875, ssoEmployer: 875, netPay: 19125 }),
+        line({
+          grossSalary: 20000,
+          pitWithheld: 0,
+          ssoEmployee: 875,
+          ssoEmployer: 875,
+          severanceAmount: 300000,
+          netPay: 20000 - 875 + 300000,
+        }),
+      ];
+      const res = buildPayrollJournalEntry(lines, DEFAULT_SETTINGS);
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        const severanceLine = res.lines.find((l) => l.accountCode === DEFAULT_SETTINGS.severanceExpenseAccountCode);
+        expect(Number(severanceLine?.debit ?? 0)).toBe(300000);
+        expect(res.lines.length).toBeLessThanOrEqual(7);
+        expect(isBalanced(toNumericLines(res.lines))).toBe(true);
+      }
+    });
   });
 });
 

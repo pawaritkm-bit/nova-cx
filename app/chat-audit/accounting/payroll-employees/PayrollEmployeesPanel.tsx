@@ -117,6 +117,9 @@ type SettingsFormState = {
   netPayIsPaidImmediately: boolean;
   /** ★ เฟส 9b กลุ่ม BC (T140) */
   payFrequency: "monthly" | "non_monthly";
+  /** ★ เฟส 9b กลุ่ม BF (T160/T165) — รหัสบัญชีค่าใช้จ่ายค่าชดเชยเลิกจ้าง (nullable, mirror otherDeductions) */
+  severanceExpenseAccountCode: string;
+  severanceExpenseAccountName: string;
 };
 
 export default function PayrollEmployeesPanel({
@@ -243,6 +246,10 @@ export default function PayrollEmployeesPanel({
     netPayAccountName: settings.netPayAccountCode ? chartByCode[settings.netPayAccountCode]?.name ?? settings.netPayAccountCode : "",
     netPayIsPaidImmediately: settings.netPayIsPaidImmediately,
     payFrequency: settings.payFrequency,
+    severanceExpenseAccountCode: settings.severanceExpenseAccountCode ?? "",
+    severanceExpenseAccountName: settings.severanceExpenseAccountCode
+      ? chartByCode[settings.severanceExpenseAccountCode]?.name ?? settings.severanceExpenseAccountCode
+      : "",
   }));
 
   const submitSettings = () => {
@@ -258,6 +265,7 @@ export default function PayrollEmployeesPanel({
         netPayAccountCode: settingsForm.netPayAccountCode || null,
         netPayIsPaidImmediately: settingsForm.netPayIsPaidImmediately,
         payFrequency: settingsForm.payFrequency,
+        severanceExpenseAccountCode: settingsForm.severanceExpenseAccountCode || null,
       });
       setMsg({ ok: res.ok, text: res.message });
       if (res.ok) router.refresh();
@@ -497,6 +505,20 @@ export default function PayrollEmployeesPanel({
                 onSelect={(code, name) => setSettingsForm((f) => ({ ...f, otherDeductionsAccountCode: code, otherDeductionsAccountName: name }))}
                 onNameChange={(name) => setSettingsForm((f) => ({ ...f, otherDeductionsAccountName: name }))}
                 onClear={() => setSettingsForm((f) => ({ ...f, otherDeductionsAccountCode: "", otherDeductionsAccountName: "" }))}
+              />
+            </label>
+            <label className="acc-field">
+              <span>
+                รหัสบัญชีค่าชดเชยเลิกจ้าง (ค่าใช้จ่าย, ไม่บังคับ — บังคับก่อนสร้าง JE ได้จริงเฉพาะรอบที่มีค่าชดเชยเลิกจ้าง)
+              </span>
+              <AccountCombobox
+                accountCode={settingsForm.severanceExpenseAccountCode}
+                accountName={settingsForm.severanceExpenseAccountName}
+                chart={chart}
+                readOnly={false}
+                onSelect={(code, name) => setSettingsForm((f) => ({ ...f, severanceExpenseAccountCode: code, severanceExpenseAccountName: name }))}
+                onNameChange={(name) => setSettingsForm((f) => ({ ...f, severanceExpenseAccountName: name }))}
+                onClear={() => setSettingsForm((f) => ({ ...f, severanceExpenseAccountCode: "", severanceExpenseAccountName: "" }))}
               />
             </label>
             <label className="acc-field">

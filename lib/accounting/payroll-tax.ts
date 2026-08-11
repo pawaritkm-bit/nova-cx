@@ -222,3 +222,138 @@ export function calcSsoContribution(
     employerContribution: round2(wageBase * (config.employerRatePercent / 100)),
   };
 }
+
+// ---------------------------------------------------------------------
+// ★★★ เฟส 9b กลุ่ม BF — ค่าตอบแทนเลิกจ้าง/ชดเชย (docs 06, T158-T163) — เสี่ยงกฎหมายสูงสุดของเฟส 9b
+//   ★★★ 0.2 ห้ามเปิดใช้เครื่องคำนวณภาษีชดเชย (ENABLE_SEVERANCE_TAX_CALC) กับเงินจริงจนกว่าจะมี golden
+//   test ที่ verify กับแหล่งอ้างอิงที่เชื่อถือได้จริง (mirror T112 เดิม) — ดู payroll-tax.test.ts
+// ---------------------------------------------------------------------
+
+/**
+ * T158 — อายุงานสำหรับ "จำนวนวันค่าชดเชยตามกฎหมายแรงงาน" (มาตรา 118 พ.ร.บ.คุ้มครองแรงงาน) ★ pure
+ *   ★ 0.7 เครื่องคำนวณ**ช่วยเหลือ**เท่านั้น (ไม่บังคับ) — นักบัญชียังกรอก severance_amount เองได้เสมอ
+ *   ★★ ตั้งใจสะกดชื่อ/พารามิเตอร์ต่างจาก `calcYearsOfServiceForTaxFormula` ชัดเจน (0.7) — ห้ามใช้ตัวแปรชื่อ
+ *   `yearsOfService` เดี่ยว ๆ ปนกันทั้งสองความหมาย
+ *   ★ รับ `fullYearsOfService` เป็นจำนวนปีแบบทศนิยม (เศษวันคิดเป็นเศษปี หาร 365) — จำเป็นต้องเป็นทศนิยม
+ *   (ไม่ใช่จำนวนเต็มปี) เพราะขั้นบันไดแรกอยู่ที่ระดับ "วัน" (120 วัน = 120/365 ปี) ไม่ใช่ระดับปี — ผู้เรียกใช้
+ *   (เช่น payroll.ts) แปลงจำนวนวันที่ทำงานจริงเป็นปีทศนิยมก่อนเรียกฟังก์ชันนี้
+ *   ขั้นบันได (ม.118): <120วัน→0, 120วัน-<1ปี→30, 1-<3ปี→90, 3-<6ปี→180, 6-<10ปี→240, 10-<20ปี→300, ≥20ปี→400
+ */
+export function calcStatutorySeveranceDays(fullYearsOfService: number): number {
+  const years = Number.isFinite(fullYearsOfService) && fullYearsOfService > 0 ? fullYearsOfService : 0;
+  const days120AsYears = 120 / 365;
+  if (years < days120AsYears) return 0;
+  if (years < 1) return 30;
+  if (years < 3) return 90;
+  if (years < 6) return 180;
+  if (years < 10) return 240;
+  if (years < 20) return 300;
+  return 400;
+}
+
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** แปลง YYYY-MM-DD → Date (UTC เที่ยงคืน) — คืน null ถ้าไม่ใช่วันที่ปฏิทินจริง (กัน 2026-02-30) */
+function parseIsoDateUTC(iso: string): Date | null {
+  const m = ISO_DATE_RE.exec(iso);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12) return null;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return dt;
+}
+
+/**
+ * T159 — อายุงานสำหรับ "สูตรหักค่าใช้จ่ายทางภาษี" (มาตรา 48(5)) ★ pure
+ *   [⚠️ FLAG] 0.7 — กติกาเศษปีนี้อ้างอิงหลักปฏิบัติทั่วไปของกรมสรรพากร (แนวเดียวกับการนับอายุงานสำหรับกองทุน
+ *   สำรองเลี้ยงชีพ/บำเหน็จ) ต้องยืนยันกับตัวอย่างคำนวณจริงคู่กับ golden test (0.2) ก่อนเปิดใช้ ENABLE_SEVERANCE_
+ *   TAX_CALC=true เช่นกัน ไม่ใช่แค่สูตรหลักของ calcSeveranceWithholding
+ *
+ *   จำนวนปีเต็มที่ทำงาน (นับแบบ "วันครบรอบปี" เหมือนอายุคน — ปีปฏิทินจริง ไม่ใช่ 365 วันคงที่) + เศษของปีที่
+ *   เกิน 183 วัน ปัดขึ้นอีก 1 ปี — คืน 0 (ไม่ throw) ถ้าวันที่ผิดรูปแบบ/startDate ไม่ก่อนหน้า endDate
+ */
+export function calcYearsOfServiceForTaxFormula(startDate: string | null, endDate: string | null): number {
+  if (!startDate || !endDate) return 0;
+  const start = parseIsoDateUTC(startDate);
+  const end = parseIsoDateUTC(endDate);
+  if (!start || !end) return 0;
+  if (end.getTime() <= start.getTime()) return 0;
+
+  let fullYears = end.getUTCFullYear() - start.getUTCFullYear();
+  let anniversary = new Date(Date.UTC(start.getUTCFullYear() + fullYears, start.getUTCMonth(), start.getUTCDate()));
+  if (anniversary.getTime() > end.getTime()) {
+    fullYears -= 1;
+    anniversary = new Date(Date.UTC(start.getUTCFullYear() + fullYears, start.getUTCMonth(), start.getUTCDate()));
+  }
+  if (fullYears < 0) return 0;
+
+  const remainderDays = Math.round((end.getTime() - anniversary.getTime()) / 86400000);
+  if (remainderDays > 183) fullYears += 1;
+  return fullYears;
+}
+
+export type SeveranceWithholdingResult = {
+  /** ส่วนที่ได้รับยกเว้นภาษี (กฎกระทรวง 126 ข้อ 2(51) แก้ไข ฉบับ 394) */
+  exemptAmount: number;
+  /** ส่วนที่ต้องเสียภาษี (severanceAmount − exemptAmount) */
+  taxableAmount: number;
+  /** ค่าใช้จ่ายตามมาตรา 48(5) = min(7,000 × ปีทำงาน, taxableAmount) */
+  expense: number;
+  /** เงินได้หลังหักค่าใช้จ่าย (taxableAmount − expense) */
+  remainder: number;
+  /** เงินได้สุทธิที่ใช้คำนวณภาษี = remainder × 0.5 (ตามมาตรา 48(5)) */
+  netTaxable: number;
+  /** ภาษีที่ต้องหัก — คำนวณแยกอิสระจากเงินได้อื่นของปีนั้นทั้งหมด */
+  tax: number;
+};
+
+/**
+ * T162 — ภาษีหัก ณ ที่จ่ายของเงินได้จากการเลิกจ้าง (มาตรา 48(5)) ★ pure — ★★★ สูตรที่ 3 แยกจาก
+ *   `calcMonthlyPitForRegularIncome`/`calcMonthlyPitWithBonus` โดยสิ้นเชิง (ไม่ reuse โครงสร้างเดิม เพราะ
+ *   ฐานภาษี/ค่าใช้จ่ายที่ยกเว้นต่างกันโดยสิ้นเชิงตามมาตรา 48(5)):
+ *   (1) dailyWage = finalMonthlyWage/30, exemptAmount = min(severanceAmount, dailyWage×400, 600,000)
+ *       (กฎกระทรวง 126 ข้อ 2(51) แก้ไข ฉบับ 394)
+ *   (2) taxableAmount = max(severanceAmount − exemptAmount, 0)
+ *   (3) expense = min(7,000 × yearsOfServiceForTaxFormula, taxableAmount) (มาตรา 48(5))
+ *   (4) remainder = taxableAmount − expense
+ *   (5) netTaxable = remainder × 0.5
+ *   (6) tax = calcAnnualTax(netTaxable, brackets) — ★★★ คำนวณแยกอิสระ ไม่รวมกับเงินได้อื่นของปีนั้นเลย
+ *       (ตามมาตรา 48(5) ผู้มีเงินได้เลือกแยกคำนวณภาษีจากเงินได้ประเภทนี้โดยไม่ต้องนำไปรวมคำนวณกับเงินได้อื่น)
+ *   ★ severanceAmount ≤ 0 → ทุกค่าเป็น 0 (ไม่ throw) · yearsOfServiceForTaxFormula=0 (ทำงานไม่ถึงปี) →
+ *   expense=0 ไม่ throw (ยังคำนวณ exempt/tax ต่อได้ปกติ)
+ */
+export function calcSeveranceWithholding(
+  severanceAmount: number,
+  finalMonthlyWage: number,
+  yearsOfServiceForTaxFormula: number,
+  brackets: PitBracket[]
+): SeveranceWithholdingResult {
+  const severance = Number.isFinite(severanceAmount) && severanceAmount > 0 ? severanceAmount : 0;
+  if (severance <= 0) {
+    return { exemptAmount: 0, taxableAmount: 0, expense: 0, remainder: 0, netTaxable: 0, tax: 0 };
+  }
+  const wage = Number.isFinite(finalMonthlyWage) && finalMonthlyWage > 0 ? finalMonthlyWage : 0;
+  const years =
+    Number.isFinite(yearsOfServiceForTaxFormula) && yearsOfServiceForTaxFormula > 0 ? yearsOfServiceForTaxFormula : 0;
+
+  const dailyWage = round2(wage / 30);
+  const exemptAmount = round2(Math.min(severance, dailyWage * 400, 600000));
+  const taxableAmount = round2(Math.max(severance - exemptAmount, 0));
+  const expense = round2(Math.min(7000 * years, taxableAmount));
+  const remainder = round2(Math.max(taxableAmount - expense, 0));
+  const netTaxable = round2(remainder * 0.5);
+  const tax = calcAnnualTax(netTaxable, brackets);
+  return { exemptAmount, taxableAmount, expense, remainder, netTaxable, tax };
+}
+
+/**
+ * T163 — ★★★ 0.2 สวิตช์ปิด/เปิดเครื่องคำนวณภาษีค่าชดเชย — default `false` เสมอตั้งแต่ commit แรกที่เพิ่ม
+ *   ฟีเจอร์นี้ (mirror สถานะเดิมของโบนัสก่อน T112 verify) เปลี่ยนเป็น `true` ได้ก็ต่อเมื่อมี golden test
+ *   case ที่ verify ตัวเลขกับแหล่งอ้างอิงที่เชื่อถือได้จริงคู่กันในคอมมิตเดียวกันเท่านั้น (ดู payroll-tax.test.ts)
+ *   — ตอนนี้ยังหา golden test ที่เชื่อถือได้ไม่ทัน (ไม่มีเครื่องมือเข้าถึงอินเทอร์เน็ตในสภาพแวดล้อมที่พัฒนา) จึง
+ *   คง `false` ตามแผนสำรองของ 0.2 ข้อ 5 (ไม่ถือเป็นงานค้าง)
+ */
+export let ENABLE_SEVERANCE_TAX_CALC = false;

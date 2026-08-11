@@ -6,6 +6,10 @@ import {
   calcMonthlyPitForRegularIncome,
   calcMonthlyPitWithBonus,
   calcSsoContribution,
+  calcStatutorySeveranceDays,
+  calcYearsOfServiceForTaxFormula,
+  calcSeveranceWithholding,
+  ENABLE_SEVERANCE_TAX_CALC,
   PERSONAL_ALLOWANCE_STANDARD,
 } from "@/lib/accounting/payroll-tax";
 import type { PitBracket } from "@/lib/accounting/payroll-config";
@@ -259,5 +263,157 @@ describe("calcSsoContribution (0.6)", () => {
   it("ค่าจ้าง = 0 (ไม่มีค่าจ้างงวดนี้) → ไม่มีเงินสมทบ (ไม่ clamp ขึ้น floor)", () => {
     const r = calcSsoContribution(0, configOld);
     expect(r).toEqual({ wageBase: 0, employeeContribution: 0, employerContribution: 0 });
+  });
+});
+
+// =========================================================================
+// ★★★ เฟส 9b กลุ่ม BF (T158-T163) — ค่าตอบแทนเลิกจ้าง/ชดเชย — เสี่ยงกฎหมายสูงสุดของเฟส 9b
+// =========================================================================
+
+describe("calcStatutorySeveranceDays (T158, มาตรา 118 — เครื่องคำนวณช่วยเหลือ ไม่บังคับ, 0.7)", () => {
+  // ★ รับ fullYearsOfService เป็นปีทศนิยม (เศษวัน/365) — ทดสอบขอบเขต 119/120 วันด้วยการหารตรง ๆ
+  it("119 วัน (119/365 ปี) → 0 (ต่ำกว่า 120 วัน)", () => {
+    expect(calcStatutorySeveranceDays(119 / 365)).toBe(0);
+  });
+  it("120 วันพอดี (120/365 ปี) → 30", () => {
+    expect(calcStatutorySeveranceDays(120 / 365)).toBe(30);
+  });
+  it("0.5 ปี (อยู่ในช่วง 120วัน-<1ปี) → 30", () => {
+    expect(calcStatutorySeveranceDays(0.5)).toBe(30);
+  });
+  it("ครบ 1 ปีพอดี → 90 (ขั้น 1-<3ปี)", () => {
+    expect(calcStatutorySeveranceDays(1)).toBe(90);
+  });
+  it("2 ปี (อยู่ในช่วง 1-<3ปี) → 90", () => {
+    expect(calcStatutorySeveranceDays(2)).toBe(90);
+  });
+  it("ครบ 3 ปีพอดี → 180 (ขั้น 3-<6ปี)", () => {
+    expect(calcStatutorySeveranceDays(3)).toBe(180);
+  });
+  it("5 ปี (อยู่ในช่วง 3-<6ปี) → 180", () => {
+    expect(calcStatutorySeveranceDays(5)).toBe(180);
+  });
+  it("ครบ 6 ปีพอดี → 240 (ขั้น 6-<10ปี)", () => {
+    expect(calcStatutorySeveranceDays(6)).toBe(240);
+  });
+  it("8 ปี (อยู่ในช่วง 6-<10ปี) → 240", () => {
+    expect(calcStatutorySeveranceDays(8)).toBe(240);
+  });
+  it("ครบ 10 ปีพอดี → 300 (ขั้น 10-<20ปี)", () => {
+    expect(calcStatutorySeveranceDays(10)).toBe(300);
+  });
+  it("15 ปี (อยู่ในช่วง 10-<20ปี) → 300", () => {
+    expect(calcStatutorySeveranceDays(15)).toBe(300);
+  });
+  it("ครบ 20 ปีพอดี → 400 (ขั้นสูงสุด)", () => {
+    expect(calcStatutorySeveranceDays(20)).toBe(400);
+  });
+  it("25 ปี (มากกว่า 20 ปี) → 400", () => {
+    expect(calcStatutorySeveranceDays(25)).toBe(400);
+  });
+  it("0/ติดลบ/NaN → 0 (ไม่ throw)", () => {
+    expect(calcStatutorySeveranceDays(0)).toBe(0);
+    expect(calcStatutorySeveranceDays(-1)).toBe(0);
+    expect(calcStatutorySeveranceDays(NaN)).toBe(0);
+  });
+});
+
+describe("calcYearsOfServiceForTaxFormula (T159, มาตรา 48(5) — [⚠️ FLAG] ต้อง verify คู่ golden test ก่อนเปิด flag, 0.7)", () => {
+  it("ทำงานพอดี 3 ปี 0 วัน → 3 (ไม่ปัดขึ้น)", () => {
+    expect(calcYearsOfServiceForTaxFormula("2020-01-01", "2023-01-01")).toBe(3);
+  });
+  it("ทำงาน 3 ปี 100 วัน (ไม่เกิน 183 วัน) → 3 (ไม่ปัดขึ้น)", () => {
+    expect(calcYearsOfServiceForTaxFormula("2020-01-01", "2023-04-11")).toBe(3);
+  });
+  it("ทำงาน 3 ปี 183 วันพอดี (ขอบเขต — ไม่เกิน) → 3 (ไม่ปัดขึ้น)", () => {
+    expect(calcYearsOfServiceForTaxFormula("2020-01-01", "2023-07-03")).toBe(3);
+  });
+  it("ทำงาน 3 ปี 184 วัน (เกิน 183 วันพอดี 1 วัน) → 4 (ปัดขึ้น)", () => {
+    expect(calcYearsOfServiceForTaxFormula("2020-01-01", "2023-07-04")).toBe(4);
+  });
+  it("ทำงาน 3 ปี 200 วัน (เกิน 183 วัน) → 4 (ปัดขึ้น)", () => {
+    expect(calcYearsOfServiceForTaxFormula("2020-01-01", "2023-07-20")).toBe(4);
+  });
+  it("ทำงานไม่ถึง 1 ปี (5 เดือน) → 0", () => {
+    expect(calcYearsOfServiceForTaxFormula("2023-01-01", "2023-06-01")).toBe(0);
+  });
+  it("startDate/endDate เป็น null → 0 (ไม่ throw)", () => {
+    expect(calcYearsOfServiceForTaxFormula(null, "2023-01-01")).toBe(0);
+    expect(calcYearsOfServiceForTaxFormula("2020-01-01", null)).toBe(0);
+  });
+  it("endDate ก่อนหน้า startDate (ข้อมูลผิดปกติ) → 0 ไม่ throw", () => {
+    expect(calcYearsOfServiceForTaxFormula("2020-01-01", "2019-12-31")).toBe(0);
+  });
+  it("รูปแบบวันที่ผิดปกติ → 0 ไม่ throw", () => {
+    expect(calcYearsOfServiceForTaxFormula("not-a-date", "2023-01-01")).toBe(0);
+  });
+});
+
+describe("calcSeveranceWithholding (T162, มาตรา 48(5) — ★★★ self-consistent, [⚠️ FLAG] ต้อง verify golden test ก่อนเปิด flag)", () => {
+  it("severanceAmount ≤ 0 → ทุกค่าเป็น 0 (ไม่ throw)", () => {
+    const r = calcSeveranceWithholding(0, 30000, 5, BRACKETS);
+    expect(r).toEqual({ exemptAmount: 0, taxableAmount: 0, expense: 0, remainder: 0, netTaxable: 0, tax: 0 });
+    const r2 = calcSeveranceWithholding(-1000, 30000, 5, BRACKETS);
+    expect(r2.tax).toBe(0);
+  });
+
+  it("severanceAmount ต่ำกว่า exempt cap ทั้งหมด (dailyWage×400 และ 600,000) → exempt เต็มจำนวน → tax=0", () => {
+    // finalMonthlyWage=100000 → dailyWage=3333.33 → ×400=1,333,333.33 (สูงกว่า severance และ 600,000 มาก)
+    const r = calcSeveranceWithholding(300000, 100000, 5, BRACKETS);
+    expect(r.exemptAmount).toBe(300000);
+    expect(r.taxableAmount).toBe(0);
+    expect(r.expense).toBe(0);
+    expect(r.tax).toBe(0);
+  });
+
+  it("yearsOfServiceForTaxFormula=0 (ทำงานไม่ถึงปี) → expense=0 ไม่ throw ยังคำนวณภาษีต่อได้ปกติ", () => {
+    // finalMonthlyWage=30000 → dailyWage=1000 → ×400=400,000 (cap ที่ 400,000 เพราะน้อยกว่า 600,000)
+    // severance=450,000 → exempt=min(450000,400000,600000)=400000 → taxable=50000 → expense=min(0,50000)=0
+    // remainder=50000 → netTaxable=25000 → ต่ำกว่าขั้นแรก(150000) → tax=0
+    const r = calcSeveranceWithholding(450000, 30000, 0, BRACKETS);
+    expect(r.exemptAmount).toBe(400000);
+    expect(r.taxableAmount).toBe(50000);
+    expect(r.expense).toBe(0);
+    expect(r.remainder).toBe(50000);
+    expect(r.netTaxable).toBe(25000);
+    expect(r.tax).toBe(0);
+  });
+
+  it("exemptAmount ชนเพดาน 600,000 (dailyWage×400 สูงกว่า 600,000) → ใช้ 600,000 เป็นตัวคุม", () => {
+    // finalMonthlyWage=60000 → dailyWage=2000 → ×400=800,000 (สูงกว่า 600,000) → exempt cap ที่ 600,000
+    const r = calcSeveranceWithholding(700000, 60000, 5, BRACKETS);
+    expect(r.exemptAmount).toBe(600000);
+    expect(r.taxableAmount).toBe(100000);
+    expect(r.expense).toBe(35000); // min(7000*5=35000, 100000)
+    expect(r.remainder).toBe(65000);
+    expect(r.netTaxable).toBe(32500);
+    expect(r.tax).toBe(0); // ต่ำกว่าขั้นแรก (150,000)
+  });
+
+  it("severanceAmount สูงเกิน exempt cap มาก → ส่วนเกินเข้าสูตรภาษี 6 ขั้นถูกต้องตามลำดับ (self-consistent เทียบมือ)", () => {
+    // finalMonthlyWage=30000 → dailyWage=1000 → ×400=400,000 (cap ที่ 400,000)
+    // severance=2,000,000 → exempt=400,000 → taxable=1,600,000
+    // years=10 → expense=min(70,000,1,600,000)=70,000 → remainder=1,530,000 → netTaxable=765,000
+    // tax(765,000) = 0(0-150k) + 7,500(150k-300k@5%) + 20,000(300k-500k@10%) + 37,500(500k-750k@15%)
+    //   + 3,000(750k-765k@20%, 15,000*20%) = 68,000
+    const r = calcSeveranceWithholding(2000000, 30000, 10, BRACKETS);
+    expect(r.exemptAmount).toBe(400000);
+    expect(r.taxableAmount).toBe(1600000);
+    expect(r.expense).toBe(70000);
+    expect(r.remainder).toBe(1530000);
+    expect(r.netTaxable).toBe(765000);
+    expect(r.tax).toBe(68000);
+  });
+
+  it("finalMonthlyWage ≤ 0/ผิดปกติ → dailyWage=0 → exemptAmount cap ที่ 0 (ไม่ throw, ยกเว้นได้แค่ 0)", () => {
+    const r = calcSeveranceWithholding(100000, 0, 5, BRACKETS);
+    expect(r.exemptAmount).toBe(0);
+    expect(r.taxableAmount).toBe(100000);
+  });
+});
+
+describe("ENABLE_SEVERANCE_TAX_CALC (T163, ★★★ 0.2 gate)", () => {
+  it("ต้องเป็น false เสมอ จนกว่าจะมี golden test ที่ verify กับแหล่งอ้างอิงที่เชื่อถือได้จริงคู่กัน (ยังไม่มีในคอมมิตนี้)", () => {
+    expect(ENABLE_SEVERANCE_TAX_CALC).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, type AccountingAccess } from "@/lib/accounting/access";
 import { listRuns, getRunWithLines } from "@/lib/accounting/payroll";
 import { listActiveFilingReminders, countPendingFilingUnits } from "@/lib/accounting/payroll-filing-reminders";
+import { ENABLE_SEVERANCE_TAX_CALC } from "@/lib/accounting/payroll-tax";
 import PayrollRunPanel from "./PayrollRunPanel";
 import ChatAuditFrame from "../../_Frame";
 import "../../chat-admin.css";
@@ -158,6 +159,7 @@ export default async function PayrollPage({
               customerId={validCustomerId}
               runs={runs}
               detail={detail}
+              severanceTaxCalcEnabled={ENABLE_SEVERANCE_TAX_CALC}
             />
           </div>
         )}
