@@ -553,6 +553,45 @@ export function netAdjustmentByEntry(notesByEntry: Map<string, CreditDebitNote[]
   return result;
 }
 
+/**
+ * ผลปรับปรุงยอดคงค้าง "สกุลต่างประเทศ" (ก่อน VAT) แบบมีสัญญาณ ของ CN/DN "confirmed" 1 ใบ (เฟส 10b, 0.3/0.10)
+ *   — mirror noteSignedAdjustment เป๊ะ แต่สรุปจาก `line.fxAmount` แทน `line.amount + line.vatAmount`
+ *   (0.3: ฐานคำนวณ revaluation ต้องไม่รวม VAT เสมอ — VAT เป็นตัวเงินบาทเสมอตามกฎหมายไทย ไม่ใช่ monetary item
+ *   สกุลต่างประเทศ) — บิลต้นทาง THB ปกติ (ไม่มี fxAmount ต่อบรรทัดเลย) → คืน 0 เสมอ (ไม่ throw)
+ *   - credit_note (ลดยอด) → ลบ (ค่าติดลบ) · debit_note (เพิ่มยอด) → บวก · draft (ยังไม่ยืนยัน) → 0 เสมอ
+ */
+export function noteFxSignedAdjustment(note: Pick<CreditDebitNote, "docType" | "status" | "lines">): number {
+  if (note.status !== "confirmed") return 0;
+  let total = 0;
+  for (const l of note.lines) total += numLocal(l.fxAmount ?? 0);
+  total = round2(total);
+  return note.docType === "credit_note" ? round2(-total) : total;
+}
+
+/**
+ * ผลรวมสัญญาณของ CN/DN "confirmed" ต่อบิล ฐานสกุลต่างประเทศ (ก่อน VAT) — ป้อนเข้า
+ *   fx-revaluation.ts::outstandingFxForEntry (เฟส 10b, 0.4/0.10) — pure, รับ Map ที่โหลดมาแล้ว
+ *   (จาก listNotesForEntries) กรอง confirmed ก่อนรวมเสมอ (ผ่าน noteFxSignedAdjustment)
+ *   @param asOfDate เฟส 10b (0.5) — YYYY-MM-DD, optional · ไม่ส่ง = ไม่กรอง (นับ CN/DN confirmed ทุกใบ) ·
+ *     ส่งมา = กรอง note.docDate ≤ asOfDate ก่อนรวม (กัน CN/DN วันที่ในอนาคตหลุดเข้ามาตอนตั้งรายงานย้อนหลัง)
+ *   ★ ไม่แก้ noteSignedAdjustment/netAdjustmentByEntry เดิมเลย (ฟังก์ชันใหม่แยกต่างหากทั้งหมด)
+ */
+export function netFxAdjustmentByEntry(
+  notesByEntry: Map<string, CreditDebitNote[]>,
+  asOfDate?: string
+): Map<string, number> {
+  const result = new Map<string, number>();
+  for (const [entryId, notes] of notesByEntry) {
+    let sum = 0;
+    for (const n of notes) {
+      if (asOfDate && n.docDate > asOfDate) continue;
+      sum += noteFxSignedAdjustment(n);
+    }
+    result.set(entryId, round2(sum));
+  }
+  return result;
+}
+
 /** ผลลัพธ์ที่ server action ใช้แสดง toast/inline */
 export type NoteActionResult = { ok: true; id: string } | { ok: false; message: string };
 

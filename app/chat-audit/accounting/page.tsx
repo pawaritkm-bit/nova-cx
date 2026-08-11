@@ -46,6 +46,7 @@ import {
 } from "@/lib/accounting/monthly";
 import { createEntryAction } from "./actions";
 import { isCreditEligibleForPayment, hasActiveBillPaymentsForEntries } from "@/lib/accounting/bill-payments";
+import { countOverdueUnconfirmedReversals } from "@/lib/accounting/fx-revaluation";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import { listProducts } from "@/lib/accounting/products";
 import ChatAuditFrame from "../_Frame";
@@ -1085,6 +1086,17 @@ export default async function AccountingPage({
   // สวิตช์ท้าวแชร์ — เฉพาะ admin + migration พร้อม (คอลัมน์ is_share_circle apply แล้ว)
   const showShareToggle = access.mode === "admin" && shareResolved && !!shareCustomerId;
 
+  // ---- เฟส 10b (0.18) — badge เตือน reversing FX ค้างยืนยันเกิน 7 วัน (hint UI เท่านั้น ไม่ block อะไร) ----
+  //   ★ perf: โหลดเฉพาะ "ลูกค้าที่กางอยู่" เท่านั้น (เหมือน shareCustomerId ข้างบน) — ไม่ query ทั้งหน้า list
+  let fxOverdueCount = 0;
+  if (shareCustomerId) {
+    try {
+      fxOverdueCount = await countOverdueUnconfirmedReversals(service, tenantId, shareCustomerId, 7);
+    } catch {
+      // best-effort — migration ยังไม่ apply/blip ชั่วคราว → ไม่โชว์ badge (หน้าไม่ล้ม)
+    }
+  }
+
   // ---- sign thumbnail ของลูกค้าที่เปิด (ทุกแท็บ) + บิลที่แก้ ----
   //   ★ perf: thumbnail = batch sign (1 call, ไม่บล็อก render) + lazy-load ในเบราว์เซอร์
   //     รูปในหน้าตรวจ/เลื่อนบิล = ย่อขนาด (เล็ก เลื่อนเร็ว)
@@ -1223,6 +1235,15 @@ export default async function AccountingPage({
         </div>
       ) : null}
 
+      {/* เฟส 10b (0.18) — badge เตือน reversing FX ค้างยืนยันเกิน 7 วัน (hint UI เท่านั้น ไม่ block อะไร) */}
+      {g.customerId && g.customerId === shareCustomerId && fxOverdueCount > 0 ? (
+        <div className="action-msg err" style={{ marginBottom: 10 }}>
+          <a href={`/chat-audit/accounting/fx-revaluation?customerId=${g.customerId}`}>
+            ⚠️ มี JE กลับรายการ FX ค้างยืนยัน {fxOverdueCount.toLocaleString("th-TH")} รายการ (เกิน 7 วันแล้ว)
+          </a>
+        </div>
+      ) : null}
+
       {/* สรุปของลูกค้ารายนี้ */}
       <KpiRow s={g.summary.all} />
 
@@ -1251,6 +1272,7 @@ export default async function AccountingPage({
           g.customerId ? `/chat-audit/accounting/financial-statements?customerId=${g.customerId}` : undefined
         }
         journalEntryHref={g.customerId ? `/chat-audit/accounting/journal-entry?customerId=${g.customerId}` : undefined}
+        fxRevaluationHref={g.customerId ? `/chat-audit/accounting/fx-revaluation?customerId=${g.customerId}` : undefined}
         recurringJournalHref={
           g.customerId ? `/chat-audit/accounting/recurring-journal?customerId=${g.customerId}` : undefined
         }

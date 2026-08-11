@@ -99,6 +99,16 @@ function makeResolver(
     entryScope?: EntryScopeRow | null;
     manualEntryTarget?: { customer_id: string; status: string } | null;
     claimSucceeds?: boolean;
+    /** เฟส 10b (0.11 guard #2) — แถว fx_period_revaluations (raw, snake_case) ที่เกี่ยวข้องกับ payment นี้ */
+    fxCycles?: Record<string, unknown>[];
+    /**
+     * เฟส 10b (0.11 guard #2) — ★ ลำดับผลลัพธ์ของ manual_journal_entries.select(...).maybeSingle() ที่
+     *   deriveLiveRevaluationStatus เรียกตามลำดับ (เรียกครั้งที่ 1 = revaluation_je_id, ครั้งที่ 2 =
+     *   reversing_je_id ถ้ามี) — ต้องใช้ค่านี้แทน manualEntryTarget เมื่อระบุมา (fake-supabase.ts แยกแยะ
+     *   query ซ้ำบนตารางเดียวกันด้วย column ไม่ได้ — ใช้ call-counter แทน) · ไม่ระบุ = fallback
+     *   manualEntryTarget เดิม (regression-safe กับเทสต์เดิมทั้งหมดของ dedupe 0.14)
+     */
+    jeLiveSequence?: ({ status: string; deleted_at: string | null } | null)[];
   } = {}
 ): Resolver {
   const payment: PaymentRow | null =
@@ -124,6 +134,7 @@ function makeResolver(
       ? opts.entryScope ?? null
       : { customer_id: CUSTOMER_ID, entry_type: "sale", payment_method: "credit", status: "confirmed", doc_no: "INV-001", currency: "USD", fx_rate: 35.0 };
 
+  let jeLiveCallIndex = 0;
   return ({ table, op, terminal }) => {
     if (table === "bill_payments" && op === "select" && terminal === "maybeSingle") {
       return { data: payment, error: null };
@@ -141,6 +152,11 @@ function makeResolver(
       return { data: RAW_CHART, error: null };
     }
     if (table === "manual_journal_entries" && op === "select" && terminal === "maybeSingle") {
+      if (opts.jeLiveSequence) {
+        const row = opts.jeLiveSequence[jeLiveCallIndex] ?? null;
+        jeLiveCallIndex++;
+        return { data: row, error: null };
+      }
       return { data: opts.manualEntryTarget ?? null, error: null };
     }
     if (table === "manual_journal_entries" && op === "insert" && terminal === "maybeSingle") {
@@ -148,6 +164,10 @@ function makeResolver(
     }
     if (table === "manual_journal_entry_lines" && terminal === "await") {
       return { data: null, error: null };
+    }
+    // เฟส 10b (0.11 guard #2) — ★ default: ไม่มี cycle ใด ๆ เลย (regression บังคับ — ทำงานปกติเหมือนก่อนเฟส 10b)
+    if (table === "fx_period_revaluations" && terminal === "await") {
+      return { data: opts.fxCycles ?? [], error: null };
     }
     return { data: null, error: null };
   };
@@ -293,5 +313,89 @@ describe("suggestFxGainLossNoteAction", () => {
     setupDb({ claimSucceeds: false });
     const res = await suggestFxGainLossNoteAction(PAYMENT_ID);
     expect(res.ok).toBe(false);
+  });
+
+  // -----------------------------------------------------------------
+  // เฟส 10b (0.11) — hard-block guard #2: assertReversalConfirmedForPayment ถูกเรียกจริงจาก action layer
+  //   ★ payment fixture ของทุกเทสต์ในกลุ่มนี้ต้อง fx_gain_loss_note_id: null (กันชนกับ dedupe query ของ 0.14
+  //   ที่ใช้ manual_journal_entries+select+maybeSingle เดียวกัน — ดูหมายเหตุ jeLiveSequence ด้านบน)
+  // -----------------------------------------------------------------
+  describe("guard #2 (0.11) — assertReversalConfirmedForPayment", () => {
+    const FX_CYCLE_ROW = {
+      id: "reval-row-1",
+      tenant_id: "tenant-1",
+      customer_id: CUSTOMER_ID,
+      entry_type: "sale",
+      currency: "USD",
+      period_end_date: "2026-07-31", // งวดใหม่เริ่ม 2026-08-01
+      closing_rate: 36,
+      source: "manual",
+      outstanding_fx_amount: 100,
+      unrealized_amount: 50,
+      revaluation_je_id: "reval-je",
+      reversing_je_id: "reversing-je",
+      status: "reversing_draft",
+      created_at: "2026-07-31T00:00:00Z",
+    };
+
+    it("★ ไม่มี cycle ที่เกี่ยวข้องเลย (fxCycles ว่าง) → ทำงานปกติเหมือนก่อนเฟสนี้ (regression บังคับ)", async () => {
+      setupDb({ fxCycles: [] });
+      const res = await suggestFxGainLossNoteAction(PAYMENT_ID);
+      expect(res.ok).toBe(true);
+    });
+
+    it("★ มี cycle ที่เกี่ยวข้อง + reversing ยังไม่ confirm (live) + payDate ≥ วันเริ่มงวดใหม่ → ปฏิเสธ พร้อมข้อความชัดเจน", async () => {
+      setupDb({
+        fxCycles: [FX_CYCLE_ROW],
+        // ลำดับ: (1) เช็ค revaluation_je_id → confirmed, (2) เช็ค reversing_je_id → ยังไม่ confirmed
+        jeLiveSequence: [
+          { status: "confirmed", deleted_at: null },
+          { status: "draft", deleted_at: null },
+        ],
+      });
+      const res = await suggestFxGainLossNoteAction(PAYMENT_ID); // payment default payDate = 2026-08-01 (≥ งวดใหม่)
+      expect(res.ok).toBe(false);
+      expect(res.message).toContain("กลับรายการ");
+      expect(currentCapture.inserts.find((i) => i.table === "manual_journal_entries")).toBeUndefined();
+    });
+
+    it("cycle ที่เกี่ยวข้อง reversing confirmed แล้ว (live) → ผ่านปกติ", async () => {
+      setupDb({
+        fxCycles: [FX_CYCLE_ROW],
+        jeLiveSequence: [
+          { status: "confirmed", deleted_at: null },
+          { status: "confirmed", deleted_at: null },
+        ],
+      });
+      const res = await suggestFxGainLossNoteAction(PAYMENT_ID);
+      expect(res.ok).toBe(true);
+    });
+
+    it("payDate ก่อนวันเริ่มงวดใหม่ (ชำระในงวดเดิม) → ไม่ถูกบล็อกเลย แม้ cycle นั้นจะยังไม่ confirm", async () => {
+      setupDb({
+        payment: {
+          id: PAYMENT_ID,
+          entry_id: ENTRY_ID,
+          customer_id: CUSTOMER_ID,
+          pay_date: "2026-07-15", // ก่อนวันเริ่มงวดใหม่ (2026-08-01)
+          amount: 3500,
+          method: "cash",
+          bank_account_id: null,
+          notes: null,
+          created_at: "2026-07-15T00:00:00Z",
+          currency: "USD",
+          fx_rate: 36.0,
+          fx_amount: 100,
+          fx_gain_loss_note_id: null,
+        },
+        fxCycles: [FX_CYCLE_ROW],
+        // ไม่ต้องมี jeLiveSequence เลย — guard ต้องไม่แม้แต่ query manual_journal_entries (ไม่มี cycle ที่
+        // nextPeriodStartDate ≤ payDate เข้าเงื่อนไข) พิสูจน์ผ่านการที่ action ยังสำเร็จได้แม้ resolver
+        // คืน null สำหรับ manual_journal_entries เสมอ
+        manualEntryTarget: null,
+      });
+      const res = await suggestFxGainLossNoteAction(PAYMENT_ID);
+      expect(res.ok).toBe(true);
+    });
   });
 });

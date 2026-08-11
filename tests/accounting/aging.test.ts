@@ -109,8 +109,15 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
 
 const ASOF = "2026-08-08";
 
-function payments(map: Record<string, Pick<BillPayment, "amount">[]>): Map<string, Pick<BillPayment, "amount">[]> {
-  return new Map(Object.entries(map));
+type PaymentLite = Pick<BillPayment, "amount" | "payDate">;
+
+/** helper ประกอบ Map payments — payDate default = ก่อน ASOF เสมอ (สถานการณ์ปกติทั่วไป) เว้นแต่ระบุมาเอง */
+function payments(
+  map: Record<string, (Partial<PaymentLite> & { amount: number })[]>
+): Map<string, PaymentLite[]> {
+  return new Map(
+    Object.entries(map).map(([k, v]) => [k, v.map((p) => ({ amount: p.amount, payDate: p.payDate ?? "2026-08-01" }))])
+  );
 }
 
 describe("buildAgingReport", () => {
@@ -221,5 +228,37 @@ describe("buildAgingReport", () => {
     const entries = [mkEntry({ id: "e1", dueDate: "2026-08-01", lines: [mkLine({ amount: 1000 })] })];
     const report = buildAgingReport(entries, payments({}), ASOF, new Map([["e1", -1000]]));
     expect(report.ar).toHaveLength(0);
+  });
+
+  // -----------------------------------------------------------------
+  // asOfDate → billOutstanding (เฟส 10b, 0.5 — bonus correctness fix: เดิมไม่ส่ง asOfDate เข้า
+  //   billOutstanding เลย เป็นบั๊ก) — เคสปกติต้องไม่เปลี่ยน + เคสตั้งใจต้องแก้บั๊กได้จริง
+  // -----------------------------------------------------------------
+  it("★ เคสปกติ (payment ทุกแถว payDate ≤ asOfDate เสมอ — สถานการณ์จริงทั่วไป) → ผลลัพธ์เหมือนก่อนแก้เป๊ะ (regression บังคับ)", () => {
+    const entries = [mkEntry({ id: "e1", dueDate: "2026-08-01", lines: [mkLine({ amount: 1000 })] })];
+    const report = buildAgingReport(entries, payments({ e1: [{ amount: 400, payDate: "2026-08-01" }] }), ASOF);
+    expect(report.ar[0].total).toBe(600); // เหมือนเทสต์เดิม "จ่ายบางส่วน" ข้างบนทุกประการ
+  });
+
+  it("★★★ บั๊กที่แก้ (0.5) — payment วันที่ในอนาคตเทียบกับ asOfDate (ตั้งรายงานย้อนหลัง) → ไม่ถูกหักออก (payment ยังไม่เกิดขึ้นจริง ณ วันตั้งรายงาน)", () => {
+    const entries = [mkEntry({ id: "e1", dueDate: "2026-08-01", lines: [mkLine({ amount: 1000 })] })];
+    // payment เกิดวันที่ 08-20 แต่ตั้งรายงาน ณ วันที่ 08-08 (ก่อนวันที่ payment) → ต้องไม่ถูกหัก
+    const report = buildAgingReport(entries, payments({ e1: [{ amount: 400, payDate: "2026-08-20" }] }), ASOF);
+    expect(report.ar[0].total).toBe(1000); // เต็มยอด — ไม่หัก payment ที่ยังไม่ถึงวันนั้น
+  });
+
+  it("payment บางแถว payDate ≤ asOfDate บางแถว > asOfDate (ผสม) → หักเฉพาะแถวที่เกิดจริงแล้ว", () => {
+    const entries = [mkEntry({ id: "e1", dueDate: "2026-08-01", lines: [mkLine({ amount: 1000 })] })];
+    const report = buildAgingReport(
+      entries,
+      payments({
+        e1: [
+          { amount: 300, payDate: "2026-08-01" }, // ≤ ASOF → หัก
+          { amount: 400, payDate: "2026-08-20" }, // > ASOF → ไม่หัก
+        ],
+      }),
+      ASOF
+    );
+    expect(report.ar[0].total).toBe(700); // 1000 - 300
   });
 });

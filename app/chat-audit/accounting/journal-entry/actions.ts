@@ -31,6 +31,11 @@ import {
   getManualEntryScope,
   type ManualEntryInput,
 } from "@/lib/accounting/manual-journal";
+import { isRevaluationOrReversingJeId } from "@/lib/accounting/fx-revaluation";
+
+/** ข้อความปฏิเสธเมื่อ id เป็น revaluation_je_id/reversing_je_id ของ fx_period_revaluations ที่ยังไม่จบ cycle */
+const FX_LOCKED_MESSAGE =
+  "รายการนี้ผูกกับ 'ปรับปรุงอัตราแลกเปลี่ยนปลายงวด' — จัดการยืนยัน/ยกเลิกยืนยันผ่านหน้านั้นเท่านั้น";
 
 const PATH = "/chat-audit/accounting/journal-entry";
 
@@ -130,6 +135,16 @@ export async function confirmManualEntryAction(id: string, customerId: string): 
     if (!scope) return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
     assertCustomerInScope(ctx, scope.customerId);
 
+    // ⚠️ เฟส 10b (0.13) — defense-in-depth: ปฏิเสธ id ที่ผูกกับ fx revaluation (best-effort, ไม่ throw ถ้า
+    //   query ล้ม — กันปุ่ม generic นี้ข้าม side-effect ที่จำเป็น เช่น สร้าง reversing อัตโนมัติตอนยืนยัน)
+    try {
+      if (await isRevaluationOrReversingJeId(service, ctx.tenantId, id)) {
+        return { ok: false, message: FX_LOCKED_MESSAGE };
+      }
+    } catch {
+      // query ล้ม — ปล่อยผ่าน (best-effort, ไม่ block การยืนยัน JE ปกติเพราะ query เสริมนี้พัง)
+    }
+
     const res = await confirmManualEntry(service, ctx.tenantId, id);
     if (!res.ok) return { ok: false, message: res.message };
     revalidatePath(PATH);
@@ -152,6 +167,15 @@ export async function unconfirmManualEntryAction(id: string, customerId: string)
     const scope = await getManualEntryScope(service, ctx.tenantId, id);
     if (!scope) return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
     assertCustomerInScope(ctx, scope.customerId);
+
+    // ⚠️ เฟส 10b (0.13) — เหมือน confirmManualEntryAction ข้างบน (best-effort, defense-in-depth)
+    try {
+      if (await isRevaluationOrReversingJeId(service, ctx.tenantId, id)) {
+        return { ok: false, message: FX_LOCKED_MESSAGE };
+      }
+    } catch {
+      // query ล้ม — ปล่อยผ่าน (best-effort)
+    }
 
     const res = await unconfirmManualEntry(service, ctx.tenantId, id);
     if (!res.ok) return { ok: false, message: res.message };

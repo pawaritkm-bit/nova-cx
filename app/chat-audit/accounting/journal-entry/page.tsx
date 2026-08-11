@@ -6,6 +6,7 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, type AccountingAccess } from "@/lib/accounting/access";
 import { listManualEntries } from "@/lib/accounting/manual-journal";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
+import { listActiveFxJeIds } from "@/lib/accounting/fx-revaluation";
 import JournalEntryPanel from "./JournalEntryPanel";
 import ChatAuditFrame from "../../_Frame";
 import "../../chat-admin.css";
@@ -91,6 +92,8 @@ export default async function JournalEntryPage({
   const selectedLabel = customers.find((c) => c.id === validCustomerId)?.label ?? "";
 
   const initial = validCustomerId ? await listManualEntries(service, access.tenantId, validCustomerId) : [];
+  // เฟส 10b (0.13) — ชุด id ของ JE ที่ผูกกับ fx revaluation ที่ยังไม่จบ cycle (UI hint ซ่อนปุ่ม generic)
+  const fxLockedIds = validCustomerId ? await listActiveFxJeIds(service, access.tenantId, validCustomerId) : new Set<string>();
 
   return (
     <ChatAuditFrame
@@ -133,7 +136,12 @@ export default async function JournalEntryPage({
         ) : (
           <div className="card">
             <div className="acc-opening-cust-label">{selectedLabel}</div>
-            <JournalEntryPanel customerId={validCustomerId} initial={initial} chart={chart} />
+            <JournalEntryPanel
+              customerId={validCustomerId}
+              initial={initial}
+              chart={chart}
+              fxLockedIds={[...fxLockedIds]}
+            />
           </div>
         )}
       </div>
