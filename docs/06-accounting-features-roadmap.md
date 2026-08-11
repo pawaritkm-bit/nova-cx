@@ -4913,3 +4913,1172 @@ notify pgrst, 'reload schema';
 6. **ค่าตอบแทนจากการเลิกจ้าง/ชดเชยตามกฎหมายแรงงาน** ที่มีสูตรภาษียกเว้นพิเศษต่างจากเงินเดือนปกติ/โบนัส
 7. **ระบบแจ้งเตือนวันครบกำหนดยื่น ภ.ง.ด.1/สปส.1-10** (ภายในวันที่ 7/15 ของเดือนถัดไปตามกฎหมาย) — รอบแรกมีแค่
    สถานะยื่นแล้ว/ยังไม่ยื่น ไม่มี reminder อัตโนมัติ
+
+# เฟส 9b — แผนละเอียด: Backlog เพิ่มเติมระบบเงินเดือน
+
+สโคป (คำตอบผู้ใช้ล็อกแล้ว — เชื่อถือได้ ไม่วิเคราะห์ซ้ำ): ทำ backlog 9b ทั้ง **7 ข้อเต็มรูป** ที่บันทึกไว้ท้าย
+เฟส 9 เดิม (docs/06-accounting-features-roadmap.md, หมวด `## 6) Backlog 9b`) **รวมข้อ 1 (ค่าลดหย่อนภาษีอื่น)
+และข้อ 6 (ค่าชดเชยเลิกจ้าง) แบบเต็มรูป** แม้ความเสี่ยงกฎหมายสูงสุดของทั้งระบบ — และข้อ 3 (รอบจ่ายไม่รายเดือน)
+วางแผนตอนนี้แม้ขัดกับ schema เดิมของเฟส 9 (`payroll_runs` unique ต่อเดือน)
+
+ต่อยอดของจริงที่ implement ไปแล้ว (ตรวจโค้ดจริงก่อนวางแผนนี้ — ไม่ใช่แค่เอกสารแผนเฟส 9):
+- `lib/accounting/payroll-tax.ts` — `expenseDeduction`/`calcAnnualTax`/`remainingPeriodsInYear`/
+  `calcMonthlyPitForRegularIncome`/`calcMonthlyPitWithBonus`(✅ verify แล้ว)/`calcSsoContribution`,
+  ค่าคงที่ `PERSONAL_ALLOWANCE_STANDARD = 60000`, `EXPENSE_DEDUCTION_CAP = 100000`
+- `lib/accounting/payroll-config.ts` — `getEffectivePitBrackets`/`getEffectiveSsoConfig` (effective-dated,
+  global ไม่ผูก tenant)
+- `lib/accounting/payroll-employees.ts` / `payroll-settings.ts` / `payroll.ts` (orchestrator: createDraftRun/
+  recalcRunLines/buildPayrollJournalEntry/generateRunJournalEntry/mark*Filed) — โครงสร้างจริงที่ implement
+  แล้ว **ต่างจากคำบรรยายในเอกสารแผนเฟส 9 บางจุด** (deviation ที่ตั้งใจ, มีคอมเมนต์อธิบายในโค้ดแล้ว) เช่น
+  atomic claim ใช้คอลัมน์ `status` แทน `manual_entry_id` ตรง ๆ — เฟสนี้ต้อง**อ้างอิงโค้ดจริง ไม่ใช่เอกสารแผนเฟส 9
+  ตรง ๆ** ทุกจุดที่ deviation
+- Schema จริง: `payroll_employees`(0080)/`payroll_settings`(0081)/`payroll_runs`(0082)/`payroll_run_lines`(0083)/
+  `payroll_config`(0079)/`payroll_accounts_seed`(0084) — เฟส 10 (FX) ใช้เลข 0085-0090 ไปแล้วหลังจากนั้น
+- `lib/accounting/wht-cert.ts` + `app/chat-audit/accounting/wht-cert/*` — ต้นแบบ "หนังสือรับรองหัก ณ ที่จ่าย"
+  ที่มีอยู่แล้ว **แต่ใช้กับบิลซื้อ (มาตรา 3 เตรส) เท่านั้น ไม่ใช่พนักงาน** — เฟสนี้ (ข้อ 5) ต้องสร้างไฟล์ใหม่
+  แยกต่างหาก `payroll-wht-cert.ts` ไม่ reuse ตรง ๆ เพราะโดเมนข้อมูลต่างกัน (ผูกกับ `payroll_run_lines`/
+  `payroll_employees` ไม่ใช่ `bill_entries`) แต่ mirror สไตล์ "pure, print-only, ไม่มี migration ใหม่" เดียวกัน
+- `app/api/cron/generate-recurring-je/route.ts` — ต้นแบบ cron ที่เฟสนี้ (ข้อ 7) mirror ตรง ๆ ทั้งโครง (auth
+  CRON_SECRET fail-closed, service-role client ไม่ผูก tenant เดียว, catch error คืน 200 เสมอกัน retry loop)
+- `lib/line/notify.ts` (`job_queue` queue=`notification` + `processNotifJob`) — **ตรวจแล้วพบว่าผูกกับ
+  `survey_invitations`/LINE OA ของลูกค้าโดยเฉพาะ ("kind" ที่รองรับมีแค่ `survey_invitation`/`reminder`, โหลด
+  `invitation_id`ตรง ๆ)** — **ไม่ใช่ pipeline generic ที่ enqueue เรื่องอื่นได้ตรง ๆ** เฟสนี้ (ข้อ 7) จึง
+  **ไม่ reuse pipeline นี้ตรงตัว** (ดูเหตุผลเต็มใน 0.6)
+
+⚠️ ก่อนสร้างไฟล์ migration จริงทุกครั้ง ต้องรัน `ls supabase/migrations/ | sort -V | tail -20` เพื่อยืนยันเลข
+ล่าสุดจริง (ไม่เชื่อเลขที่จองไว้ในเอกสารนี้ตรง ๆ — mirror 0.16 เดิม) — ณ วันวางแผนนี้ (ตรวจแล้ว) เลขล่าสุดคือ
+`0090_chart_of_accounts_fx_gain_loss_seed.sql` (เฟส 10/FX) → เฟสนี้จองเลขต่อจากนั้น **0091-0100**
+
+⚠️ T-code ล่าสุดที่ใช้แล้วทั่วทั้งเอกสาร `docs/06-accounting-features-roadmap.md` (ทุกเฟส 1-10) คือ **T123**
+(ปิดเฟส 9) → เฟสนี้ต่อเลขจากนั้นเป็น **T124** เป็นต้นไป
+
+---
+
+## 0) การตัดสินใจที่ล็อกไว้ก่อนเริ่มโค้ด
+
+### 0.1 ลำดับการทำงาน — จัดใหม่ตามความเสี่ยง/dependency ไม่ใช่ตามเลขข้อ backlog เดิม
+Backlog เดิมเรียง 1-7 ตามลำดับที่คิดออกตอนนั้น ไม่ใช่ลำดับที่ควรทำจริง — แผนนี้จัดกลุ่มงานใหม่เป็น **BA-BG**
+เรียงจากงานที่เสี่ยงต่ำ/เห็นผลไว → งานที่เป็นสถาปัตยกรรมพื้นฐานที่งานอื่นพึ่งพา → งานเสี่ยงกฎหมายสูงสุด →
+งานที่ต้องรอโครงสร้างจากงานก่อนหน้า:
+
+| กลุ่ม | = backlog ข้อ | เหตุผลลำดับ |
+|---|---|---|
+| **BA** | 4 (ยกเว้น SSO) | ง่ายสุด เสี่ยงต่ำสุด ไม่แตะ schema ใหญ่ — ทำก่อนเพื่อเห็นผลไว |
+| **BB** | 2 (auto-prorate) | pure function ล้วน ไม่แตะ engine ภาษี/ประกันสังคมเลย เสี่ยงต่ำ |
+| **BC** | 3 (รอบจ่ายไม่รายเดือน) | งานสถาปัตยกรรมใหญ่ที่สุด — **ต้องเสร็จก่อนข้อ 7** เพราะข้อ 7 (แจ้งเตือนยื่น)
+      ต้องอิงตาราง "หน่วยยื่นรายเดือน" ที่ข้อนี้สร้างขึ้น ไม่ใช่ `payroll_runs` แบบเดิม |
+| **BD** | 5 (นำเข้า YTD นายจ้างเดิม) | เพิ่ม field อ้างอิง + เอกสาร 50 ทวิ ไม่แตะ engine คำนวณเลย เสี่ยงต่ำ อิสระจากกลุ่มอื่น |
+| **BE** | 1 (ค่าลดหย่อนอื่น) | ★★★ เสี่ยงกฎหมายสูง — ต้องผ่าน gate 0.2 ก่อนเปิดใช้จริง |
+| **BF** | 6 (ค่าชดเชยเลิกจ้าง) | ★★★ เสี่ยงกฎหมายสูงสุด — ต้องผ่าน gate 0.2 ก่อนเปิดใช้จริง (ทำหลัง BE เพราะ
+      ทั้งคู่แตะ `recalcRunLines`/`buildPayrollJournalEntry` จุดเดียวกัน ทำสลับกันจะ merge conflict ซ้ำซ้อน) |
+| **BG** | 7 (แจ้งเตือนวันครบกำหนดยื่น) | ต้องรอ **BC** เสร็จก่อน (อิง `payroll_monthly_filings` ไม่ใช่ `payroll_runs`) |
+
+### 0.2 ★★★ ข้อบังคับ — ห้ามเปิดใช้เครื่องคำนวณจริงของข้อ 1/6 กับเงินจริงจนกว่าจะ verify (mirror T112 เดิม)
+นี่ไม่ใช่ทางเลือก แม้ผู้ใช้สั่งให้ทำเต็มรูป — "ทำเต็มรูป" หมายถึง **เขียน engine/schema/UI ให้ครบทุกส่วน** แต่
+**การให้ผลลัพธ์จากสูตรไปกระทบยอดภาษีที่หักจริงของพนักงานลูกค้า ต้องผ่านเงื่อนไขนี้ก่อนเสมอ**:
+
+1. เขียนฟังก์ชันคำนวณ pure ให้ครบ (`sumAndCapDeductions` ข้อ 1 / `calcSeveranceWithholding` ข้อ 6) พร้อม unit
+   test ที่ตรวจคณิตศาสตร์ภายในสูตรเองถูกต้อง (self-consistent — เหมือน `calcAnnualTax` ที่ตรวจได้จากนิยาม
+   ของตัวเองโดยไม่ต้องมีตัวอย่างอ้างอิงภายนอก)
+2. เพิ่ม **flag ปิดสวิตช์ในโค้ดจริง** (ไม่ใช่แค่ระบุในเอกสาร): `ENABLE_EXTRA_DEDUCTIONS_IN_PIT` (ข้อ 1) และ
+   `ENABLE_SEVERANCE_TAX_CALC` (ข้อ 6) ใน `lib/accounting/payroll-tax.ts` — ตั้งเป็น **`false` โดย default**
+   ตั้งแต่ commit แรกที่เพิ่มฟีเจอร์นี้ (mirror สถานะเดิมของโบนัสก่อน T112 verify — ตอนนั้น `payroll.ts` ปฏิเสธ
+   `bonus_amount > 0` ตรง ๆ ที่ชั้นแอปพลิเคชัน)
+3. ตอน flag = false: `recalcRunLines` ยังคำนวณ/แสดงตัวเลข "preview" ให้นักบัญชีเห็นในหน้าจอ (ประโยชน์ของ
+   สูตรที่เขียนเสร็จแล้ว) แต่ **ยอดที่บันทึกจริงลง `pit_withheld`/`severance_pit_withheld` (และเข้า JE)
+   ยังคงใช้สูตรเดิมที่ verify แล้ว** (`PERSONAL_ALLOWANCE_STANDARD` อย่างเดียวสำหรับข้อ 1, ปฏิเสธ/ไม่คำนวณ
+   ภาษีชดเชยสำหรับข้อ 6 — ให้นักบัญชีกรอกยอด `severance_amount` เป็นค่า **ก่อนหักภาษี** ได้ปกติ แต่ภาษีที่หัก
+   ต้องกรอกเอง/ปล่อย 0 จนกว่าจะเปิด flag)
+4. **เงื่อนไขเดียวที่อนุญาตให้เปลี่ยน flag เป็น `true`**: มี golden test case ใน `payroll-deductions.test.ts`/
+   `payroll-tax.test.ts` (severance) ที่ **verify ตัวเลขกับตัวอย่างคำนวณจากแหล่งที่เชื่อถือได้จริง** — แหล่งที่
+   แนะนำให้ QA/นักบัญชีตามหาก่อนอื่น (เชื่อถือได้กว่า blog สรุปทั่วไป): **"คำแนะนำการเสียภาษีเงินได้บุคคล
+   ธรรมดา" ฉบับที่กรมสรรพากรเผยแพร่เองประจำปี (คู่มือยื่น ภ.ง.ด.90/91)** ซึ่งมักมีตัวอย่างคำนวณเต็มรูปทั้งกรณี
+   ค่าลดหย่อนหลายประเภทรวมกันและกรณีเงินได้จากการออกจากงาน หรือเอกสารสัมมนา/อบรมของกรมสรรพากรเองที่มี
+   ตัวอย่างเลข (ดูรายละเอียดแหล่งที่มาที่แนะนำเพิ่มเติมใน 4))
+5. ถ้าหา golden test ที่เชื่อถือได้ไม่ทันเวลาก่อนปิดเฟสนี้: **แผนสำรอง = คง flag ไว้ที่ `false`** ปิดเฟสนี้ได้
+   ปกติ (schema/UI/engine ครบสมบูรณ์ พร้อมเปิดใช้ทันทีเมื่อมี golden test ในอนาคต) — หน้าจอต้องมีข้อความชัดเจน
+   "ฟีเจอร์นี้ยังไม่เปิดใช้กับการคำนวณภาษีจริง อยู่ระหว่างตรวจสอบความถูกต้อง" ไม่ปล่อยให้นักบัญชีเข้าใจผิดว่า
+   ตัวเลข preview ที่เห็นคือยอดที่หักจริงแล้ว
+6. Definition of Done ของเฟสนี้ **ไม่บังคับ**ว่า flag ต้องเป็น `true` ก่อนปิดงาน — บังคับแค่ว่า engine ต้องครบ
+   + flag ต้อง sync กับสถานะ verify จริง (ถ้า verify แล้วต้องเปิด, ถ้ายังไม่ verify ต้องปิด — ห้ามเปิดโดยไม่มี
+   golden test คู่กัน ห้ามปิดทั้งที่ verify แล้วโดยไม่มีเหตุผล)
+
+### 0.3 Reframe ข้อ 4 — จาก "ผู้ประกันตนมาตรา 39/40" เป็น flag ระดับพนักงานที่นักบัญชีตัดสินใจเอง
+Backlog เดิมเขียนว่า "ผู้ประกันตนมาตรา 39/40" ซึ่ง**ไม่ถูกต้องตามข้อเท็จจริง**: ม.39 คืออดีตผู้ประกันตนที่ลาออก
+แล้วส่งเงินเองตรงกับ สปส. (ไม่ผ่านนายจ้าง), ม.40 คือผู้ประกอบอาชีพอิสระ (ไม่มีนายจ้าง) — **ทั้งคู่ไม่เกี่ยวกับ
+payroll ของนายจ้างเลย** ไม่มีอะไรให้ระบบนี้ทำเกี่ยวกับ ม.39/40 จริง ๆ — สิ่งที่ทำได้จริงและมีประโยชน์คือ
+flag `payroll_employees.sso_exempt: boolean` ให้นักบัญชีพิจารณาเองเป็นรายพนักงาน (เช่น พนักงานอายุเกิน 60 ที่
+ตกลงไม่ต่อประกันสังคม, กรณีพิเศษอื่นที่นักบัญชีลูกค้าแจ้งมา) **ไม่ต้องระบุเหตุผลทางกฎหมายในระบบ** — `payroll.ts`
+เพียงข้าม `calcSsoContribution` เมื่อ flag=true (เงื่อนไขก่อนเรียก ไม่แก้ตัวฟังก์ชันเอง)
+
+### 0.4 ขอบเขตข้อ 5 — YTD นายจ้างเดิมเป็น "ข้อมูลอ้างอิงเพื่อพิมพ์เอกสารเท่านั้น" ห้ามผสมเข้าสูตรคำนวณ
+สถาปัตยกรรม 0.4 ของเฟส 9 เดิม (`lib/accounting/payroll-tax.ts`) ตั้งใจคำนวณอิสระทุกงวดไม่พึ่ง YTD สะสม — ถ้าดึง
+ยอด YTD จากนายจ้างเดิมมาผสมเข้า `annualEstimate` ของ `calcMonthlyPitForRegularIncome`/`calcMonthlyPitWithBonus`
+จะกระทบพนักงาน**ทุกคน**ที่ไม่มี YTD (regression risk สูงสุด) โดยไม่จำเป็น (การ reconcile ข้ามนายจ้างเป็นหน้าที่
+พนักงานตอนยื่น ภ.ง.ด.90/91 เองอยู่แล้ว) — **การตัดสินใจนี้ล็อกไว้ ไม่ใช่การลดสโคปแบบขอไปที**: เก็บ
+`prior_employer_ytd_*` เป็น field ข้อมูลอ้างอิงล้วน ใช้แค่ตอนพิมพ์หนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ) ปลายปี
+ให้ครบถ้วน (`payroll-wht-cert.ts` ใหม่, ไม่แตะ `payroll-tax.ts`/`payroll.ts::recalcRunLines` เลยแม้แต่บรรทัดเดียว)
+
+### 0.5 สถาปัตยกรรมข้อ 3 — แยก "รอบจ่าย" ออกจาก "หน่วยยื่นภาษี/ประกันสังคมรายเดือน" (non-destructive)
+`payroll_runs` เดิม unique ที่ `(tenant_id, customer_id, pay_period_year, pay_period_month)` และ
+`pit_filing_status`/`sso_filing_status` อยู่บน `payroll_runs` ตรง ๆ (1 รอบ = 1 การยื่น) — ภ.ง.ด.1/สปส.1-10
+เป็นภาระผูกพัน**รายเดือนเสมอ**ไม่ว่าจ่ายถี่แค่ไหน จึงต้องมีเอนทิตีใหม่ **`payroll_monthly_filings`**
+(1 แถวต่อ tenant+customer+ปี+เดือน) เป็นเจ้าของสถานะยื่นตัวจริง — `payroll_runs` ได้ `filing_period_id`
+ชี้ไปแถวนั้น (หลายรอบจ่ายในเดือนเดียวกันชี้แถวเดียวกันได้)
+
+**Backward compatibility (บังคับ — ลูกค้าที่จ่ายรายเดือนปกติต้องทำงานเหมือนเดิมทุกประการ)**:
+- DB level: เอา unique constraint เดิมออก (ต้องเอาออกจริงถึงจะสร้างหลายรอบ/เดือนได้ทางเทคนิค) แทนที่ด้วย
+  index ธรรมดา — **แต่ความปลอดภัยเดิมยังอยู่ที่ชั้นแอปพลิเคชัน**: `payroll_settings.pay_frequency` คอลัมน์ใหม่
+  (`'monthly'` default, `'non_monthly'` ทางเลือก) — `createDraftRun` ปฏิเสธสร้างรอบซ้ำเดือน/ปีเดียวกันเหมือน
+  เดิมทุกประการถ้า `pay_frequency='monthly'` (ค่า default ของลูกค้าทุกรายที่มีอยู่แล้วก่อนเฟสนี้ — ไม่มีใคร
+  ได้รับพฤติกรรมใหม่โดยไม่ได้ตั้งใจ) เปิดสร้างหลายรอบ/เดือนได้เฉพาะลูกค้าที่นักบัญชีตั้งค่าเป็น `non_monthly`
+  เองเท่านั้น
+- Migration backfill: สร้างแถว `payroll_monthly_filings` 1 แถวต่อ `payroll_runs` ที่มีอยู่แล้วทุกแถว (วันนี้
+  เป็น 1:1 เป๊ะ) คัดลอกค่า `pit_filing_status`/`pit_filed_at`/`pit_filed_by`/`sso_*` เดิมมาแบบไม่มีการสูญหาย
+  ข้อมูล แล้วผูก `filing_period_id` กลับเข้า `payroll_runs` — คอลัมน์เดิมบน `payroll_runs` **ไม่ถูกลบ** (เก็บไว้
+  เป็น deprecated แค่หยุดเขียนต่อ กันโค้ดเก่า/รายงานเก่าที่อาจยัง query ตรง ๆ พัง)
+- ปุ่ม "บันทึกว่ายื่นแล้ว" ย้ายไปทำงานที่ระดับ `payroll_monthly_filings` (ผ่านไฟล์ใหม่
+  `payroll-monthly-filing.ts`) — สำหรับลูกค้า `monthly` (ส่วนใหญ่/ทุกรายเดิม) ยังคง 1:1 กับรอบเสมอ ผู้ใช้จะ
+  ไม่เห็นความต่างจากเดิมเลยจากมุมมอง UX
+
+### 0.6 Reframe ข้อ 7 — ไม่ reuse `job_queue`/`processNotifJob` ตรงตัว (ตรวจโค้ดจริงแล้วผูกกับ LINE survey เท่านั้น)
+`lib/line/notify.ts::processNotifJob` เขียนเฉพาะเจาะจงกับ `survey_invitations` (โหลด `invitation_id`, เช็ค
+`status in (responded,expired)`, ใช้ LIFF URL ของแบบสำรวจ) — **การ enqueue payload ประเภทใหม่ (เช่น
+"เตือนยื่นภาษีเงินเดือน") เข้า `job_queue` queue=`notification` จะพังทันทีที่ `processNotifJob`** (โหลด
+`invitation_id` ไม่เจอ → เข้า path `fail("missing_invitation_id")` วนซ้ำจนตาย) — นี่คือ pipeline เฉพาะสำหรับ
+ส่งข้อความหาลูกค้าผ่าน LINE OA ไม่ใช่ pipeline generic สำหรับแจ้งเตือนภายใน
+
+**การตัดสินใจ (reframe ชัดเจน แทนการ "reuse notification เดิม" ตรงตัวตามที่ backlog เดิมสมมติไว้)**: สร้าง
+เอนทิตีใหม่เฉพาะของตัวเอง **`payroll_filing_reminders`** (log การแจ้งเตือนที่ cron สร้าง, กัน dedup ด้วย
+unique index) + **ไม่ส่ง LINE/อีเมลใด ๆ** (ไม่มีช่องทางส่งข้อความหานักบัญชีภายใน Finovas โดยเฉพาะอยู่แล้วใน
+ระบบตอนนี้ — สร้างใหม่นอกสโคปเฟสนี้) แทนที่ด้วย **แถบแจ้งเตือนในหน้าจอ** (`payroll/page.tsx` banner) ที่
+นักบัญชีเห็นทุกครั้งที่เปิดหน้าเงินเดือนของลูกค้ารายนั้นอยู่แล้ว — ยัง reuse โครง cron (auth/error-handling)
+จาก `generate-recurring-je` เต็มที่ (ส่วนที่ reuse ได้จริงและปลอดภัย) เพียงแต่ปลายทางของผลลัพธ์ต่างจากที่
+backlog เดิมสมมติไว้
+
+### 0.7 อายุงาน 2 ความหมาย (ข้อ 6) — ต้องแยกตัวแปร/ฟังก์ชันให้ชัดในโค้ด
+- **อายุงานสำหรับ "จำนวนวันค่าชดเชยตามกฎหมายแรงงาน" (มาตรา 118 พ.ร.บ.คุ้มครองแรงงาน)**: ขั้นบันได 120 วัน→30
+  วัน, 1 ปี→90 วัน, 3 ปี→180 วัน, 6 ปี→240 วัน, 10 ปี→300 วัน, 20 ปีขึ้นไป→400 วัน — ใช้แค่เป็น **เครื่องคำนวณ
+  ช่วยเหลือ (calculator)** ให้นักบัญชีดูยอดที่ควรจ่าย ไม่ใช่ตัวบังคับ (นักบัญชียังกรอก `severance_amount` เองได้
+  เสมอ เหมือนหลักการ 0.13 เดิมของ `gross_salary`)
+- **อายุงานสำหรับ "สูตรหักค่าใช้จ่ายทางภาษี" (มาตรา 48(5))**: จำนวนปีเต็มที่ทำงาน (ใช้คูณ 7,000) — เศษของปีที่
+  เกิน 183 วัน ให้นับเพิ่มอีก 1 ปี ตามหลักปฏิบัติทั่วไปของกรมสรรพากร (แนวเดียวกับการนับอายุงานสำหรับกองทุนสำรอง
+  เลี้ยงชีพ/บำเหน็จ) — **[⚠️ FLAG]** กติกาเศษปีนี้ต้องยืนยันกับตัวอย่างคำนวณจริงคู่กับ golden test (0.2) ก่อน
+  เปิดใช้เช่นกัน ไม่ใช่แค่สูตรหลัก
+
+ชื่อฟังก์ชัน/ตัวแปรในโค้ดต้องสะกดต่างกันชัดเจน: `calcStatutorySeveranceDays` (118, calculator ช่วยเหลือ) กับ
+`calcYearsOfServiceForTaxFormula` (48(5), ใช้ในสูตรภาษีจริง) — ห้ามใช้ตัวแปรชื่อ `yearsOfService` เดี่ยว ๆ
+ปนกันทั้งสองความหมายในไฟล์เดียวกัน (mirror หลักการตั้งชื่อ 0.2 เดิมที่กัน `employees`/`payroll_employees` สับสน)
+
+### 0.8 ไม่แตะของเดิม — mirror 0.2/0.7 เดิมทุกประการ
+`public.employees` เดิม, `journal.ts`/`ledger.ts`/`trial-balance.ts`/`financial-statements.ts`/`cash-flow.ts`/
+`formal-statements.ts` **ห้ามแก้แม้แต่บรรทัดเดียว** — ทุก JE ยังผ่าน `upsertManualEntry` เป็น `draft` เสมอ
+(0.7 เดิม) ไม่มีทาง auto-confirm แม้จะมีบรรทัดใหม่ (severance, deductions ไม่ส่งผลต่อ journal engine โดยตรง —
+แค่เพิ่มบรรทัดใน `buildPayrollJournalEntry` ที่มีอยู่แล้ว)
+
+### 0.9 PDPA — ข้อมูลค่าลดหย่อน/YTD ก็เป็นข้อมูลการเงินส่วนบุคคลที่อ่อนไหว
+`payroll_employee_deductions` (เบี้ยประกันชีวิต, ดอกเบี้ยกู้บ้าน ฯลฯ) และ `prior_employer_ytd_*` เป็นข้อมูล
+การเงินส่วนบุคคลของพนักงานลูกค้า — มาตรฐานเดิมทั้งระบบใช้ต่อ: **ไม่ log ค่าตัวเลข/ชื่อพนักงานที่ไหนเลย** (ไม่ต้อง
+มาสก์แบบเลขบัตรประชาชนเพราะไม่ใช่ identifier แต่ยังคงหลักการ "ไม่ log" เดิม)
+
+### 0.10 Migration/T-code — ยืนยันเลขจริงก่อน apply เสมอ (0.16 เดิม)
+เลขที่จองในเอกสารนี้ (`0091-0100`, `T124-T182`) **ต้องตรวจซ้ำด้วย `ls` จริงก่อนสร้างไฟล์เสมอ** เผื่อมีเฟส/PR
+อื่นแทรกก่อนเฟสนี้ implement จริง — เชื่อ `ls`/grep T-code ในเอกสารเท่านั้น ไม่เชื่อเลขในแผนนี้ตรง ๆ
+
+---
+
+## 1) โครงสร้างไฟล์ (ใหม่/แก้) — เฟส 9b
+
+```
+supabase/migrations/
+  0091_payroll_employees_sso_exempt.sql        [ใหม่] BA/ข้อ4 — sso_exempt boolean default false
+  0092_payroll_settings_pay_frequency.sql      [ใหม่] BC/ข้อ3 — pay_frequency ('monthly'|'non_monthly')
+  0093_payroll_monthly_filings.sql             [ใหม่] BC/ข้อ3 — ตารางหน่วยยื่นรายเดือน + RLS
+  0094_payroll_runs_filing_period_id.sql       [ใหม่] BC/ข้อ3 — filing_period_id FK + backfill non-destructive
+  0095_payroll_runs_period_unique_relaxed.sql  [ใหม่] BC/ข้อ3 — เอา unique เดิมออก, ใช้ index ธรรมดาแทน
+  0096_payroll_employees_prior_employer_ytd.sql[ใหม่] BD/ข้อ5 — prior_employer_ytd_* (อ้างอิงล้วน)
+  0097_payroll_employee_deductions.sql         [ใหม่] BE/ข้อ1 — ตารางค่าลดหย่อนอื่น + annual_income_estimate_override
+  0098_payroll_run_lines_severance.sql         [ใหม่] BF/ข้อ6 — severance_amount/severance_pit_withheld +
+                                                  payroll_settings.severance_expense_account_code
+  0099_payroll_severance_account_seed.sql      [ใหม่] BF/ข้อ6 — seed '5312 ค่าชดเชยเลิกจ้างพนักงาน' (additive)
+  0100_payroll_filing_reminders.sql            [ใหม่] BG/ข้อ7 — log กันแจ้งเตือนซ้ำ + RLS
+
+lib/accounting/
+  payroll-tax.ts                [แก้] เพิ่ม ENABLE_EXTRA_DEDUCTIONS_IN_PIT/ENABLE_SEVERANCE_TAX_CALC (0.2),
+                                  calcSeveranceWithholding, calcStatutorySeveranceDays,
+                                  calcYearsOfServiceForTaxFormula (0.7) — ฟังก์ชันเดิมทั้งหมดไม่ถูกแก้ signature
+  payroll-employees.ts          [แก้] เพิ่ม ssoExempt, priorEmployerYtd*, annualIncomeEstimateOverride ใน
+                                  type/validate/CRUD (additive, ฟิลด์เดิมไม่เปลี่ยน)
+  payroll-deductions.ts         [ใหม่] BE/ข้อ1 — types, validate, CRUD (listDeductions/upsertDeduction/
+                                  deleteDeduction), sumAndCapDeductions(rows, annualIncomeEstimate) ★ pure
+  payroll-prorate.ts            [ใหม่] BB/ข้อ2 — ★ pure ล้วน calcProratedGrossSalary(...)
+  payroll-monthly-filing.ts     [ใหม่] BC/ข้อ3 — getOrCreateFilingPeriod, listFilingPeriods,
+                                  markPitFiled/unmarkPitFiled/markSsoFiled/unmarkSsoFiled (ย้ายมาจาก payroll.ts)
+  payroll-filing-reminders.ts   [ใหม่] BG/ข้อ7 — ★ pure: calcPitDeadline/calcSsoDeadline/isReminderDue +
+                                  orchestrator generateDueReminders(db, today)
+  payroll-wht-cert.ts           [ใหม่] BD/ข้อ5 — ★ pure: aggregate PIT รายปีต่อพนักงาน + YTD อ้างอิง
+  payroll.ts                    [แก้] recalcRunLines: ข้าม SSO เมื่อ sso_exempt (BA), ใช้ prorate ตอน prefill
+                                  (BB), ใช้ pay_frequency guard ตอน createDraftRun (BC), รวม
+                                  severance_amount/severance_pit_withheld เข้าสูตร net_pay + JE (BF),
+                                  ผูก personalAllowance กับ sumAndCapDeductions ใต้ flag (BE) —
+                                  markPitFiled/unmarkPitFiled/markSsoFiled/unmarkSsoFiled ย้ายออกไป
+                                  payroll-monthly-filing.ts (deprecated ในไฟล์นี้, คงไว้เป็น re-export
+                                  ชั่วคราวกันโค้ดอื่น import พัง)
+
+app/
+  chat-audit/accounting/
+    payroll-employees/
+      PayrollEmployeesPanel.tsx [แก้] checkbox sso_exempt (BA), ฟอร์มค่าลดหย่อนอื่นต่อพนักงาน/ปีภาษี (BE,
+                                  gated ด้วย flag — ถ้าปิดยังกรอก/บันทึกได้ปกติแค่ notice ว่ายังไม่มีผลจริง),
+                                  ช่อง prior_employer_ytd_* (BD)
+      actions.ts                [แก้] เพิ่ม action ผูก payroll-deductions.ts (upsert/deleteDeductionAction)
+
+    payroll/
+      page.tsx                  [แก้] banner แจ้งเตือนใกล้/เกินกำหนดยื่น (BG), ลิงก์ไปหน้าสรุปการยื่นรายเดือน
+      PayrollRunPanel.tsx       [แก้] badge "prorate อัตโนมัติ" ต่อบรรทัด (BB), ช่องกรอก severance_amount +
+                                  แสดง severance_pit_withheld (BF, แสดง disabled/preview ถ้า flag ปิด)
+      filing/
+        page.tsx                [ใหม่] BC/ข้อ3 — หน้าสรุป "หน่วยยื่นรายเดือน" (เลือกเดือน → เห็นทุกรอบจ่ายที่
+                                  รวมอยู่ในเดือนนั้น + ปุ่มยื่นแล้ว 1 ชุดต่อเดือน แทนต่อรอบ)
+        FilingPeriodPanel.tsx   [ใหม่] BC/ข้อ3
+        actions.ts              [ใหม่] BC/ข้อ3 — guard requireAccountingAccess+assertCustomerInScope เดิม
+      wht-cert/
+        page.tsx                [ใหม่] BD/ข้อ5 — เลือกพนักงาน+ปีภาษี → พรีวิว
+        PayrollWhtCertDoc.tsx   [ใหม่] BD/ข้อ5 — หน้าพิมพ์ CSS (mirror wht-cert เดิม)
+
+  api/cron/
+    generate-payroll-filing-reminders/route.ts [ใหม่] BG/ข้อ7 — mirror generate-recurring-je/route.ts ตรงๆ
+
+vercel.json                     [แก้] เพิ่ม cron entry ใหม่ 1 รายการ (BG)
+
+tests/accounting/
+  payroll-employees.test.ts         [แก้] เพิ่มเคส sso_exempt/priorEmployerYtd/annualIncomeEstimateOverride
+  payroll-prorate.test.ts           [ใหม่] BB
+  payroll-monthly-filing.test.ts    [ใหม่] BC
+  payroll-deductions.test.ts        [ใหม่] BE — รวม golden test (ถ้ามี) + เคส cap ทุกประเภท
+  payroll-tax.test.ts               [แก้] เพิ่ม calcSeveranceWithholding/calcStatutorySeveranceDays/
+                                      calcYearsOfServiceForTaxFormula (BF) + golden test ถ้ามี
+  payroll-wht-cert.test.ts          [ใหม่] BD
+  payroll-filing-reminders.test.ts  [ใหม่] BG
+  payroll.test.ts                   [แก้] เคส sso_exempt ข้าม SSO, prorate prefill, pay_frequency guard,
+                                      severance ใน buildPayrollJournalEntry, flag ปิด/เปิดของข้อ 1/6
+```
+
+### 1.1 Schema ใหม่ (ร่างหลักที่ต้อง apply ตามลำดับ 0091→0100)
+
+```sql
+-- 0091 (BA) ------------------------------------------------------------
+alter table public.payroll_employees
+  add column if not exists sso_exempt boolean not null default false;
+-- คอมเมนต์บังคับ: reframe จาก "ม.39/40" เดิม (0.3) — นักบัญชีตัดสินใจเอง ไม่ผูกเหตุผลกฎหมายในระบบ
+
+-- 0092 (BC) ------------------------------------------------------------
+alter table public.payroll_settings
+  add column if not exists pay_frequency text not null default 'monthly'
+    check (pay_frequency in ('monthly','non_monthly'));
+
+-- 0093 (BC) ------------------------------------------------------------
+create table if not exists public.payroll_monthly_filings (
+  id                uuid primary key default gen_random_uuid(),
+  tenant_id         uuid not null references public.tenants(id) on delete cascade,
+  customer_id       uuid not null references public.customers(id) on delete cascade,
+  period_year       int not null check (period_year between 2500 and 2700),
+  period_month      int not null check (period_month between 1 and 12),
+  pit_filing_status text not null default 'not_filed' check (pit_filing_status in ('not_filed','filed')),
+  pit_filed_at      timestamptz,
+  pit_filed_by      uuid references public.employees(id) on delete set null,
+  sso_filing_status text not null default 'not_filed' check (sso_filing_status in ('not_filed','filed')),
+  sso_filed_at      timestamptz,
+  sso_filed_by      uuid references public.employees(id) on delete set null,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+create unique index if not exists uq_payroll_monthly_filings_period
+  on public.payroll_monthly_filings (tenant_id, customer_id, period_year, period_month);
+-- RLS: เหมือน payroll_runs เป๊ะ (tenant_read select authenticated, revoke anon, service_role เขียนได้/
+-- แอปเขียนผ่าน RLS ปกติเหมือนตารางอื่นในเฟส 9)
+
+-- 0094 (BC) — non-destructive backfill ----------------------------------
+alter table public.payroll_runs
+  add column if not exists filing_period_id uuid references public.payroll_monthly_filings(id) on delete set null;
+
+insert into public.payroll_monthly_filings
+  (tenant_id, customer_id, period_year, period_month,
+   pit_filing_status, pit_filed_at, pit_filed_by, sso_filing_status, sso_filed_at, sso_filed_by)
+select tenant_id, customer_id, pay_period_year, pay_period_month,
+       pit_filing_status, pit_filed_at, pit_filed_by, sso_filing_status, sso_filed_at, sso_filed_by
+from public.payroll_runs
+where deleted_at is null
+on conflict (tenant_id, customer_id, period_year, period_month) do nothing;
+
+update public.payroll_runs pr
+set filing_period_id = pmf.id
+from public.payroll_monthly_filings pmf
+where pr.tenant_id = pmf.tenant_id and pr.customer_id = pmf.customer_id
+  and pr.pay_period_year = pmf.period_year and pr.pay_period_month = pmf.period_month
+  and pr.filing_period_id is null;
+-- ★ คอลัมน์ filing_period_id เก็บเป็น nullable ต่อไป (ไม่บังคับ not null) — เผื่อแถว soft-deleted เก่าที่ไม่ถูก
+--   backfill ครบ ไม่ให้ migration ล้มเหลว — payroll.ts เขียนโค้ดให้ตั้งค่านี้เสมอสำหรับรอบใหม่ทุกรอบหลังจากนี้
+
+-- 0095 (BC) — relax unique (DB level เท่านั้น, แอปคุมพฤติกรรมเดิมผ่าน pay_frequency, 0.5) ---------------
+drop index if exists public.uq_payroll_runs_period;
+create index if not exists idx_payroll_runs_period
+  on public.payroll_runs (tenant_id, customer_id, pay_period_year, pay_period_month)
+  where deleted_at is null;
+
+-- 0096 (BD) --------------------------------------------------------------
+alter table public.payroll_employees
+  add column if not exists prior_employer_ytd_gross         numeric(14,2) check (prior_employer_ytd_gross is null or prior_employer_ytd_gross >= 0),
+  add column if not exists prior_employer_ytd_pit_withheld  numeric(14,2) check (prior_employer_ytd_pit_withheld is null or prior_employer_ytd_pit_withheld >= 0),
+  add column if not exists prior_employer_ytd_sso_employee  numeric(14,2) check (prior_employer_ytd_sso_employee is null or prior_employer_ytd_sso_employee >= 0),
+  add column if not exists prior_employer_note              text;
+-- คอมเมนต์บังคับ: ห้ามใช้ 3 ค่านี้ในสูตรคำนวณภาษีหัก ณ ที่จ่ายรายเดือนเด็ดขาด (0.4) — ใช้แค่พิมพ์ 50 ทวิ
+
+-- 0097 (BE) ----------------------------------------------------------------
+alter table public.payroll_employees
+  add column if not exists annual_income_estimate_override numeric(14,2)
+    check (annual_income_estimate_override is null or annual_income_estimate_override >= 0);
+
+create table if not exists public.payroll_employee_deductions (
+  id                   uuid primary key default gen_random_uuid(),
+  tenant_id            uuid not null references public.tenants(id) on delete cascade,
+  customer_id          uuid not null references public.customers(id) on delete cascade,
+  payroll_employee_id  uuid not null references public.payroll_employees(id) on delete cascade,
+  tax_year             int not null check (tax_year between 2500 and 2700),
+  deduction_type       text not null check (deduction_type in
+                          ('spouse_no_income','child','life_insurance','provident_fund',
+                           'mortgage_interest','other')),
+  amount               numeric(14,2) not null default 0 check (amount >= 0),
+  note                 text,
+  created_at           timestamptz not null default now(),
+  updated_at           timestamptz not null default now()
+);
+create index if not exists idx_payroll_employee_deductions_lookup
+  on public.payroll_employee_deductions (tenant_id, customer_id, payroll_employee_id, tax_year);
+-- ★ ไม่ unique ต่อ deduction_type — บุตร/ประกันชีวิตมีได้หลายแถว (หลายคน/หลายกรมธรรม์)
+
+-- 0098 (BF) ------------------------------------------------------------------
+alter table public.payroll_run_lines
+  add column if not exists severance_amount        numeric(14,2) not null default 0 check (severance_amount >= 0),
+  add column if not exists severance_pit_withheld  numeric(14,2) not null default 0 check (severance_pit_withheld >= 0);
+alter table public.payroll_settings
+  add column if not exists severance_expense_account_code text;
+-- ★ severance_amount/severance_pit_withheld แยกจาก gross_salary/bonus_amount/pit_withheld เด็ดขาด (0.7 เดิม
+--   ของเฟส 9 — ป้องกันสูตรผิดฝั่งถ้าปนกัน)
+
+-- 0099 (BF) — additive account seed (mirror 0084 เดิม) --------------------
+-- insert into chart_of_accounts (code, name, category, ...) values ('5312','ค่าชดเชยเลิกจ้างพนักงาน','expense',...)
+--   ทุก tenant, on conflict do nothing, ไม่ใส่ PROTECTED_CODES (0.11 เดิม)
+
+-- 0100 (BG) ------------------------------------------------------------------
+create table if not exists public.payroll_filing_reminders (
+  id                uuid primary key default gen_random_uuid(),
+  tenant_id         uuid not null references public.tenants(id) on delete cascade,
+  customer_id       uuid not null references public.customers(id) on delete cascade,
+  filing_period_id  uuid not null references public.payroll_monthly_filings(id) on delete cascade,
+  kind              text not null check (kind in ('pit','sso')),
+  reminder_stage    text not null check (reminder_stage in ('due_soon','due_today','overdue')),
+  notified_at       timestamptz not null default now()
+);
+create unique index if not exists uq_payroll_filing_reminders_dedup
+  on public.payroll_filing_reminders (filing_period_id, kind, reminder_stage);
+-- RLS: tenant_read select authenticated, เขียนได้เฉพาะ service_role (cron เขียนผ่าน service-role client เท่านั้น)
+```
+
+---
+
+## 2) งานย่อยเรียงลำดับ
+
+### กลุ่ม BA — ข้อ 4: ยกเว้นเงินสมทบประกันสังคม (reframe, 0.3)
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T124** | Migration 0091 — `sso_exempt` boolean บน `payroll_employees` + คอมเมนต์อธิบาย reframe (0.3) | `0091_payroll_employees_sso_exempt.sql` | - | `ls migrations` เช็คเลขจริงก่อน; apply ไม่ error; ค่า default `false` สำหรับพนักงานเดิมทุกคน (ไม่กระทบข้อมูลเก่า); เทสต์เดิมทั้งหมดผ่าน |
+| **T125** | `payroll-employees.ts` — เพิ่ม `ssoExempt` ใน type/validate/`upsertEmployee`/`listEmployees` | `payroll-employees.ts` | T124 | unit test: `ssoExempt` undefined จาก input เก่า → default `false` (ไม่ throw); บันทึก/โหลดค่า `true` ได้ปกติ |
+| **T126** | `payroll.ts::recalcRunLines` — โหลด `sso_exempt` คู่กับ `start_date` ต่อพนักงาน, ข้าม `calcSsoContribution` (ตั้ง `sso_employee=0, sso_employer=0`) เมื่อ flag=true ก่อนคำนวณ `net_pay` | `payroll.ts` | T125 | unit test: พนักงาน `sso_exempt=true` → `sso_employee`/`sso_employer`=0 เสมอไม่ว่าค่าจ้างเท่าไหร่; พนักงานอื่นในรอบเดียวกันที่ `sso_exempt=false` คำนวณปกติไม่ถูกกระทบ; `buildPayrollJournalEntry` ยอดรวม SSO ลดลงถูกต้องตามที่ข้ามไป |
+| **T127** | UI: checkbox "ยกเว้นเงินสมทบประกันสังคม (นักบัญชีพิจารณาเงื่อนไขเอง)" ใน `PayrollEmployeesPanel.tsx` + เทสต์ครบกลุ่ม BA | `PayrollEmployeesPanel.tsx`, `payroll-employees.test.ts`, `payroll.test.ts` | T126 | เปิดหน้าจริง ติ๊กยกเว้นพนักงาน 1 คน → สร้างรอบใหม่ → คำนวณ → เห็น SSO ของคนนั้น=0 คนอื่นปกติ; `npm run test` ผ่านทั้งกลุ่ม BA |
+
+**Milestone BA**: ยกเว้น SSO รายพนักงานใช้งานได้จริง — ไม่มีความเสี่ยงกฎหมายเพิ่ม (ตัดสินใจอยู่ที่นักบัญชี)
+
+### กลุ่ม BB — ข้อ 2: Auto-prorate เงินเดือนตามวันทำงานจริง
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T128** | `payroll-prorate.ts` — ★ pure `calcProratedGrossSalary(baseSalary, payPeriodYear(พ.ศ.), payPeriodMonth, startDate, resignDate)` คืน `{prorated, daysInMonth, daysWorked, isProrated}`; สูตร `baseSalary/daysInMonth×daysWorked`; แปลง พ.ศ.→ค.ศ. (`-543`) ก่อนคำนวณวันในเดือน/ปีอธิกสุรทิน | `payroll-prorate.ts` | - | หน่วยเดียว pure ไม่แตะ DB |
+| **T129** | unit test `payroll-prorate.test.ts` | `payroll-prorate.test.ts` | T128 | เข้ากลางเดือน (เช่นเริ่มวันที่ 16 ก.พ.) → daysWorked ถูกต้อง; ลาออกกลางเดือน; ทั้งเข้า+ออกในเดือนเดียวกัน; เดือน ก.พ. ปีอธิกสุรทิน (พ.ศ. ที่ตรงกับ ค.ศ. หาร 4 ลงตัว) นับ 29 วันถูกต้อง; พนักงานเต็มเดือน (start/resign นอกช่วง) → `isProrated=false`, `prorated===baseSalary` เป๊ะ (ไม่ปัดเศษเพี้ยน) |
+| **T130** | `payroll.ts::createDraftRun` — ใช้ `calcProratedGrossSalary` ตอน prefill เฉพาะพนักงานที่ `start_date`/`resign_date` ตกอยู่ในช่วงเดือนของรอบ; พนักงานปกตินอกช่วงยังคง prefill `base_salary` ตรง ๆ เหมือนเดิมทุกประการ (regression-safe) | `payroll.ts` | T128 | unit test: ลูกค้าเดิมที่ไม่มีพนักงานเข้า/ออกกลางเดือนเลย → ผล prefill เหมือนก่อนเฟสนี้เป๊ะ (byte-identical); พนักงานเข้าใหม่กลางเดือน → prefill ต่ำกว่า `base_salary` ตามสัดส่วนวันทำงานถูกต้อง |
+| **T131** | UI: badge "prorate อัตโนมัติ (X/Y วัน)" ต่อบรรทัดใน `PayrollRunPanel.tsx` + [⚠️ FLAG] banner อธิบายว่าฐาน SSO ยังคำนวณจากยอดที่ prorate แล้วตามปกติ (floor/ceiling ไม่เปลี่ยนพฤติกรรม) ให้นักบัญชียืนยันก่อนคำนวณจริง | `PayrollRunPanel.tsx` | T130 | เปิดหน้าจริง สร้างรอบที่มีพนักงานเข้าใหม่กลางเดือน → เห็น badge + ยอด prefill ที่ถูกต้อง ยังแก้ไขเองได้ต่อ (0.13 เดิม) |
+| **T132** | เทสต์ครบกลุ่ม BB + regression | `payroll.test.ts` | T128-T131 | `npm run test` ผ่านทั้งกลุ่ม BB; regression: ลูกค้าที่ไม่มีพนักงานกลางเดือนเลย ยอด/JE เหมือนก่อนเฟสนี้ทุกตัวเลข |
+
+**Milestone BB**: prefill เงินเดือนพนักงานเข้า/ออกกลางเดือนแม่นยำขึ้น — ยังแก้ไขเองได้เสมอ ไม่ผูกมัดนักบัญชี
+
+### กลุ่ม BC — ข้อ 3: รอบจ่ายที่ไม่ใช่รายเดือน (สถาปัตยกรรมใหญ่ที่สุด)
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T133** | Migration 0092 — `payroll_settings.pay_frequency` (default `'monthly'`) | `0092_payroll_settings_pay_frequency.sql` | - | apply ไม่ error; ลูกค้าเดิมทุกรายได้ `'monthly'` อัตโนมัติ; เทสต์เดิมผ่าน |
+| **T134** | Migration 0093 — ตาราง `payroll_monthly_filings` + RLS | `0093_payroll_monthly_filings.sql` | - | apply ไม่ error; unique `(tenant,customer,year,month)` ทำงานถูกต้อง; RLS anon อ่านไม่ได้ |
+| **T135** | Migration 0094 — `payroll_runs.filing_period_id` + backfill non-destructive (0.5) | `0094_payroll_runs_filing_period_id.sql` | T134 | apply ไม่ error; **ทุกแถว `payroll_runs` ที่ `deleted_at is null` ที่มีอยู่ก่อนเฟสนี้ได้ `filing_period_id` ที่ไม่ null**; ค่า `pit_filing_status`/`sso_filing_status` ใน `payroll_monthly_filings` ที่ backfill มา **ตรงกับค่าเดิมใน `payroll_runs` เป๊ะทุกแถว** (query เทียบยืนยันก่อนปิดงาน); รันซ้ำ (idempotent, `on conflict do nothing`) ไม่สร้างซ้ำ |
+| **T136** | Migration 0095 — เอา unique เดิมออก ใช้ index ธรรมดา (0.5) | `0095_payroll_runs_period_unique_relaxed.sql` | T135 | apply ไม่ error; ทดสอบ insert 2 รอบเดือน/ปีเดียวกันที่ DB level ผ่านได้แล้ว (การกันซ้ำย้ายไปชั้นแอป T138) |
+| **T137** | `lib/accounting/payroll-monthly-filing.ts` — `getOrCreateFilingPeriod`, `listFilingPeriods`, ย้าย `markPitFiled`/`unmarkPitFiled`/`markSsoFiled`/`unmarkSsoFiled` มาที่นี่ (ทำงานบน `payroll_monthly_filings` แทน `payroll_runs`) | `payroll-monthly-filing.ts` | T134 | unit test: `getOrCreateFilingPeriod` เรียกซ้ำด้วย (tenant,customer,year,month) เดิม → คืนแถวเดียวกันเสมอ (idempotent); `markPitFiled` เฉพาะ filing period ที่มีอย่างน้อย 1 รอบ `status='finalized'` ผูกอยู่ ปฏิเสธถ้ายังไม่มีรอบไหน finalized เลย |
+| **T138** | `payroll.ts::createDraftRun` — เพิ่ม guard: ถ้า `payroll_settings.pay_frequency='monthly'` (default) ปฏิเสธสร้างรอบซ้ำเดือน/ปีเดียวกัน **ที่ชั้นแอปพลิเคชัน** (reproduce พฤติกรรมเดิมเป๊ะ แม้ DB ไม่บังคับแล้ว) — ถ้า `'non_monthly'` อนุญาตสร้างหลายรอบ; ทุกรอบใหม่ (ทั้ง 2 โหมด) เรียก `getOrCreateFilingPeriod` แล้วผูก `filing_period_id` เสมอ | `payroll.ts` | T133, T136, T137 | unit test: ลูกค้า `pay_frequency='monthly'` (ค่า default) สร้างรอบซ้ำเดือน/ปีเดียวกัน → ปฏิเสธด้วยข้อความเดียวกับก่อนเฟสนี้ (regression-safe 100%); ลูกค้า `non_monthly` สร้าง 2 รอบเดือนเดียวกัน (เช่น จ่ายรายสัปดาห์ 4 รอบ) → สำเร็จทั้ง 4 รอบ, `filing_period_id` เดียวกันทุกรอบของเดือนนั้น |
+| **T139** | UI: `app/chat-audit/accounting/payroll/filing/{page.tsx,FilingPeriodPanel.tsx,actions.ts}` — เลือกเดือน → เห็นทุกรอบจ่ายที่รวมอยู่ในหน่วยยื่นเดือนนั้น + ยอดรวม PIT/SSO ข้ามรอบ + ปุ่มยื่นแล้ว 1 ชุด/เดือน | 3 ไฟล์ใหม่ | T137, T138 | เปิดหน้าจริงกับลูกค้า `non_monthly` ที่มี 4 รอบ/เดือน → เห็นยอดรวม PIT/SSO ของทั้ง 4 รอบถูกต้อง → กดยื่นแล้ว 1 ครั้ง → สถานะเปลี่ยนที่ระดับเดือน ไม่ใช่ต่อรอบ |
+| **T140** | UI: dropdown `pay_frequency` ใน settings ของ `PayrollEmployeesPanel.tsx` (แท็บตั้งค่าบัญชี) พร้อมคำเตือนเปลี่ยนพฤติกรรม | `PayrollEmployeesPanel.tsx` | T133 | เปลี่ยนเป็น `non_monthly` แล้วกลับมาเป็น `monthly` ได้ปกติ ไม่ทำลายรอบที่สร้างไปแล้วระหว่างนั้น |
+| **T141** | ปรับ `PayrollRunPanel.tsx` เอาปุ่ม "บันทึกว่ายื่นแล้ว" เดิมออก (ย้ายไปหน้า `filing/` ตาม T139) — แสดงสถานะยื่น (read-only) พร้อมลิงก์ไปหน้าสรุปรายเดือนแทน | `PayrollRunPanel.tsx` | T139 | ลูกค้า `monthly` เดิม เปิดรอบ → เห็นสถานะยื่น + ลิงก์ไปหน้า `filing/` → กดยื่นที่นั่นได้ผลเหมือนกดจากหน้ารอบเดิมทุกประการ (1 รอบ = 1 เดือนเป๊ะ) |
+| **T142** | เพิ่มลิงก์หน้า `page.tsx`/`CustomerTabs.tsx` (path หน้าสรุปการยื่นรายเดือน) + เทสต์ครบกลุ่ม BC: `payroll-monthly-filing.test.ts`, ส่วนที่แก้ใน `payroll.test.ts` | หลายไฟล์ | T133-T141 | `npm run test` ผ่านทั้งกลุ่ม BC |
+| **T143** | Regression sweep เฉพาะกลุ่ม BC — สุ่มลูกค้าที่มีรอบเงินเดือนเดิมก่อนเฟสนี้อย่างน้อย 3 ราย ตรวจว่าสถานะยื่น/ยอด/ปุ่มทำงานเหมือนก่อนเฟสนี้ทุกประการ | - | T133-T142 | เปิดรอบเก่าของลูกค้าจริง (หรือ staging เทียบเท่า) → สถานะยื่น/วันที่/ผู้กด ตรงกับก่อน migrate เป๊ะ; ไม่มีลูกค้ารายใดถูกเปลี่ยนเป็น `non_monthly` โดยไม่ได้ตั้งใจ |
+
+**Milestone BC**: รองรับลูกค้าที่จ่ายไม่รายเดือนได้จริงโดยไม่กระทบลูกค้าที่จ่ายรายเดือนปกติแม้แต่รายเดียว
+
+### กลุ่ม BD — ข้อ 5: นำเข้ายอด YTD จากนายจ้างเดิม (อ้างอิงเพื่อพิมพ์เอกสารเท่านั้น, 0.4)
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T144** | Migration 0096 — `prior_employer_ytd_*`/`prior_employer_note` บน `payroll_employees` | `0096_payroll_employees_prior_employer_ytd.sql` | - | apply ไม่ error; ค่า default null ทุกแถวเดิม; เทสต์เดิมผ่าน |
+| **T145** | `payroll-employees.ts` — เพิ่ม field ใหม่ใน type/validate (nullable, ตัวเลขไม่ติดลบถ้ากรอก)/CRUD | `payroll-employees.ts` | T144 | unit test: ไม่กรอกเลย → ผ่าน (nullable); กรอกติดลบ → ปฏิเสธ; แก้ค่าเดิมเป็น null (ล้างค่า) ได้ |
+| **T146** | UI: ส่วน "ยอดยกมาจากนายจ้างเดิม (สำหรับพิมพ์ 50 ทวิ เท่านั้น ไม่กระทบการคำนวณภาษีหัก ณ ที่จ่ายรายเดือน)" ใน `PayrollEmployeesPanel.tsx` | `PayrollEmployeesPanel.tsx` | T145 | เปิดหน้าจริง กรอกยอด YTD ของพนักงาน 1 คน → บันทึกสำเร็จ → สร้าง/คำนวณรอบเงินเดือนเดือนถัดไปของคนนั้น → **ยอดภาษีหักที่คำนวณได้ไม่เปลี่ยนแปลงเลย** (ยืนยันด้วยตาว่าเท่ากับก่อนกรอก YTD) |
+| **T147** | `lib/accounting/payroll-wht-cert.ts` — ★ pure `buildPayrollWhtCertData(employee, runLinesOfTaxYear, priorEmployerYtd)`: รวม `pit_withheld`+`severance_pit_withheld` ทุกเดือนของปีภาษีจาก `payroll_run_lines` (join `payroll_runs.pay_period_year`) เป็นยอดรวมทั้งปีของนายจ้างปัจจุบัน + แสดงยอด YTD นายจ้างเดิมเป็น**บรรทัดอ้างอิงแยกต่างหาก** (ไม่บวกรวมเป็นยอดเดียว) | `payroll-wht-cert.ts` | - | หน่วยเดียว pure ไม่แตะ DB |
+| **T148** | UI: `app/chat-audit/accounting/payroll/wht-cert/{page.tsx,PayrollWhtCertDoc.tsx}` — เลือกพนักงาน+ปีภาษี → พรีวิว/พิมพ์ (mirror CSS ของ `wht-cert` เดิม) | 2 ไฟล์ใหม่ | T147 | เปิดพนักงานที่มีรอบเงินเดือน 12 เดือน + มี YTD นายจ้างเดิม → เห็นยอดรวมนายจ้างปัจจุบันถูกต้อง + บรรทัด YTD แยกต่างหากชัดเจน ไม่ปนกัน |
+| **T149** | เทสต์ครบกลุ่ม BD: `payroll-employees.test.ts` (ส่วนเพิ่ม), `payroll-wht-cert.test.ts` (รวมเคสพนักงานเข้าใหม่กลางปีที่มี prior YTD, พนักงานไม่มี YTD เลย) | 2 ไฟล์ | T144-T148 | `npm run test` ผ่านทั้งกลุ่ม BD |
+
+**Milestone BD**: พิมพ์ 50 ทวิ ปลายปีครบถ้วนกว่าเดิม โดยไม่กระทบความแม่นยำของภาษีหัก ณ ที่จ่ายรายเดือนเลย
+
+### กลุ่ม BE — ข้อ 1: ★★★ ค่าลดหย่อนภาษีอื่น (เสี่ยงกฎหมายสูง — ต้องผ่าน gate 0.2)
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T150** | Migration 0097 — `payroll_employee_deductions` + `payroll_employees.annual_income_estimate_override` | `0097_payroll_employee_deductions.sql` | - | apply ไม่ error; insert หลายแถว `deduction_type='child'` ต่อพนักงานคนเดียวได้ (ไม่ unique); เทสต์เดิมผ่าน |
+| **T151** | `payroll-deductions.ts` — types, validate (`amount>=0`), CRUD (`listDeductions`/`upsertDeduction`/`deleteDeduction`) scope tenant+customer+employee | `payroll-deductions.ts` | T150 | unit test: amount ติดลบ → ปฏิเสธ; `deduction_type` นอกรายการที่กำหนด → ปฏิเสธ; ลบ/แก้เฉพาะแถวของพนักงานที่ระบุ scope ตรงเท่านั้น (IDOR-safe) |
+| **T152** | `payroll-deductions.ts::sumAndCapDeductions(rows, annualIncomeEstimate)` ★ pure — กติกา: `spouse_no_income` ≤60,000 (sum, cap เผื่อกรอกซ้ำผิดพลาด), `child` ไม่บังคับ cap อัตโนมัติ (นักบัญชี/หน้าจอเลือก 30,000 หรือ 60,000 ต่อคนเองตามกติกาปีเกิด/ลำดับบุตร — ระบบไม่ auto-derive กติกาบุตรที่ซับซ้อนเรื่องปีเกิด/ลำดับ), `life_insurance` ≤100,000 (หรือ ≤110,000 ถ้ามีแถว `spouse_no_income`>0 ด้วย ตามกติกา +10,000), `provident_fund` รวม RMF/กบข ≤500,000 **และ** ≤30% ของ `annualIncomeEstimate` (ใช้ค่าที่น้อยกว่า), `mortgage_interest` ≤100,000 — คืน `{totalOtherAllowance, warnings[]}` (warnings ระบุทุกจุดที่ตัดยอดเพราะชนเพดาน) | `payroll-deductions.ts` | - | unit test **self-consistent** (ตรวจจากนิยามสูตรเอง, ไม่ต้องมีตัวอย่างอ้างอิงภายนอกสำหรับเคสพื้นฐาน): เกินเพดานแต่ละประเภทถูกตัดตรงตามค่า cap เป๊ะ; PVD รวม RMF เกิน 500,000 แต่ยังไม่ถึง 30% ของเงินได้ → cap ที่ 500,000; เงินได้ต่อปีต่ำจน 30% < 500,000 → cap ที่ 30% ของเงินได้แทน; ประกันชีวิต + คู่สมรสไม่มีเงินได้พร้อมกัน → cap ขยับเป็น 110,000 ถูกต้อง |
+| **T153** | `payroll-tax.ts` — เพิ่ม `export let ENABLE_EXTRA_DEDUCTIONS_IN_PIT = false;` (0.2, ★★★ ห้ามเปลี่ยนเป็น `true` โดยไม่มี golden test คู่กัน) | `payroll-tax.ts` | T152 | grep ยืนยันค่า `false` ก่อนปิดงานเฟสนี้เสมอ (เว้นแต่ verify แล้วจริง) |
+| **T154** | `payroll.ts::recalcRunLines` — โหลด `payroll_employee_deductions` ของปีภาษี (`pay_period_year`) ต่อพนักงาน, คำนวณ `personalAllowancePreview = PERSONAL_ALLOWANCE_STANDARD + sumAndCapDeductions(...).totalOtherAllowance` เพื่อ**แสดงในหน้าจอเป็น preview เท่านั้น** — ยอดที่ใช้จริงในการคำนวณ `pit_withheld` ยังคง `personalAllowance = ENABLE_EXTRA_DEDUCTIONS_IN_PIT ? personalAllowancePreview : PERSONAL_ALLOWANCE_STANDARD` (ตรง ๆ ตาม flag) | `payroll.ts` | T153 | unit test: flag=false → `pit_withheld` เท่ากับก่อนเฟสนี้เป๊ะแม้มีข้อมูล deductions อยู่ในตาราง (regression-safe 100% กับลูกค้าเดิม); flag=true (จำลองในเทสต์เท่านั้น) → `pit_withheld` ลดลงตามค่าลดหย่อนที่เพิ่มถูกต้องตามสูตร T152 |
+| **T155** | UI: ฟอร์มค่าลดหย่อนต่อพนักงาน/ปีภาษีใน `PayrollEmployeesPanel.tsx` (dropdown ประเภท + ช่องจำนวนเงิน + dropdown 30,000/60,000 เฉพาะ `child`) + แสดง `personalAllowancePreview` ใน `PayrollRunPanel.tsx` พร้อมข้อความชัดเจนว่า **"preview เท่านั้น ยังไม่มีผลต่อยอดหักภาษีจริงจนกว่าจะ verify"** เมื่อ flag=false | `PayrollEmployeesPanel.tsx`, `PayrollRunPanel.tsx` | T154 | เปิดหน้าจริง กรอกค่าลดหย่อนพนักงาน 1 คน → เห็น preview เปลี่ยน แต่ยอด `pit_withheld` จริงที่คำนวณ/บันทึกไม่เปลี่ยน (ตราบใด flag=false) — ข้อความ notice แสดงชัดเจนไม่กำกวม |
+| **T156** | เทสต์ครบกลุ่ม BE: `payroll-deductions.test.ts`, ส่วนเพิ่มใน `payroll.test.ts` | 2 ไฟล์ | T150-T155 | `npm run test` ผ่านทั้งกลุ่ม BE |
+| **T157** | ★★★ [บังคับ — เงื่อนไข gate, 0.2] ค้นหา/ยืนยัน golden test case ค่าลดหย่อนหลายประเภทรวมกันจากแหล่งที่เชื่อถือได้จริง (คู่มือ ภ.ง.ด.90/91 ของกรมสรรพากร หรือเทียบเท่า — ดู 4) แนวทางเพิ่มเติม) | `payroll-deductions.test.ts` | T152, T156 | **ถ้าพบและ verify ผ่าน**: เพิ่ม golden test อ้างอิงแหล่งที่มาในคอมเมนต์ + เปลี่ยน `ENABLE_EXTRA_DEDUCTIONS_IN_PIT = true` ใน commit เดียวกัน (mirror T112) **ถ้าหาไม่ทัน**: คง flag `false` ปิดงานกลุ่ม BE ได้ปกติโดยไม่ถือว่าเป็นงานค้าง — บันทึกไว้ใน backlog ต่อว่า "รอ golden test" |
+
+**Milestone BE**: เครื่องคำนวณค่าลดหย่อนอื่นครบสมบูรณ์พร้อมใช้ทันทีที่ verify ได้ — ไม่กระทบยอดภาษีจริงของลูกค้า
+รายใดจนกว่าจะมั่นใจ
+
+### กลุ่ม BF — ข้อ 6: ★★★ ค่าตอบแทนเลิกจ้าง/ชดเชย (เสี่ยงกฎหมายสูงสุด — ต้องผ่าน gate 0.2)
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T158** | `payroll-tax.ts::calcStatutorySeveranceDays(fullYearsOfService)` ★ pure — ขั้นบันได ม.118: <120วัน→0, 120วัน-<1ปี→30, 1-<3ปี→90, 3-<6ปี→180, 6-<10ปี→240, 10-<20ปี→300, ≥20ปี→400 (เครื่องคำนวณช่วยเหลือ ไม่บังคับ, 0.7) | `payroll-tax.ts` | - | unit test ครบทุกขั้นบันได รวมค่าขอบเขต (119วัน, 120วันพอดี, ครบ 1/3/6/10/20 ปีพอดี) |
+| **T159** | `payroll-tax.ts::calcYearsOfServiceForTaxFormula(startDate, endDate)` ★ pure — จำนวนปีเต็ม + เศษเกิน 183 วันปัดขึ้น 1 ปี (0.7, [⚠️ FLAG] ต้อง verify คู่ golden test) | `payroll-tax.ts` | - | unit test: ทำงานพอดี 3 ปี 0 วัน → 3; ทำงาน 3 ปี 200 วัน → 4 (ปัดขึ้น); ทำงาน 3 ปี 100 วัน → 3 (ไม่ปัด) |
+| **T160** | Migration 0098 — `payroll_run_lines.severance_amount`/`severance_pit_withheld` + `payroll_settings.severance_expense_account_code` | `0098_payroll_run_lines_severance.sql` | - | apply ไม่ error; default 0/null ทุกแถวเดิม; เทสต์เดิมผ่าน |
+| **T161** | Migration 0099 — seed บัญชี `5312 ค่าชดเชยเลิกจ้างพนักงาน` (additive, mirror 0084 เดิม) | `0099_payroll_severance_account_seed.sql` | - | apply ไม่ error; idempotent; ไม่อยู่ใน `PROTECTED_CODES` |
+| **T162** | `payroll-tax.ts::calcSeveranceWithholding(severanceAmount, finalMonthlyWage, yearsOfServiceForTaxFormula, brackets)` ★ pure — ★★★ สูตรที่ 3 แยกจาก `calcMonthlyPitForRegularIncome`/`calcMonthlyPitWithBonus` โดยสิ้นเชิง (ไม่ reuse โครงสร้างเดิม): (1) `dailyWage=finalMonthlyWage/30`, `exemptAmount=min(severanceAmount, dailyWage×400, 600000)` (กฎกระทรวง 126 ข้อ 2(51) แก้ไข ฉบับ 394); (2) `taxableAmount=max(severanceAmount-exemptAmount,0)`; (3) `expense=min(7000×yearsOfServiceForTaxFormula, taxableAmount)` (มาตรา 48(5)); (4) `remainder=taxableAmount-expense`; (5) `netTaxable=remainder×0.5`; (6) `tax=calcAnnualTax(netTaxable, brackets)` **คำนวณแยกอิสระ ไม่รวมกับเงินได้อื่นของปีนั้นเลย** ตามมาตรา 48(5) | `payroll-tax.ts` | T158, T159 | unit test **self-consistent**: severanceAmount ต่ำกว่า exempt cap ทั้งหมด → tax=0; severanceAmount สูงเกิน 600,000 exempt cap → ส่วนเกินเข้าสูตรภาษีถูกต้องตามลำดับ 6 ขั้น; `yearsOfServiceForTaxFormula`=0 (พนักงานทำงานไม่ถึงปี) → expense=0 ไม่ throw |
+| **T163** | `payroll-tax.ts` — เพิ่ม `export let ENABLE_SEVERANCE_TAX_CALC = false;` (0.2) | `payroll-tax.ts` | T162 | grep ยืนยันค่า `false` ก่อนปิดงานเสมอ (เว้นแต่ verify แล้วจริง) |
+| **T164** | `payroll.ts::recalcRunLines`/`buildPayrollJournalEntry` — รับ `severance_amount` เป็น input ที่นักบัญชีกรอกได้เสมอ (เหมือน `bonus_amount`); คำนวณ `severance_pit_withheld = ENABLE_SEVERANCE_TAX_CALC ? calcSeveranceWithholding(...).tax : 0`; ปรับสูตร `net_pay` ให้รวม `+severance_amount -severance_pit_withheld`; `buildPayrollJournalEntry` เพิ่ม `Dr severance_expense_account_code = Σ(severance_amount)` (ปฏิเสธถ้า >0 แต่ไม่ตั้งรหัสบัญชี, mirror `other_deductions` เดิม) และรวม `severance_pit_withheld` เข้า `Cr pit_payable` เดียวกับ PIT ปกติ ([⚠️ FLAG] ต้องยืนยันกับนักบัญชีจริงว่าภาษีหักจากค่าชดเชยยื่นรวมกับ ภ.ง.ด.1 เดือนเดียวกันจริงหรือไม่ ก่อนเปิด flag) | `payroll.ts` | T160-T163 | unit test: flag=false → `severance_pit_withheld`=0 เสมอแม้กรอก `severance_amount`>0 (นักบัญชีต้องกรอกภาษีเองถ้าต้องการ ผ่านช่องแก้ไขเดิม); `buildPayrollJournalEntry`: Dr=Cr ยังสมดุลเสมอแม้มี severance (พิสูจน์พีชคณิตเพิ่มเข้าสูตรเดิมของ 0.8 เฟส 9); ไม่ตั้ง `severance_expense_account_code` แต่มี `severance_amount`>0 → ปฏิเสธสร้าง JE พร้อมข้อความชัดเจน |
+| **T165** | UI: ช่องกรอก `severance_amount` + แสดง `severance_pit_withheld` (preview/disabled ตาม flag เหมือน BE) + แสดงผลลัพธ์ `calcStatutorySeveranceDays` เป็นตัวช่วยคำนวณ (ไม่บังคับใช้) ใน `PayrollRunPanel.tsx`; เพิ่ม `severance_expense_account_code` ในฟอร์มตั้งค่าบัญชี | `PayrollRunPanel.tsx`, `PayrollEmployeesPanel.tsx` | T164 | เปิดหน้าจริง กรอกค่าชดเชยพนักงาน 1 คนที่ลาออก → เห็นตัวช่วยคำนวณวันตามขั้นบันได + preview ภาษี (ถ้า flag ปิด ระบุชัดว่ายังไม่บังคับใช้จริง) |
+| **T166** | เทสต์ครบกลุ่ม BF: ส่วนเพิ่มใน `payroll-tax.test.ts`, `payroll.test.ts` | 2 ไฟล์ | T158-T165 | `npm run test` ผ่านทั้งกลุ่ม BF |
+| **T167** | ★★★ [บังคับ — เงื่อนไข gate, 0.2] ค้นหา/ยืนยัน golden test case ค่าชดเชยเลิกจ้างจากแหล่งที่เชื่อถือได้จริง | `payroll-tax.test.ts` | T162, T166 | **ถ้าพบและ verify ผ่าน**: เพิ่ม golden test + เปลี่ยน `ENABLE_SEVERANCE_TAX_CALC = true` ในคอมมิตเดียวกัน + ยืนยัน [⚠️ FLAG] เรื่องยื่นรวม ภ.ง.ด.1 เดือนเดียวกันหรือไม่กับนักบัญชีจริง **ถ้าหาไม่ทัน**: คง flag `false` ปิดงานกลุ่ม BF ได้ปกติ |
+
+**Milestone BF**: เครื่องคำนวณภาษีค่าชดเชยครบสมบูรณ์ พร้อมเปิดใช้ทันทีที่ verify ได้ — ป้องกันความเสี่ยงสูงสุดของ
+เฟสนี้ไม่ให้กระทบเงินจริงของพนักงานลูกค้าจนกว่าจะมั่นใจ
+
+### กลุ่ม BG — ข้อ 7: แจ้งเตือนวันครบกำหนดยื่น ภ.ง.ด.1/สปส.1-10 (ต้องรอ BC เสร็จ, reframe 0.6)
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T168** | `payroll-filing-reminders.ts` — ★ pure `calcPitDeadline(periodYear,periodMonth)`/`calcSsoDeadline(...)` = วันที่ 15 ของเดือนถัดไป (ภ.ง.ด.1 บังคับยื่นออนไลน์ตั้งแต่ ม.ค. 2567 จึงใช้ 15 เสมอ ไม่ใช้กติกา 7 วันแบบกระดาษเดิม; สปส.1-10 = วันที่ 15 ของเดือนถัดไปเช่นกัน); `isReminderDue(deadline, today, stage)` คืน stage ที่ควรแจ้ง (`due_soon`=3 วันก่อน, `due_today`, `overdue`=ทุกวันหลังเกินกำหนด) | `payroll-filing-reminders.ts` | - | unit test: ข้ามปี/ข้ามเดือน (เดือน 12 → deadline เดือน 1 ปีถัดไป) คำนวณถูกต้อง; ปีอธิกสุรทินไม่กระทบ (deadline เป็นวันที่ 15 คงที่); [⚠️ FLAG] ไม่ปรับวันหยุดราชการอัตโนมัติ (ไม่มี API ปฏิทินวันหยุดราชการที่เชื่อถือได้ฟรี) — ชดเชยด้วย buffer แจ้งเตือนล่วงหน้า 3 วัน + แจ้งซ้ำทุกวันที่เกินกำหนดจนกว่าจะยื่น กันพลาดจากวันหยุดเลื่อน |
+| **T169** | Migration 0100 — `payroll_filing_reminders` (dedup log) + RLS | `0100_payroll_filing_reminders.sql` | - | apply ไม่ error; unique `(filing_period_id,kind,reminder_stage)` กัน insert ซ้ำ |
+| **T170** | `payroll-filing-reminders.ts::generateDueReminders(db, today)` — scan `payroll_monthly_filings` ทุก tenant (service-role, ไม่ผูก tenant เดียว, mirror `generateForAllTenants` ของ `generate-recurring-je`) ที่ `pit_filing_status='not_filed'` หรือ `sso_filing_status='not_filed'` และเข้าเงื่อนไข `isReminderDue` → insert `payroll_filing_reminders` (ใช้ `on conflict do nothing` กัน dedup ซ้ำ) | `payroll-filing-reminders.ts` | T168, T169 | unit test: filing period เดิมที่ยื่นแล้ว (`filed`) → ไม่ generate reminder; เรียกซ้ำวันเดียวกัน 2 ครั้ง → ไม่สร้างแถวซ้ำ (unique constraint); เรียกวันถัดไป (stage เปลี่ยนจาก `due_soon`→`due_today`) → สร้างแถวใหม่ได้ (stage ต่างกัน ไม่ชน unique เดิม) |
+| **T171** | `app/api/cron/generate-payroll-filing-reminders/route.ts` — mirror `generate-recurring-je/route.ts` ทั้งโครง (auth CRON_SECRET fail-closed 503/401, service-role client, catch error คืน 200 เสมอ) | `route.ts` ใหม่ | T170 | ยิง request ด้วย secret ผิด → 401; ไม่ตั้ง secret เลย → 503; ยิงถูกต้อง → 200 พร้อมสรุปจำนวนที่ scan/generate; จำลอง error ภายใน (DB blip) → ยัง 200 (กัน Vercel retry loop) |
+| **T172** | `vercel.json` — เพิ่ม cron entry ใหม่ (เช่น `"0 4 * * *"` เวลาที่ไม่ชนกับ cron อื่นที่มีอยู่ 10 รายการเดิม) | `vercel.json` | T171 | ตรวจ schedule ไม่ชนกับ cron เดิม (health-ping 01:00, generate-recurring-je 02:00, generate-fixed-asset-depreciation 03:00 — เลือก 04:00 หรือหลังจากนั้น) |
+| **T173** | UI: banner ใน `payroll/page.tsx` — query `payroll_filing_reminders` ล่าสุดของลูกค้าที่กำลังดู + join `payroll_monthly_filings` แสดง "⚠️ N หน่วยยื่นใกล้/เกินกำหนด" พร้อมลิงก์ไปหน้า `filing/` (T139) | `payroll/page.tsx` | T139, T170 | เปิดหน้าจริงของลูกค้าที่มี filing period ใกล้ครบกำหนด (จำลอง/seed ทดสอบ) → เห็น banner ถูกต้อง กดลิงก์ไปหน้ายื่นได้; ลูกค้าที่ยื่นครบทุกเดือนแล้ว → ไม่เห็น banner |
+| **T174** | เทสต์ครบกลุ่ม BG: `payroll-filing-reminders.test.ts` | `payroll-filing-reminders.test.ts` | T168-T173 | `npm run test` ผ่านทั้งกลุ่ม BG |
+
+**Milestone BG**: นักบัญชีเห็นเตือนวันครบกำหนดยื่นในหน้าจอที่ใช้งานอยู่แล้วทุกวัน โดยไม่ต้องพึ่งช่องทางแจ้งเตือน
+ภายนอกใหม่ (ไม่มี LINE/อีเมลออก — ตามเหตุผล reframe 0.6)
+
+### กลุ่ม BH — ปิดงานเฟส 9b
+
+| รหัส | สิ่งที่ต้องทำ | ขึ้นกับ | เกณฑ์เสร็จ |
+|---|---|---|---|
+| **T175** | Regression sweep ข้ามทุกเฟส 1-10 + เฟส 9 เดิม — เปิดทุกหน้าบัญชีเดิมรวมหน้าเงินเดือนเฟส 9 เดิม ยืนยัน grep ว่าไฟล์ engine เดิม (`journal.ts`/`ledger.ts`/`trial-balance.ts`/`financial-statements.ts`/`cash-flow.ts`/`formal-statements.ts`) และ `public.employees` **ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว** | T124-T174 | ทุกหน้าเดิมเปิดได้ปกติไม่ error; ลูกค้าที่มีรอบเงินเดือนจากเฟส 9 เดิม (ก่อนเฟส 9b) ยอด/สถานะยื่น/JE ไม่เปลี่ยนแม้แต่สตางค์เดียว; เทสต์เดิมของเฟส 1-10 ทั้งหมดยังผ่าน |
+| **T176** | grep ยืนยัน gate ของ BE/BF ก่อนปิดงาน — `ENABLE_EXTRA_DEDUCTIONS_IN_PIT`/`ENABLE_SEVERANCE_TAX_CALC` มีค่าตรงกับสถานะ verify จริง (ไม่ใช่ `true` ลอย ๆ โดยไม่มี golden test คู่กันในไฟล์ test) | T157, T167 | grep หา golden test ที่อ้างอิงแหล่งที่มาในคอมเมนต์คู่กับค่า flag จริงในโค้ด — ถ้า flag=true ต้องมี golden test อยู่จริงเท่านั้น |
+| **T177** | รันชุดตรวจสอบเต็ม + ทดสอบมือรอบสุดท้ายก่อน merge/deploy | T124-T176 | `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด; smoke test มือครบทุกกลุ่ม BA-BG อย่างน้อย 1 รอบต่อกลุ่มตาม 4) |
+
+---
+
+## 3) Definition of Done (เฟส 9b รวม)
+
+- [ ] **BA**: ยกเว้น SSO รายพนักงานทำงานได้จริงผ่านหน้าจอ ไม่กระทบพนักงานที่ไม่ได้ยกเว้น
+- [ ] **BB**: prefill เงินเดือน prorate อัตโนมัติสำหรับพนักงานเข้า/ออกกลางเดือน ยังแก้ไขเองได้เสมอ — ลูกค้าที่ไม่มี
+      พนักงานกลางเดือนไม่ได้รับผลกระทบใด ๆ (regression-safe)
+- [ ] **BC**: รองรับหลายรอบจ่าย/เดือนสำหรับลูกค้าที่ตั้งค่า `non_monthly` โดยลูกค้าที่ใช้ `monthly` (ค่า default,
+      = ลูกค้าเดิมทุกรายก่อนเฟสนี้) ทำงานเหมือนก่อนเฟสนี้ **ทุกประการ** (unique-per-month behavior เดิม
+      reproduce ที่ชั้นแอปพลิเคชัน)
+- [ ] **BD**: พิมพ์หนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ) ของพนักงานรายปีได้ รวมยอด YTD นายจ้างเดิมเป็นบรรทัด
+      อ้างอิงแยก — ยอดภาษีหัก ณ ที่จ่ายรายเดือนที่คำนวณจริงไม่เปลี่ยนแปลงจากก่อนเฟสนี้แม้แต่บาทเดียว
+- [ ] **BE**: เครื่องคำนวณค่าลดหย่อนภาษีอื่นครบทุกประเภทที่ระบุ (คู่สมรส/บุตร/ประกันชีวิต/PVD-RMF-กบข/ดอกเบี้ย
+      กู้บ้าน) พร้อม cap ครบตามกฎหมาย — **`ENABLE_EXTRA_DEDUCTIONS_IN_PIT` เป็น `true` ได้ก็ต่อเมื่อมี golden
+      test ที่ verify แล้วเท่านั้น** (เป็น `false` พร้อม engine ครบสมบูรณ์ ก็ถือว่าเสร็จตาม DoD นี้เช่นกัน)
+- [ ] **BF**: เครื่องคำนวณภาษีค่าชดเชยเลิกจ้างตามมาตรา 48(5) แยกสูตรจากเงินเดือน/โบนัสโดยสิ้นเชิง พร้อม
+      exempt cap ตามกฎกระทรวง 126 ข้อ 2(51) แก้ไข ฉบับ 394 — **`ENABLE_SEVERANCE_TAX_CALC` เป็น `true` ได้ก็
+      ต่อเมื่อมี golden test ที่ verify แล้วเท่านั้น** (เป็น `false` พร้อม engine ครบสมบูรณ์ ก็ถือว่าเสร็จตาม
+      DoD นี้เช่นกัน)
+- [ ] **BG**: แจ้งเตือนวันครบกำหนดยื่นแสดงในหน้าจอที่นักบัญชีใช้งานอยู่แล้วถูกต้องตามวันที่จริง (15 ของเดือน
+      ถัดไปทั้ง PIT/SSO) ไม่ generate ซ้ำซ้อน
+- [ ] `journal.ts`/`ledger.ts`/`trial-balance.ts`/`financial-statements.ts`/`cash-flow.ts`/
+      `formal-statements.ts`/`public.employees` **ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว** (grep ยืนยัน)
+- [ ] ทุก write path ใหม่ผ่าน `requireAccountingAccess` + `assertCustomerInScope` (derive จาก resource id จริง)
+- [ ] ไม่มี `console.log`/log ใดที่มีค่าตัวเลขการเงิน/ชื่อพนักงาน/ชื่อลูกค้าของฟีเจอร์ใหม่ทั้งหมด (PDPA)
+- [ ] เทสต์เดิมของเฟส 1-10 (รวมเฟส 9 เดิม) ทั้งหมดยังผ่านหลังเพิ่มตาราง/ไฟล์ใหม่ (ไม่มี regression ข้ามเฟส)
+- [ ] `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด ไม่มี error/warning ใหม่
+
+---
+
+## 4) แนวทางการทดสอบ (สำหรับ tester)
+
+### 4.1 Unit test ตามกลุ่ม
+ดูรายละเอียดครบใน DoD ของแต่ละ task ใน 2) — สรุปจุดสำคัญที่สุด:
+- **BE/BF (golden test ที่ยังไม่มีตัวอย่างอ้างอิงจริงในมือตอนวางแผนนี้)**: แนะนำให้ QA/นักบัญชีตามหาจาก
+  (เรียงลำดับความน่าเชื่อถือ):
+  1. เอกสาร **"คำแนะนำการเสียภาษีเงินได้บุคคลธรรมดา" ของกรมสรรพากรเอง** (เผยแพร่ประจำปีคู่กับฤดูยื่น
+     ภ.ง.ด.90/91 ที่ rd.go.th) — มักมีตัวอย่างคำนวณเต็มรูปทั้งกรณีค่าลดหย่อนหลายประเภทรวมกันและกรณีเงินได้จาก
+     การออกจากงาน
+  2. เอกสารสัมมนา/อบรมที่กรมสรรพากรจัดเอง หรือหน่วยงานราชการอื่นที่อ้างอิงตัวบทกฎหมายตรง (ไม่ใช่บทความสรุป
+     ของเว็บบัญชี/ที่ปรึกษาเอกชนทั่วไปที่ไม่ระบุที่มา)
+  3. ถ้าใช้แหล่งเอกชน (สำนักงานบัญชี/ที่ปรึกษาภาษี) ต้องเป็นแหล่งที่**อ้างอิงเลขมาตรา/คำสั่งกรมสรรพากรที่ตรวจ
+     สอบย้อนกลับได้** (เหมือนที่ T112 ใช้ hiperc.sru.ac.th เพราะจำลองตัวอย่างทางการของ ป.96/2543 ตรง ๆ ไม่ใช่
+     ตีความเอง) — ห้ามใช้ blog สรุปทั่วไปที่ไม่ระบุที่มาเด็ดขาด
+  - ถ้าหาไม่ได้ทันเวลาก่อนปิดเฟสนี้: ยอมรับว่า flag ยังปิดอยู่ ไม่ใช่ความล้มเหลวของงาน (0.2 ข้อ 5)
+
+### 4.2 Integration/manual (บน dev จริง — ทำต่อเนื่องกันเป็น flow เดียวต่อกลุ่ม)
+
+1. **BA**: ตั้งพนักงาน 1 คนเป็น `sso_exempt=true` → สร้างรอบ → คำนวณ → ยืนยัน SSO ของคนนั้น=0 คนอื่นปกติ
+2. **BB**: เพิ่มพนักงานใหม่ `start_date`=วันที่ 16 ของเดือนที่จะสร้างรอบ → สร้างรอบ → ยืนยัน prefill ต่ำกว่า
+   `base_salary` ตามสัดส่วนวันทำงานถูกต้องด้วยมือ
+3. **BC**: ตั้งลูกค้าทดสอบเป็น `non_monthly` → สร้าง 4 รอบในเดือนเดียวกัน (จำลองจ่ายรายสัปดาห์) → เปิดหน้า
+   `filing/` → ยืนยันยอดรวม PIT/SSO ข้าม 4 รอบถูกต้อง → กดยื่นแล้ว 1 ครั้ง → สถานะเปลี่ยนที่ทุกรอบพร้อมกัน;
+   ทำซ้ำกับลูกค้า `monthly` เดิม → ยืนยันพฤติกรรมเหมือนก่อนเฟสนี้ทุกประการ (สร้างรอบซ้ำเดือนเดียวกัน → ปฏิเสธ
+   เหมือนเดิม)
+4. **BD**: กรอก YTD นายจ้างเดิมของพนักงาน 1 คน → พิมพ์ 50 ทวิ ปลายปี → ยืนยันยอด YTD แสดงแยกจากยอดนายจ้าง
+   ปัจจุบัน ไม่ปนกัน → คำนวณรอบเงินเดือนเดือนถัดไปของคนเดียวกัน → ยืนยันยอดภาษีไม่เปลี่ยนจากก่อนกรอก YTD
+5. **BE**: กรอกค่าลดหย่อนพนักงาน 1 คน (คู่สมรส+บุตร 2 คน+ประกันชีวิต) → ยืนยัน preview คำนวณตาม cap ถูกต้อง
+   ด้วยมือ → ยืนยันยอด `pit_withheld` จริงไม่เปลี่ยน (flag ปิด) หรือเปลี่ยนตามสูตรถูกต้อง (ถ้า flag เปิดแล้ว)
+6. **BF**: กรอกค่าชดเชยพนักงานที่ลาออก (ทำงาน 5 ปี) → ยืนยันตัวช่วยคำนวณวันตามขั้นบันได (180 วัน) แสดงถูกต้อง →
+   ยืนยัน JE ที่สร้างมี `severance_expense_account_code` และยัง Dr=Cr สมดุล
+7. **BG**: seed filing period ที่ deadline ใกล้ถึง (จำลองวันที่) → ยิง cron ด้วยมือ (curl + CRON_SECRET) →
+   ยืนยัน `payroll_filing_reminders` มีแถวใหม่ → เปิดหน้า `payroll/page.tsx` → เห็น banner ถูกต้อง → ยื่นแล้ว
+   → banner หายไป
+8. **Regression**: เปิดทุกหน้าบัญชีเดิม (เฟส 1-10 รวมเฟส 9 เดิม) ของลูกค้าที่มีรอบเงินเดือนจากก่อนเฟส 9b →
+   ยอด/สถานะ/JE ต้องเหมือนก่อนเฟสนี้ทุกตัวเลข
+
+---
+
+## 5) ความเสี่ยงของแผน & แผนสำรอง
+
+| ความเสี่ยง | แผนสำรอง |
+|---|---|
+| **เปิดใช้สูตรค่าลดหย่อน (BE)/ค่าชดเชย (BF) กับเงินจริงก่อนมั่นใจ 100%** — เสี่ยงสูงสุดของเฟสนี้ ผิดแล้วกระทบเงินจริงพนักงานลูกค้าและความน่าเชื่อถือของ Finovas ต่อกรมสรรพากร | Feature flag `ENABLE_EXTRA_DEDUCTIONS_IN_PIT`/`ENABLE_SEVERANCE_TAX_CALC` เป็น `false` โดย default ในโค้ดจริง (ไม่ใช่แค่เอกสาร) — เปิดได้เฉพาะเมื่อมี golden test คู่กันในคอมมิตเดียวกันเท่านั้น (T157/T167, grep ยืนยันที่ T176) — ปิดเฟสนี้ได้ปกติแม้ flag ยังปิดอยู่ |
+| **Migration ข้อ 3 (BC) ทำลาย/บิดเบือนสถานะยื่นเดิมของลูกค้าที่มีอยู่แล้ว** — กระทบทุกลูกค้าที่ใช้ระบบเงินเดือนอยู่แล้วจากเฟส 9 | Backfill non-destructive (T135) เก็บคอลัมน์เดิมไว้ไม่ลบ + เทียบค่าก่อน/หลัง migrate ด้วย query ตรง ๆ ก่อนปิดงาน (T143) — ถ้าพบความคลาดเคลื่อนแม้แถวเดียว หยุดและแก้ migration ก่อน merge |
+| **การเอา unique constraint เดิมออก (0095) ทำให้ลูกค้า `monthly` สร้างรอบซ้ำเดือนได้โดยไม่ตั้งใจ เพราะพึ่งชั้นแอปพลิเคชันแทน DB** | `createDraftRun` (T138) เช็ค `pay_frequency` ก่อนเสมอ + unit test เฉพาะเจาะจงยืนยันพฤติกรรมเดิม reproduce ได้ 100% + `pay_frequency` default เป็น `'monthly'` เสมอสำหรับลูกค้าใหม่ (ไม่มีใครได้ `non_monthly` โดยไม่ตั้งใจ) |
+| **สูตร `calcSeveranceWithholding` ผสม/สับสนกับ `pit_withheld`/`gross_salary`/`bonus_amount` เดิมในคอลัมน์เดียวกัน** | คอลัมน์ `severance_amount`/`severance_pit_withheld` แยกจากคอลัมน์เดิมเด็ดขาดตั้งแต่ระดับ DB (0.7) — unit test ยืนยันว่าแก้ `severance_amount` ไม่กระทบผลคำนวณของ `calcMonthlyPitForRegularIncome`/`calcMonthlyPitWithBonus` เลย |
+| **`job_queue`/`processNotifJob` ถูกเข้าใจผิดว่า "reuse ได้ตรง ๆ" แล้วมีคน enqueue payload ผิด schema ในอนาคต (ทำให้ job ค้าง retry จนตาย)** | ไม่แตะ `lib/line/notify.ts` เลยในเฟสนี้ (0.6) — สร้าง `payroll_filing_reminders`/cron แยกอิสระอย่างสมบูรณ์ + คอมเมนต์ในโค้ดใหม่ระบุชัดว่าทำไมไม่ reuse pipeline เดิม (กันคนในอนาคตพยายาม "แก้ให้ reuse" แล้วพัง) |
+| **ไม่มีปฏิทินวันหยุดราชการอัตโนมัติ (BG) อาจแจ้งเตือน deadline คลาดเคลื่อนวันที่จริงเลื่อน** | Buffer แจ้งเตือนล่วงหน้า 3 วัน + แจ้งซ้ำทุกวันที่เกินกำหนดจนกว่าจะยื่น (T168) — ระบุ [⚠️ FLAG] ชัดเจนในหน้าจอว่าวันที่คำนวณเป็นวันปฏิทินปกติ นักบัญชียังต้องยืนยันวันจริงเองปีที่มีวันหยุดชนพอดี |
+| **ขอบเขตงานเฟส 9b ใหญ่มาก (7 ข้อ, ~54 tasks) เสี่ยง scope creep ระหว่างทำจริง** | ทำเป็นกลุ่ม BA→BG อิสระต่อกัน (ยกเว้น BG ที่พึ่ง BC) — แต่ละกลุ่มมี milestone ปิดจบได้ทีละกลุ่ม ไม่ต้องรอให้ครบทั้ง 7 ข้อถึงจะ deploy กลุ่มแรก ๆ ได้ (BA/BB/BD พร้อม deploy ได้ทันทีที่เสร็จ โดยไม่ต้องรอ BE/BF ที่เสี่ยงกว่า) |
+| **จำนวน call site ที่ต้องเพิ่มลิงก์/ปุ่ม (page.tsx/CustomerTabs.tsx) เสี่ยง gap แบบที่เจอซ้ำทุกเฟส** | grep ยืนยันครบก่อนปิดงาน (T175) เหมือนที่ทุกเฟสก่อนหน้าทำสำเร็จมาแล้ว |
+
+# เฟส 10b — แผนละเอียด: Unrealized FX Revaluation ปลายงวด
+
+> ไฟล์นี้เป็นส่วนต่อขยายแยกจาก `docs/06-accounting-features-roadmap.md` (ไฟล์หลักใหญ่เกินกว่าจะแก้ทับได้
+> ปลอดภัย) — อ่านคู่กับหมวด **เฟส 10 (0.1-0.18 + หมวด 1-6)** ในไฟล์หลักเสมอ โดยเฉพาะ **0.9 ของเฟส 10a
+> (ล็อก `bill_entries.currency`/`fx_rate` ตลอดชีวิตบิลหลังมี `bill_payments` ผูกแล้ว)** — เฟส 10b นี้
+> **ไม่แตะ/ไม่ขัดกับ 0.9 เดิมแม้แต่จุดเดียว** (revaluation ไม่แก้ `bill_entries.fx_rate` เลย — ใช้อัตราปิด
+> แยกเก็บที่ตารางใหม่ของเฟสนี้เท่านั้น)
+>
+> **สโคปที่ผู้ใช้ล็อกแล้ว**: ทำระบบ **auto-reversing เต็มรูป** (ไม่ใช่ manual-only แบบเบาที่ analyst เคย
+> เสนอเป็นทางเลือกที่ถูกที่สุด) — มี `fx_period_revaluations` + hard-block guard 2 จุด ตามที่วิเคราะห์ไว้
+>
+> เลขงานต่อจากเฟส 9 (ส่วน AF) ที่จบที่ **T123** ในไฟล์หลัก → เฟสนี้เริ่มที่ **T124**
+> เลข migration ต่อจาก `0090_chart_of_accounts_fx_gain_loss_seed.sql` (ไฟล์ล่าสุดจริงตอนวางแผนนี้ ยืนยันด้วย
+> `ls supabase/migrations/ | sort -V | tail -20`) → เฟสนี้จอง **0091**
+
+---
+
+## 0) การตัดสินใจที่ล็อกไว้ก่อนเริ่มโค้ด
+
+### 0.1 ขอบเขต — auto-reversing เต็มรูป (ย้ำการตัดสินใจของผู้ใช้)
+ไม่ทำแบบ "manual-only" (นักบัญชีต้องจำเองว่าต้องกลับรายการ) — ระบบต้อง **สร้าง reversing JV ให้อัตโนมัติ
+เป็น draft** ทันทีที่ยืนยัน JV ปรับปรุงของงวดนั้น + มี **hard-block guard 2 จุด** ป้องกัน double-count เชิง
+โครงสร้าง (ไม่ใช่แค่คำเตือน) — เป้าหมาย: ปลอดภัยที่สุดเท่าที่สถาปัตยกรรมเดิม (ไม่มี fiscal-period lock ทั้ง
+ระบบ) จะรองรับได้ โดยไม่ต้องสร้างระบบปิดงวดเต็มรูปทั้งบริษัท
+
+### 0.2 ⚠️ สูตร/กลไกหลัก — verify แล้วว่าตรงย่อหน้า 29 TAS 21 เป๊ะทุกบาท (อ่านก่อนเริ่มโค้ดทุกไฟล์)
+กลไก **"reversing entry ต้นงวดถัดไป + สูตร realized เดิมของเฟส 10a ที่ยังใช้ `bill_entries.fx_rate` (invoice
+rate) เสมอ (0.8/0.9 เฟส 10a)"** ให้ผลลัพธ์ตรงกับย่อหน้า 29 เป๊ะ เพราะ reversing ทำให้ยอด AR/AP ใน GL
+"รีเซ็ตกลับไปที่ invoice rate" ทุกครั้งที่เริ่มงวดใหม่ — เป็นผลให้ **สูตรคำนวณ unrealized ของทุกงวดเทียบกับ
+`invoice rate` เดิมเสมอ ไม่ใช่เทียบกับ closing rate ของงวดก่อนหน้า** (ไม่ต้องมี "carrying rate" แยกต่างหาก) —
+ทำให้ **`unrealizedFxGainLoss` ใช้สูตรเดียวกับ `fx.ts::realizedFxGainLoss` ของเฟส 10a เป๊ะ** เพียงแค่แทน
+`settleFxRate` ด้วย `closingRate`:
+
+```
+unrealizedFxGainLoss(entryType, outstandingFxAmount, invoiceFxRate, closingRate)
+  = realizedFxGainLoss(entryType, outstandingFxAmount, invoiceFxRate, closingRate)   // reuse ตรง ๆ ไม่มีสูตรคู่ขนาน
+```
+
+ตัวอย่างตัวเลขที่ verify แล้ว (จาก analyst, 3 งวดสมมติเพื่อยืนยันความต่อเนื่อง):
+```
+บิลขาย USD 10,000 @ invoice rate 33.00 → AR (THB) = 330,000
+
+งวด 1 ปิดที่ closing rate 33.50:
+  unrealized = 10,000 × (33.50 − 33.00) = +5,000 (กำไร)
+  JV ปรับปรุง:   Dr AR 5,000 / Cr 4025(กำไร FX) 5,000  →  AR ใน GL = 335,000
+  ยืนยัน JV ปรับปรุง → ระบบสร้าง reversing JV (draft, doc_date = วันแรกงวด 2) ทันที
+
+ต้นงวด 2 — ยืนยัน reversing:
+  Dr 4025 5,000 / Cr AR 5,000  →  AR กลับเป็น 330,000 (เท่ากับ invoice rate เป๊ะ — สมมติฐานของสูตร realized เดิมยังจริง)
+
+งวด 2 ลูกค้าชำระที่ settlement rate 34.00 (ยังไม่ปิดงวด 2):
+  realized (สูตรเดิม 10a, เทียบกับ invoice rate 33.00 เสมอ) = 10,000 × (34.00 − 33.00) = +10,000
+  รวม P&L งวด 2 = −5,000 (reversal) + 10,000 (realized) = +5,000
+  ตรงกับย่อหน้า 29 ที่ควรได้ = (34.00 − 33.50) × 10,000 = +5,000 ✓ (ผลต่างเฉพาะช่วงที่เกิดจริงในงวด 2)
+
+(ถ้ายังไม่จ่ายในงวด 2 แล้วปิดงวด 2 ที่ closing rate ใหม่ เช่น 33.80:
+  unrealized งวด 2 = 10,000 × (33.80 − 33.00) = +8,000 — เทียบกับ invoice rate เสมอ ไม่ใช่เทียบ 33.50 ของ
+  งวด 1 เพราะ reversing งวด 1 ได้ล้างผลของงวด 1 ออกจาก GL ไปแล้ว — สอดคล้องหลักการเดียวกัน)
+```
+**นี่คือเหตุผลที่ engine เดิมของเฟส 10a (`fx.ts`) ไม่ต้องแก้เลยแม้แต่บรรทัดเดียว** — เฟสนี้แค่ **เรียกใช้ซ้ำ**
+`realizedFxGainLoss` ด้วยพารามิเตอร์คนละชุด (closingRate แทน settleRate)
+
+### 0.3 ฐานคำนวณ — ไม่รวม VAT เสมอ (ย้ำ 0.7 ของเฟส 10a)
+VAT เป็นรายการที่เป็นตัวเงินสกุลบาทเสมอตามกฎหมายไทย (ไม่ใช่ monetary item สกุลต่างประเทศ) — **ฐานที่ใช้
+revalue ต้องเป็น `bill_entry_lines.fx_amount` (ก่อน VAT) ล้วน ๆ เท่านั้น** ไม่ใช่ `billOutstanding()`/
+`netTotal` ที่รวม VAT (THB) เข้าไปแล้ว — ถ้าเผลอเอายอดรวม VAT มาคูณ/หารด้วยอัตราปิดตรง ๆ จะผิดหลักบัญชีทันที
+(สร้าง unrealized gain/loss เกินจริงจากส่วนของ VAT ที่ไม่ควรถูก revalue เลย)
+
+### 0.4 ⚠️ ช่องโหว่ #1 (แก้จริง ไม่ใช่ theoretical) — ไม่มีฟังก์ชันคำนวณยอดคงค้างสกุลต่างประเทศเลย
+`lib/accounting/bill-payments.ts::billOutstanding()` คืนค่าเป็น THB (รวม VAT/net adjustment) เท่านั้น — ต้อง
+เพิ่มฟังก์ชันใหม่ (ไปอยู่ที่ `fx-revaluation.ts` ใหม่ เพื่อไม่ให้ `bill-payments.ts` ต้องรู้จัก fx-specific
+formula เพิ่มเกินจำเป็น — เฟส 10a ทำ `recordBillPayment`/`validatePaymentInput` รู้จัก fx อยู่แล้วเพราะเป็น
+เจ้าของ schema แต่การ "รวมยอดหลายบิลเพื่อ revalue" เป็นความรับผิดชอบของฟีเจอร์ใหม่นี้ล้วน ๆ):
+
+```
+outstandingFxForEntry(fxLinesTotal, fxPayments[], fxNoteAdjustment, asOfDate?)
+  = Σ(bill_entry_lines.fx_amount ก่อน VAT ของบิลนั้น)
+    − Σ(bill_payments.fx_amount ที่ยังไม่ยกเลิก และ pay_date ≤ asOfDate)
+    + fxNoteAdjustment  (สัญญาณจาก confirmed CN/DN ที่มี fx_amount ของบิลนั้น, doc_date ≤ asOfDate)
+```
+
+### 0.5 ⚠️ ช่องโหว่ #2 (แก้จริง) — ไม่มี as-of-date filtering ของ payments เลยทั้งระบบ
+`listBillPayments`/`listBillPaymentsForEntries`/`billOutstanding`/`aging.ts::buildAgingReport` นับ
+`bill_payments`/`credit_debit_notes` ทุกแถวที่ `deleted_at is null` **ณ ตอน query จริง** ไม่เคยกรอง
+`pay_date`/`doc_date` เทียบ `asOfDate` เลย — ปัจจุบัน `asOfDate` ของ `aging.ts` ใช้ทำแค่ "จัดกลุ่มอายุหนี้"
+เท่านั้น ไม่ได้ใช้กรอง payments ที่หักออกจากยอดค้าง — รันรายงานปลายงวดย้อนหลัง (หรือมี payment วันที่ในอนาคต
+หลุดเข้ามา) จะได้ยอดผิดทันที (นับ payment ที่ยังไม่เกิดขึ้นจริง ณ วันตั้งรายงานไปหักออกก่อนเวลา) — **แก้ที่
+จุดเดียว (`billOutstanding`) แล้วให้ `aging.ts`/`fx-revaluation.ts` reuse** (ดู 1.2):
+- `billOutstanding(entry, payments, netAdjustment, asOfDate?)` — เพิ่มพารามิเตอร์ที่ 4 (optional, backward
+  compatible: **ไม่ส่ง = ไม่กรอง = พฤติกรรมเดิม 100%**) — เมื่อส่งมา กรอง `payments` ที่ `payDate > asOfDate`
+  ออกก่อนคำนวณ (ต้องขยาย type พารามิเตอร์ `payments` ให้มี `payDate` เพิ่มจากเดิมที่มีแค่ `amount`)
+- `listBillPayments`/`listBillPaymentsForEntries(db, tenantId, entryId(s), asOfDate?)` — เพิ่มพารามิเตอร์
+  ท้าย optional, เมื่อส่งมา `.lte("pay_date", asOfDate)` ในคำสั่ง query จริง (ไม่ใช่กรองหลัง fetch — ลด
+  ปริมาณข้อมูลด้วย) — ไม่ส่ง = query เดิมทุกประการ (regression-safe)
+- `aging.ts::buildAgingReport` — เปลี่ยนจากไม่ส่ง `asOfDate` เข้า `billOutstanding` เลย (bug เดิม) → **ส่ง
+  `asOfDate` ที่มีอยู่แล้วในพารามิเตอร์ของฟังก์ชันเข้า `billOutstanding` ด้วย** — เป็น **bonus correctness
+  fix** ที่ได้มาฟรีจากการแก้ 0.5 (ผลลัพธ์ของรายงานอายุหนี้ปกติที่รันแบบ "ณ วันนี้" กับข้อมูลที่ payment ทุก
+  แถว `pay_date ≤ วันนี้` เสมอ **จะไม่เปลี่ยนแม้แต่บาทเดียว** — เปลี่ยนเฉพาะกรณีตั้งรายงานย้อนหลัง/มี
+  payment วันที่อนาคตเท่านั้น ต้องมี regression test คุมเคสนี้ชัดเจน)
+
+### 0.6 concept "งวดบัญชี" แบบเบาที่สุดเท่าที่พอสำหรับฟีเจอร์นี้ (ไม่ใช่ระบบปิดงวดเต็มรูป)
+ระบบไม่มี `fiscal_year`/period-lock ใด ๆ อยู่ก่อนเลย (ยืนยันจาก analyst) — เฟสนี้ **ไม่สร้างตาราง
+fiscal period แยก** เพราะเกินความจำเป็นของฟีเจอร์นี้ — ใช้แค่ `period_end_date` (date เดี่ยว ๆ ที่นักบัญชี
+เลือกเอง เช่น สิ้นเดือน/สิ้นไตรมาส/สิ้นปี ก็ได้ ระบบไม่บังคับ) เก็บอยู่ที่ **แถวของ `fx_period_revaluations`
+เอง** — "งวดถัดไป" = `period_end_date + 1 วัน` เสมอ (ใช้เป็น `doc_date` ของ reversing JV) — เพียงพอสำหรับ
+"track ว่างวดนี้ทำ revaluation ไปหรือยัง" ตามที่ต้องการ ไม่ต้องมีแนวคิดปิดงวดทั้งบริษัท
+
+### 0.7 Schema ใหม่ — `fx_period_revaluations` (ต่อ "1 กลุ่ม" = ลูกค้า+สกุลเงิน+ฝั่งบัญชี)
+คีย์ล็อกตามที่วิเคราะห์ไว้: `(tenant_id, customer_id, currency, period_end_date, closing_rate, source,
+revaluation_je_id, reversing_je_id, status)` — **เพิ่ม `entry_type` เข้าไปอีก 1 คอลัมน์นอกเหนือจากที่ระบุไว้
+เดิม** (การตัดสินใจของแผนนี้ ไม่ใช่การเบี่ยงเบนจากสโคป) เพราะ **`customer_id` ในระบบนี้คือ "ลูกค้าของ Finovas"
+(กิจการที่ทำบัญชีให้) ไม่ใช่คู่ค้า/เจ้าหนี้ลูกหนี้รายตัว** — กิจการเดียวกันมีได้ทั้งบิลขาย (AR, 1140) และบิล
+ซื้อ (AP, 2010) สกุลเดียวกันพร้อมกัน ซึ่ง**ต้อง revalue แยกกันคนละ JV เสมอ** (คนละบัญชี GL, คนละทิศทาง) —
+ถ้าไม่แยก `entry_type` จะเสี่ยงเอายอด AR กับ AP มาหักล้างกันผิดหลักบัญชี (netting ที่ไม่ควรเกิด)
+
+```sql
+create table public.fx_period_revaluations (
+  id                    uuid primary key default gen_random_uuid(),
+  tenant_id             uuid not null references public.tenants(id) on delete cascade,
+  customer_id           uuid not null references public.customers(id) on delete cascade,
+  entry_type            text not null check (entry_type in ('sale','purchase')),
+  currency              text not null check (currency ~ '^[A-Z]{3}$'),
+  period_end_date       date not null,
+  closing_rate          numeric(18,6) not null check (closing_rate > 0 and closing_rate <= 100000),
+  source                text not null check (source in ('bot','manual')),
+  outstanding_fx_amount numeric(14,2) not null,     -- audit: ยอดคงค้าง fx ณ ตอนสร้าง (0.4)
+  unrealized_amount     numeric(14,2) not null,     -- audit: กำไร(+)/ขาดทุน(−) ที่คำนวณได้ ณ ตอนสร้าง
+  revaluation_je_id     uuid references public.manual_journal_entries(id) on delete set null,
+  reversing_je_id       uuid references public.manual_journal_entries(id) on delete set null,
+  status                text not null default 'reval_draft'
+                          check (status in ('reval_draft','reversing_draft','reversing_confirmed','voided')),
+  created_at            timestamptz not null default now(),
+  deleted_at            timestamptz
+);
+```
+(รายละเอียด index/RLS/trigger เต็มดู 1.1) — **`status` เป็นแค่ cache สำหรับแสดงผล/กรองเร็ว ไม่ใช่แหล่งความ
+จริงที่ guard เชื่อ (ดู 0.12 — สำคัญมาก)**
+
+### 0.8 ลำดับงวดต้องต่อเนื่อง — ห้ามสร้างงวดใหม่ถ้ารอบก่อนหน้ายังไม่ปิดสมบูรณ์ (guard #1)
+ต่อ 1 กลุ่ม (`customer_id`+`currency`+`entry_type`) ห้ามสร้างแถวใหม่ (`period_end_date` ใหม่) ถ้าแถวล่าสุด
+(period_end_date สูงสุดที่ไม่ใช่ `voided`) ของกลุ่มเดียวกันยังไม่ถึงสถานะ **"reversing_confirmed" จริง (เช็ค
+live, 0.12)** — และ `period_end_date` ใหม่ต้อง **มากกว่า** ของแถวล่าสุดเสมอ (ห้ามสร้างย้อน/ซ้อนทับ) —
+ข้อความปฏิเสธต้องบอกชัดว่าให้ไปยืนยัน reversing ของงวดไหนก่อน (ลิงก์ตรงไปที่แถวนั้น)
+
+### 0.9 ⚠️ กลไก reversing — สร้างเป็น draft **ทันทีที่ยืนยัน JV ปรับปรุง** (ไม่รอถึงวันจริงของงวดถัดไป)
+เมื่อนักบัญชีกด "ยืนยัน" ที่ JV ปรับปรุง (`revaluation_je_id`) สำเร็จ → ระบบสร้าง JV กลับรายการ
+(`reversing_je_id`) เป็น **draft ทันที** ในขั้นตอนเดียวกัน (ไม่ใช่ cron/รอวันจริง): วันที่เอกสาร = `period_end_
+date + 1 วัน` (0.6), memo = `"กลับรายการปรับปรุงอัตราแลกเปลี่ยนปลายงวด ${period_end_date} (${currency}) —
+⚠️ ต้องยืนยันก่อนเริ่มบันทึกบัญชีงวดใหม่"` — **ยังคง never-auto-confirm เสมอ** (0.5 ของเฟส 10a): reversing
+เป็น draft ที่นักบัญชีต้องเข้าไปตรวจ/กดยืนยันเองอีกครั้งที่หน้า FX revaluation (ไม่ใช่หน้า journal-entry ทั่วไป
+— ดู 0.13) — **สร้างจากบรรทัดเดียวกับ JV ปรับปรุงเป๊ะ แค่สลับ debit↔credit** (ไม่คำนวณใหม่ กันความคลาดเคลื่อน
+จากการปัดเศษ/ดึงอัตราใหม่โดยไม่ตั้งใจ)
+
+### 0.10 ⚠️ Hard-block guard #1 — ห้ามสร้าง JV ปรับปรุงงวดถัดไปถ้ารอบก่อนหน้ายังไม่ปิด (ย้ำ 0.8 เป็นจุดโค้ด)
+`createFxRevaluationDraft()` ต้องเรียก guard นี้เป็นจุดแรกสุดก่อนคำนวณ/สร้างอะไรเลย — **ปฏิเสธการทำงาน (ไม่ใช่
+แค่เตือน)** ถ้าพบว่ากลุ่มเดียวกัน (customer+currency+entryType) มีรอบก่อนหน้าที่ live-status ยังไม่ใช่
+`reversing_confirmed`/`voided`
+
+### 0.11 ⚠️ Hard-block guard #2 — ห้าม "แนะนำ realized FX" ถ้า reversing งวดใหม่ยังไม่ confirm
+`suggestFxGainLossNoteAction` (ของเฟส 10a, `app/chat-audit/accounting/payments/actions.ts`) ต้องเพิ่ม
+เช็คก่อนคำนวณ: หา revaluation cycle **ล่าสุด** ของ (`entry.customerId`, `entry.currency`, `entry.entryType`)
+ที่ `reversing_je_id` (doc_date = period_end_date+1) **≤ payment.payDate** — ถ้าพบ **และ** live-status ของ
+reversing JV นั้นยังไม่ `confirmed` → **ปฏิเสธการทำงาน** พร้อมข้อความ "ต้องยืนยันรายการกลับรายการ FX ของงวด
+ก่อนหน้าให้เสร็จก่อน จึงจะแนะนำกำไร/ขาดทุนจากอัตราแลกเปลี่ยนของงวดนี้ได้" (ลิงก์ไปหน้า FX revaluation) —
+**เหตุผล**: สูตร realized เดิม (0.8 เฟส 10a) สมมติว่า AR/AP กลับไปที่ invoice rate แล้ว (เพราะ reversing ทำ
+แล้ว) — ถ้ายังไม่ reverse จริง ตัวเลข GL จะไม่ตรงกับสมมติฐานนี้ เกิด **double-count FX gain/loss ที่ทั้งสอง
+JV ต่าง `isBalanced()` ผ่านสมบูรณ์ในตัวเอง** (ตรวจจับยากมากภายหลัง — ต้องกันที่ต้นเหตุด้วย guard นี้เท่านั้น
+ดูหมวด 5 riskตัวแรก) — payment ที่ `payDate` **ก่อน** วันเริ่มงวดใหม่ (ชำระภายในงวดเดิมตามปกติ) **ไม่ถูก
+บล็อก** (ไม่กระทบ flow ปกติของเฟส 10a เลย)
+
+### 0.12 ⚠️ ห้าม guard เชื่อคอลัมน์ `status` ที่ cache ไว้ — ต้องเช็ค **live status ของ JE จริง** เสมอ
+นี่คือจุดสถาปัตยกรรมสำคัญที่สุดของเฟสนี้ (ป้องกัน "status drift" ที่ทำให้ guard รั่ว): manual JE ใด ๆ
+(รวมถึง `revaluation_je_id`/`reversing_je_id`) แก้สถานะ `confirmed → draft` ได้เสมอผ่าน
+`unconfirmManualEntryAction` เดิม (ฟีเจอร์ทั่วไปที่มีอยู่แล้ว ใช้ได้กับ manual JE ทุกใบไม่เลือกประเภท) — ถ้า
+นักบัญชี unconfirm reversing JV **หลัง**จากที่เคยยืนยันไปแล้ว (และอาจมีการแนะนำ realized FX ของงวดใหม่ไป
+บ้างแล้วโดยอาศัย guard ที่เคยผ่าน) คอลัมน์ `fx_period_revaluations.status` ที่ cache ไว้ (`reversing_
+confirmed`) จะ **ค้างผิด** ทันที ถ้า guard เชื่อคอลัมน์นี้ตรง ๆ จะเปิดช่องให้ double-count เกิดขึ้นได้อีกทาง
+— **ทุกจุด guard (0.10/0.11) ต้อง query สถานะจริงของ `manual_journal_entries.status`/`deleted_at` ของ
+`revaluation_je_id`/`reversing_je_id` ที่เกี่ยวข้อง ณ ตอนนั้นเสมอ** (ผ่าน `deriveLiveRevaluationStatus()`
+ใน `fx-revaluation.ts`) — คอลัมน์ `status` ของตารางใช้เป็น **cache สำหรับ list/แสดงผลเร็วเท่านั้น** อัปเดต
+ที่จุด transition ที่ควบคุมได้ (0.13) แต่ไม่ใช่แหล่งความจริงสุดท้าย (ย้ำ risk นี้ในหมวด 5)
+
+### 0.13 ⚠️ ล็อกปุ่ม "ยืนยัน"/"ยกเลิกยืนยัน" ทั่วไปสำหรับ JV ที่ผูกกับ fx revaluation — บังคับผ่านหน้าเฉพาะเท่านั้น
+`JournalEntryPanel.tsx`/`journal-entry/actions.ts::confirmManualEntryAction`/`unconfirmManualEntryAction`
+เดิม (เฟส 1) เป็น **generic** ใช้กับ manual JE ทุกใบ — ถ้าปล่อยให้นักบัญชียืนยัน `revaluation_je_id`/
+`reversing_je_id` ผ่านช่องทางนี้ตรง ๆ จะข้าม side-effect ที่จำเป็น (สร้าง reversing อัตโนมัติตอนยืนยัน reval,
+0.9) **เฟสนี้จึงต้อง**:
+- **Client**: `JournalEntryPanel.tsx` โหลดชุด id ของ JE ที่เป็น `revaluation_je_id`/`reversing_je_id` ของ
+  `fx_period_revaluations` ที่ยังไม่จบ cycle (`status != 'reversing_confirmed'` แบบ cache ก็พอสำหรับ UI
+  hint) → ซ่อนปุ่ม "ยืนยัน"/"ยกเลิกยืนยัน" generic ของ JE เหล่านั้น แสดงข้อความ "จัดการรายการนี้ผ่านหน้า
+  'ปรับปรุงอัตราแลกเปลี่ยนปลายงวด' เท่านั้น" พร้อมลิงก์
+- **Server (defense-in-depth, บังคับจริง)**: `confirmManualEntryAction`/`unconfirmManualEntryAction` ต้อง
+  query (best-effort, ไม่ throw ถ้า query ล้ม) ว่า `id` เป็น `revaluation_je_id`/`reversing_je_id` ของแถวใด
+  ที่ยัง `deleted_at is null` หรือไม่ → **ถ้าใช่ ปฏิเสธเสมอ** พร้อมข้อความชี้ไปหน้าเฉพาะ — กัน client ข้าม UI
+  ยิง action ตรง ๆ (ไม่ต่างจาก IDOR-safe pattern ที่ใช้ทั้งระบบ)
+- การยืนยัน/ยกเลิกยืนยันที่ "ถูกต้อง" ทั้งหมดต้องผ่าน `fx-revaluation.ts::confirmFxRevaluation`/
+  `confirmFxReversing`/`unconfirmFxReversing` เท่านั้น (เรียก `confirmManualEntry`/`unconfirmManualEntry`
+  เดิมข้างในซ้ำ — **ไม่แก้ตรรกะภายในสองฟังก์ชันนั้นเลยแม้แต่บรรทัดเดียว**, แค่ wrap เพิ่ม side-effect)
+
+### 0.14 จัดการกรณี JE ที่ผูกไว้ถูกลบไปแล้ว (mirror ความเสี่ยงเดิมของเฟส 10a ข้อ `fx_gain_loss_note_id`)
+ถ้า `revaluation_je_id` หรือ `reversing_je_id` ถูก soft-delete ไป (นักบัญชีลบ JV ทิ้งผ่านหน้า journal-entry
+เดิม) → `deriveLiveRevaluationStatus()` ต้องคืนสถานะ `voided` (ไม่ใช่ค้างเป็น `draft` ตลอดไปซึ่งจะบล็อกกลุ่ม
+นั้นถาวรตาม guard #1) — UI แสดงแถวนั้นเป็น "ยกเลิกแล้ว (JV เดิมถูกลบ) — สร้างรอบใหม่ของงวดนี้ได้" และปุ่ม
+"สร้างใหม่" เรียก `createFxRevaluationDraft` ด้วย `period_end_date` เดิมได้อีกครั้ง (unique index ต้องเป็น
+partial `where deleted_at is null` แบบเดียวกับ pattern เดิมทั้งระบบ — ไม่ชนกับแถวเก่าที่ voided)
+
+### 0.15 อัตราปิด — reuse `fetchBotReferenceRate()` เดิมของเฟส 10a ตรง ๆ ไม่มีการเชื่อมต่อใหม่
+`lib/integrations/bot-exchange-rate.ts::fetchBotReferenceRate(currency, periodEndDate)` — best-effort
+prefill ช่อง `closing_rate` เหมือน 0.12 ของเฟส 10a ทุกประการ (นักบัญชีแก้ทับได้เสมอ, `try/catch` ไม่ throw,
+`source='bot'` เมื่อดึงสำเร็จและไม่ถูกแก้ทับ / `source='manual'` เมื่อกรอกเอง/แก้ทับค่าที่ดึงมา) — **ไม่
+สร้างไฟล์ integration ใหม่**
+
+### 0.16 บัญชี GL — reuse `4025` เดิม (ไม่สร้างบัญชีใหม่/ไม่ seed migration ใหม่)
+ใช้ `DEFAULT_FX_GAIN_LOSS_ACCOUNT_CODE` ("4025") จาก `lib/accounting/currency.ts` เดิมเป็นค่าเสนอ default
+— นักบัญชีเปลี่ยนเป็นรหัสอื่นได้ทุกครั้งตอนสร้าง JV ปรับปรุง (self-service ตาม 0.4 เฟส 10a) — ไม่ hardcode
+mapping ตายตัว
+
+### 0.17 สิทธิ์ — reuse `requireAccountingAccess`+`assertCustomerInScope` เดิมทั้งหมด (ไม่มี admin-only ใหม่)
+ทุก server action ใหม่ (สร้าง/ยืนยัน JV ปรับปรุง, ยืนยัน reversing) guard ด้วย pattern เดิม 100% — สโคป
+derive จาก `customerId` ที่กำลังจะเขียนจริงเสมอ (เหมือนเฟส 1-10a ทั้งหมด)
+
+### 0.18 Dashboard badge — เตือน reversing ที่ค้างยืนยันเกิน 7 วัน (mirror แนวคิด badge เตือนงานค้างเฟสอื่น)
+`countOverdueUnconfirmedReversals(db, tenantId, customerId?, thresholdDays=7)` — นับ
+`fx_period_revaluations` ที่ live-status = `reversing_draft` และ `reversing_je_id`'s `doc_date` (=วันเริ่ม
+งวดใหม่) ผ่านมาแล้ว ≥ 7 วัน — แสดงเป็น badge ที่หน้าแรกงานบัญชีของลูกค้านั้น (`app/chat-audit/accounting/
+page.tsx`) ข้อความ "⚠️ มี JE กลับรายการ FX ค้างยืนยัน N รายการ (เกิน 7 วันแล้ว)" พร้อมลิงก์ไปหน้า FX
+revaluation — เป็น **hint UI เท่านั้น ไม่ block อะไร** (ตัว hard-block จริงคือ 0.10/0.11)
+
+### 0.19 ไม่แตะ engine เดิมเลย — ย้ำหลักการ 0.6 ของเฟส 10a แบบเจาะจงไฟล์
+- `journal.ts`/`ledger.ts`/`trial-balance.ts`/`financial-statements.ts`/`formal-statements.ts` — **ไม่แตะ**
+  (อ่านจาก `JournalLine[]` ตาม account code ล้วน ๆ — JV ปรับปรุง/reversing ที่ผ่าน `upsertManualEntry` เดิม
+  เข้าสมการได้ปกติทันที)
+- `cash-flow.ts` — **ไม่แตะ** (ใช้ direct method จับคู่ cash-leg ต่อ entryId — JV ปรับปรุง/reversing มีแค่
+  Dr/Cr 1140-หรือ-2010 กับ 4025 ไม่มี cash leg เลย ถูกกฎ "cashLegs ว่าง → ไม่เข้า CF" ตัดออกอัตโนมัติ ถูกต้อง
+  ตามหลักบัญชีอยู่แล้ว — unrealized ไม่ใช่เงินสด)
+- `bill-payments.ts::toJournalLines/toJournalPosting` — **ไม่แตะ** (0.8 เฟส 10a ยังใช้ invoice rate เสมอ
+  ถูกต้องตามกลไก 0.2 ข้างบนพอดี)
+- `manual-journal.ts::isBalanced/toJournalLines/toJournalPosting/upsertManualEntry/confirmManualEntry/
+  unconfirmManualEntry` (ตัวตรรกะภายใน) — **ไม่แตะ** (เฟสนี้ wrap เพิ่มจากภายนอกเท่านั้น ตาม 0.13)
+- `fx.ts::realizedFxGainLoss` — **ไม่แตะ** (reuse ตรง ๆ ตาม 0.2)
+- `aging.ts`/`bill-payments.ts::billOutstanding/listBillPayments/listBillPaymentsForEntries` — **ต้องแก้**
+  (0.5) แต่เป็นไฟล์ input ให้ revaluation ใช้ ไม่ใช่ engine หลักที่ผลลัพธ์ revaluation ไปกระทบ — แก้แบบ
+  backward-compatible (optional parameter ท้ายสุด, ไม่ส่ง = พฤติกรรมเดิม 100%)
+
+### 0.20 ยืนยันเลข migration จริงก่อน apply เสมอ
+`ls supabase/migrations/ | sort -V | tail -20` ตอนวางแผนนี้ (2026-08-11) พบไฟล์ล่าสุด =
+`0090_chart_of_accounts_fx_gain_loss_seed.sql` — เฟสนี้จองเลข **0091** ต่อจากนั้น **แต่ต้องรันคำสั่งเดียวกัน
+นี้ซ้ำอีกครั้งก่อนสร้างไฟล์จริงเสมอ** (0.18 ของเฟส 10a) เผื่อมีงานคู่ขนานอื่นจองเลขไปก่อนแล้ว
+
+---
+
+## 1) โครงสร้างไฟล์ (ใหม่/แก้) — เฟส 10b
+
+```
+supabase/migrations/
+  0091_fx_period_revaluations.sql   [ใหม่] ตาราง fx_period_revaluations + index + RLS (mirror 0068)
+  ⚠️ เลขไฟล์ 0091 อิง "0090 เป็นไฟล์ล่าสุด ณ วันที่วางแผน" (0.20) — ตรวจซ้ำก่อน apply จริงเสมอ
+
+lib/accounting/
+  bill-payments.ts    [แก้] billOutstanding(entry, payments, netAdjustment, asOfDate?) — พารามิเตอร์ที่ 4
+                              ใหม่ (optional, 0.5) · payments type ขยายให้มี payDate (จาก amount อย่างเดียว) ·
+                              listBillPayments/listBillPaymentsForEntries(..., asOfDate?) — filter query จริง
+                              เมื่อส่งมา · ไม่แก้ toJournalLines/toJournalPosting/validatePaymentInput/
+                              recordBillPayment เลย (0.19)
+  credit-debit-notes.ts [แก้] เพิ่ม netFxAdjustmentByEntry(notesByEntry, asOfDate?) — mirror
+                              netAdjustmentByEntry เป๊ะ แต่สรุปจาก line.fxAmount แทน line.amount+vatAmount
+                              (0.3 ไม่รวม VAT) + กรอง note.docDate ≤ asOfDate เมื่อส่งมา
+  fx-revaluation.ts   [ใหม่] engine หลักของเฟสนี้ — pure + data layer ในไฟล์เดียว (mirror bill-payments.ts/
+                              credit-debit-notes.ts):
+                              pure:
+                                - outstandingFxForEntry(fxLinesTotal, fxPayments[], fxNoteAdjustment) → number (0.4)
+                                - unrealizedFxGainLoss = re-export ตรงจาก fx.ts::realizedFxGainLoss (0.2,
+                                  ไม่เขียนสูตรคู่ขนาน — import แล้วส่งออกชื่อใหม่เพื่อความชัดเจนของ caller)
+                                - buildRevaluationEntryInput(entryType, unrealizedAmount, arApAccountCode,
+                                  gainLossAccountCode, docDate, memo) → ManualEntryInput | null (null เมื่อ
+                                  unrealizedAmount = 0, mirror T90 เฟส 10a) — กติกาเดียว ทิศทางเดียวกันทั้ง
+                                  sale/purchase (0.7 ของหมวดนี้ในไฟล์): unrealizedAmount>0 → Dr AR/AP,
+                                  Cr gainLossAccount · <0 → Dr gainLossAccount, Cr AR/AP (ขนาด |amount|)
+                                - buildReversingEntryInput(revalLines, nextPeriodStartDate, memo) →
+                                  ManualEntryInput (สลับ debit↔credit ของทุกบรรทัดจาก JV ต้นฉบับเป๊ะ ไม่คำนวณใหม่, 0.9)
+                              data layer (DB, ทุกฟังก์ชันกรอง tenant_id เสมอ):
+                                - loadOutstandingFxGroup(db, tenantId, customerId, currency, entryType, asOfDate)
+                                  → รวมยอด (reuse listEntries/loadEntryLineAmounts-style query ใหม่เฉพาะบิล FX
+                                  ที่ currency ตรง + eligible + ยังไม่ปิด, reuse listBillPaymentsForEntries +
+                                  netFxAdjustmentByEntry ที่แก้แล้วข้างบน — ไม่มีสูตรคู่ขนาน)
+                                - deriveLiveRevaluationStatus(db, tenantId, row) → 'reval_draft'|
+                                  'reversing_draft'|'reversing_confirmed'|'voided' (0.12, query
+                                  manual_journal_entries.status/deleted_at ของทั้งสอง id จริงเสมอ)
+                                - assertNoPendingCycle(db, tenantId, customerId, currency, entryType,
+                                  newPeriodEndDate) → guard #1 (0.8/0.10)
+                                - assertReversalConfirmedForPayment(db, tenantId, customerId, currency,
+                                  entryType, payDate) → guard #2 (0.11)
+                                - createFxRevaluationDraft(db, tenantId, customerId, entryType, currency,
+                                  periodEndDate, closingRate, source, chartByCode, gainLossAccountCode?)
+                                  → guard #1 → loadOutstandingFxGroup → unrealizedFxGainLoss → ถ้า 0 ปฏิเสธ →
+                                  upsertManualEntry (draft) → insert แถว fx_period_revaluations (status=
+                                  'reval_draft')
+                                - confirmFxRevaluation(db, tenantId, revaluationId) → confirmManualEntry
+                                  (revaluation_je_id, ไม่แก้ตรรกะเดิม) → buildReversingEntryInput →
+                                  upsertManualEntry (draft ใหม่) → update แถว (reversing_je_id, status=
+                                  'reversing_draft')
+                                - confirmFxReversing(db, tenantId, revaluationId) → confirmManualEntry
+                                  (reversing_je_id) → update แถว (status='reversing_confirmed')
+                                - voidFxPeriodRevaluationIfJeDeleted(db, tenantId, revaluationId) — mirror
+                                  resetFxGainLossNote ของเฟส 10a (0.14)
+                                - listFxPeriodRevaluations(db, tenantId, customerId) — เพื่อแสดงหน้ารายงาน
+                                  (โหลด live status ประกบด้วยเสมอ ไม่ใช่แค่ cache)
+                                - countOverdueUnconfirmedReversals(db, tenantId, customerId?, thresholdDays) (0.18)
+                                - isRevaluationOrReversingJeId(db, tenantId, id) → boolean (0.13, ใช้ที่
+                                  journal-entry/actions.ts server-side guard)
+
+app/chat-audit/accounting/
+  fx-revaluation/page.tsx        [ใหม่] หน้ารายงาน "ปรับปรุงอัตราแลกเปลี่ยนปลายงวด" ต่อลูกค้า — ตาราง
+                                    ยอดคงค้าง FX แยกตาม currency+entryType (เรียก loadOutstandingFxGroup ของ
+                                    ทุกสกุล/ทุกฝั่งที่ลูกค้ามีบิล FX ค้างอยู่) + ประวัติ fx_period_revaluations
+                                    เดิม (พร้อม live status)
+  fx-revaluation/FxRevaluationPanel.tsx [ใหม่] client component: ช่องกรอก period_end_date + closing_rate
+                                    (ต่อ currency/entry_type, ปุ่ม "ดึงอัตรา ธปท." 0.15) + ปุ่ม "สร้าง JV
+                                    ปรับปรุง" (disabled + ข้อความชัดเจนถ้า guard #1 ไม่ผ่าน) → แสดง JV draft
+                                    ที่สร้างแล้ว + ปุ่ม "ยืนยัน JV ปรับปรุง" → หลังยืนยันแสดง reversing JV
+                                    draft ที่สร้างอัตโนมัติ + ปุ่ม "ยืนยันรายการกลับรายการ" แยกต่างหาก
+  fx-revaluation/actions.ts      [ใหม่] server actions: createFxRevaluationDraftAction,
+                                    confirmFxRevaluationAction, confirmFxReversingAction — guard สโคปผ่าน
+                                    requireAccountingAccess+assertCustomerInScope เดิมทั้งหมด (0.17)
+  payments/actions.ts            [แก้] suggestFxGainLossNoteAction — เพิ่มเรียก
+                                    assertReversalConfirmedForPayment ก่อนคำนวณ/สร้าง JV (0.11 guard #2)
+  journal-entry/JournalEntryPanel.tsx [แก้] ซ่อนปุ่ม "ยืนยัน"/"ยกเลิกยืนยัน" generic + แสดงลิงก์ไปหน้า
+                                    fx-revaluation สำหรับ JE ที่เป็น revaluation_je_id/reversing_je_id ที่ยัง
+                                    ไม่จบ cycle (0.13, UI hint)
+  journal-entry/actions.ts       [แก้] confirmManualEntryAction/unconfirmManualEntryAction — เพิ่มเช็ค
+                                    isRevaluationOrReversingJeId ก่อนทำงานจริง → ปฏิเสธถ้าใช่ (0.13,
+                                    server-side บังคับจริง — defense-in-depth)
+  page.tsx                       [แก้] เพิ่ม badge "⚠️ มี JE กลับรายการ FX ค้างยืนยัน N รายการ (เกิน 7 วัน)"
+                                    ต่อลูกค้าที่มีรายการค้าง (0.18, เรียก countOverdueUnconfirmedReversals)
+
+tests/accounting/
+  fx-revaluation.test.ts         [ใหม่] outstandingFxForEntry ทุก branch (มี/ไม่มี payment, มี/ไม่มี CN/DN,
+                                    asOfDate ตัดพอดี) + unrealizedFxGainLoss เทียบ fx.ts::realizedFxGainLoss
+                                    ตรง ๆ (สูตรเดียวกัน) + buildRevaluationEntryInput/buildReversingEntryInput
+                                    สมดุลเสมอ (isBalanced) + เคส 3 งวดต่อเนื่องตรงย่อหน้า 29 (0.2) +
+                                    deriveLiveRevaluationStatus ทุก state รวม voided (0.14) +
+                                    assertNoPendingCycle/assertReversalConfirmedForPayment ทุกเคส (guard #1/#2)
+  bill-payments.test.ts          [แก้] เพิ่มเทสต์ billOutstanding(..., asOfDate) — ไม่ส่ง = ผลลัพธ์เดิมเป๊ะ
+                                    (regression บังคับ) · ส่ง asOfDate ตัดก่อน/หลัง payment ถูกต้อง
+  aging.test.ts                  [แก้] เพิ่มเทสต์ buildAgingReport ที่ asOfDate ย้อนหลังกว่า payment บางแถว
+                                    → ไม่ถูกหักออก (bug fix, 0.5) · เคสปกติ (payment ทั้งหมด ≤ asOfDate) →
+                                    ผลลัพธ์เหมือนก่อนแก้เป๊ะ (regression บังคับ)
+  credit-debit-notes.test.ts     [แก้] เพิ่มเทสต์ netFxAdjustmentByEntry ทุก docType/status/asOfDate
+  journal-entry-actions.test.ts  [แก้] เพิ่มเทสต์ confirm/unconfirm ปฏิเสธเมื่อ id ผูกกับ fx revaluation
+  payments-actions.test.ts       [แก้] เพิ่มเทสต์ guard #2 บล็อก/ไม่บล็อกตามเงื่อนไข payDate
+  fx-revaluation-actions.test.ts [ใหม่] guard สโคป + flow ครบ (สร้าง→ยืนยัน reval→ยืนยัน reversing)
+```
+
+### 1.1 Schema — migration 0091 (fx_period_revaluations)
+
+```sql
+-- เฟส 10b (docs/06-accounting-features-roadmap.phase10b-addition.md, 0.7) — unrealized FX revaluation
+--   ปลายงวด + auto-reversing เต็มรูป — ไม่แก้ bill_entries.fx_rate เลย (เข้ากันได้กับ 0.9 เฟส 10a ที่ล็อกไว้)
+
+create table if not exists public.fx_period_revaluations (
+  id                    uuid primary key default gen_random_uuid(),
+  tenant_id             uuid not null references public.tenants(id) on delete cascade,
+  customer_id           uuid not null references public.customers(id) on delete cascade,
+  -- ฝั่งบัญชี — 'sale' = ปรับปรุง AR (1140), 'purchase' = ปรับปรุง AP (2010) — ต้องแยกกันเสมอ (0.7)
+  entry_type            text not null check (entry_type in ('sale','purchase')),
+  currency              text not null check (currency ~ '^[A-Z]{3}$'),
+  period_end_date       date not null,
+  closing_rate          numeric(18,6) not null check (closing_rate > 0 and closing_rate <= 100000),
+  source                text not null check (source in ('bot','manual')),
+  outstanding_fx_amount numeric(14,2) not null,
+  unrealized_amount     numeric(14,2) not null,
+  revaluation_je_id     uuid references public.manual_journal_entries(id) on delete set null,
+  reversing_je_id       uuid references public.manual_journal_entries(id) on delete set null,
+  -- cache สำหรับ list/แสดงผลเร็วเท่านั้น — guard ต้องเช็ค live status เสมอ ไม่เชื่อคอลัมน์นี้ตรง ๆ (0.12)
+  status                text not null default 'reval_draft'
+                          check (status in ('reval_draft','reversing_draft','reversing_confirmed','voided')),
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  deleted_at            timestamptz
+);
+
+-- กันสร้างซ้อนทับงวดเดียวกันของกลุ่มเดียวกัน (0.14: voided ไม่ถูกนับ กันหลังลบ JE แล้วสร้างใหม่ไม่ได้)
+create unique index if not exists uq_fx_period_revaluations_group_period
+  on public.fx_period_revaluations (tenant_id, customer_id, entry_type, currency, period_end_date)
+  where deleted_at is null and status <> 'voided';
+
+create index if not exists idx_fx_period_revaluations_group_latest
+  on public.fx_period_revaluations (tenant_id, customer_id, entry_type, currency, period_end_date desc)
+  where deleted_at is null;
+
+create index if not exists idx_fx_period_revaluations_reval_je
+  on public.fx_period_revaluations (tenant_id, revaluation_je_id)
+  where deleted_at is null and revaluation_je_id is not null;
+create index if not exists idx_fx_period_revaluations_reversing_je
+  on public.fx_period_revaluations (tenant_id, reversing_je_id)
+  where deleted_at is null and reversing_je_id is not null;
+
+drop trigger if exists trg_fx_period_revaluations_updated on public.fx_period_revaluations;
+create trigger trg_fx_period_revaluations_updated before update on public.fx_period_revaluations
+  for each row execute function public.set_updated_at();
+
+alter table public.fx_period_revaluations enable row level security;
+drop policy if exists tenant_read on public.fx_period_revaluations;
+create policy tenant_read on public.fx_period_revaluations for select to authenticated
+  using (tenant_id = public.current_tenant_id());
+revoke all on public.fx_period_revaluations from anon;
+grant select on public.fx_period_revaluations to authenticated;
+grant all on public.fx_period_revaluations to service_role;
+
+notify pgrst, 'reload schema';
+```
+
+### 1.2 ตัวอย่างการแก้ `billOutstanding` (0.5) — เพิ่มพารามิเตอร์ท้ายสุด แบบ backward-compatible
+
+```ts
+// lib/accounting/bill-payments.ts (แก้)
+export function billOutstanding(
+  entry: Pick<PaymentEntryInfo, "lines">,
+  payments: Pick<BillPayment, "amount" | "payDate">[],   // ★ เพิ่ม "payDate" เข้า Pick (เดิมมีแค่ "amount")
+  netAdjustment = 0,
+  asOfDate?: string                                      // ★ ใหม่ — ไม่ส่ง = พฤติกรรมเดิม 100% (0.5)
+): number {
+  const net = billNetTotal(entry);
+  const eligible = asOfDate ? payments.filter((p) => p.payDate <= asOfDate) : payments;
+  const paid = round2(eligible.reduce((s, p) => s + numLocal(p.amount), 0));
+  return round2(net + numLocal(netAdjustment) - paid);
+}
+```
+(เปรียบเทียบ string วันที่รูปแบบ `YYYY-MM-DD` ด้วย `<=` ตรง ๆ ปลอดภัย เพราะเป็น ISO lexicographic order —
+pattern เดียวกับที่ `aging.ts::ageBucket` ใช้เทียบวันที่อยู่แล้วในไฟล์เดิม เพียงแต่ไฟล์นั้น parse เป็น epoch
+ก่อนเทียบเผื่อกัน edge case — ที่นี่ใช้ string compare ตรง ๆ ก็พอเพราะ format คงที่เสมอจาก DATE_RE ที่
+validate ไว้แล้วทุกจุดที่เขียนลง DB)
+
+---
+
+## 2) งานย่อยเรียงลำดับ (เฟส 10b)
+
+**Legend**: [โค้ดได้เลย] = ทำตามสเปกได้ทันที · [⚠️ FLAG] = ทำต่อได้เลยแต่ต้องแจ้งผู้ใช้ (ดูรายละเอียดในหมวด 0)
+
+เลขงาน: ต่อจากเฟส 9 (T100–T123) → เริ่มที่ **T124**
+
+### ส่วน BA — โครงพื้นฐาน: แก้ช่องโหว่ as-of-date + schema fx_period_revaluations
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T124** [โค้ดได้เลย] | Migration 0091 — ตาราง `fx_period_revaluations` + index + RLS | `0091_fx_period_revaluations.sql` | - | ⚠️ ก่อนสร้างไฟล์ `ls supabase/migrations/ \| sort -V \| tail -20` เช็ค 0090 ยังล่าสุดจริง (0.20); apply ไม่ error; insert แถวทดสอบ `entry_type='sale'`/`'purchase'` ผ่าน, ค่าอื่นถูกปฏิเสธ; `currency`/`closing_rate` รูปแบบผิดถูกปฏิเสธเหมือน 0079/0082 ของเฟส 10a; unique index กันสร้างซ้อนทับ (tenant,customer,entry_type,currency,period_end_date) ที่ status≠'voided' ทำงานถูกต้อง (insert ซ้ำถูกปฏิเสธ, แต่ insert ซ้ำหลัง mark เดิมเป็น 'voided' ผ่านได้); เทสต์เดิมทั้งหมดผ่าน |
+| **T125** [⚠️ FLAG — ดู 0.5] | `lib/accounting/bill-payments.ts` — `billOutstanding` เพิ่มพารามิเตอร์ `asOfDate?` (ท้ายสุด, optional) + ขยาย `payments` type ให้มี `payDate` · `listBillPayments`/`listBillPaymentsForEntries` เพิ่มพารามิเตอร์ `asOfDate?` filter query จริง (`.lte("pay_date", asOfDate)`) | `bill-payments.ts` | - | unit test: ไม่ส่ง `asOfDate` เข้าทั้ง 3 ฟังก์ชัน → ผลลัพธ์เหมือนก่อนแก้ **เป๊ะทุกกรณี** (regression บังคับ, เทียบ byte-ต่อ-byte กับเทสต์เดิมของเฟส 2/3/10a); ส่ง `asOfDate` ตัดก่อน/หลัง `payDate` ของ payment บางแถว → ผลลัพธ์กรองถูกต้อง; `toJournalLines`/`toJournalPosting`/`validatePaymentInput`/`recordBillPayment` **ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว** (grep ยืนยัน, 0.19) |
+| **T126** [โค้ดได้เลย] | `lib/accounting/aging.ts::buildAgingReport` — ส่ง `asOfDate` (ที่มีอยู่แล้วในพารามิเตอร์) เข้า `billOutstanding` ด้วย (เดิมไม่ส่ง — bug fix 0.5) · ขยาย type พารามิเตอร์ `paymentsByEntry` ให้มี `payDate` | `aging.ts` | T125 | unit test: เคสปกติ (payment ทุกแถว `payDate ≤ asOfDate` เสมอ, สถานการณ์จริงทั่วไป) → ผลลัพธ์ **เหมือนก่อนแก้เป๊ะ** (regression บังคับ); เคสตั้งใจ (payment บางแถว `payDate > asOfDate` — จำลองตั้งรายงานย้อนหลัง/payment วันที่อนาคต) → บิลนั้นไม่ถูกหัก payment ที่ยังไม่ถึงวันนั้นออก (bug fix ยืนยันได้จริง); เรียกจากหน้า `/ar-ap-aging` จริง → ยอดของลูกค้าที่ไม่มี payment วันที่ผิดปกติเลยไม่เปลี่ยนแม้แต่บาทเดียว |
+| **T127** [โค้ดได้เลย] | `lib/accounting/credit-debit-notes.ts` — เพิ่ม `netFxAdjustmentByEntry(notesByEntry, asOfDate?)` mirror `netAdjustmentByEntry` แต่สรุปจาก `line.fxAmount` (ไม่รวม VAT, 0.3) + กรอง `docDate ≤ asOfDate` เมื่อส่งมา | `credit-debit-notes.ts` | - | unit test: ทุก docType (credit_note ลบ/debit_note บวก) × status (confirmed คิด/draft=0) ครบเมทริกซ์ (mirror เทสต์เดิมของ `netAdjustmentByEntry`); บิลต้นทาง `currency=null` (ไม่มี `fxAmount`) → คืน 0 เสมอ (ไม่ throw); `noteSignedAdjustment`/`netAdjustmentByEntry` เดิม **ไม่ถูกแก้เลย** (ฟังก์ชันใหม่แยกต่างหาก, regression บังคับ) |
+| **T128** [โค้ดได้เลย] | เทสต์ครบส่วน BA: `bill-payments.test.ts`/`aging.test.ts`/`credit-debit-notes.test.ts` อัปเดตครบ | หลายไฟล์ | T124-T127 | `npm run test` ผ่านทั้งชุด BA |
+
+**Milestone เฟส 10b-BA**: ช่องโหว่ as-of-date ถูกปิดทั้งระบบ (aging/bill-payments) แบบ backward-compatible
+100% — schema พร้อมสำหรับ engine revaluation — ยังไม่มีการคำนวณ/สร้าง JV ปรับปรุงจริง (ส่วน BB ทำถัดไป)
+
+### ส่วน BB — engine fx-revaluation.ts + guard 2 จุด + flow สร้าง/ยืนยัน reval+reversing
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T129** [โค้ดได้เลย] | `lib/accounting/fx-revaluation.ts` (ใหม่) — ส่วน pure: `outstandingFxForEntry`, `unrealizedFxGainLoss` (re-export จาก `fx.ts::realizedFxGainLoss`), `buildRevaluationEntryInput`, `buildReversingEntryInput` | `fx-revaluation.ts` | T127 | unit test: `outstandingFxForEntry` ครบเคส (มี/ไม่มี payment, มี/ไม่มี CN/DN, ค่าติดลบ/0); `unrealizedFxGainLoss(entryType, fx, invoiceRate, closingRate)` ให้ผลลัพธ์ตัวเลขเดียวกับเรียก `fx.ts::realizedFxGainLoss` ตรง ๆ ทุกเคส (พิสูจน์ reuse จริง ไม่ใช่ copy สูตร); `buildRevaluationEntryInput`: unrealized>0 → Dr AR/AP-code / Cr gainLossCode ถูกทิศทาง, <0 → สลับถูกทิศทาง, =0 → คืน `null`; `isBalanced()` (import จาก `manual-journal.ts`) ผ่านเสมอทุกเคสที่ไม่ null; `buildReversingEntryInput`: สลับ debit↔credit ของทุกบรรทัดต้นฉบับเป๊ะ (ไม่คำนวณใหม่), `docDate` = วันถัดจาก `periodEndDate` ที่ส่งเข้าไปถูกต้อง (รวมเคสข้ามเดือน/ข้ามปี เช่น 2569-12-31→01-01-2570) |
+| **T130** [⚠️ FLAG — ดู 0.2] | ยืนยัน 3-งวดต่อเนื่องด้วยตัวเลขจริงตามตัวอย่าง 0.2 เป็น unit test แยกเฉพาะ (golden test) | `fx-revaluation.test.ts` | T129 | ทดสอบลำดับ: (1) สร้าง unrealized งวด 1 = +5,000 ด้วย `unrealizedFxGainLoss`, (2) สร้างบรรทัด reversing ด้วย `buildReversingEntryInput`, (3) คำนวณ realized งวด 2 ด้วย `fx.ts::realizedFxGainLoss` (ของเฟส 10a, ไม่แก้), (4) รวม P&L งวด 2 = reversal(−5,000) + realized(+10,000) = **+5,000 พอดี** ตรงกับสูตรอ้างอิงย่อหน้า 29 `(34.00−33.50)×10,000=5,000` เป๊ะ (assert เท่ากันทุกทศนิยม) — ต้องมี ≥2 เคสตัวเลขต่างชุด (ไม่ใช่แค่เคสในเอกสาร) เพื่อกันบังเอิญตรง |
+| **T131** [⚠️ FLAG — ดู 0.12] | `fx-revaluation.ts` ส่วน data layer: `deriveLiveRevaluationStatus`, `assertNoPendingCycle` (guard #1, 0.10), `assertReversalConfirmedForPayment` (guard #2, 0.11) | `fx-revaluation.ts` | T129, T124 | unit test (mock DB): `deriveLiveRevaluationStatus` คืนถูกทุก state รวม `voided` เมื่อ JE ที่ผูกไว้ถูก soft-delete (0.14); `assertNoPendingCycle`: ไม่มีรอบก่อนหน้า → ผ่าน, รอบก่อนหน้า live-status ≠ `reversing_confirmed`/`voided` → ปฏิเสธ, `periodEndDate` ใหม่ ≤ ของรอบล่าสุด → ปฏิเสธ (ลำดับเวลา); `assertReversalConfirmedForPayment`: ไม่มี cycle ที่เกี่ยวข้อง → ผ่าน, มี cycle แต่ reversing confirmed แล้ว (live) → ผ่าน, มี cycle reversing ยังไม่ confirm และ `payDate ≥` วันเริ่มงวดใหม่ → ปฏิเสธ, `payDate <` วันเริ่มงวดใหม่ (ชำระในงวดเดิม) → ผ่าน (ไม่บล็อก flow ปกติของเฟส 10a) |
+| **T132** [โค้ดได้เลย] | `fx-revaluation.ts` ส่วนที่เหลือ: `loadOutstandingFxGroup`, `createFxRevaluationDraft`, `confirmFxRevaluation`, `confirmFxReversing`, `voidFxPeriodRevaluationIfJeDeleted`, `listFxPeriodRevaluations`, `countOverdueUnconfirmedReversals`, `isRevaluationOrReversingJeId` | `fx-revaluation.ts` | T129-T131 | unit test: `createFxRevaluationDraft` เรียก guard #1 ก่อนเสมอ (mock ปฏิเสธถ้า guard ไม่ผ่าน — ไม่คำนวณ/ไม่ insert อะไรเลย); unrealized=0 → ปฏิเสธ "ไม่มีผลต่างอัตราแลกเปลี่ยนที่ต้องปรับปรุง" ไม่สร้าง JV เปล่า (mirror T90 เฟส 10a); สำเร็จ → insert แถวสถานะ `reval_draft` + JV draft ผูกถูกต้อง; `confirmFxRevaluation`: reval JE ยัง unbalanced/ถูกลบ → ปฏิเสธ (reuse error จาก `confirmManualEntry` เดิมตรง ๆ), สำเร็จ → สร้าง reversing JV draft ใหม่ (บรรทัดสลับ debit/credit ถูกต้องตาม T129) + อัปเดตแถวเป็น `reversing_draft`; `confirmFxReversing`: สำเร็จ → อัปเดตแถวเป็น `reversing_confirmed`; `countOverdueUnconfirmedReversals`: นับถูกเฉพาะที่เกิน threshold วันจริงและยังไม่ confirm (live) |
+| **T133** [โค้ดได้เลย] | `app/chat-audit/accounting/fx-revaluation/actions.ts` (ใหม่) — `createFxRevaluationDraftAction`, `confirmFxRevaluationAction`, `confirmFxReversingAction` guard สโคปผ่าน `requireAccountingAccess`+`assertCustomerInScope` เดิม (0.17) | `actions.ts` | T132 | unit test: นักบัญชีนอกสโคปเรียกกับลูกค้าอื่น → ปฏิเสธ (guard เดิม); ทุก action ส่งต่อ error message จาก `fx-revaluation.ts` ตรง ๆ ไม่ swallow |
+| **T134** [โค้ดได้เลย] | `app/chat-audit/accounting/fx-revaluation/page.tsx` + `FxRevaluationPanel.tsx` (ใหม่) — ตารางยอดคงค้าง FX ต่อ currency/entry_type + ฟอร์มสร้าง JV ปรับปรุง (closing_rate + ปุ่มดึงอัตรา ธปท., 0.15) + ปุ่มยืนยัน reval/reversing แยกกัน | 2 ไฟล์ | T133 | เปิดหน้าจริงของลูกค้าที่มีบิล FX ค้างอยู่ (จากเฟส 10a) → เห็นยอดคงค้าง FX ถูกต้อง (ไม่รวม VAT, ตรงกับ 0.3) → กรอก closing_rate → สร้าง JV ปรับปรุง → เห็น draft ที่หน้านี้ (ไม่ใช่หน้า journal-entry ทั่วไป) → กดยืนยัน → เห็น reversing JV draft ใหม่ปรากฏทันที (0.9) → กดยืนยัน reversing → สถานะเปลี่ยนเป็น "เสร็จสมบูรณ์"; ลองสร้าง JV ปรับปรุงงวดถัดไปก่อน confirm reversing งวดนี้ → ปุ่มถูก disable/ปฏิเสธ พร้อมข้อความชัดเจน (guard #1) |
+| **T135** [⚠️ FLAG — ดู 0.11] | `app/chat-audit/accounting/payments/actions.ts::suggestFxGainLossNoteAction` — เพิ่มเรียก `assertReversalConfirmedForPayment` ก่อนคำนวณ/สร้าง JV (guard #2) | `payments/actions.ts` | T131 | unit test: payment ที่ไม่มี cycle เกี่ยวข้องเลย → ทำงานปกติเหมือนก่อนเฟสนี้ (regression บังคับ); payment ที่ `payDate` อยู่ในงวดใหม่ที่ reversing ยังไม่ confirm → ปฏิเสธพร้อมข้อความชัดเจน + ลิงก์; payment ที่ `payDate` ก่อนวันเริ่มงวดใหม่ (ชำระในงวดเดิม) → ไม่ถูกบล็อกเลย |
+| **T136** [โค้ดได้เลย] | เทสต์ครบส่วน BB: `fx-revaluation.test.ts`, `fx-revaluation-actions.test.ts`, อัปเดต `payments-actions.test.ts` | หลายไฟล์ | T129-T135 | `npm run test` ผ่านทั้งชุด BB |
+
+**Milestone เฟส 10b-BB**: นักบัญชีสร้าง/ยืนยัน JV ปรับปรุงอัตราแลกเปลี่ยนปลายงวดได้จริงผ่านหน้าเฉพาะ ระบบสร้าง
+reversing draft ให้อัตโนมัติทันทีที่ยืนยัน — guard ทั้ง 2 จุดทำงานจริง ป้องกัน double-count ได้ — ยังไม่ล็อก
+ปุ่ม generic ที่หน้า journal-entry ทั่วไป (ส่วน BC ทำถัดไป)
+
+### ส่วน BC — ล็อกปุ่ม generic + dashboard badge + ปิดงาน
+
+| รหัส | สิ่งที่ต้องทำ | ไฟล์ | ขึ้นกับ | เกณฑ์เสร็จ (DoD) |
+|---|---|---|---|---|
+| **T137** [⚠️ FLAG — ดู 0.13] | `journal-entry/actions.ts::confirmManualEntryAction`/`unconfirmManualEntryAction` — เพิ่มเช็ค `isRevaluationOrReversingJeId` ก่อนทำงานจริง → ปฏิเสธถ้าใช่ (server-side บังคับจริง) | `journal-entry/actions.ts` | T132 | unit test: JE ปกติ (ไม่เกี่ยว FX เลย) → confirm/unconfirm ทำงานเหมือนเดิมทุกประการ (regression บังคับ); JE ที่เป็น `revaluation_je_id`/`reversing_je_id` ของแถวที่ยัง `deleted_at is null` → ปฏิเสธพร้อมข้อความชี้ไปหน้า fx-revaluation; แถวที่ `voided` แล้ว (JE ถูกลบไปแล้ว) → ไม่ถูกนับว่าเป็นข้อจำกัดอีก (คืน false, ปล่อยผ่านปกติ — เพราะไม่มีอะไรให้ปกป้องอีกต่อไป) |
+| **T138** [โค้ดได้เลย] | `journal-entry/JournalEntryPanel.tsx` — ซ่อนปุ่ม "ยืนยัน"/"ยกเลิกยืนยัน" generic + แสดงลิงก์ไปหน้า fx-revaluation สำหรับ JE ที่เกี่ยวข้อง (UI hint คู่กับ T137) | `JournalEntryPanel.tsx` | T137 | เปิดหน้า journal-entry ของลูกค้าที่มี JV ปรับปรุง FX ค้างอยู่ → เห็นปุ่มยืนยัน/ยกเลิกยืนยันของ 2 ใบนั้นถูกซ่อน/disable พร้อมลิงก์ชัดเจน → JV อื่นทั้งหมด (ไม่เกี่ยว FX) ปุ่มทำงานปกติเหมือนก่อนเฟสนี้ (regression) |
+| **T139** [โค้ดได้เลย] | `app/chat-audit/accounting/page.tsx` — เพิ่ม badge เตือน reversing ค้างยืนยันเกิน 7 วัน (0.18) | `page.tsx` | T132 | เปิดหน้าแรกงานบัญชีของลูกค้าที่มี reversing ค้างเกิน 7 วัน → เห็น badge ข้อความ+จำนวนถูกต้อง พร้อมลิงก์ไปหน้า fx-revaluation; ลูกค้าที่ไม่มีรายการค้างเลย/ยังไม่ครบ 7 วัน → ไม่เห็น badge (regression, หน้าตาเหมือนก่อนเฟสนี้) |
+| **T140** [โค้ดได้เลย] | เพิ่มลิงก์หน้า `page.tsx`/`CustomerTabs.tsx` ไปหน้า fx-revaluation ใหม่ + เทสต์ครบส่วน BC: `journal-entry-actions.test.ts` | หลายไฟล์ | T137-T139 | `npm run test` ผ่านทั้งชุด BC; เปิดหน้าใหม่จากเมนู/แท็บได้จริงไม่ต้องพิมพ์ URL เอง |
+| **T141** [โค้ดได้เลย] | regression sweep ข้ามทุกเฟส 1-10b — grep ยืนยัน `journal.ts`/`ledger.ts`/`trial-balance.ts`/`financial-statements.ts`/`cash-flow.ts`/`formal-statements.ts`/`fx.ts`/`manual-journal.ts` (ตรรกะภายใน)/`bill-payments.ts::toJournalLines/toJournalPosting` **ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว** (0.19) | T124-T140 | ทุกหน้า `/chat-audit/accounting/*` เดิมเปิดได้ปกติไม่ error; ยอด/รายงาน/งบการเงินของลูกค้าที่**ไม่มี**บิล FX เลยหรือ**ไม่เคย**ทำ revaluation ไม่เปลี่ยนแม้แต่สตางค์เดียวจากก่อนเฟส 10b; เทสต์เดิมของเฟส 1-10a ทั้งหมดยังผ่าน |
+| **T142** [โค้ดได้เลย] | รันชุดตรวจสอบเต็ม + ทดสอบมือรอบสุดท้ายก่อน merge/deploy | T124-T141 | `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด ไม่มี error/warning ใหม่; smoke test มือครบ flow เดียว (ต่อจากบิล FX ของเฟส 10a): ปิดงวด 1 → สร้าง+ยืนยัน JV ปรับปรุง → เห็น reversing draft → **ลองแนะนำ realized FX ของ payment งวดใหม่ก่อนยืนยัน reversing → ต้องถูกบล็อก** (guard #2 ยืนยันจริงบน dev) → ยืนยัน reversing → แนะนำ realized ได้ปกติ → **ลองสร้าง JV ปรับปรุงงวดถัดไปตอนที่ reversing งวดนี้ยังไม่ confirm (ย้อนกลับไปทดสอบก่อนขั้นก่อนหน้า) → ต้องถูกบล็อก** (guard #1) → เปิดงบทดลอง/งบการเงินเห็นยอด 4025/1140/2010 ถูกต้องครบทุกขั้น |
+
+**Milestone เฟส 10b-BC**: ระบบปิดช่องทางเลี่ยง guard ทั้งหมด (ทั้ง UI และ server-side) — dashboard เตือนงานค้าง
+ชัดเจน — ฟีเจอร์ FX revaluation ปลายงวดพร้อมใช้งานจริงครบวงจร ไม่กระทบฟีเจอร์เดิมของเฟส 1-10a แม้แต่จุดเดียว
+
+---
+
+## 3) Definition of Done (เฟส 10b รวม)
+
+- [ ] นักบัญชีดูยอดคงค้าง FX (ก่อน VAT) ต่อลูกค้า/สกุลเงิน/ฝั่งบัญชี (AR หรือ AP แยกกัน) ได้ถูกต้องจากหน้า
+      fx-revaluation ใหม่ (0.3/0.4)
+- [ ] สร้าง JV ปรับปรุงอัตราแลกเปลี่ยนปลายงวดได้ (กรอก/ดึงอัตราปิด ธปท. best-effort, 0.15) — ยังคง **draft
+      เสมอ** ให้นักบัญชีตรวจ/ยืนยันเอง (never-auto-confirm, 0.1/0.9)
+- [ ] ยืนยัน JV ปรับปรุงแล้ว ระบบสร้าง **reversing JV เป็น draft ทันที** (ไม่รอวันจริง) ด้วยวันที่/ยอดถูกต้อง
+      ตรงกับบรรทัดต้นฉบับสลับ debit/credit เป๊ะ (0.9)
+- [ ] **Guard #1**: ห้ามสร้าง JV ปรับปรุงงวดถัดไปของ (ลูกค้า+สกุลเงิน+ฝั่งบัญชี) เดียวกัน ถ้ารอบก่อนหน้ายังไม่
+      ยืนยัน reversing สมบูรณ์ (เช็ค live status จริง ไม่ใช่ cache) — ถูกปฏิเสธจริงเมื่อทดสอบ (0.10/0.12)
+- [ ] **Guard #2**: ห้าม "แนะนำ realized FX gain/loss" (ฟีเจอร์เดิมเฟส 10a) สำหรับ payment ที่เกิดในงวดใหม่
+      ถ้า reversing ของงวดนั้นยังไม่ confirm — ถูกปฏิเสธจริงเมื่อทดสอบ (0.11/0.12)
+- [ ] ตัวเลขที่คำนวณได้ตรงกับย่อหน้า 29 TAS 21 เป๊ะทุกบาท เมื่อทดสอบ ≥ 2 ชุดตัวเลขต่อเนื่อง 2-3 งวด (0.2/T130)
+- [ ] ปุ่มยืนยัน/ยกเลิกยืนยัน generic ที่หน้า journal-entry ทั่วไปใช้กับ JV ปรับปรุง/reversing ไม่ได้ (ทั้ง UI
+      และ server-side, 0.13) — JV อื่นทั้งหมดไม่ถูกกระทบ
+- [ ] Dashboard แสดง badge เตือนเมื่อมี reversing ค้างยืนยันเกิน 7 วัน (0.18)
+- [ ] `journal.ts`/`ledger.ts`/`trial-balance.ts`/`financial-statements.ts`/`cash-flow.ts`/
+      `formal-statements.ts`/`fx.ts` และตรรกะภายใน `manual-journal.ts` (`isBalanced`/`toJournalLines`/
+      `toJournalPosting`/`upsertManualEntry`/`confirmManualEntry`/`unconfirmManualEntry`) และ
+      `bill-payments.ts::toJournalLines/toJournalPosting` **ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว** (0.19 — grep
+      ยืนยันก่อนปิดงาน)
+- [ ] `billOutstanding`/`listBillPayments`/`listBillPaymentsForEntries`/`buildAgingReport` เมื่อไม่ส่ง
+      `asOfDate` (หรือลูกค้าไม่มี payment วันที่ผิดปกติ) ให้ผลลัพธ์**เหมือนก่อนเฟสนี้ 100%** (0.5, regression)
+- [ ] ไม่มีทางสร้าง JV ปรับปรุง/reversing ที่ `unrealizedAmount = 0` ได้ (ไม่มี JV เปล่าไร้ความหมาย)
+- [ ] JE ที่ผูกกับ fx revaluation ถูกลบไปแล้ว (soft-delete) → กลุ่มนั้นกลับมาสร้างรอบใหม่ของงวดเดิมได้อีกครั้ง
+      ไม่ถูกล็อกค้างถาวร (0.14)
+- [ ] ทุก write path ใหม่ผ่าน `requireAccountingAccess` + `assertCustomerInScope` (0.17, ไม่ซ้ำ IDOR ที่เคย
+      พบเฟส 3)
+- [ ] ไม่มี `console.log`/log ใดที่มีตัวเลข/อัตราแลกเปลี่ยน/ชื่อลูกค้า (PDPA)
+- [ ] ไม่มี mock/stub ปนอยู่ใน critical flow ของโค้ด production
+- [ ] เทสต์เดิมของเฟส 1-10a ทั้งหมดยังผ่านหลังเพิ่มตาราง/ไฟล์ใหม่ (ไม่มี regression ข้ามเฟส)
+- [ ] `npm run typecheck && npm run lint && npm run test && npm run build` ผ่านทั้งหมด ไม่มี error/warning ใหม่
+
+---
+
+## 4) แนวทางการทดสอบ (สำหรับ tester)
+
+### 4.1 Unit test
+
+**`fx-revaluation.ts` (T129-T132) — หัวใจของเฟสนี้:**
+- `outstandingFxForEntry`: ครบเคส (ไม่มี payment เลย, มี payment บางส่วน, มี payment เกินยอด (ไม่ควรเกิดจาก
+  flow ปกติ — defensive), มี CN/DN fx signed adjustment, asOfDate ตัดพอดีวันเดียวกับ payment/CN-DN)
+- `unrealizedFxGainLoss` **ต้องเทียบผลลัพธ์กับ `fx.ts::realizedFxGainLoss` ที่เรียกด้วยพารามิเตอร์เดียวกัน
+  ทุกเคส** (import ทั้งสองมาเทียบตรง ๆ ในเทสต์ — พิสูจน์ reuse จริงไม่ใช่ copy สูตรที่อาจ drift ทีหลัง)
+- **golden test 3 งวดต่อเนื่อง (T130)** — ต้องมีอย่างน้อย 2 ชุดตัวเลขอิสระ (ไม่ใช่แค่ชุดในเอกสาร 0.2):
+  1. คำนวณ unrealized งวด 1 (invoice rate → closing rate 1)
+  2. สร้าง reversing (สลับ debit/credit)
+  3. คำนวณ realized งวด 2 ตามสูตรเดิมเฟส 10a (invoice rate → settlement rate)
+  4. รวม P&L งวด 2 = `−unrealized_งวด1 + realized_งวด2` ต้อง**เท่ากับ**
+     `fxAmount × (settlementRate − closingRate_งวด1)` เป๊ะ (สูตรอ้างอิงย่อหน้า 29 — ผลต่างเฉพาะช่วงที่เกิด
+     จริงในงวดที่จ่าย) ทุกชุดตัวเลข
+- `deriveLiveRevaluationStatus`: ครบ 4 state (`reval_draft`/`reversing_draft`/`reversing_confirmed`/
+  `voided`) รวมเคส reval JE confirmed แต่ reversing_je_id ยังเป็น null (สถานะกึ่งกลางที่ไม่ควรเกิดถ้า flow
+  ถูกต้อง — defensive, ต้องมีค่าคืนที่นิยามชัดเจนไม่ throw)
+- `assertNoPendingCycle`/`assertReversalConfirmedForPayment`: ครบทุก branch ตามที่ระบุในตาราง T131
+
+**Regression บังคับ (`bill-payments.ts`/`aging.ts`/`credit-debit-notes.ts`, T125-T127):**
+- ทุกเทสต์เดิมของเฟส 2/3/10a เกี่ยวกับ `billOutstanding`/`listBillPayments`/`buildAgingReport`/
+  `netAdjustmentByEntry` ต้องผ่าน**ไม่เปลี่ยนแม้แต่ 1 ตัวอักษรของผลลัพธ์**เมื่อไม่ส่ง `asOfDate` ใหม่
+  (เทียบผลลัพธ์แบบ byte-ต่อ-byte กับก่อนแก้)
+
+**Actions (`fx-revaluation-actions.test.ts`/`payments-actions.test.ts`/`journal-entry-actions.test.ts`):**
+- guard สโคป: นักบัญชีนอกสโคปทำรายการ FX revaluation ของลูกค้าอื่นไม่ได้
+- guard #1/#2 ถูกเรียกจริงจาก action layer (ไม่ใช่แค่ pure function มีแต่ไม่ถูกเรียกใช้จริง)
+- `confirmManualEntryAction`/`unconfirmManualEntryAction`: ปฏิเสธ JE ที่ผูก fx revaluation, ผ่านปกติสำหรับ
+  JE อื่นทั้งหมด (regression บังคับ)
+
+### 4.2 Integration/manual (บน dev จริง — ทำต่อเนื่องกันเป็น flow เดียว ต่อจากบิล FX ของเฟส 10a)
+
+1. เตรียมข้อมูล: บิลขาย USD (จากเฟส 10a) ที่ยังค้างชำระบางส่วน (มี fx_amount คงค้างจริง)
+2. เปิดหน้า fx-revaluation ของลูกค้านั้น → เห็นยอดคงค้าง FX (USD, ฝั่ง sale) ถูกต้อง (ตรวจเทียบเลขมือ — ไม่รวม
+   VAT)
+3. กรอก period_end_date + closing_rate (หรือกดดึงอัตรา ธปท. — ทดสอบทั้งกรณี fetch สำเร็จ/จำลอง fetch ล้ม) →
+   กด "สร้าง JV ปรับปรุง" → เห็น draft ที่หน้านี้ (**ไม่ปรากฏปุ่มยืนยัน generic ที่หน้า journal-entry ทั่วไป**
+   — ตรวจโดยเปิดหน้า journal-entry คู่ขนาน)
+4. กดยืนยัน JV ปรับปรุงที่หน้า fx-revaluation → เห็น reversing JV draft ใหม่ปรากฏทันที (วันที่ = วันแรกของ
+   งวดถัดไป, memo ชัดเจน) → เปิดงบทดลองเห็นบัญชี 4025/AR ปรับถูกต้องตามที่คำนวณ
+5. **ทดสอบ guard #1**: พยายามสร้าง JV ปรับปรุงงวดถัดไปทันที (ก่อนยืนยัน reversing ของงวดนี้) → ต้องถูกบล็อก
+   พร้อมข้อความชัดเจน ชี้ไปที่รายการที่ต้องยืนยันก่อน
+6. **ทดสอบ guard #2**: บันทึกรับเงินงวดใหม่ (payDate หลังวันเริ่มงวดใหม่) ของบิลเดียวกัน → กดปุ่ม "แนะนำ JV
+   กำไร/ขาดทุน FX" (ฟีเจอร์เดิมเฟส 10a) → ต้องถูกบล็อกพร้อมข้อความ + ลิงก์ไปยืนยัน reversing ก่อน
+7. กดยืนยัน reversing JV ที่หน้า fx-revaluation → สถานะเปลี่ยนเป็นเสร็จสมบูรณ์ → กลับไปทำข้อ 6 ซ้ำ → คราวนี้
+   ต้องทำงานได้ปกติ (ไม่ถูกบล็อกอีก) → เปิดงบทดลอง/งบกำไรขาดทุน เห็นยอด P&L รวมของงวด 2 ตรงกับสูตรย่อหน้า 29
+   ที่คำนวณด้วยมือ
+8. กลับไปหน้า fx-revaluation → ลองสร้าง JV ปรับปรุงงวดถัดไปอีกครั้ง (ตอนนี้ guard #1 ต้องผ่านแล้ว) → สำเร็จ
+9. ทดสอบ **rollback edge case (0.14)**: ลบ (soft-delete) JV ปรับปรุงที่ยังเป็น draft ผ่านหน้า journal-entry
+   ปกติ (ก่อนยืนยัน) → กลับไปหน้า fx-revaluation → แถวนั้นต้องแสดงเป็น "ยกเลิกแล้ว" และ **สร้างรอบใหม่ของงวด
+   เดียวกันได้อีกครั้ง** (ไม่ล็อกค้างถาวร)
+10. dashboard: เปิดหน้าแรกงานบัญชีของลูกค้าที่มี reversing ค้างยืนยันเกิน 7 วัน (ปรับ `created_at`/
+    `period_end_date` ในข้อมูลทดสอบให้เก่าพอ) → เห็น badge ถูกต้อง
+11. regression: เปิดทุกหน้าบัญชีเดิม (เฟส 1-10a) ของลูกค้าที่มีข้อมูลครบแต่**ไม่เคย**ทำ FX revaluation เลย →
+    ยอด/รายงาน/งบการเงิน/สมุดรายวันต้องเหมือนก่อนเฟส 10b ทุกตัวเลข
+12. staff นักบัญชีที่ไม่ได้ดูแลลูกค้า A → เปิดหน้า fx-revaluation ของลูกค้า A ไม่ได้/ทำรายการไม่ได้
+
+---
+
+## 5) ความเสี่ยงของแผน & แผนสำรอง
+
+| ความเสี่ยง | แผนสำรอง |
+|---|---|
+| **⚠️ ความเสี่ยงสูงสุดของแผนนี้ — double-count FX gain/loss ถ้า guard #1/#2 พลาดจุดใดจุดหนึ่ง: ทั้ง JV ปรับปรุง/reversing และ JV realized ต่าง `isBalanced()` ผ่านสมบูรณ์ในตัวเอง ทำให้ตรวจจับความผิดพลาดภายหลังยากมาก (ไม่มี error/exception ให้เห็น มีแต่ตัวเลขงบการเงินที่ผิดเงียบ ๆ)** | กันที่ต้นเหตุด้วย 2 ชั้น: (1) guard ทั้งสองจุดต้องเช็ค **live status ของ JE จริงเสมอ ไม่เชื่อ cache** (0.12) — เขียน `deriveLiveRevaluationStatus` เป็นจุดเดียวที่ทุก guard เรียกใช้ ไม่มีสูตรคู่ขนาน (2) golden test 3 งวดต่อเนื่อง ≥2 ชุดตัวเลข (T130) ที่ยืนยันผลรวมตรงย่อหน้า 29 เป๊ะ ต้องผ่านก่อนถือว่าเฟสเสร็จ (3) T142 (smoke test มือรอบสุดท้าย) บังคับทดสอบ "พยายามข้าม guard" ทั้ง 2 จุดจริงบน dev ก่อน merge เสมอ ไม่ใช่แค่เชื่อ unit test |
+| **status drift จาก `unconfirmManualEntryAction` ทั่วไป — นักบัญชี unconfirm reversing JV ที่เคยยืนยันแล้ว (หลังจากมีการแนะนำ realized ของงวดใหม่ไปแล้วบางส่วนโดยอาศัย guard ที่เคยผ่าน) ทำให้ GL ไม่ตรงกับสมมติฐานของ realized ที่คำนวณไปแล้วย้อนหลัง** | T137 ล็อกไม่ให้ unconfirm ผ่านช่องทาง generic ได้เลยสำหรับ JE ที่ผูก fx revaluation (ทั้ง client+server) — ปิดช่องทางที่จะทำให้เกิด drift นี้ตั้งแต่ต้น (ไม่ใช่แค่ตรวจจับทีหลัง); ถ้าจำเป็นต้องแก้ไข reversing จริง ๆ (พบข้อผิดพลาดหลังยืนยันแล้ว) ต้องทำผ่านกระบวนการ "กลับรายการด้วยมือ" ตามมาตรฐานเดิมทั้งระบบ (สร้าง JV ปรับปรุงแก้ไขแยกต่างหาก ไม่ใช่ unconfirm ของเดิม) — เอกสารขั้นตอนนี้ไว้ใน memo ของ JV |
+| **การรวมยอดหลายบิลเป็น JV เดียว (aggregate ต่อ customer+currency+entryType) — ถ้าบิลใดบิลหนึ่งในกลุ่มมี `bill_entries.fx_rate` ผิด (พิมพ์ผิดตอนบันทึกบิล, แก้ไม่ได้แล้วเพราะถูกล็อกตาม 0.9 เฟส 10a) จะทำให้ยอด revaluation รวมทั้งกลุ่มผิดไปด้วย โดยหาสาเหตุยาก (ไม่รู้ว่าบิลไหนในกลุ่มที่ผิด)** | หน้า fx-revaluation (T134) แสดง **breakdown รายบิล** ที่ประกอบเป็นยอดรวม (แม้ JV ที่ post จริงจะเป็นยอดรวมเดียว) ให้นักบัญชีตรวจสอบก่อนกดยืนยันเสมอ — ไม่ post แบบ "เชื่อยอดรวมเฉย ๆ ไม่โชว์ที่มา" |
+| **ปัดเศษ (`round2`) สะสมข้ามหลายบิลในกลุ่มเดียวกัน อาจทำให้ `buildRevaluationEntryInput` ไม่สมดุลเล็กน้อย** | รวมยอด `outstandingFxAmount`/`unrealizedAmount` **ก่อน** ปัดเศษครั้งเดียวตอนสุดท้าย (ไม่ปัดเศษราย บิลแล้วบวกกัน) + reuse `round2` ตัวเดียวกับ `queries.ts`/`fx.ts` (ไม่มีสูตรปัดเศษคู่ขนาน) + unit test เทียบกับ `isBalanced()` ตรง ๆ ทุกเคส (mirror แนวทางเฟส 10a) |
+| **`period_end_date` เป็นแค่ date เดี่ยว ๆ ที่นักบัญชีเลือกเอง (0.6) — เสี่ยงเลือกวันผิด/ไม่ตรงกับงวดบัญชีจริงของกิจการ (เช่น เผลอเลือกสิ้นเดือนผิดเดือน)** | ยอมรับความเสี่ยงนี้ตามสโคปที่ตั้งใจ (ไม่ทำระบบปิดงวดเต็มรูป) — mitigate ด้วย UI แสดงยืนยันวันที่ชัดเจนก่อนสร้าง + guard #1 (ลำดับเวลาต้องต่อเนื่อง, 0.8) อย่างน้อยกันสร้างซ้อนทับ/ย้อนหลังผิดลำดับได้ในระดับหนึ่ง — ถ้าต้องการ fiscal-period lock เต็มรูปในอนาคต เป็นโปรเจกต์แยก (ไม่ใช่สโคปเฟสนี้) |
+| **หน้า fx-revaluation ใหม่ต้อง query รวมยอดข้ามหลายตาราง (`bill_entries`+`bill_entry_lines`+`bill_payments`+`credit_debit_notes`) ต่อ currency/entry_type — เสี่ยง performance ถ้าลูกค้ามีบิล FX สะสมมาก** | reuse `chunkIds`/pattern `LIST_LIMIT` เดิมทั้งหมด (ไม่มี query ใหม่ที่ไม่มีเพดาน) — ขอบเขตข้อมูลจริง (บิล FX ต่อลูกค้าต่อสกุลเงิน) เล็กกว่าที่เฟส 8 (สต็อกสินค้า) เจอมากอยู่แล้วในทางปฏิบัติ ไม่ใช่จุดเสี่ยงสูง |
+| **จำนวน call site ที่ต้องแก้ให้ตรงกัน (`payments/actions.ts`/`journal-entry/actions.ts`/`journal-entry/JournalEntryPanel.tsx`/`page.tsx`) เสี่ยง gap แบบที่เจอซ้ำทุกเฟส** | grep ยืนยันครบก่อนปิดงาน (T141) เหมือนที่ T98/T122 ของเฟสก่อนหน้าทำสำเร็จมาแล้วทุกครั้ง |
+
+---
+
+*(เฟส 10b เป็นฟีเจอร์เพิ่มหลังเฟส 10a — ทำตาม pattern เดียวกัน: implement → QC (review+security+test) → แก้ไข
+ทุกข้อที่พบ → verify เต็มรูป (โดยเฉพาะ golden test ย่อหน้า 29 + smoke test guard ทั้ง 2 จุดจริงบน dev) →
+รวมเข้า branch → merge+deploy เมื่อผู้ใช้ยืนยัน)*
