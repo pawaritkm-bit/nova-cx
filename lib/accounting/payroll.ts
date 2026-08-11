@@ -17,8 +17,9 @@
  *   ถ้า `upsertManualEntry` ล้มเหลวหลัง claim สำเร็จ → revert สถานะกลับ 'draft' (compensating rollback,
  *   mirror `fixed-assets.ts::generateOne`)
  * ★ 0.7 Never-auto-confirm — JE ที่สร้างจากรอบเงินเดือนเป็น `draft` เสมอผ่าน `upsertManualEntry` เท่านั้น
- * ★★ 0.5 โบนัส [ปิดสวิตช์ชั่วคราว] — `bonus_amount > 0` ถูกปฏิเสธที่ชั้น validate ของไฟล์นี้ (ดูคอมเมนต์เต็ม
- *   ใน `payroll-tax.ts` ด้านบนไฟล์) จนกว่าจะ verify สูตรภาษีโบนัสกับตัวอย่างอ้างอิงที่เชื่อถือได้จริง (T112)
+ * ★★ 0.5 โบนัส — **verify แล้ว เปิดใช้งานจริง** (T112 เสร็จ) — `bonus_amount > 0` คำนวณภาษีผ่าน
+ *   `calcMonthlyPitWithBonus` (ป.96/2543 ข้อ 1(5), ดูคอมเมนต์เต็มใน `payroll-tax.ts` ด้านบนไฟล์) แทนการ
+ *   ปฏิเสธเหมือนรอบก่อน
  * ★ 0.2 ทุกจุดที่ query พนักงาน ใช้ `payroll-employees.ts` เท่านั้น — ไม่ import จาก accountant-scope.ts/
  *   employees ที่เป็นพนักงานภายใน Finovas ปนกันในไฟล์นี้เด็ดขาด
  * ★ ทุก query/write กรอง tenant_id + customer_id เสมอ — IDOR-safe (0.15) ทำที่ actions.ts ชั้นบนด้วย
@@ -38,7 +39,7 @@ import {
 } from "@/lib/accounting/manual-journal";
 import { getEffectivePitBrackets, getEffectiveSsoConfig } from "@/lib/accounting/payroll-config";
 import {
-  calcMonthlyPitForRegularIncome,
+  calcMonthlyPitWithBonus,
   calcSsoContribution,
   remainingPeriodsInYear,
   PERSONAL_ALLOWANCE_STANDARD,
@@ -50,10 +51,6 @@ type DB = SupabaseClient;
 
 export type PayrollRunStatus = "draft" | "finalized";
 export type PayrollFilingStatus = "not_filed" | "filed";
-
-/** ★★ [ปิดสวิตช์ชั่วคราว 0.5] — bonus_amount > 0 ยังไม่เปิดใช้งาน (ต้อง verify สูตรภาษีโบนัสก่อน, T112) */
-export const BONUS_DISABLED_MESSAGE =
-  "ฟีเจอร์คำนวณภาษีโบนัส/เงินได้ครั้งเดียว (ตามคำสั่งกรมสรรพากร ทป.4/2528) ยังไม่เปิดใช้งาน (รอ verify สูตรกับตัวอย่างคำนวณอ้างอิงที่เชื่อถือได้จริง) — กรุณากรอก 0 ไปก่อน";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const RUN_LIST_LIMIT = 500;
@@ -449,9 +446,9 @@ type ValidatedLineAmountEdit = {
 };
 
 /**
- * validate ยอดที่นักบัญชีแก้ต่อบรรทัด (0.13) — ★★ 0.5 ปฏิเสธ bonus_amount > 0 เสมอ (ปิดสวิตช์ชั่วคราว
- *   จนกว่าจะ verify สูตรภาษีโบนัส, T112) — ปฏิเสธทั้งชุดถ้าบรรทัดใดมี bonus > 0 (ไม่บันทึกบางบรรทัด
- *   บางบรรทัดไม่บันทึก กันสภาพข้อมูลครึ่ง ๆ กลาง ๆ)
+ * validate ยอดที่นักบัญชีแก้ต่อบรรทัด (0.13) — ★★ 0.5 bonus_amount > 0 เปิดใช้งานแล้ว (verify สูตรภาษี
+ *   โบนัสตามคำสั่งกรมสรรพากรที่ ป.96/2543 ข้อ 1(5) เสร็จแล้ว, T112) — คงเหลือแค่ตรวจว่าเป็นตัวเลขไม่ติดลบ
+ *   เหมือนช่องเงินอื่น ๆ ทุกประการ
  */
 function validateLineAmountEdits(
   edits: LineAmountEdit[]
@@ -465,7 +462,6 @@ function validateLineAmountEdits(
     if (additions === null || additions < 0) return { ok: false, message: "รายรับเพิ่มเติมต้องเป็นตัวเลขไม่ติดลบ" };
     const bonus = parseMoney(e.bonusAmount);
     if (bonus === null || bonus < 0) return { ok: false, message: "โบนัสต้องเป็นตัวเลขไม่ติดลบ" };
-    if (bonus > 0) return { ok: false, message: BONUS_DISABLED_MESSAGE };
     const deductions = parseMoney(e.otherDeductions);
     if (deductions === null || deductions < 0) return { ok: false, message: "รายการหักอื่น ๆ ต้องเป็นตัวเลขไม่ติดลบ" };
     out.push({ id: e.id, grossSalary: gross, otherAdditions: additions, bonusAmount: bonus, otherDeductions: deductions });
@@ -479,8 +475,9 @@ export type RecalcResult = { ok: true; lineCount: number } | { ok: false; messag
  * บันทึกยอดที่แก้ (ถ้ามี) แล้วคำนวณภาษีหัก ณ ที่จ่าย + ประกันสังคม + เงินเดือนสุทธิใหม่ทุกบรรทัดของรอบ
  *   (idempotent — เรียกซ้ำได้ตลอดตอน status='draft', เขียนทับค่าเดิมได้เสมอ, T114)
  *   ★ ปฏิเสธถ้ารอบ status='finalized' แล้ว (ล็อกแก้หลังสร้าง JE, T115)
- *   ★ grossThisPeriod ที่ annualize = gross_salary + other_additions (ไม่รวม bonus — 0.5 ยังปิดสวิตช์
- *   บังคับเป็น 0 อยู่แล้วจาก validateLineAmountEdits ด้านบน)
+ *   ★ grossThisPeriod ที่ annualize (สำหรับเงินได้ประจำ + ฐาน SSO) = gross_salary + other_additions
+ *   (ไม่รวม bonus — bonus คำนวณแยกเป็นเงินได้ครั้งเดียวผ่าน `calcMonthlyPitWithBonus`, 0.5, verify แล้ว/
+ *   เปิดใช้งานจริง)
  *   ★★ แก้บั๊ก QC เฟส 9: net_pay ไม่มี DB check constraint `>=0` และไม่มีชั้นไหนกันไว้มาก่อน — ถ้า
  *   other_deductions ที่นักบัญชีกรอกมากกว่ารายรับสุทธิของพนักงานคนนั้นจริง (gross+add+bonus−pit−sso_employee
  *   −other_deductions < 0) จะทำให้ net_pay ติดลบ แล้วภายหลัง buildPayrollJournalEntry ตัดบรรทัด Cr net_pay
@@ -551,9 +548,10 @@ export async function recalcRunLines(
   for (const raw of rawLines) {
     const amounts = mapLineAmounts(raw);
     const periodsPerYear = remainingPeriodsInYear(run.payDate, startDateByEmp.get(raw.payroll_employee_id) ?? null);
-    // ★ 0.5 ยังปิดสวิตช์โบนัส — grossThisPeriod ไม่รวม bonusAmount (การันตี = 0 อยู่แล้วจากชั้น validate)
+    // ★ grossThisPeriod (ฐาน annualize เงินได้ประจำ + ฐาน SSO) ไม่รวม bonusAmount เสมอ — bonus ถูกส่งเข้า
+    //   calcMonthlyPitWithBonus แยกเป็นพารามิเตอร์ของตัวเอง (0.5, verify แล้ว) ไม่ผสมเข้า grossThisPeriod
     const grossThisPeriod = round2(amounts.grossSalary + amounts.otherAdditions);
-    const pit = calcMonthlyPitForRegularIncome(grossThisPeriod, periodsPerYear, PERSONAL_ALLOWANCE_STANDARD, brackets);
+    const pit = calcMonthlyPitWithBonus(grossThisPeriod, amounts.bonusAmount, periodsPerYear, PERSONAL_ALLOWANCE_STANDARD, brackets).totalPit;
     const sso = calcSsoContribution(grossThisPeriod, ssoConfig);
     const netPay = round2(
       amounts.grossSalary + amounts.otherAdditions + amounts.bonusAmount - pit - sso.employeeContribution - amounts.otherDeductions

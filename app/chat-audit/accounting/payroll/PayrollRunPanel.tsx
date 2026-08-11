@@ -11,15 +11,14 @@ import {
   unmarkFiledAction,
 } from "./actions";
 import type { PayrollRun, PayrollRunLine } from "@/lib/accounting/payroll";
-import { BONUS_DISABLED_MESSAGE } from "@/lib/accounting/payroll";
 import { parseAmountInput, formatMoney } from "@/lib/accounting/calc";
 import SlipView from "./SlipView";
 
 /**
  * PayrollRunPanel — รายการรอบเงินเดือน + สร้างรอบใหม่ + ตารางบรรทัดต่อพนักงานของรอบที่เลือก (เฟส 9 ส่วน AD/AE)
  *
- * ★ 0.5 ช่องกรอกโบนัสถูกปิดใช้งาน (disabled, ค่าคงที่ 0) — รอ verify สูตรภาษีโบนัสกับตัวอย่างอ้างอิงที่
- *   เชื่อถือได้จริงก่อน (T112) — ดูคอมเมนต์เต็มใน lib/accounting/payroll-tax.ts
+ * ★ 0.5 ช่องกรอกโบนัสเปิดใช้งานแล้ว (verify สูตรภาษีโบนัสตามคำสั่งกรมสรรพากรที่ ป.96/2543 ข้อ 1(5) เสร็จแล้ว,
+ *   T112) — ดูคอมเมนต์เต็มใน lib/accounting/payroll-tax.ts (calcMonthlyPitWithBonus)
  * ★ 0.7/0.9 ปุ่ม "สร้างรายการบัญชี (JE)" สร้าง draft เสมอ + กันกดซ้ำสอง (server-side atomic claim)
  * ★ ล็อกแก้ไขยอด/คำนวณซ้ำหลังรอบ status='finalized' (มี JE แล้ว)
  */
@@ -38,7 +37,7 @@ function currentBuddhistYear(): number {
   return new Date().getFullYear() + 543;
 }
 
-type LineEditState = { grossSalary: string; otherAdditions: string; otherDeductions: string };
+type LineEditState = { grossSalary: string; otherAdditions: string; bonusAmount: string; otherDeductions: string };
 
 export default function PayrollRunPanel({
   customerId,
@@ -83,10 +82,18 @@ export default function PayrollRunPanel({
   const isFinalized = detail?.run.status === "finalized";
 
   const getEdit = (l: PayrollRunLine): LineEditState =>
-    edits[l.id] ?? { grossSalary: String(l.grossSalary), otherAdditions: String(l.otherAdditions), otherDeductions: String(l.otherDeductions) };
+    edits[l.id] ?? {
+      grossSalary: String(l.grossSalary),
+      otherAdditions: String(l.otherAdditions),
+      bonusAmount: String(l.bonusAmount),
+      otherDeductions: String(l.otherDeductions),
+    };
 
   const setEdit = (id: string, patch: Partial<LineEditState>) => {
-    setEdits((m) => ({ ...m, [id]: { ...(m[id] ?? { grossSalary: "", otherAdditions: "", otherDeductions: "" }), ...patch } }));
+    setEdits((m) => ({
+      ...m,
+      [id]: { ...(m[id] ?? { grossSalary: "", otherAdditions: "", bonusAmount: "", otherDeductions: "" }), ...patch },
+    }));
   };
 
   const totals = useMemo(() => {
@@ -114,7 +121,7 @@ export default function PayrollRunPanel({
         id: l.id,
         grossSalary: parseAmountInput(e.grossSalary),
         otherAdditions: parseAmountInput(e.otherAdditions),
-        bonusAmount: 0,
+        bonusAmount: parseAmountInput(e.bonusAmount),
         otherDeductions: parseAmountInput(e.otherDeductions),
       };
     });
@@ -277,7 +284,7 @@ export default function PayrollRunPanel({
                   <th>พนักงาน</th>
                   <th className="num">เงินเดือน/ค่าจ้าง</th>
                   <th className="num">รายรับเพิ่มเติม</th>
-                  <th className="num" title={BONUS_DISABLED_MESSAGE}>โบนัส (ปิดใช้งาน)</th>
+                  <th className="num" title="โบนัส/เงินได้ครั้งเดียว — ภาษีคำนวณตามคำสั่งกรมสรรพากรที่ ป.96/2543 ข้อ 1(5) หักเต็มจำนวนในงวดที่จ่ายจริง">โบนัส</th>
                   <th className="num">หักอื่น ๆ</th>
                   <th className="num">ภาษีหัก ณ ที่จ่าย</th>
                   <th className="num">ประกันสังคม (ลูกจ้าง)</th>
@@ -313,7 +320,14 @@ export default function PayrollRunPanel({
                         />
                       </td>
                       <td className="num">
-                        <input className="num" style={{ width: 70 }} value="0" disabled title={BONUS_DISABLED_MESSAGE} readOnly />
+                        <input
+                          className="num"
+                          inputMode="decimal"
+                          style={{ width: 90 }}
+                          disabled={!isDraft}
+                          value={e.bonusAmount}
+                          onChange={(ev) => setEdit(l.id, { bonusAmount: ev.target.value })}
+                        />
                       </td>
                       <td className="num">
                         <input

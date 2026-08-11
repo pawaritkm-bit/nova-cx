@@ -4425,17 +4425,29 @@ scope ด้วยทั้ง `tenant_id` **และ** `customer_id` เสม
 นับจากเดือนที่เริ่มงานถึงเดือนธันวาคม (ไม่ใช่ 12 คงที่) — **[⚠️ FLAG]** สูตรนี้อ้างอิงวิธีปฏิบัติที่พบทั่วไป
 ต้องให้นักบัญชีจริงยืนยันอีกรอบก่อนใช้กับลูกค้าจริงรายแรก (ไม่ใช่ blog summary)
 
-### 0.5 ⚠️ กรณีโบนัส/เงินได้ครั้งเดียว (คำสั่งกรมสรรพากร ทป.4/2528 ข้อ 3) — ต้อง verify ตัวอย่างจริงก่อนถือว่าเสร็จ
-สูตรที่ใช้ (ต้อง verify): คำนวณภาษีทั้งปี **โดยไม่รวมโบนัส** (ตาม 0.4) = `taxRegularOnly` → คำนวณภาษีทั้งปีอีกครั้ง
-โดยบวกโบนัสเข้า `annualEstimate` ก่อนหักลดหย่อน = `taxWithBonus` → ภาษีที่ต้องหักจากโบนัสงวดนี้ = `taxWithBonus
-− taxRegularOnly` (หักเต็มจำนวนในงวดนั้น **ไม่หารด้วย periodsPerYear**) → ภาษีรวมที่หักงวดนี้ = ภาษีเงินเดือน
-ปกติ (0.4, หารแล้ว) + ภาษีโบนัส (ไม่หาร) — **[⚠️⚠️ FLAG — ล็อกจากผู้ใช้ตรง ๆ]** ห้ามเขียน engine จริงจาก
-บทสรุปนี้เฉย ๆ **ต้องมี task แยก (T112) หาตัวอย่างคำนวณอ้างอิงที่เชื่อถือได้จริง** (เช่น เอกสารประกอบคำสั่ง
-ทป.4/2528 ฉบับเต็ม, ตัวอย่างจากหนังสือ/หลักสูตรบัญชีที่มีเลขอ้างอิงชัดเจน — ไม่ใช่บล็อกสรุปทั่วไป) มาทำเป็น
-golden test case ก่อนถือว่า T112 เสร็จ — ถ้าหาตัวอย่างที่เชื่อถือได้ไม่ทันก่อน deploy รอบนี้ ให้ตัดสินใจ ณ
-ตอนนั้นระหว่าง (ก) เลื่อน merge ทั้งเฟสจนกว่าจะยืนยันได้ หรือ (ข) ปิดสวิตช์ UI ช่องกรอกโบนัสไว้ก่อน
-(ใส่ `bonus_amount` ได้แต่ปฏิเสธ >0 ชั่วคราว) แล้วเปิด backlog 9b ทำต่อ — **ห้าม deploy engine โบนัสที่ยัง
-ไม่ verify ให้ใช้กับเงินจริงของลูกค้า**
+### 0.5 ✅ กรณีโบนัส/เงินได้ครั้งเดียว — verify แล้ว เปิดใช้งานจริงแล้ว (T112 เสร็จ, แก้บั๊ก QC รอบ
+`fix/accounting-payroll-bonus-pit` — ดูคอมเมนต์เต็มใน `lib/accounting/payroll-tax.ts::calcMonthlyPitWithBonus`)
+
+**แก้การอ้างอิงกฎหมายที่ผิดจากรอบก่อน**: เดิมโค้ด/เอกสารนี้อ้างอิง "ทป.4/2528 ข้อ 3" ว่าเป็นที่มาของสูตร —
+**ผิด** ทป.4/2528 ข้อ 3 จริง ๆ คือเรื่องหักภาษี ณ ที่จ่าย 0.75% สำหรับนิติบุคคลซื้อสินค้าเกษตร ไม่เกี่ยวกับ
+โบนัส/เงินเดือนเลย (ยืนยันจาก rd.go.th + วิกิซอร์ซ อิสระ 2 แหล่ง) — กฎหมายที่ถูกต้องคือ **คำสั่งกรมสรรพากรที่
+ป.96/2543 ข้อ 1(5)** เรื่อง "การคำนวณภาษีเงินได้บุคคลธรรมดาหัก ณ ที่จ่ายตามมาตรา 50(1) กรณีเงินได้พึงประเมิน
+ตามมาตรา 40(1)" ครอบคลุม "เงินได้พิเศษที่จ่ายเป็นครั้งคราวระหว่างปี เช่น ค่าล่วงเวลา เงินโบนัส"
+(rd.go.th/3558.html)
+
+สูตรที่ใช้ (verify แล้ว — golden test case ใน `tests/accounting/payroll-tax.test.ts`, อ้างอิงตัวอย่างคำนวณ
+จากเอกสารสอนบัญชีของมหาวิทยาลัยราชภัฏสุราษฎร์ธานี hiperc.sru.ac.th ที่จำลองตัวอย่างทางการของ ป.96/2543 ด้วย
+อัตรา/ค่าลดหย่อนปัจจุบันหลังปฏิรูป 2560 — ตรวจทานคณิตศาสตร์ภายในตัวเองแล้วถูกต้อง 100%): คำนวณภาษีทั้งปี
+**โดยไม่รวมโบนัส** (ตาม 0.4) = `taxRegularOnly` (A) → คำนวณภาษีทั้งปีอีกครั้งโดยบวกโบนัสเข้า
+`annualEstimate` ก่อนหักลดหย่อน (ใช้ชุดลดหย่อนเดียวกัน) = `taxWithBonus` (B) → ภาษีที่ต้องหักจากโบนัสงวดนี้
+= `B − A` (หักเต็มจำนวนในงวดนั้น **ไม่หารด้วย periodsPerYear**) → ภาษีรวมที่หักงวดนี้ = ภาษีเงินเดือนปกติ
+(0.4, หารแล้ว) + ภาษีโบนัส (ไม่หาร) — งวดอื่น ๆ ที่ไม่มีโบนัสไม่ถูกกระทบเลย (คำนวณอิสระทุกงวดตาม 0.4 เดิม)
+
+`calcMonthlyPitWithBonus(grossThisPeriod, bonusAmount, periodsPerYear, personalAllowance, brackets)` ใน
+`lib/accounting/payroll-tax.ts` reuse `expenseDeduction`/`calcAnnualTax`/`calcMonthlyPitForRegularIncome`
+ล้วน ไม่คำนวณภาษีก้าวหน้าซ้ำ — `lib/accounting/payroll.ts::recalcRunLines` เรียกฟังก์ชันนี้ตรง ๆ แทนการ
+ปฏิเสธ `bonus_amount > 0` เหมือนรอบก่อน, ช่องกรอกโบนัสใน `PayrollRunPanel.tsx` เปิดให้กรอกได้ปกติแล้ว
+(ไม่ disabled อีกต่อไป)
 
 ### 0.6 ประกันสังคม (มาตรา 33) — effective-dated config table ไม่ hardcode
 5%/5% (ลูกจ้าง/นายจ้าง), ฐานค่าจ้างขั้นต่ำ 1,650 บาท (floor), ฐานค่าจ้างเพดาน (ceiling) **เปลี่ยนตามเวลา**
@@ -4556,8 +4568,8 @@ lib/
     payroll-tax.ts           [ใหม่] ★ pure ล้วน — expenseDeduction(annualIncome),
                                     calcAnnualTax(taxableIncome, brackets), remainingPeriodsInYear
                                     (payDate, startDate) (0.4), calcMonthlyPitForRegularIncome(...) (0.4),
-                                    calcMonthlyPitWithBonus(...) [⚠️ FLAG ต้อง verify, 0.5],
-                                    calcSsoContribution(grossWage, config) (0.6)
+                                    calcMonthlyPitWithBonus(...) ✅ verify แล้ว/เปิดใช้งานจริง (0.5,
+                                    ป.96/2543 ข้อ 1(5)), calcSsoContribution(grossWage, config) (0.6)
     payroll.ts                [ใหม่] orchestrator: createDraftRun (prefill จาก payroll_employees active,
                                     ใช้ chunkIds ถ้า >150 คน), recalcRunLines (เรียก payroll-tax.ts ทุก
                                     บรรทัด, idempotent — เรียกซ้ำได้ตลอดตอน draft), listRuns/getRunWithLines,
@@ -4761,7 +4773,7 @@ notify pgrst, 'reload schema';
 | **T109** | Migration 0088 — `payroll_runs` + RLS (1.3, unique partial index 0.14) | `0088_payroll_runs.sql` | T101 | apply ไม่ error; สร้างรอบเดือน/ปีเดียวกันซ้ำ (ที่ยังไม่ลบ) → ถูกปฏิเสธ (unique); soft-delete แล้วสร้างใหม่เดือน/ปีเดียวกันได้ (unique เฉพาะแถวที่ยังไม่ลบ); เทสต์เดิมทั้งหมดผ่าน |
 | **T110** | Migration 0089 — `payroll_run_lines` + RLS (1.3) | `0089_payroll_run_lines.sql` | T109, T104 | apply ไม่ error; unique `(run_id, payroll_employee_id)` ทำงานถูกต้อง (กันบรรทัดซ้ำพนักงานเดียวกันในรอบเดียว); ลบ `payroll_runs`/`payroll_employees` ต้นทาง → บรรทัดถูกลบตาม (`on delete cascade`) ตามที่ตั้งใจ; เทสต์เดิมทั้งหมดผ่าน |
 | **T111** | `lib/accounting/payroll-tax.ts` — `expenseDeduction(annualIncome)`, `calcAnnualTax(taxableIncome, brackets)` (progressive, pure), `remainingPeriodsInYear(payDate, startDate)` (0.4), `calcMonthlyPitForRegularIncome(monthlyGross, periodsPerYear, personalAllowance, brackets)` | `payroll-tax.ts` | T100 | unit test: `expenseDeduction`: รายได้ต่อปี 100,000/200,000/1,000,000 → ได้ 50,000/100,000(cap)/100,000(cap); `calcAnnualTax`: เงินได้สุทธิที่ตกแต่ละขั้น (เช่น 140,000→0, 200,000→2,500, 400,000→17,500ตามสูตรสะสม) คำนวณถูกต้องทุกขั้น รวมขั้นสุดท้ายไม่มีเพดาน; `remainingPeriodsInYear`: พนักงานเข้าเก่ากว่าปีปัจจุบัน → 12 เสมอไม่ว่า pay_date เดือนไหน, เข้าใหม่เดือน ก.ค. ปีเดียวกับ pay_date → 6 (ก.ค.-ธ.ค.); `calcMonthlyPitForRegularIncome`: ตัวอย่างเงินเดือน 30,000/เดือน (=360,000/ปี) หักลดหย่อนมาตรฐานรวม 160,000 (ค่าใช้จ่าย100,000cap+ส่วนบุคคล60,000) เหลือ 200,000 → ภาษีปี 2,500 → ต่อเดือน 208.33 (ปัด 2 ตำแหน่ง) ตรงเป๊ะ |
-| **T112** | [⚠️⚠️ FLAG — ต้อง verify ก่อนถือว่าเสร็จ, 0.5] `payroll-tax.ts` — `calcMonthlyPitWithBonus(monthlyRegularGross, bonusThisPeriod, periodsPerYear, personalAllowance, brackets)` ตามคำสั่ง ทป.4/2528 ข้อ 3 | `payroll-tax.ts` | T111 | **ก่อนเขียน implementation จริง: หาตัวอย่างคำนวณอ้างอิงที่เชื่อถือได้จริง (เอกสารประกอบคำสั่ง ทป.4/2528 ฉบับเต็ม หรือแหล่งที่ระบุเลขอ้างอิงชัดเจน — ห้ามใช้บล็อกสรุปทั่วไป) → ใส่เป็น golden test case ใน `payroll-tax.test.ts` พร้อมคอมเมนต์อ้างอิงแหล่งที่มา → implement ให้ผลตรงกับตัวอย่างนั้นเป๊ะก่อนถือว่า T112 เสร็จ; ถ้าหาตัวอย่างที่เชื่อถือได้ไม่ทันตามกำหนดเวลาของรอบนี้ ให้หยุดที่ scope "เงินเดือนปกติเท่านั้น" (T111) ก่อน เปิด backlog 9b สำหรับโบนัส แล้วปฏิเสธ `bonus_amount > 0` ที่ชั้น validate ของ T110/UI ชั่วคราวจนกว่าจะ verify ได้จริง — ห้าม deploy สูตรที่ยังไม่ verify ให้ใช้กับเงินจริง** |
+| **T112** | ✅ [verify แล้ว/เปิดใช้งานจริง, 0.5] `payroll-tax.ts` — `calcMonthlyPitWithBonus(monthlyRegularGross, bonusThisPeriod, periodsPerYear, personalAllowance, brackets)` ตามคำสั่งกรมสรรพากรที่ **ป.96/2543 ข้อ 1(5)** (แก้จากรอบก่อนที่อ้างอิงผิดเป็น "ทป.4/2528 ข้อ 3") | `payroll-tax.ts` | T111 | golden test case ใน `payroll-tax.test.ts` เทียบตัวอย่างคำนวณจาก hiperc.sru.ac.th ที่จำลองตัวอย่างทางการของ ป.96/2543 ตรงเป๊ะ (A/B/bonusPit/totalPit) + edge case พนักงานเข้าใหม่กลางปีที่มีโบนัส + โบนัสที่ทำให้ยอดคาบเกี่ยวข้ามขั้นภาษี — `bonus_amount > 0` เปิดให้ใช้งานจริงแล้วทั้งที่ชั้น validate ของ `payroll.ts` และ UI (`PayrollRunPanel.tsx`) |
 | **T113** | `payroll-tax.ts` — `calcSsoContribution(grossWage, config)` (clamp floor/ceiling, employee/employer share, 0.6) | `payroll-tax.ts` | T100 | unit test: ค่าจ้างต่ำกว่า floor (1,650) → ใช้ floor เป็นฐาน; ค่าจ้างสูงกว่า ceiling → ใช้ ceiling เป็นฐาน (ทดสอบทั้ง config ceiling 15000 และ 17500); ค่าจ้างอยู่ระหว่าง floor-ceiling → ใช้ค่าจริง; ปัดเศษ 2 ตำแหน่งถูกต้องทุกกรณี |
 | **T114** | `lib/accounting/payroll.ts` — `createDraftRun` (prefill จาก `payroll_employees` active ทั้งหมด, ใช้ `chunkIds` ถ้า query มากกว่า 150 คน), `recalcRunLines` (เรียก T111-T113 ทุกบรรทัด, idempotent — เขียนทับค่า pit/sso/net เดิมได้ตลอดตอน `status='draft'`), `listRuns`/`getRunWithLines` | `payroll.ts` | T109-T113 | unit test: `createDraftRun` กับลูกค้าที่มีพนักงาน active 150+ คน (mock) → สร้างบรรทัดครบทุกคนไม่ตกหล่น, ใช้ query แบบ chunk ไม่ error; `recalcRunLines`: เรียกซ้ำ 2 ครั้งด้วยข้อมูล input เดียวกัน → ผลลัพธ์เหมือนกันเป๊ะ (deterministic); พนักงานที่ `resign_date`/`start_date` อยู่ในช่วงกลางเดือนของรอบ → ยังคำนวณได้ปกติ (ไม่ throw, gross_salary ที่นักบัญชีแก้เองแล้วถูกเคารพ 0.13) |
 | **T115** | `payroll.ts` — `buildPayrollJournalEntry(lines, settings)` (0.8, รวมยอดต่อรหัสบัญชี, ข้ามบรรทัดยอด 0, ปฏิเสธถ้า `other_deductions`>0 แต่ไม่มี `other_deductions_account_code`) + `generateRunJournalEntry(db, tenantId, customerId, runId)` (0.9 atomic claim ผ่าน `manual_entry_id`, เรียก `upsertManualEntry` **draft เสมอ** 0.7, set `status='finalized'`) | `payroll.ts` | T114 | unit test: บรรทัด 5 คน (ยอดต่าง ๆ กัน รวม `other_deductions`>0 บางคน) → JE ที่ได้ `isBalanced()` ผ่านเสมอ (import จาก `manual-journal.ts` เทียบตรง ๆ), จำนวนบรรทัด JE ไม่เกิน 6 บรรทัดไม่ว่าจะมีกี่คน (ทดสอบกับ 150 คน mock ยืนยัน constant); `other_deductions`>0 แต่ settings ไม่มีรหัสบัญชี → ปฏิเสธสร้าง JE พร้อมข้อความชัดเจน; เรียก `generateRunJournalEntry` ซ้ำ (จำลอง 2 request พร้อมกัน) → สร้างได้แค่ครั้งเดียว (claim atomic 0.9); รอบที่ `status='finalized'` แล้ว → `recalcRunLines`/แก้บรรทัดถูกปฏิเสธ (ล็อกหลังสร้าง JE) |
@@ -4801,8 +4813,8 @@ notify pgrst, 'reload schema';
       ไม่ค้าง/ไม่ timeout)
 - [ ] คำนวณภาษีหัก ณ ที่จ่าย (มาตรา 50, สูตร annualize) + ประกันสังคม (floor/ceiling ตามวันที่จ่ายจริง)
       ถูกต้องตรงกับตัวอย่างคำนวณมือทุกเคสทดสอบ
-- [ ] กรณีโบนัส/เงินได้ครั้งเดียว — **ถ้ายังไม่ผ่านการ verify กับตัวอย่างอ้างอิงจริง (T112) ห้ามเปิดให้กรอก
-      `bonus_amount`>0 ใช้กับลูกค้าจริง** (ต้องเลือก backlog 9b ชั่วคราวถ้าจำเป็น — ดู 0.5)
+- [x] กรณีโบนัส/เงินได้ครั้งเดียว — verify กับตัวอย่างอ้างอิงจริงแล้ว (T112, ป.96/2543 ข้อ 1(5)) เปิดให้กรอก
+      `bonus_amount`>0 ใช้กับลูกค้าจริงได้แล้ว (ดู 0.5)
 - [ ] สร้างรายการบัญชี (JE) ของทั้งรอบเป็น**ยอดรวม**ไม่เกิน ~6 บรรทัดไม่ว่าจะมีพนักงานเท่าไหร่ (0.8) เป็น
       **draft เสมอ** (0.7) — ไม่มีทาง auto-confirm
 - [ ] กดปุ่ม "สร้าง JE" ซ้ำ/สองแท็บพร้อมกัน → ไม่สร้าง JE ซ้ำสอง (atomic claim, 0.9)
@@ -4834,9 +4846,9 @@ notify pgrst, 'reload schema';
   ปีเดียวกับ pay_date → 6; เข้าเดือน ธ.ค. (เดือนสุดท้าย) → 1; เข้าเดือน ม.ค. → 12 (เท่ากับพนักงานเก่า)
 - `calcMonthlyPitForRegularIncome`: อย่างน้อย 5 เคสระดับเงินเดือนต่างกัน (ต่ำกว่าเกณฑ์เสียภาษี, กลางขั้น 5%,
   กลางขั้น 10%, ขั้นสูง) เทียบตัวเลขมือทุกเคส
-- `calcMonthlyPitWithBonus` (T112, ★★): **golden test จากตัวอย่างอ้างอิงจริงที่หาได้ (ต้องระบุแหล่งที่มาใน
-  คอมเมนต์เทสต์ชัดเจน)** — ถ้ายังหาไม่ได้ก่อนปิดงาน ห้ามมีเทสต์นี้ผ่านแบบ "เดาแล้วปรับให้ผ่าน" (นั่นไม่ใช่การ
-  verify) ต้องเป็นตัวเลขจากแหล่งอ้างอิงจริงเท่านั้น
+- `calcMonthlyPitWithBonus` (T112, ★★): ✅ golden test จากตัวอย่างอ้างอิงจริง (เอกสารสอนบัญชี
+  hiperc.sru.ac.th ที่จำลองตัวอย่างทางการของคำสั่งกรมสรรพากรที่ ป.96/2543 ข้อ 1(5)) เทียบ A/B/bonusPit/
+  totalPit ตรงเป๊ะ + edge case พนักงานเข้าใหม่กลางปีที่มีโบนัส + โบนัสข้ามขั้นภาษี
 - `calcSsoContribution`: floor/ceiling ทั้ง 2 ช่วงเวลา (15000 กับ 17500), ค่าจ้างระหว่าง floor-ceiling
 
 **`payroll.ts` (T114-T116):**
@@ -4877,7 +4889,7 @@ notify pgrst, 'reload schema';
 | ความเสี่ยง | แผนสำรอง |
 |---|---|
 | **สับสนระหว่าง `payroll_employees` (พนักงานลูกค้า) กับ `employees` เดิม (พนักงาน Finovas ภายใน)** — ความเสี่ยงสูงสุดของเฟสนี้ (0.2) ถ้าเผลอ join/query ผิดตารางจะรั่วข้อมูลข้าม tenant/ข้าม scope ร้ายแรง | ตั้งชื่อตัวแปร/ฟังก์ชันให้สะกดต่างชัดเจนตั้งแต่ต้น (`payrollEmployee` ไม่ใช่ `employee` เดี่ยว ๆ) + grep ยืนยันก่อนปิดงานทุก task ว่าไฟล์ใหม่ของเฟสนี้ import จาก `payroll-employees.ts` เท่านั้น ไม่มีจุดไหน query ตาราง `employees` ปนกับ `payroll_employees` ในไฟล์เดียวกันโดยไม่ตั้งใจ (ยกเว้น `pit_filed_by`/`sso_filed_by` ที่ตั้งใจ FK ไปยัง `employees` จริง เพราะเป็น "นักบัญชี Finovas ที่กดยืนยัน" ไม่ใช่พนักงานลูกค้า — ต้องมีคอมเมนต์กำกับจุดนี้ชัดเจนว่าทำไมถึงต่างจากตารางอื่นในเฟสนี้ที่ชี้ `payroll_employees`) |
-| **สูตร PIT/SSO ผิดตั้งแต่ต้นเพราะอ้างอิงจากความเข้าใจทั่วไปไม่ใช่ตัวอย่างคำนวณจริง — เกี่ยวข้องกับเงินจริงของพนักงานลูกค้า ผิดแล้วกระทบทั้งพนักงานและความน่าเชื่อถือของ Finovas ต่อกรมสรรพากร/สปส.** | golden test ทุกฟังก์ชันคำนวณเทียบตัวเลขอ้างอิงที่ระบุแหล่งที่มาในคอมเมนต์ (0.4/0.5) — โบนัส (T112) ห้าม deploy จนกว่าจะ verify ได้จริง (ทางเลือก backlog 9b ถ้าจำเป็นเร่งเวลา) — smoke test มือรอบสุดท้าย (T123) ต้องมีนักบัญชีจริงตรวจเลขซ้ำอีกชั้นก่อนเปิดใช้กับลูกค้าจริงรายแรก (ไม่ใช่แค่ unit test ผ่านแล้วถือว่าจบ) |
+| **สูตร PIT/SSO ผิดตั้งแต่ต้นเพราะอ้างอิงจากความเข้าใจทั่วไปไม่ใช่ตัวอย่างคำนวณจริง — เกี่ยวข้องกับเงินจริงของพนักงานลูกค้า ผิดแล้วกระทบทั้งพนักงานและความน่าเชื่อถือของ Finovas ต่อกรมสรรพากร/สปส.** | golden test ทุกฟังก์ชันคำนวณเทียบตัวเลขอ้างอิงที่ระบุแหล่งที่มาในคอมเมนต์ (0.4/0.5) — โบนัส (T112) verify แล้วกับตัวอย่างคำนวณจริงของคำสั่งกรมสรรพากรที่ ป.96/2543 ข้อ 1(5) ก่อนเปิดใช้งาน (แก้จากรอบก่อนที่อ้างอิงกฎหมายผิดเป็น "ทป.4/2528") — smoke test มือรอบสุดท้าย (T123) ต้องมีนักบัญชีจริงตรวจเลขซ้ำอีกชั้นก่อนเปิดใช้กับลูกค้าจริงรายแรก (ไม่ใช่แค่ unit test ผ่านแล้วถือว่าจบ) |
 | **JE ต่อรอบกลายเป็นหลายสิบ/ร้อยบรรทัดถ้า implement ผิดจาก 0.8 (ลืมรวมยอดต่อรหัสบัญชี) — พังทั้ง performance และหน้าจอ journal-entry เดิมกับลูกค้าที่มีพนักงาน 100+ คน** | unit test บังคับ (T115) ว่าจำนวนบรรทัด JE คงที่ (~4-6 บรรทัด) ไม่ว่า mock พนักงานกี่คน (5 vs 150 ต้องได้จำนวนบรรทัดเท่ากัน) — ถ้า test นี้ fail ถือว่า T115 ยังไม่เสร็จ ไม่ผ่านไปต่อ |
 | **ประกันสังคมเพดานเปลี่ยน 1 ม.ค. 2569 — ถ้า deploy หลังวันนั้นแล้วไม่ seed แถวใหม่ให้ทันจะคำนวณผิดเงียบ ๆ (ใช้ ceiling เก่าเกินเวลา)** | seed ทั้ง 2 ช่วงเวลาไว้ในเฟสนี้เลย (T100 ไม่ต้องรอถึงวันจริงค่อย migrate เพิ่ม) — `getEffectiveSsoConfig` เลือกตาม `pay_date` จริงเสมอ (0.6) ไม่ hardcode ปีในโค้ด — เมื่อกฎหมายเปลี่ยนอีกครั้งในอนาคต (2572/2575) แค่เพิ่ม migration ใหม่ 1 แถว ไม่ต้องแก้โค้ด engine เลย |
 | **พนักงานลาออก/เข้าใหม่กลางเดือนของรอบ ทำให้ `gross_salary`/`remainingPeriodsInYear` ต้องคำนวณเป็นพิเศษ แต่ระบบไม่ auto-prorate (0.13)** | ยอมรับเป็นข้อจำกัดที่ตั้งใจของรอบแรก (นักบัญชีกรอกยอดที่ถูกต้องเองต่องวด) — เอกสาร/ป้ายในหน้าจอต้องระบุชัดว่า "ยอดนี้ไม่ auto-prorate ตามวันทำงาน กรุณาตรวจสอบก่อนคำนวณ" กันนักบัญชีเข้าใจผิดว่าระบบคิดให้อัตโนมัติ |

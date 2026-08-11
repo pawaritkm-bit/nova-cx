@@ -4,21 +4,22 @@ import {
   calcAnnualTax,
   remainingPeriodsInYear,
   calcMonthlyPitForRegularIncome,
+  calcMonthlyPitWithBonus,
   calcSsoContribution,
   PERSONAL_ALLOWANCE_STANDARD,
 } from "@/lib/accounting/payroll-tax";
 import type { PitBracket } from "@/lib/accounting/payroll-config";
 
 /**
- * เทสต์ lib/accounting/payroll-tax.ts (เฟส 9 ส่วน AD, T111/T113) — ★ จุดสำคัญที่สุดของเฟสนี้
+ * เทสต์ lib/accounting/payroll-tax.ts (เฟส 9 ส่วน AD, T111/T112/T113) — ★ จุดสำคัญที่สุดของเฟสนี้
  *   (เกี่ยวข้องกับเงินจริงของพนักงานลูกค้าโดยตรง)
  *
- * ★★★ 0.5 หมายเหตุสำคัญ — ไม่มี golden test ของ `calcMonthlyPitWithBonus` ในไฟล์นี้โดยตั้งใจ: ในรอบ
- *   implement นี้ไม่มีเครื่องมือค้นเว็บให้ verify ตัวอย่างคำนวณโบนัสตามคำสั่งกรมสรรพากร ทป.4/2528 กับแหล่ง
- *   อ้างอิงที่เชื่อถือได้จริงทันเวลา (T112 ยังไม่เสร็จ) — เลือกทางเลือก (ข) ตามที่เอกสารแผนระบุไว้: ไม่เขียน/
- *   ไม่ deploy engine โบนัสที่ยังไม่ verify เลย (ไม่มีฟังก์ชัน `calcMonthlyPitWithBonus` อยู่ใน payroll-tax.ts
- *   ด้วยซ้ำ) — ปฏิเสธ `bonus_amount > 0` ที่ชั้น validate ของ lib/accounting/payroll.ts แทน (ดูเทสต์ที่เกี่ยวข้อง
- *   ใน tests/accounting/payroll.test.ts) — เปิด backlog 9b ทำต่อเมื่อหาตัวอย่างอ้างอิงที่เชื่อถือได้จริงมาได้แล้ว
+ * ★★★ 0.5 หมายเหตุ (T112 — verify แล้ว): golden test ของ `calcMonthlyPitWithBonus` อยู่ในบล็อกด้านล่างสุด
+ *   ของไฟล์นี้ — เดิมโค้ด/คอมเมนต์อ้างอิงกฎหมายผิดเป็น "ทป.4/2528 ข้อ 3" (จริง ๆ คือเรื่องหักภาษี ณ ที่จ่าย
+ *   0.75% ซื้อสินค้าเกษตร ไม่เกี่ยวกับโบนัส) — กฎหมายที่ถูกต้องคือคำสั่งกรมสรรพากรที่ **ป.96/2543 ข้อ 1(5)**
+ *   (rd.go.th/3558.html) — ตัวอย่างคำนวณอ้างอิงจากเอกสารประกอบการสอนของมหาวิทยาลัยราชภัฏสุราษฎร์ธานี
+ *   (hiperc.sru.ac.th) ที่จำลองตัวอย่างทางการของ ป.96/2543 ด้วยอัตรา/ค่าลดหย่อนปัจจุบันหลังปฏิรูป 2560 —
+ *   ตรวจทานคณิตศาสตร์ภายในตัวเองแล้วถูกต้อง 100% (โครงสร้างตรงกับตัวอย่างทางการของ ป.96/2543 ทุกประการ)
  */
 
 // อัตราภาษีก้าวหน้า 8 ขั้นปัจจุบัน (ตรงกับ seed migration 0079) — ใช้ทดสอบ calcAnnualTax/calcMonthlyPit...
@@ -146,6 +147,84 @@ describe("calcMonthlyPitForRegularIncome — golden test (T111)", () => {
   it("grossThisPeriod ≤ 0 → 0 (ไม่ throw)", () => {
     expect(calcMonthlyPitForRegularIncome(0, 12, PERSONAL_ALLOWANCE_STANDARD, BRACKETS)).toBe(0);
     expect(calcMonthlyPitForRegularIncome(-100, 12, PERSONAL_ALLOWANCE_STANDARD, BRACKETS)).toBe(0);
+  });
+});
+
+describe("calcMonthlyPitWithBonus — golden test (T112, 0.5, verify แล้ว)", () => {
+  /**
+   * ★★★ Golden test case — ยืนยันตัวเลขจากเอกสารสอนบัญชี hiperc.sru.ac.th ที่จำลองตัวอย่างทางการของคำสั่ง
+   *   กรมสรรพากรที่ **ป.96/2543 ข้อ 1(5)** ("การคำนวณภาษีเงินได้บุคคลธรรมดาหัก ณ ที่จ่ายตามมาตรา 50(1) กรณี
+   *   เงินได้พึงประเมินตามมาตรา 40(1) — เงินได้พิเศษที่จ่ายเป็นครั้งคราวระหว่างปี เช่น ค่าล่วงเวลา เงินโบนัส")
+   *   ด้วยอัตรา/ค่าลดหย่อนปัจจุบันหลังปฏิรูป 2560 (rd.go.th/3558.html ยืนยันตัวบทกฎหมาย, hiperc.sru.ac.th
+   *   ยืนยันตัวอย่างคำนวณ — ตรวจทานคณิตศาสตร์ภายในตัวเองแล้วถูกต้อง 100%):
+   *   - เงินเดือน 60,000/เดือน (ปีละ 720,000), ค่าลดหย่อนรวม 360,000, ค่าใช้จ่ายเหมา 100,000 (เพดานปัจจุบัน)
+   *   - A (ไม่มีโบนัส): 720,000−100,000−360,000 = 260,000 → ภาษี = 150,000×0%+110,000×5% = 5,500
+   *   - B (โบนัส 90,000 เดือนมีนาคม): (720,000+90,000)−100,000−360,000 = 350,000
+   *     → ภาษี = 150,000×0%+150,000×5%+50,000×10% = 12,500
+   *   - ภาษีจากโบนัส = B−A = 12,500−5,500 = 7,000 (หักเต็มจำนวน ไม่หารงวด)
+   *   - ภาษีที่หักเดือนมีนาคม = 458.33 (ปกติ, 5,500/12) + 7,000 (โบนัส) = 7,458.33
+   *   ★ ห้ามปรับตัวเลขในเทสต์นี้ให้ตรงกับผล implementation — ถ้าไม่ตรงกันต้องตรวจ logic ของ
+   *   calcMonthlyPitWithBonus/calcAnnualTax/expenseDeduction ก่อนเสมอ
+   */
+  const allowance = 360000; // ค่าลดหย่อนรวมของตัวอย่าง (ผู้มีเงินได้+คู่สมรส+บุตร 3 คน+ประกันชีวิต+เลี้ยงดูบุพการี+ประกันสุขภาพบุพการี)
+
+  it("A (ไม่มีโบนัส) — เงินเดือน 60,000/เดือน → ภาษีทั้งปี 5,500 → ต่อเดือน 458.33", () => {
+    const pit = calcMonthlyPitForRegularIncome(60000, 12, allowance, BRACKETS);
+    expect(pit).toBe(458.33);
+  });
+
+  it("golden case หลัก — เดือนมีนาคมมีโบนัส 90,000 → regularPit=458.33, bonusPit=7,000, totalPit=7,458.33", () => {
+    const r = calcMonthlyPitWithBonus(60000, 90000, 12, allowance, BRACKETS);
+    expect(r.regularPit).toBe(458.33);
+    expect(r.bonusPit).toBe(7000);
+    expect(r.totalPit).toBe(7458.33);
+  });
+
+  it("เดือนอื่นที่ไม่มีโบนัส (bonus=0) → totalPit เท่ากับ regularPit เป๊ะ ไม่ถูกกระทบจากโบนัสเดือนอื่น", () => {
+    const r = calcMonthlyPitWithBonus(60000, 0, 12, allowance, BRACKETS);
+    expect(r.regularPit).toBe(458.33);
+    expect(r.bonusPit).toBe(0);
+    expect(r.totalPit).toBe(458.33);
+  });
+
+  it("bonus ติดลบ/ผิดปกติ → ปฏิบัติเหมือนไม่มีโบนัส (ไม่ throw)", () => {
+    const r = calcMonthlyPitWithBonus(60000, -1000, 12, allowance, BRACKETS);
+    expect(r.bonusPit).toBe(0);
+    expect(r.totalPit).toBe(458.33);
+  });
+
+  it("★ edge case: พนักงานเข้าใหม่กลางปี (periods=6) ได้โบนัสด้วย — bonusPit ไม่หารด้วย periods, regularPit หารด้วย periods", () => {
+    // gross=100,000/เดือน, periods=6 (เข้าใหม่ ก.ค.), allowance=60,000 (มาตรฐาน), bonus=100,000
+    // A: annual=600,000, expense=min(300,000,100,000)=100,000, taxable=600,000-100,000-60,000=440,000
+    //    tax = 150,000*0% + 150,000*5%(7,500) + 140,000*10%(14,000) = 21,500 → regularPit = 21,500/6 = 3,583.33
+    // B: annualB=700,000, expenseB=min(350,000,100,000)=100,000, taxableB=700,000-100,000-60,000=540,000
+    //    tax = 7,500 + 200,000*10%(20,000) + 40,000*15%(6,000) = 33,500 (ข้ามขั้น 10%→15%)
+    // bonusPit = 33,500-21,500 = 12,000 (ไม่หารด้วย periods=6) → totalPit = 3,583.33+12,000 = 15,583.33
+    const r = calcMonthlyPitWithBonus(100000, 100000, 6, PERSONAL_ALLOWANCE_STANDARD, BRACKETS);
+    expect(r.regularPit).toBe(3583.33);
+    expect(r.bonusPit).toBe(12000);
+    expect(r.totalPit).toBe(15583.33);
+  });
+
+  it("★ edge case: โบนัสทำให้ยอดคาบเกี่ยวข้ามขั้นภาษี (พนักงานเก่า periods=12)", () => {
+    // gross=50,000/เดือน (annual=600,000), allowance=60,000, bonus=100,000
+    // A: taxable=600,000-100,000-60,000=440,000 → tax=7,500+14,000=21,500 → regularPit=21,500/12=1,791.67
+    // B: annualB=700,000, taxableB=700,000-100,000-60,000=540,000 → tax=7,500+20,000+6,000=33,500 (ข้ามขั้น 10%→15%)
+    // bonusPit=33,500-21,500=12,000 → totalPit=1,791.67+12,000=13,791.67
+    const r = calcMonthlyPitWithBonus(50000, 100000, 12, PERSONAL_ALLOWANCE_STANDARD, BRACKETS);
+    expect(r.regularPit).toBe(1791.67);
+    expect(r.bonusPit).toBe(12000);
+    expect(r.totalPit).toBe(13791.67);
+  });
+
+  it("gross ≤ 0 (แต่มีโบนัส) → regularPit=0, bonusPit คำนวณจากฐาน 0 บวกโบนัสเท่านั้น", () => {
+    const r = calcMonthlyPitWithBonus(0, 90000, 12, PERSONAL_ALLOWANCE_STANDARD, BRACKETS);
+    expect(r.regularPit).toBe(0);
+    // annualEstimateA=0 (gross<=0), taxableA=0 → annualTaxA=0
+    // annualEstimateB=0+90000=90000, expenseB=min(45000,100000)=45000, taxableB=max(90000-45000-60000,0)=0
+    // bonusPit = 0-0 = 0
+    expect(r.bonusPit).toBe(0);
+    expect(r.totalPit).toBe(0);
   });
 });
 
