@@ -31,11 +31,15 @@ import {
   getManualEntryScope,
   type ManualEntryInput,
 } from "@/lib/accounting/manual-journal";
-import { isRevaluationOrReversingJeId } from "@/lib/accounting/fx-revaluation";
+import { isRevaluationOrReversingJeId, isFxCycleConfirmedForJe } from "@/lib/accounting/fx-revaluation";
 
 /** ข้อความปฏิเสธเมื่อ id เป็น revaluation_je_id/reversing_je_id ของ fx_period_revaluations ที่ยังไม่จบ cycle */
 const FX_LOCKED_MESSAGE =
   "รายการนี้ผูกกับ 'ปรับปรุงอัตราแลกเปลี่ยนปลายงวด' — จัดการยืนยัน/ยกเลิกยืนยันผ่านหน้านั้นเท่านั้น";
+
+/** ข้อความปฏิเสธเมื่อพยายามลบ JE ที่ revaluation JE ของ cycle เดียวกันยัง confirmed อยู่จริง (เฟส 10b QC fix) */
+const FX_LOCKED_DELETE_MESSAGE =
+  "รายการนี้ผูกกับ 'ปรับปรุงอัตราแลกเปลี่ยนปลายงวด' ที่ยืนยันแล้ว — ต้องยกเลิกยืนยันที่หน้าปรับปรุงอัตราแลกเปลี่ยนก่อน ไม่สามารถลบ JV นี้ตรงๆได้";
 
 const PATH = "/chat-audit/accounting/journal-entry";
 
@@ -199,6 +203,18 @@ export async function deleteManualEntryAction(id: string, customerId: string): P
     const scope = await getManualEntryScope(service, ctx.tenantId, id);
     if (!scope) return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
     assertCustomerInScope(ctx, scope.customerId);
+
+    // ⚠️ QC fix เฟส 10b — defense-in-depth (เหมือนปุ่มยืนยัน/ยกเลิกยืนยันข้างบน): ปฏิเสธการลบถ้า revaluation JE
+    //   ของ cycle เดียวกันยัง confirmed อยู่จริง (ไม่ว่า id นี้จะเป็น revaluation หรือ reversing JE ของ cycle
+    //   นั้น) — กันช่องโหว่ "ลบเฉพาะ reversing JE (draft) เดี่ยวๆ" ที่ทำให้ revaluation JE ตกค้างไม่ถูกกลับ
+    //   รายการ (best-effort, ไม่ throw ถ้า query ล้ม — กันปุ่มลบ JE ปกติพังเพราะ query เสริมนี้ล้ม)
+    try {
+      if (await isFxCycleConfirmedForJe(service, ctx.tenantId, id)) {
+        return { ok: false, message: FX_LOCKED_DELETE_MESSAGE };
+      }
+    } catch {
+      // query ล้ม — ปล่อยผ่าน (best-effort)
+    }
 
     const res = await softDeleteManualEntry(service, ctx.tenantId, id);
     if (!res.ok) return { ok: false, message: res.message };

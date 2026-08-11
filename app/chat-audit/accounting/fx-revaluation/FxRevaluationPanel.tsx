@@ -6,6 +6,7 @@ import {
   createFxRevaluationDraftAction,
   confirmFxRevaluationAction,
   confirmFxReversingAction,
+  unconfirmFxReversingAction,
   fetchBotRateAction,
 } from "./actions";
 import type { FxOutstandingGroup, FxPeriodRevaluationWithLiveStatus, FxPeriodRevaluationStatus } from "@/lib/accounting/fx-revaluation";
@@ -132,6 +133,23 @@ export default function FxRevaluationPanel({
     setMsg(null);
     startTransition(async () => {
       const res = await confirmFxReversingAction(id, customerId);
+      setMsg({ ok: res.ok, text: res.message });
+      if (res.ok) router.refresh();
+    });
+  }
+
+  /** 0.13 — ทางเข้าที่ถูกต้องทางเดียวสำหรับแก้ไข reversing_je_id ที่ยืนยันผิดพลาด (ปุ่มลบทั่วไปถูกบล็อกแล้ว
+   *   ตอน cycle confirmed) — เตือนความเสี่ยง status drift ชัดเจนก่อนทำจริงเสมอ (หมวด 5 ของแผน) */
+  function onUnconfirmReversing(id: string) {
+    const confirmed = window.confirm(
+      "ยกเลิกการยืนยันรายการกลับรายการ?\n\n" +
+        "การยกเลิกนี้จะทำให้ยอด AR/AP ใน GL ไม่ตรงกับที่ระบบคำนวณไว้ ควรทำเฉพาะกรณีกดยืนยันผิดพลาดทันทีเท่านั้น " +
+        "และต้องตรวจสอบว่ายังไม่มีการแนะนำ realized FX ของงวดใหม่ไปแล้วก่อนยกเลิก"
+    );
+    if (!confirmed) return;
+    setMsg(null);
+    startTransition(async () => {
+      const res = await unconfirmFxReversingAction(id, customerId);
       setMsg({ ok: res.ok, text: res.message });
       if (res.ok) router.refresh();
     });
@@ -272,6 +290,10 @@ export default function FxRevaluationPanel({
                     ) : row.liveStatus === "reversing_draft" ? (
                       <button type="button" className="btn btn-sm green" onClick={() => onConfirmReversing(row.id)} disabled={pending}>
                         ยืนยันรายการกลับรายการ
+                      </button>
+                    ) : row.liveStatus === "reversing_confirmed" ? (
+                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => onUnconfirmReversing(row.id)} disabled={pending}>
+                        ยกเลิกการยืนยันรายการกลับรายการ
                       </button>
                     ) : (
                       "—"

@@ -138,7 +138,8 @@ export type FxOutstandingGroup = {
  *   บิลแต่ละใบในกลุ่มเดียวกัน (customer+currency+entryType) อาจมี invoiceFxRate ต่างกัน (bill_entries.fx_rate
  *   ล็อกไว้ตลอดชีวิตบิลตาม 0.9 เฟส 10a) — ต้องคำนวณ unrealized "ต่อบิล" ด้วย closingRate เดียวกัน แล้วรวม
  *   ผลลัพธ์ (ไม่ใช่เอายอดรวม outstandingFxAmount ไปคูณ closingRate ตรง ๆ ซึ่งจะผิดถ้า invoiceFxRate ต่างกัน)
- *   — ปัดเศษครั้งเดียวตอนสุดท้าย
+ *   — แต่ละเทอม (unrealizedFxGainLoss ต่อบิล) ถูก round2 ไปแล้วก่อนรวม (round2 ภายใน realizedFxGainLoss เดิม
+ *   ของเฟส 10a) · round2 สุดท้ายรอบนี้เป็นแค่การันตีผลรวมไม่มีเศษ floating point ค้าง ไม่ใช่การปัดเศษครั้งแรก
  */
 export function computeGroupUnrealizedAmount(
   bills: Pick<FxOutstandingBillBreakdown, "outstandingFxAmount" | "invoiceFxRate">[],
@@ -543,6 +544,25 @@ export async function createFxRevaluationDraft(
   const created = await upsertManualEntry(db, tenantId, customerId, entryInput, chartByCode);
   if (!created.ok) return { ok: false, message: created.message };
 
+  // self-heal cache ก่อน insert (QC review เฟส 10b ข้อ 3) — unique index uq_fx_period_revaluations_group_period
+  // พึ่งคอลัมน์ status ที่ cache ไว้ตรง ๆ (WHERE status <> 'voided') ถ้าแถวเดิมของงวด+กลุ่มนี้เคยมีมาก่อนแล้ว
+  // JE ถูกลบไปหลังบ้าน (เช่นผ่านปุ่ม "ลบ" ทั่วไปตอนยัง reval_draft) แต่ไม่มีใครไป sync cache ให้ → insert ใหม่
+  // จะชนกับ unique index ทั้งที่ live status จริงของแถวเดิมคือ 'voided' ไปแล้ว — ไม่ต้องพึ่งว่า caller ต้องเคย
+  // โหลดหน้า list (listFxPeriodRevaluations) มาก่อนถึงจะ sync ให้
+  const { data: existingExactPeriod } = await db
+    .from("fx_period_revaluations")
+    .select(FX_REVAL_COLUMNS)
+    .eq("tenant_id", tenantId)
+    .eq("customer_id", customerId)
+    .eq("entry_type", entryType)
+    .eq("currency", currency)
+    .eq("period_end_date", periodEndDate)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (existingExactPeriod) {
+    await refreshCacheStatus(db, tenantId, mapFxRevalRow(existingExactPeriod as unknown as RawFxRevalRow));
+  }
+
   const { data, error } = await db
     .from("fx_period_revaluations")
     .insert({
@@ -704,6 +724,23 @@ export async function unconfirmFxReversing(db: DB, tenantId: string, revaluation
 }
 
 /**
+ * internal — ตรวจ+ซ่อม cache column `status` ให้ตรงกับ live status จริง (update DB ถ้าไม่ตรงกับ cache) แล้ว
+ *   คืน live status ปัจจุบัน (ใช้ร่วมกันของ voidFxPeriodRevaluationIfJeDeleted/listFxPeriodRevaluations/
+ *   createFxRevaluationDraft — ลด duplicate logic ตาม QC review เฟส 10b ข้อ 3)
+ */
+async function refreshCacheStatus(
+  db: DB,
+  tenantId: string,
+  row: Pick<FxPeriodRevaluation, "id" | "revaluationJeId" | "reversingJeId" | "status">
+): Promise<FxPeriodRevaluationStatus> {
+  const live = await deriveLiveRevaluationStatus(db, tenantId, row);
+  if (live !== row.status) {
+    await db.from("fx_period_revaluations").update({ status: live }).eq("id", row.id).eq("tenant_id", tenantId);
+  }
+  return live;
+}
+
+/**
  * ตรวจ+ซ่อม cache status ให้ตรงกับ live status จริง (0.14 mirror resetFxGainLossNote ของเฟส 10a) — ใช้ตอน
  *   list/แสดงผล เผื่อ JE ที่ผูกไว้ถูก soft-delete ไปหลังบ้าน (นักบัญชีลบผ่านหน้า journal-entry ปกติ) → คอลัมน์
  *   status ที่ cache ไว้จะค้างผิดถ้าไม่ refresh — คืน live status ปัจจุบัน (อัปเดต DB ด้วยถ้าไม่ตรงกับ cache)
@@ -715,11 +752,7 @@ export async function voidFxPeriodRevaluationIfJeDeleted(
 ): Promise<FxPeriodRevaluationStatus | null> {
   const row = await getFxPeriodRevaluation(db, tenantId, revaluationId);
   if (!row) return null;
-  const live = await deriveLiveRevaluationStatus(db, tenantId, row);
-  if (live !== row.status) {
-    await db.from("fx_period_revaluations").update({ status: live }).eq("id", revaluationId).eq("tenant_id", tenantId);
-  }
-  return live;
+  return refreshCacheStatus(db, tenantId, row);
 }
 
 /** แถวพร้อม live status (ไม่ใช่แค่ cache) — สำหรับหน้ารายงาน (T134) */
@@ -744,10 +777,7 @@ export async function listFxPeriodRevaluations(
 
   const out: FxPeriodRevaluationWithLiveStatus[] = [];
   for (const row of rows) {
-    const liveStatus = await deriveLiveRevaluationStatus(db, tenantId, row);
-    if (liveStatus !== row.status) {
-      await db.from("fx_period_revaluations").update({ status: liveStatus }).eq("id", row.id).eq("tenant_id", tenantId);
-    }
+    const liveStatus = await refreshCacheStatus(db, tenantId, row);
     out.push({ ...row, liveStatus });
   }
   return out;
@@ -806,9 +836,37 @@ export async function isRevaluationOrReversingJeId(db: DB, tenantId: string, id:
 }
 
 /**
+ * `id` นี้ (revaluation_je_id หรือ reversing_je_id ของ fx_period_revaluations แถวใดก็ตาม) ลบไม่ได้เพราะ
+ *   revaluation JE ของ cycle เดียวกัน "confirmed จริง" อยู่ (live state — ไม่ใช่ cache) หรือไม่ — ใช้เฉพาะปุ่ม
+ *   "ลบ" ทั่วไปของหน้า journal-entry (deleteManualEntryAction) เท่านั้น: ★ เข้มกว่า isRevaluationOrReversingJeId
+ *   ข้างบน เพราะปุ่มลบทำลาย JE ถาวร (ต่างจากยืนยัน/ยกเลิกยืนยันที่กลับสถานะได้เสมอ) — อนุญาตลบได้เฉพาะตอนที่
+ *   revaluation JE ยังไม่ confirmed เลย (cycle ยัง 'reval_draft', ลบแล้วไม่มีอะไรตกค้าง) · ถ้า revaluation JE
+ *   confirmed แล้ว (ไม่ว่าจะกำลังจะลบตัว revaluation JE เอง หรือ reversing JE คู่กัน ไม่ว่า reversing จะ
+ *   confirmed หรือยังไม่ confirmed ก็ตาม) ต้องปฏิเสธเสมอ — ปิดช่องโหว่ที่ tester พิสูจน์แล้ว: ลบเฉพาะ reversing
+ *   JE (draft) ตัวเดียว ทำให้ deriveLiveRevaluationStatus คืน 'voided' ทันที ทั้งที่ revaluation JE ยัง
+ *   confirmed ค้างอยู่จริงในบัญชี (Dr/Cr ยังโพสต์อยู่ ไม่ถูกกลับรายการ)
+ */
+export async function isFxCycleConfirmedForJe(db: DB, tenantId: string, id: string): Promise<boolean> {
+  const [a, b] = await Promise.all([
+    db.from("fx_period_revaluations").select("revaluation_je_id").eq("tenant_id", tenantId).eq("revaluation_je_id", id).is("deleted_at", null).maybeSingle(),
+    db.from("fx_period_revaluations").select("revaluation_je_id").eq("tenant_id", tenantId).eq("reversing_je_id", id).is("deleted_at", null).maybeSingle(),
+  ]);
+  const revJeId =
+    (a.data as { revaluation_je_id?: string | null } | null)?.revaluation_je_id ??
+    (b.data as { revaluation_je_id?: string | null } | null)?.revaluation_je_id ??
+    null;
+  if (!revJeId) return false; // ไม่ผูกกับ fx revaluation ใด ๆ เลย — ลบได้ปกติ
+  const revState = await loadJeLiveState(db, tenantId, revJeId);
+  return !!revState && revState.confirmed && !revState.deleted;
+}
+
+/**
  * ชุด id ของ JE (revaluation_je_id/reversing_je_id) ที่ยังไม่จบ cycle ของลูกค้า 1 ราย — ใช้ที่
  *   journal-entry/JournalEntryPanel.tsx ซ่อนปุ่ม "ยืนยัน"/"ยกเลิกยืนยัน" generic (0.13, UI hint —
  *   cache status ก็พอสำหรับจุดนี้ ไม่ใช่ guard ทางการเงิน ตรงกับที่แผนระบุไว้)
+ *   ★ ต้องตรงกับเจตนาของ isRevaluationOrReversingJeId (server, ล็อกถาวรทุก status ที่ไม่ใช่ 'voided') เสมอ —
+ *   ตัดออกเฉพาะ 'voided' เท่านั้น (ไม่ตัด 'reversing_confirmed' ออก แม้ cycle จบแล้วก็ยังต้องซ่อนปุ่ม generic
+ *   ต่อไป มิฉะนั้นปุ่มจะโชว์ปกติทั้งที่กดแล้วจะถูก server ปฏิเสธเสมอ — สับสนผู้ใช้)
  */
 export async function listActiveFxJeIds(db: DB, tenantId: string, customerId: string): Promise<Set<string>> {
   const { data } = await db
@@ -820,7 +878,7 @@ export async function listActiveFxJeIds(db: DB, tenantId: string, customerId: st
     .limit(LIST_LIMIT);
   const ids = new Set<string>();
   for (const r of (data ?? []) as { revaluation_je_id: string | null; reversing_je_id: string | null; status: string }[]) {
-    if (r.status === "reversing_confirmed" || r.status === "voided") continue;
+    if (r.status === "voided") continue;
     if (r.revaluation_je_id) ids.add(r.revaluation_je_id);
     if (r.reversing_je_id) ids.add(r.reversing_je_id);
   }

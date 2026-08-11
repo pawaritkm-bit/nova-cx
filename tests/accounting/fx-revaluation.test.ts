@@ -19,6 +19,7 @@ import {
   listFxPeriodRevaluations,
   countOverdueUnconfirmedReversals,
   isRevaluationOrReversingJeId,
+  isFxCycleConfirmedForJe,
   listActiveFxJeIds,
   getFxPeriodRevaluationCustomerId,
 } from "@/lib/accounting/fx-revaluation";
@@ -730,18 +731,71 @@ describe("isRevaluationOrReversingJeId (0.13)", () => {
   });
 });
 
+describe("isFxCycleConfirmedForJe (QC fix เฟส 10b — ปุ่ม 'ลบ' ของหน้า journal-entry)", () => {
+  it("id ไม่เกี่ยวกับ fx revaluation เลย → false (ลบได้ปกติ)", async () => {
+    const { db } = makeMultiTableDb();
+    expect(await isFxCycleConfirmedForJe(db, "t1", "je-unrelated")).toBe(false);
+  });
+
+  it("revaluation JE ยังเป็น draft (cache 'reval_draft') → false (ลบได้ ไม่มีอะไรตกค้าง) — id ที่เช็คคือตัว revaluation JE เอง", async () => {
+    const { db, tables } = makeMultiTableDb();
+    seedJe(tables, "je1", { status: "draft" });
+    seedFxRevalRow(tables, "r1", { periodEndDate: "2026-06-30", revaluationJeId: "je1", status: "reval_draft" });
+    expect(await isFxCycleConfirmedForJe(db, "t1", "je1")).toBe(false);
+  });
+
+  it("★ revaluation JE confirmed แล้ว (cache 'reversing_draft') → true แม้ id ที่เช็คคือ reversing JE (draft, ยังไม่ confirm) — ปิดช่องโหว่ 'ลบเฉพาะ reversing JE เดี่ยวๆ'", async () => {
+    const { db, tables } = makeMultiTableDb();
+    seedJe(tables, "je1", { status: "confirmed" }); // revaluation JE confirmed แล้ว
+    seedJe(tables, "je2", { status: "draft" }); // reversing JE ยังไม่ confirm
+    seedFxRevalRow(tables, "r1", { periodEndDate: "2026-06-30", revaluationJeId: "je1", reversingJeId: "je2", status: "reversing_draft" });
+    expect(await isFxCycleConfirmedForJe(db, "t1", "je2")).toBe(true); // เช็คที่ reversing JE
+    expect(await isFxCycleConfirmedForJe(db, "t1", "je1")).toBe(true); // เช็คที่ revaluation JE เอง
+  });
+
+  it("cycle จบสมบูรณ์แล้ว (reversing_confirmed) → true ทั้ง revaluation และ reversing JE (ต้องไปยกเลิกยืนยันที่หน้า FX ก่อนเท่านั้น)", async () => {
+    const { db, tables } = makeMultiTableDb();
+    seedJe(tables, "je1", { status: "confirmed" });
+    seedJe(tables, "je2", { status: "confirmed" });
+    seedFxRevalRow(tables, "r1", { periodEndDate: "2026-06-30", revaluationJeId: "je1", reversingJeId: "je2", status: "reversing_confirmed" });
+    expect(await isFxCycleConfirmedForJe(db, "t1", "je1")).toBe(true);
+    expect(await isFxCycleConfirmedForJe(db, "t1", "je2")).toBe(true);
+  });
+
+  it("revaluation JE ถูกลบไปแล้ว (live = voided) → false แม้ cache ยังค้างเป็น 'reversing_draft' (เช็ค live state จริง ไม่เชื่อ cache)", async () => {
+    const { db, tables } = makeMultiTableDb();
+    seedJe(tables, "je1", { status: "confirmed", deleted: true });
+    seedJe(tables, "je2", { status: "draft" });
+    seedFxRevalRow(tables, "r1", { periodEndDate: "2026-06-30", revaluationJeId: "je1", reversingJeId: "je2", status: "reversing_draft" });
+    expect(await isFxCycleConfirmedForJe(db, "t1", "je2")).toBe(false);
+  });
+});
+
 describe("listActiveFxJeIds (0.13, UI hint)", () => {
   it("รวม id ของแถวที่ยังไม่จบ cycle ทั้งสองคอลัมน์ ของลูกค้ารายนั้น", async () => {
     const { db, tables } = makeMultiTableDb();
     seedFxRevalRow(tables, "r1", { customerId: "c1", periodEndDate: "2026-06-30", revaluationJeId: "je1", reversingJeId: "je2", status: "reversing_draft" });
-    seedFxRevalRow(tables, "r2", { customerId: "c1", periodEndDate: "2026-05-31", revaluationJeId: "je3", reversingJeId: "je4", status: "reversing_confirmed" });
     seedFxRevalRow(tables, "r3", { customerId: "c2", periodEndDate: "2026-06-30", revaluationJeId: "je5", status: "reval_draft" });
     const ids = await listActiveFxJeIds(db, "t1", "c1");
     expect(ids.has("je1")).toBe(true);
     expect(ids.has("je2")).toBe(true);
-    expect(ids.has("je3")).toBe(false); // reversing_confirmed แล้ว — จบ cycle
-    expect(ids.has("je4")).toBe(false);
     expect(ids.has("je5")).toBe(false); // ลูกค้าอื่น
+  });
+
+  it("★ QC fix — ไม่ตัด 'reversing_confirmed' ออก (ต้องตรงกับ isRevaluationOrReversingJeId ที่ล็อกถาวรทุก status ที่ไม่ใช่ voided มิฉะนั้นปุ่ม generic จะโชว์ปกติทั้งที่กดแล้วถูกปฏิเสธเสมอ)", async () => {
+    const { db, tables } = makeMultiTableDb();
+    seedFxRevalRow(tables, "r2", { customerId: "c1", periodEndDate: "2026-05-31", revaluationJeId: "je3", reversingJeId: "je4", status: "reversing_confirmed" });
+    const ids = await listActiveFxJeIds(db, "t1", "c1");
+    expect(ids.has("je3")).toBe(true);
+    expect(ids.has("je4")).toBe(true);
+  });
+
+  it("ตัดออกเฉพาะ 'voided' เท่านั้น", async () => {
+    const { db, tables } = makeMultiTableDb();
+    seedFxRevalRow(tables, "r1", { customerId: "c1", periodEndDate: "2026-06-30", revaluationJeId: "je1", reversingJeId: "je2", status: "voided" });
+    const ids = await listActiveFxJeIds(db, "t1", "c1");
+    expect(ids.has("je1")).toBe(false);
+    expect(ids.has("je2")).toBe(false);
   });
 });
 
@@ -1046,6 +1100,32 @@ describe("createFxRevaluationDraft (0.10/0.15/0.16)", () => {
     expect(je.status).toBe("draft"); // never-auto-confirm
     const lines = tables.manual_journal_entry_lines.filter((l) => l.entry_id === row.revaluation_je_id);
     expect(isBalanced(lines as { debit: number; credit: number }[])).toBe(true);
+  });
+
+  it("★ QC fix ข้อ 3 — self-heal cache ก่อน insert: แถวเดิมของงวด+กลุ่มเดียวกันที่ JE ถูกลบไปแล้ว (ผ่านช่องทางอื่นตรง ๆ) แต่ cache ยังค้างไม่ voided → ถูก refresh เป็น voided ก่อนสร้างรอบใหม่ (กัน unique index ที่พึ่ง cache ตรง ๆ บล็อกผิด ๆ)", async () => {
+    const { db, tables } = makeMultiTableDb();
+    seedChart(tables);
+    seedFxBill(tables, "e1", { customerId: "c1", entryType: "sale", currency: "USD", fxRate: 33.0, fxLinesTotal: 10000 });
+    // จำลอง JE ของรอบเดิม (งวดเดียวกันเป๊ะ) ถูกลบไปแล้ว แต่ cache ยังค้างเป็น 'reval_draft' (ไม่มีใครไป sync ให้)
+    seedJe(tables, "je-old", { status: "draft", deleted: true });
+    seedFxRevalRow(tables, "r-old", {
+      customerId: "c1",
+      currency: "USD",
+      entryType: "sale",
+      periodEndDate: "2026-06-30",
+      revaluationJeId: "je-old",
+      reversingJeId: null,
+      status: "reval_draft", // cache ค้างผิด — live status จริงต้องเป็น voided (JE ถูกลบไปแล้ว)
+    });
+
+    const res = await createFxRevaluationDraft(db, "t1", "c1", "sale", "USD", "2026-06-30", 33.5, "manual", chartByCodeWithFx);
+    expect(res.ok).toBe(true);
+
+    // แถวเดิมต้องถูก self-heal เป็น voided แล้ว (ก่อน insert แถวใหม่)
+    const oldRow = tables.fx_period_revaluations.find((r) => r.id === "r-old")!;
+    expect(oldRow.status).toBe("voided");
+    // แถวใหม่ถูกสร้างสำเร็จ (ไม่ถูกบล็อกโดยแถวเดิมที่ตอนนี้ voided แล้ว)
+    expect(tables.fx_period_revaluations).toHaveLength(2);
   });
 
   it("unrealized = 0 (อัตราปิด = อัตราตอนออกบิลพอดี) → ปฏิเสธ ไม่สร้าง JV เปล่า", async () => {
