@@ -2,7 +2,7 @@
 
 import { Fragment, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { recordBillPaymentAction, voidBillPaymentAction } from "./actions";
+import { recordBillPaymentAction, voidBillPaymentAction, suggestFxGainLossNoteAction } from "./actions";
 import { AGING_BUCKET_LABELS, type AgingBucketKey } from "@/lib/accounting/aging";
 import type { BillPayment, BillPaymentMethod } from "@/lib/accounting/bill-payments";
 import type { CustomerBankAccount } from "@/lib/accounting/bank-accounts";
@@ -29,6 +29,10 @@ export type PaymentBillRow = {
   outstanding: number;
   bucket: AgingBucketKey;
   payments: BillPayment[];
+  /** เฟส 10 ส่วน AA — สกุลเงินของบิลต้นทาง (null = บิล THB ปกติ — ไม่โชว์ช่อง fx/ปุ่มแนะนำ FX เลย) */
+  currency: string | null;
+  /** เฟส 10 ส่วน AA — อัตราแลกเปลี่ยนตอนออกบิล (ใช้แสดงอ้างอิงเท่านั้น — ยอด THB คำนวณที่ server เสมอ) */
+  fxRate: number | null;
 };
 
 function todayIso(): string {
@@ -58,10 +62,22 @@ type FormState = {
   method: BillPaymentMethod;
   bankAccountId: string;
   notes: string;
+  /** เฟส 10 ส่วน AA — จำนวนเงินตราต่างประเทศงวดนี้ (มีความหมายเฉพาะบิลที่ currency ตั้งไว้) */
+  fxAmount: string;
+  /** เฟส 10 ส่วน AA — อัตราแลกเปลี่ยนวันชำระของงวดนี้ (คนละอัตรากับ fxRate ตอนออกบิล) */
+  fxRate: string;
 };
 
 function blankForm(outstanding: number): FormState {
-  return { payDate: todayIso(), amount: outstanding > 0 ? String(outstanding) : "", method: "cash", bankAccountId: "", notes: "" };
+  return {
+    payDate: todayIso(),
+    amount: outstanding > 0 ? String(outstanding) : "",
+    method: "cash",
+    bankAccountId: "",
+    notes: "",
+    fxAmount: "",
+    fxRate: "",
+  };
 }
 
 export default function PaymentsPanel({
@@ -107,6 +123,9 @@ export default function PaymentsPanel({
         method: f.method,
         bankAccountId: f.method === "transfer" && f.bankAccountId ? f.bankAccountId : null,
         notes: f.notes || null,
+        // เฟส 10 ส่วน AA — ส่งเฉพาะบิล FX (currency ตั้งไว้) เท่านั้น
+        fxAmount: bill.currency ? parseAmountInput(f.fxAmount) : undefined,
+        fxRate: bill.currency ? parseAmountInput(f.fxRate) : undefined,
       });
       setMsg({ ok: res.ok, text: res.ok ? "บันทึกรับ/จ่ายเงินแล้ว" : res.message });
       if (res.ok) {
@@ -127,6 +146,19 @@ export default function PaymentsPanel({
     startTransition(async () => {
       const res = await voidBillPaymentAction(paymentId);
       setMsg({ ok: res.ok, text: res.ok ? "ยกเลิกรายการแล้ว" : res.message });
+      if (res.ok) router.refresh();
+    });
+  }
+
+  /** เฟส 10 ส่วน AA (0.5) — "แนะนำ" กำไร/ขาดทุนจากอัตราแลกเปลี่ยน (สร้าง JV draft — ไม่ auto-confirm) */
+  function onSuggestFx(paymentId: string) {
+    setMsg(null);
+    startTransition(async () => {
+      const res = await suggestFxGainLossNoteAction(paymentId);
+      setMsg({
+        ok: res.ok,
+        text: res.ok ? "สร้างรายการแนะนำ (ร่าง) แล้ว — ไปตรวจ/ยืนยันที่หน้าลงบัญชีเอง" : res.message,
+      });
       if (res.ok) router.refresh();
     });
   }
@@ -184,17 +216,48 @@ export default function PaymentsPanel({
                               disabled={pending}
                             />
                           </label>
-                          <label className="acc-field">
-                            <span>จำนวนเงิน (คงค้าง {formatMoney(bill.outstanding)})</span>
-                            <input
-                              className="num"
-                              inputMode="decimal"
-                              value={formOf(bill).amount}
-                              onChange={(e) => patchForm(bill.entryId, { amount: e.target.value })}
-                              placeholder="0.00"
-                              disabled={pending}
-                            />
-                          </label>
+                          {bill.currency ? (
+                            <>
+                              <label className="acc-field">
+                                <span>จำนวนเงินตราต่างประเทศ ({bill.currency})</span>
+                                <input
+                                  className="num"
+                                  inputMode="decimal"
+                                  value={formOf(bill).fxAmount}
+                                  onChange={(e) => patchForm(bill.entryId, { fxAmount: e.target.value })}
+                                  placeholder="0.00"
+                                  disabled={pending}
+                                />
+                              </label>
+                              <label className="acc-field">
+                                <span>อัตราแลกเปลี่ยนวันนี้ (settlement)</span>
+                                <input
+                                  className="num"
+                                  inputMode="decimal"
+                                  value={formOf(bill).fxRate}
+                                  onChange={(e) => patchForm(bill.entryId, { fxRate: e.target.value })}
+                                  placeholder={bill.fxRate ? String(bill.fxRate) : "0.000000"}
+                                  disabled={pending}
+                                />
+                              </label>
+                              <div className="acc-field acc-field-wide acc-contra-hint">
+                                ยอดที่ตัด AR/AP คำนวณด้วยอัตราตอนออกบิล ({bill.fxRate ?? "—"}) เสมอ ไม่ใช่อัตราวันนี้ —
+                                ผลต่างจะเป็นกำไร/ขาดทุนจากอัตราแลกเปลี่ยนที่แนะนำให้ภายหลัง
+                              </div>
+                            </>
+                          ) : (
+                            <label className="acc-field">
+                              <span>จำนวนเงิน (คงค้าง {formatMoney(bill.outstanding)})</span>
+                              <input
+                                className="num"
+                                inputMode="decimal"
+                                value={formOf(bill).amount}
+                                onChange={(e) => patchForm(bill.entryId, { amount: e.target.value })}
+                                placeholder="0.00"
+                                disabled={pending}
+                              />
+                            </label>
+                          )}
                           <label className="acc-field">
                             <span>วิธี{bill.entryType === "sale" ? "รับเงิน" : "จ่ายเงิน"}</span>
                             <select
@@ -266,7 +329,29 @@ export default function PaymentsPanel({
                                       <td>{METHOD_LABELS[p.method]}</td>
                                       <td className="num">{formatMoney(p.amount)}</td>
                                       <td>{p.notes || "—"}</td>
-                                      <td>
+                                      <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                        {/* เฟส 10 ส่วน AA (0.5/0.14) — เห็นเฉพาะงวดที่เป็น FX เท่านั้น */}
+                                        {p.currency ? (
+                                          p.fxGainLossNoteId ? (
+                                            <a
+                                              href="/chat-audit/accounting/journal-entry"
+                                              className="btn btn-sm btn-ghost"
+                                              title="ดู JV กำไร/ขาดทุนจากอัตราแลกเปลี่ยนที่แนะนำไว้แล้ว"
+                                            >
+                                              ดู JV ที่แนะนำ
+                                            </a>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              className="btn btn-sm"
+                                              onClick={() => onSuggestFx(p.id)}
+                                              disabled={pending}
+                                              title="คำนวณ + สร้างร่าง JV กำไร/ขาดทุนจากอัตราแลกเปลี่ยนของงวดนี้ (ต้องไปยืนยันเองที่หน้าลงบัญชีเอง)"
+                                            >
+                                              แนะนำ JV กำไร/ขาดทุน FX
+                                            </button>
+                                          )
+                                        ) : null}
                                         <button
                                           type="button"
                                           className="btn btn-sm danger"

@@ -21,6 +21,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { contraAccountFor, asPaymentMethod } from "@/lib/accounting/payment";
 import { chunkIds } from "@/lib/accounting/id-chunk";
+import { validateFxRate, deriveThbAmount } from "@/lib/accounting/currency";
 import {
   round2,
   summarizeEntry,
@@ -86,6 +87,19 @@ export type BillPayment = {
   bankAccountCode: string | null;
   notes: string | null;
   createdAt: string;
+  /**
+   * เฟส 10 ส่วน AA — สกุลเงินต่างประเทศของงวดนี้ (สำเนาจากบิลต้นทางเสมอ ไม่รับจาก client) · null = งวด THB ปกติ
+   */
+  currency: string | null;
+  /** เฟส 10 ส่วน AA — อัตราแลกเปลี่ยน "วันชำระ/settlement" ของงวดนี้ (คนละอัตรากับ bill_entries.fx_rate, 0.8) */
+  fxRate: number | null;
+  /** เฟส 10 ส่วน AA — จำนวนเงินตราต่างประเทศที่ได้รับ/จ่ายจริงงวดนี้ */
+  fxAmount: number | null;
+  /**
+   * เฟส 10 ส่วน AA (0.14) — id ของ manual JE (draft) ที่ "แนะนำ" กำไร/ขาดทุนจากอัตราแลกเปลี่ยนของงวดนี้ไปแล้ว
+   *   null = ยังไม่เคยแนะนำ (หรือ JV เดิมถูกลบไปแล้ว — เช็คสถานะจริงผ่าน getManualEntryScope ก่อนตัดสินใจ)
+   */
+  fxGainLossNoteId: string | null;
 };
 
 // ---------------------------------------------------------------------
@@ -98,6 +112,10 @@ export type PaymentEntryInfo = {
   paymentMethod: PaymentMethod | null;
   status: EntryStatus;
   lines: Pick<BillEntryLine, "amount" | "vatAmount" | "whtAmount">[];
+  /** เฟส 10 ส่วน AA — สกุลเงินของบิลต้นทาง (optional, undefined/null = บิล THB ปกติ — backward-compat) */
+  currency?: string | null;
+  /** เฟส 10 ส่วน AA — อัตราแลกเปลี่ยน "ตอนออกบิล" (invoice rate, ใช้ derive `amount` ของงวดชำระ, 0.8) */
+  fxRate?: number | null;
 };
 
 /** ยอดเต็มของบิล (มูลค่าที่ตั้ง AR/AP ไว้ตอนยืนยัน) = amount + vat − wht รวมทุกบรรทัด (0.3, reuse summarizeEntry) */
@@ -139,10 +157,21 @@ export function isCreditEligibleForPayment(
 /** input ดิบ จาก client */
 export type BillPaymentInput = {
   payDate: unknown;
+  /** ยอด THB ต่องวด — มีความหมายเฉพาะบิล THB ปกติ (currency=null); บิล FX ไม่ใช้ค่านี้ (ดู fxAmount) */
   amount: unknown;
   method: unknown;
   bankAccountId?: unknown;
   notes?: unknown;
+  /**
+   * เฟส 10 ส่วน AA (0.8) — จำนวนเงินตราต่างประเทศที่ได้รับ/จ่ายจริงงวดนี้ — บังคับกรอกเมื่อบิลต้นทางเป็น FX
+   *   (entry.currency ไม่ null) เท่านั้น · ไม่มีความหมายกับบิล THB ปกติ
+   */
+  fxAmount?: unknown;
+  /**
+   * เฟส 10 ส่วน AA (0.8) — อัตราแลกเปลี่ยน "วันชำระ/settlement" ของงวดนี้ — คนละอัตรากับ bill_entries.fx_rate
+   *   (อัตราตอนออกบิล) บังคับกรอกเมื่อบิลต้นทางเป็น FX เท่านั้น
+   */
+  fxRate?: unknown;
 };
 
 export type ValidatedBillPayment = {
@@ -151,6 +180,12 @@ export type ValidatedBillPayment = {
   method: BillPaymentMethod;
   bankAccountId: string | null;
   notes: string | null;
+  /** สำเนาจากบิลต้นทางเสมอ (ไม่รับจาก client) — null = งวด THB ปกติ */
+  currency: string | null;
+  /** อัตราวันชำระของงวดนี้ — null = งวด THB ปกติ */
+  fxRate: number | null;
+  /** จำนวนเงินตราต่างประเทศงวดนี้ — null = งวด THB ปกติ */
+  fxAmount: number | null;
 };
 
 export type PaymentValidationResult =
@@ -182,9 +217,28 @@ export function validatePaymentInput(
   const payDate = typeof input.payDate === "string" && DATE_RE.test(input.payDate) ? input.payDate : "";
   if (!payDate) return { ok: false, message: "ต้องระบุวันที่รับ/จ่ายเงินให้ถูกรูปแบบ" };
 
-  const rawAmount = numLocal(input.amount);
-  const amount = rawAmount > 0 ? round2(rawAmount) : 0;
-  if (!nonZero(amount)) return { ok: false, message: "ต้องระบุจำนวนเงินมากกว่า 0" };
+  // ★ เฟส 10 ส่วน AA (0.8) — บิลต้นทาง FX (entry.currency ไม่ null): ยอดที่ตัด AR/AP ต้อง derive จาก
+  //   fxAmount × entry.fxRate (อัตราตอนออกบิล — ไม่ใช่อัตรา settlement ของงวดนี้) — ไม่ใช้ input.amount ตรง ๆ
+  const isFx = !!entry.currency;
+  let amount: number;
+  let fxAmount: number | null = null;
+  let fxRateSettle: number | null = null;
+  if (isFx) {
+    const rawFxAmount = numLocal(input.fxAmount);
+    if (!(rawFxAmount > 0)) {
+      return { ok: false, message: "ต้องระบุจำนวนเงินตราต่างประเทศ (fxAmount) มากกว่า 0" };
+    }
+    const rateCheck = validateFxRate(input.fxRate);
+    if (!rateCheck.ok) return { ok: false, message: rateCheck.message };
+    fxAmount = round2(rawFxAmount);
+    fxRateSettle = rateCheck.value;
+    amount = deriveThbAmount(fxAmount, numLocal(entry.fxRate));
+    if (!nonZero(amount)) return { ok: false, message: "ต้องระบุจำนวนเงินมากกว่า 0" };
+  } else {
+    const rawAmount = numLocal(input.amount);
+    amount = rawAmount > 0 ? round2(rawAmount) : 0;
+    if (!nonZero(amount)) return { ok: false, message: "ต้องระบุจำนวนเงินมากกว่า 0" };
+  }
 
   // บัญชีเงินฝากใช้เฉพาะโอน (pattern เดียวกับ bill_entries.payment_bank_account_id)
   const bankAccountId =
@@ -201,7 +255,19 @@ export function validatePaymentInput(
     };
   }
 
-  return { ok: true, value: { payDate, amount, method, bankAccountId, notes } };
+  return {
+    ok: true,
+    value: {
+      payDate,
+      amount,
+      method,
+      bankAccountId,
+      notes,
+      currency: isFx ? entry.currency ?? null : null,
+      fxRate: fxRateSettle,
+      fxAmount,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -308,6 +374,11 @@ export type BillPaymentScope = {
   entryType: EntryType;
   paymentMethod: PaymentMethod | null;
   status: EntryStatus;
+  docNo: string | null;
+  /** เฟส 10 ส่วน AA — สกุลเงินของบิลต้นทาง (null = บิล THB ปกติ, best-effort ถ้า migration ยังไม่ apply) */
+  currency: string | null;
+  /** เฟส 10 ส่วน AA — อัตราแลกเปลี่ยน "ตอนออกบิล" (null = บิล THB ปกติ) */
+  fxRate: number | null;
 };
 
 type RawScope = {
@@ -315,9 +386,15 @@ type RawScope = {
   entry_type: string;
   payment_method: string | null;
   status: string;
+  doc_no?: string | null;
+  currency?: string | null;
+  fx_rate?: number | string | null;
 };
 
-/** โหลดสโคป + สิทธิ์รับ-จ่ายเงินของบิล 1 ใบ (scope tenant) — ใช้ตรวจก่อนบันทึก/ยกเลิกทุกครั้ง */
+/** โหลดสโคป + สิทธิ์รับ-จ่ายเงินของบิล 1 ใบ (scope tenant) — ใช้ตรวจก่อนบันทึก/ยกเลิกทุกครั้ง
+ *   ★ เฟส 10: เพิ่ม currency/fx_rate เข้า select เดียวกัน (best-effort — ถ้า migration 0085 ยังไม่ apply
+ *   select ทั้งคำสั่งจะ error → คืน null ทั้งฟังก์ชัน เหมือนไม่พบบิล — ยอมรับความเสี่ยงนี้เพราะ 3 คอลัมน์เดิม
+ *   ก็อยู่ในคำสั่งเดียวกันมาตั้งแต่ต้นอยู่แล้ว ไม่ใช่จุดใหม่ที่เพิ่มความเสี่ยง degrade) */
 export async function getBillPaymentScope(
   db: DB,
   tenantId: string,
@@ -325,7 +402,7 @@ export async function getBillPaymentScope(
 ): Promise<BillPaymentScope | null> {
   const { data } = await db
     .from("bill_entries")
-    .select("customer_id, entry_type, payment_method, status")
+    .select("customer_id, entry_type, payment_method, status, doc_no, currency, fx_rate")
     .eq("id", entryId)
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
@@ -337,6 +414,9 @@ export async function getBillPaymentScope(
     entryType: r.entry_type === "sale" ? "sale" : r.entry_type === "purchase" ? "purchase" : "unspecified",
     paymentMethod: asPaymentMethod(r.payment_method),
     status: r.status === "confirmed" ? "confirmed" : "draft",
+    docNo: r.doc_no ?? null,
+    currency: r.currency ?? null,
+    fxRate: r.fx_rate === null || r.fx_rate === undefined ? null : numLocal(r.fx_rate),
   };
 }
 
@@ -375,6 +455,10 @@ type RawPayment = {
   bank_account_id: string | null;
   notes: string | null;
   created_at: string;
+  currency?: string | null;
+  fx_rate?: number | string | null;
+  fx_amount?: number | string | null;
+  fx_gain_loss_note_id?: string | null;
 };
 
 /** join รหัสผังบัญชีเงินฝาก (customer_bank_accounts.account_code) ของชุด bank_account_id ที่ต้องใช้ */
@@ -410,11 +494,15 @@ function mapPayment(r: RawPayment, codeByBankAccount: Map<string, string | null>
     bankAccountCode: r.bank_account_id ? codeByBankAccount.get(r.bank_account_id) ?? null : null,
     notes: r.notes,
     createdAt: r.created_at,
+    currency: r.currency ?? null,
+    fxRate: r.fx_rate === null || r.fx_rate === undefined ? null : numLocal(r.fx_rate),
+    fxAmount: r.fx_amount === null || r.fx_amount === undefined ? null : numLocal(r.fx_amount),
+    fxGainLossNoteId: r.fx_gain_loss_note_id ?? null,
   };
 }
 
 const PAYMENT_COLUMNS =
-  "id, tenant_id, entry_id, customer_id, pay_date, amount, method, bank_account_id, notes, created_at";
+  "id, tenant_id, entry_id, customer_id, pay_date, amount, method, bank_account_id, notes, created_at, currency, fx_rate, fx_amount, fx_gain_loss_note_id";
 
 /** ประวัติการรับ/จ่ายเงินของบิล 1 ใบ (ไม่รวมรายการที่ยกเลิกแล้ว) เรียงวันที่เก่า→ใหม่ */
 export async function listBillPayments(db: DB, tenantId: string, entryId: string): Promise<BillPayment[]> {
@@ -470,6 +558,29 @@ export async function listBillPaymentsForEntries(
   return result;
 }
 
+/**
+ * เซตของ entryId ที่มี bill_payments ที่ยังไม่ถูกยกเลิกผูกอยู่ ≥1 แถว (เฟส 10, 0.9) — ใช้ที่ UI
+ *   (EntryEditor.tsx) โชว์ badge ล็อกฟิลด์ currency/fx_rate โดยไม่ต้อง query ต่อบิลทีละใบ
+ *   ★ นี่เป็นแค่ hint ของ UI เท่านั้น — guard ที่บังคับจริงอยู่ที่ actions-lib.ts::upsertEntry (0.9)
+ */
+export async function hasActiveBillPaymentsForEntries(
+  db: DB,
+  tenantId: string,
+  entryIds: string[]
+): Promise<Set<string>> {
+  const result = new Set<string>();
+  if (entryIds.length === 0) return result;
+  const chunks = await Promise.all(
+    chunkIds(entryIds).map((ids) =>
+      db.from("bill_payments").select("entry_id").eq("tenant_id", tenantId).in("entry_id", ids).is("deleted_at", null)
+    )
+  );
+  for (const { data } of chunks) {
+    for (const r of (data ?? []) as { entry_id: string }[]) result.add(r.entry_id);
+  }
+  return result;
+}
+
 /** ผลลัพธ์ที่ server action ใช้แสดง toast/inline */
 export type PaymentActionResult = { ok: true; id: string } | { ok: false; message: string };
 
@@ -498,7 +609,14 @@ export async function recordBillPayment(
 
   const v = validatePaymentInput(
     input,
-    { entryType: scope.entryType, paymentMethod: scope.paymentMethod, status: scope.status, lines },
+    {
+      entryType: scope.entryType,
+      paymentMethod: scope.paymentMethod,
+      status: scope.status,
+      lines,
+      currency: scope.currency,
+      fxRate: scope.fxRate,
+    },
     existingPayments,
     netAdjustment
   );
@@ -515,6 +633,9 @@ export async function recordBillPayment(
       method: v.value.method,
       bank_account_id: v.value.bankAccountId,
       notes: v.value.notes,
+      currency: v.value.currency,
+      fx_rate: v.value.fxRate,
+      fx_amount: v.value.fxAmount,
     })
     .select("id")
     .maybeSingle();
@@ -546,6 +667,63 @@ export async function getPaymentScope(db: DB, tenantId: string, id: string): Pro
   const entryScope = await getBillPaymentScope(db, tenantId, entryId);
   if (!entryScope) return null;
   return { customerId: entryScope.customerId, entryId };
+}
+
+/**
+ * โหลดแถวเต็มของการรับ/จ่ายเงิน 1 รายการ จาก id ตรง ๆ (scope tenant) — ใช้ตอน "แนะนำ" กำไร/ขาดทุนจากอัตรา
+ *   แลกเปลี่ยน (เฟส 10 ส่วน AA, T91) ที่ต้องอ่าน fxAmount/fxRate/fxGainLossNoteId ของงวดนั้นเต็มรูป
+ *   (ต่างจาก getPaymentScope ที่คืนแค่ scope บาง ๆ สำหรับ guard)
+ */
+export async function getBillPaymentById(db: DB, tenantId: string, id: string): Promise<BillPayment | null> {
+  const { data } = await db
+    .from("bill_payments")
+    .select(PAYMENT_COLUMNS)
+    .eq("id", id)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!data) return null;
+  const row = data as unknown as RawPayment;
+  const codeByBankAccount = row.bank_account_id
+    ? await resolveBankAccountCodes(db, tenantId, [row.bank_account_id])
+    : new Map<string, string | null>();
+  return mapPayment(row, codeByBankAccount);
+}
+
+/**
+ * ผูก JV (draft) ที่ "แนะนำ" กำไร/ขาดทุนจากอัตราแลกเปลี่ยนกลับเข้างวดชำระนี้ (เฟส 10 ส่วน AA, 0.14) —
+ *   atomic check-and-write (`.is("fx_gain_loss_note_id", null)` ในคำสั่ง UPDATE จริง) กันแข่งกันกดปุ่ม
+ *   "แนะนำ" ซ้ำ/สองแท็บพร้อมกัน (mirror `updateDraftNote` ของ credit-debit-notes.ts เฟส 3 ที่กัน TOCTOU
+ *   แบบเดียวกัน) — คืน `true` เมื่อผูกสำเร็จ (แถวยังไม่เคยผูกมาก่อน) · `false` เมื่อมีคนผูกไปแล้วก่อนหน้า
+ */
+export async function claimFxGainLossNote(
+  db: DB,
+  tenantId: string,
+  paymentId: string,
+  noteId: string
+): Promise<boolean> {
+  const { data, error } = await db
+    .from("bill_payments")
+    .update({ fx_gain_loss_note_id: noteId })
+    .eq("id", paymentId)
+    .eq("tenant_id", tenantId)
+    .is("fx_gain_loss_note_id", null)
+    .select("id")
+    .maybeSingle();
+  return !error && !!data;
+}
+
+/**
+ * รีเซ็ต fx_gain_loss_note_id กลับเป็น null (เฟส 10 ส่วน AA) — ใช้เมื่อพบว่า JV ที่เคยแนะนำไว้ถูกลบไปแล้ว
+ *   (นักบัญชีลบ JV ที่แนะนำทิ้ง) เพื่อให้ปุ่ม "แนะนำ" ของงวดนั้นกลับมาใช้ได้ใหม่ (mirror ความเสี่ยงในหมวด 5
+ *   ของแผนเฟส 10)
+ */
+export async function resetFxGainLossNote(db: DB, tenantId: string, paymentId: string): Promise<void> {
+  await db
+    .from("bill_payments")
+    .update({ fx_gain_loss_note_id: null })
+    .eq("id", paymentId)
+    .eq("tenant_id", tenantId);
 }
 
 /** ยกเลิกการรับ/จ่ายเงิน (soft-delete) — ยอดค้างชำระของบิลจะกลับมาเหมือนไม่เคยมีรายการนี้ (0.2) */

@@ -364,6 +364,107 @@ describe("confirmEntry", () => {
   });
 });
 
+describe("upsertEntry — currency/fxRate (เฟส 10 ส่วน Z, 0.6/0.9)", () => {
+  it("insert ใหม่พร้อม currency/fxRate → ติดใน payload insert", async () => {
+    const { db, ops } = makeDb({});
+    const res = await upsertEntry(db, "t1", { entryType: "sale", currency: "USD", fxRate: 35.5 });
+    expect(res.ok).toBe(true);
+    const ins = ops.find((o) => o.kind === "insert")!;
+    expect(ins.payload!.currency).toBe("USD");
+    expect(ins.payload!.fx_rate).toBe(35.5);
+  });
+
+  it("บิลไม่มี bill_payments ผูก → เปลี่ยน currency/fx_rate ได้ปกติ", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft", currency: null, fx_rate: null } });
+    const res = await upsertEntry(db, "t1", { id: "e1", entryType: "sale", currency: "USD", fxRate: 36 });
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update")!;
+    expect(upd.payload!.currency).toBe("USD");
+    expect(upd.payload!.fx_rate).toBe(36);
+  });
+
+  it("★ บิลมี bill_payments ผูกอยู่แล้ว (mock) + พยายามเปลี่ยน currency → ปฏิเสธด้วย fx_locked (เทสต์บังคับ 0.9)", async () => {
+    const { db } = makeDb({
+      bill_entries: { status: "draft", currency: "USD", fx_rate: 35 },
+      "bill_payments:list": [{ id: "p1" }],
+    });
+    const res = await upsertEntry(db, "t1", { id: "e1", entryType: "sale", currency: "EUR", fxRate: 40 });
+    expect(res).toEqual({ ok: false, error: "fx_locked" });
+  });
+
+  it("★ บิลมี bill_payments ผูกอยู่ + พยายามเปลี่ยนแค่ fxRate (currency เดิม) → ปฏิเสธด้วย fx_locked เช่นกัน", async () => {
+    const { db } = makeDb({
+      bill_entries: { status: "draft", currency: "USD", fx_rate: 35 },
+      "bill_payments:list": [{ id: "p1" }],
+    });
+    const res = await upsertEntry(db, "t1", { id: "e1", entryType: "sale", currency: "USD", fxRate: 999 });
+    expect(res).toEqual({ ok: false, error: "fx_locked" });
+  });
+
+  it("บิลมี bill_payments ผูกอยู่ แต่ส่งค่า currency/fxRate เดิม (ไม่เปลี่ยนจริง) → ผ่านปกติ (ไม่ล็อกฟิลด์อื่น)", async () => {
+    const { db, ops } = makeDb({
+      bill_entries: { status: "draft", currency: "USD", fx_rate: 35 },
+      "bill_payments:list": [{ id: "p1" }],
+    });
+    const res = await upsertEntry(db, "t1", {
+      id: "e1",
+      entryType: "sale",
+      currency: "USD",
+      fxRate: 35,
+      docNo: "แก้เลขที่ได้ปกติ",
+    });
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update")!;
+    expect(upd.payload!.doc_no).toBe("แก้เลขที่ได้ปกติ");
+  });
+
+  it("ไม่ส่ง currency/fxRate เลย (undefined) → ไม่แตะค่าเดิม + ไม่ query bill_payments เลย", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft", currency: "USD", fx_rate: 35 } });
+    const res = await upsertEntry(db, "t1", { id: "e1", entryType: "sale", docNo: "X" });
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update")!;
+    expect("currency" in (upd.payload ?? {})).toBe(false);
+    expect("fx_rate" in (upd.payload ?? {})).toBe(false);
+    expect(ops.some((o) => o.table === "bill_payments")).toBe(false);
+  });
+});
+
+describe("addLine/updateLine — fxAmount (เฟส 10 ส่วน Z)", () => {
+  it("addLine ส่ง fxAmount → เก็บ fx_amount ตรง ๆ", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    const res = await addLine(db, "t1", "e1", { amount: 3550, fxAmount: 100 });
+    expect(res.ok).toBe(true);
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
+    expect(ins.payload!.fx_amount).toBe(100);
+  });
+
+  it("addLine ไม่ส่ง fxAmount → fx_amount เป็น null", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    await addLine(db, "t1", "e1", { amount: 100 });
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
+    expect(ins.payload!.fx_amount).toBeNull();
+  });
+
+  it("updateLine ส่ง fxAmount → แก้ fx_amount ด้วย · ไม่ส่ง → ไม่แตะค่าเดิม", async () => {
+    const { db, ops } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "draft" },
+    });
+    const res = await updateLine(db, "t1", "l1", { fxAmount: 200 });
+    expect(res.ok).toBe(true);
+    const upd = ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
+    expect(upd.payload!.fx_amount).toBe(200);
+
+    const { db: db2, ops: ops2 } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "draft" },
+    });
+    await updateLine(db2, "t1", "l1", { amount: 500 });
+    const upd2 = ops2.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
+    expect("fx_amount" in (upd2.payload ?? {})).toBe(false);
+  });
+});
+
 describe("deleteEntry — soft delete", () => {
   it("set deleted_at + scope tenant", async () => {
     const { db, ops } = makeDb({});

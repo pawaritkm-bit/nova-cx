@@ -43,6 +43,8 @@ import { redecideExistingEntries } from "@/lib/line/bill-extract-worker";
 import { pushCustomerTaxId } from "@/lib/integrations/nova-sales-outbound";
 import { validateBankAccountInput } from "@/lib/accounting/bank-accounts";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
+import { isValidCurrencyCode, validateFxRate, deriveThbAmount } from "@/lib/accounting/currency";
+import { fetchBotReferenceRate } from "@/lib/integrations/bot-exchange-rate";
 
 const PATH = "/chat-audit/accounting";
 /** bucket รูปบิล (private) — ตรงกับหน้า bills / lib/storage/bill-storage.ts */
@@ -149,6 +151,8 @@ function friendlyError(code: string): string {
       return "ต้องมีรายการที่มีมูลค่าอย่างน้อย 1 บรรทัดก่อนยืนยัน";
     case "not_found":
       return "ไม่พบรายการ (อาจถูกลบไปแล้ว)";
+    case "fx_locked":
+      return "ล็อกสกุลเงิน/อัตราแลกเปลี่ยน — บิลนี้มีการรับ/จ่ายเงินไปแล้ว แก้ไม่ได้ (เฉพาะฟิลด์นี้)";
     default:
       return "ทำรายการไม่สำเร็จ กรุณาลองใหม่";
   }
@@ -174,6 +178,12 @@ export type EditableLineInput = {
    *   ไม่ใช่ตัวเลข/≤0 = ไม่ผูกจำนวน (เก็บ null) — ไม่ block การบันทึกบิล
    */
   quantity?: number | null;
+  /**
+   * ยอดต้นฉบับสกุลต่างประเทศ ก่อน VAT (เฟส 10 ส่วน Z) — มีความหมายเฉพาะเมื่อหัวบิล (SaveEntryInput.currency)
+   *   ตั้งไว้เท่านั้น · server derive `amount` (THB) จาก fxAmount×fxRate ให้เอง ไม่รับ `amount` ที่ client
+   *   ส่งมาตรง ๆ อีกต่อไปเมื่อเป็นบิล FX (0.6)
+   */
+  fxAmount?: number | null;
   amount: number;
   vatAmount: number;
   whtRate: number;
@@ -199,6 +209,14 @@ export type SaveEntryInput = {
   notes?: string | null;
   /** เดือนที่ใช้ภาษีซื้อ 'YYYY-MM' (ค.ศ.) — เฉพาะบิลซื้อ · null = ใช้เดือน doc_date */
   inputTaxMonth?: string | null;
+  /**
+   * สกุลเงินต่างประเทศของบิล (เฟส 10 ส่วน Z, ISO 4217) — null = บิล THB ปกติ (ค่าเริ่มต้น)
+   *   ★ ล็อกแก้ไม่ได้ (0.9) ถ้าบิลนี้มี bill_payments ที่ยังไม่ถูกยกเลิกผูกอยู่แล้ว — server ปฏิเสธเงียบ ๆ
+   *   ไม่ได้ คืน error "fx_locked" ชัดเจนเสมอ
+   */
+  currency?: string | null;
+  /** อัตราแลกเปลี่ยน "ตอนออกบิล" — ต้องระบุเมื่อ currency ไม่ null (validate server-side จริง) */
+  fxRate?: number | null;
   lines: EditableLineInput[];
   /** id ของ line ที่ผู้ใช้ลบใน editor (ต้องลบใน DB ด้วย) */
   deletedLineIds?: string[];
@@ -239,6 +257,22 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
         return { ok: false, message: "บัญชีธนาคารไม่ถูกต้อง" };
       }
       paymentBankAccountId = input.paymentBankAccountId;
+    }
+
+    // ★ เฟส 10 ส่วน Z (0.3/0.6) — สกุลเงิน + อัตราแลกเปลี่ยนตอนออกบิล (server validate จริง ไม่เชื่อ client)
+    //   currency ว่าง/ไม่ส่ง = บิล THB ปกติ (พฤติกรรมเดิม 100%) — currency มีค่า ต้องผ่านรูปแบบ ISO 4217
+    //   + ต้องมี fxRate ที่ผ่าน hard-block guard (currency.ts::validateFxRate) เสมอ
+    const currencyRaw =
+      typeof input.currency === "string" ? input.currency.trim().toUpperCase() : "";
+    const currency = currencyRaw && isValidCurrencyCode(currencyRaw) ? currencyRaw : null;
+    if (currencyRaw && !currency) {
+      return { ok: false, message: "รหัสสกุลเงินไม่ถูกต้อง (ต้องเป็นตัวอักษร 3 ตัว เช่น USD)" };
+    }
+    let fxRate: number | null = null;
+    if (currency) {
+      const rateCheck = validateFxRate(input.fxRate);
+      if (!rateCheck.ok) return { ok: false, message: rateCheck.message };
+      fxRate = rateCheck.value;
     }
 
     // ★ สโคปนักบัญชี (server-side): แก้ของเดิม → ลูกค้าปัจจุบันของ entry ต้องอยู่ในความดูแล
@@ -285,6 +319,8 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
       paymentBankAccountId,
       dueDate: asDate(input.dueDate),
       notes: clampText(input.notes, 500),
+      currency,
+      fxRate,
     }, editOpts);
     if (!up.ok) return { ok: false, message: friendlyError(up.error) };
     const entryId = up.data.id;
@@ -332,7 +368,11 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
         productId: isUuid(l.productId) && validProductIds.has(l.productId) ? l.productId : null,
         // ★ จำนวนสต็อก (เฟส 8 ส่วน Y) — optional field เสริม ไม่ใช่ field บังคับของบิล
         quantity: asQuantity(l.quantity),
-        amount: asNumber(l.amount),
+        // ★ เฟส 10 ส่วน Z (0.6) — บิล FX (currency ตั้งไว้): เก็บ fxAmount ต้นฉบับ + derive `amount` (THB)
+        //   จาก fxAmount×fxRate เอง (ไม่รับ amount ที่ client ส่งมาตรง ๆ อีกต่อไป) · บิล THB ปกติ
+        //   (currency=null): amount ยังกรอกตรงเหมือนเดิมทุกประการ (backward-compat, ไม่แตะ fxAmount)
+        fxAmount: currency ? asNumber(l.fxAmount) : null,
+        amount: currency ? deriveThbAmount(asNumber(l.fxAmount), fxRate ?? 0) : asNumber(l.amount),
         vatAmount: asNumber(l.vatAmount),
         whtRate: asNumber(l.whtRate),
         whtAmount: asNumber(l.whtAmount),
@@ -1284,5 +1324,33 @@ export async function importOpeningBalancesAction(input: {
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "นำเข้ายอดยกมาไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/** ผลลัพธ์ดึงอัตราแลกเปลี่ยน ธปท. ที่ client ใช้ได้ (ไม่หลุด internal) */
+export type BotRateActionResult = { ok: true; rate: number } | { ok: false; message: string };
+
+/**
+ * ดึงอัตราแลกเปลี่ยนอ้างอิงรายวัน ธปท. — best-effort prefill เท่านั้น (เฟส 10, 0.12)
+ *   ★ ทำเป็น server action (ไม่ fetch ตรงจาก client) — กัน CORS/เปิดเผย endpoint ให้ client ยิงตรง
+ *   ★ ไม่ block การบันทึกบิลเลย — client แสดงข้อความ "ดึงอัตราอัตโนมัติไม่สำเร็จ กรุณากรอกเอง" เฉย ๆ ถ้าล้ม
+ *   ★ ต้อง login เป็นผู้มีสิทธิ์บัญชีก่อนเรียก (กัน endpoint นี้ถูกใช้เป็น proxy สาธารณะ) — ไม่ต้องมีสโคป
+ *     ลูกค้า (แค่ prefill ตัวเลขอ้างอิงสาธารณะ ไม่แตะข้อมูลลูกค้าเลย)
+ */
+export async function fetchBotRateAction(currency: string, date: string): Promise<BotRateActionResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    await requireAccountingAccess(authed, service);
+
+    if (!isValidCurrencyCode(currency) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return { ok: false, message: "ข้อมูลไม่ถูกต้อง" };
+    }
+    const res = await fetchBotReferenceRate(currency, date);
+    if (!res.ok) return { ok: false, message: "ดึงอัตราอัตโนมัติไม่สำเร็จ กรุณากรอกเอง" };
+    return { ok: true, rate: res.rate };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ดึงอัตราอัตโนมัติไม่สำเร็จ กรุณากรอกเอง" };
   }
 }

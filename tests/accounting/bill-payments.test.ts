@@ -36,6 +36,9 @@ function entryInfo(p: Partial<PaymentEntryInfo> = {}): PaymentEntryInfo {
     paymentMethod: "paymentMethod" in p ? p.paymentMethod! : "credit",
     status: p.status ?? "confirmed",
     lines: p.lines ?? [{ amount: 1000, vatAmount: 70, whtAmount: 0 }],
+    // เฟส 10 ส่วน AA — undefined เมื่อไม่ส่ง (backward-compat เป๊ะกับเทสต์เดิมทั้งหมดก่อนเฟสนี้)
+    currency: p.currency,
+    fxRate: p.fxRate,
   };
 }
 
@@ -131,6 +134,83 @@ describe("asBillPaymentMethod", () => {
   it("ค่าอื่นที่ไม่รู้จัก → null", () => {
     expect(asBillPaymentMethod("bitcoin")).toBeNull();
     expect(asBillPaymentMethod(undefined)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------
+// validatePaymentInput — FX (เฟส 10 ส่วน AA, 0.8) — บิลต้นทาง FX (entry.currency ไม่ null)
+// ---------------------------------------------------------------------
+describe("validatePaymentInput — FX (0.8)", () => {
+  const fxEntry = () =>
+    entryInfo({ lines: [{ amount: 1000, vatAmount: 0, whtAmount: 0 }], currency: "USD", fxRate: 35.0 });
+
+  it("★ derive amount จาก fxAmount × entry.fxRate (อัตราบิล) ไม่ใช่อัตรา settlement (เทสต์บังคับ)", () => {
+    const r = validatePaymentInput(
+      { payDate: "2026-08-01", amount: 999999, method: "cash", fxAmount: 20, fxRate: 36.0 },
+      fxEntry(),
+      []
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      // 20 × 35.0 (invoice rate) = 700 — ★ ไม่ใช่ 20 × 36.0 = 720 (settlement rate)
+      expect(r.value.amount).toBe(700);
+      expect(r.value.currency).toBe("USD");
+      expect(r.value.fxRate).toBe(36.0);
+      expect(r.value.fxAmount).toBe(20);
+    }
+  });
+
+  it("ไม่ระบุ fxAmount หรือ ≤0 → ปฏิเสธ", () => {
+    const r1 = validatePaymentInput({ payDate: "2026-08-01", amount: 0, method: "cash", fxRate: 36 }, fxEntry(), []);
+    expect(r1.ok).toBe(false);
+    const r2 = validatePaymentInput(
+      { payDate: "2026-08-01", amount: 0, method: "cash", fxAmount: -5, fxRate: 36 },
+      fxEntry(),
+      []
+    );
+    expect(r2.ok).toBe(false);
+  });
+
+  it("fxRate settlement ผิดรูป (≤0/เกิน 100000/ไม่ใช่ตัวเลข) → ปฏิเสธ (hard-block, 0.11)", () => {
+    const r1 = validatePaymentInput(
+      { payDate: "2026-08-01", amount: 0, method: "cash", fxAmount: 20, fxRate: 0 },
+      fxEntry(),
+      []
+    );
+    expect(r1.ok).toBe(false);
+    const r2 = validatePaymentInput(
+      { payDate: "2026-08-01", amount: 0, method: "cash", fxAmount: 20, fxRate: 200000 },
+      fxEntry(),
+      []
+    );
+    expect(r2.ok).toBe(false);
+  });
+
+  it("ยอดที่ derive แล้วเกินยอดค้างชำระ → ปฏิเสธเหมือนบิล THB ปกติ (0.8)", () => {
+    // entry net = 1000 (USD 1000 fxRate เดิม แต่บรรทัดคำนวณจาก amount ปกติของ pure lines — ยอดเต็ม = 1000)
+    const r = validatePaymentInput(
+      { payDate: "2026-08-01", amount: 0, method: "cash", fxAmount: 100, fxRate: 36.0 },
+      fxEntry(),
+      []
+    );
+    // 100 × 35.0 = 3500 > 1000 (ยอดเต็ม) → เกิน
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toContain("เกิน");
+  });
+
+  it("บิล THB ปกติ (currency=undefined) ยังใช้ input.amount ตรง ๆ เหมือนเดิมทุกประการ (regression บังคับ)", () => {
+    const r = validatePaymentInput(
+      { payDate: "2026-08-01", amount: 400, method: "cash" },
+      entryInfo({ lines: [{ amount: 1000, vatAmount: 0, whtAmount: 0 }] }),
+      []
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.amount).toBe(400);
+      expect(r.value.currency).toBeNull();
+      expect(r.value.fxRate).toBeNull();
+      expect(r.value.fxAmount).toBeNull();
+    }
   });
 });
 
@@ -320,6 +400,17 @@ describe("toJournalLines", () => {
     );
     expect(lines).toEqual([]);
   });
+
+  it("★ เฟส 10 (0.8) — payment.amount ที่ derive จาก fx (ไม่ใช่ integer กลม ๆ) → ยังคืนแค่ 2 บรรทัดเดิม สมดุลเป๊ะ ไม่มีขา FX เพิ่ม (toJournalLines ไม่รู้จัก/ไม่แก้เลยแม้แต่บรรทัดเดียว)", () => {
+    const lines = toJournalLines(
+      { payDate: "2026-08-01", amount: 3500, method: "cash", bankAccountCode: null }, // 100 USD × 35.0 invoice rate
+      mkPaymentEntry({ entryType: "sale" }),
+      chartByCode
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ accountCode: "1010", debit: 3500, credit: 0 });
+    expect(lines[1]).toMatchObject({ accountCode: "1140", debit: 0, credit: 3500 });
+  });
 });
 
 describe("toJournalPosting", () => {
@@ -480,7 +571,15 @@ describe("getBillPaymentScope", () => {
       entries: { e1: { customer_id: "c1", entry_type: "sale", payment_method: "credit", status: "confirmed" } },
     });
     const scope = await getBillPaymentScope(db, "t1", "e1");
-    expect(scope).toEqual({ customerId: "c1", entryType: "sale", paymentMethod: "credit", status: "confirmed" });
+    expect(scope).toEqual({
+      customerId: "c1",
+      entryType: "sale",
+      paymentMethod: "credit",
+      status: "confirmed",
+      docNo: null,
+      currency: null,
+      fxRate: null,
+    });
   });
 
   it("ไม่พบบิล → null", async () => {
@@ -650,6 +749,35 @@ describe("recordBillPayment", () => {
     const { db } = makeFakeDb({ entries: {} });
     const res = await recordBillPayment(db, "t1", "missing", { payDate: "2026-08-01", amount: 100, method: "cash" });
     expect(res.ok).toBe(false);
+  });
+
+  it("★ บิล FX (currency ตั้งไว้) — insert สำเร็จ + amount derive จาก fxAmount×entry.fxRate (อัตราบิล) + เก็บ currency/fx_rate(settlement)/fx_amount (เทสต์บังคับ 0.8)", async () => {
+    const { db, payments } = makeFakeDb({
+      entries: {
+        e1: {
+          customer_id: "c1",
+          entry_type: "sale",
+          payment_method: "credit",
+          status: "confirmed",
+          currency: "USD",
+          fx_rate: 35.0,
+        },
+      },
+      lines: { e1: [{ amount: 3500, vat_amount: 0, wht_amount: 0 }] }, // net=3500 (=100×35.0)
+    });
+    const res = await recordBillPayment(db, "t1", "e1", {
+      payDate: "2026-08-01",
+      amount: 999999, // ★ ต้องถูกละเลย — server ต้อง derive จาก fxAmount×invoiceFxRate เท่านั้น
+      method: "cash",
+      fxAmount: 100,
+      fxRate: 36.0, // settlement rate (ต่างจาก invoice rate 35.0)
+    });
+    expect(res.ok).toBe(true);
+    expect(payments).toHaveLength(1);
+    expect(payments[0].amount).toBe(3500); // 100 × 35.0 (invoice rate) ไม่ใช่ 100 × 36.0
+    expect(payments[0].currency).toBe("USD");
+    expect(payments[0].fx_rate).toBe(36.0); // settlement rate ของงวดนี้ เก็บแยกจาก entry.fx_rate
+    expect(payments[0].fx_amount).toBe(100);
   });
 
   it("บิลไม่ eligible (ไม่ใช่ credit) → ปฏิเสธ ไม่ insert", async () => {

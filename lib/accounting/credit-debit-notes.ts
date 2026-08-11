@@ -18,6 +18,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { contraAccountFor } from "@/lib/accounting/payment";
 import { chunkIds } from "@/lib/accounting/id-chunk";
+import { deriveThbAmount } from "@/lib/accounting/currency";
 import { round2, summarizeEntry, type EntryType } from "@/lib/accounting/queries";
 import { INPUT_VAT, OUTPUT_VAT, EPSILON } from "@/lib/accounting/statement-config";
 import type { JournalLine } from "@/lib/accounting/journal";
@@ -99,6 +100,11 @@ export type CreditDebitNoteLine = {
   description: string | null;
   accountCode: string;
   accountName: string | null;
+  /**
+   * ยอดต้นฉบับสกุลต่างประเทศ (เฟส 10 ส่วน AA, migration 0087) — มีความหมายเฉพาะเมื่อบิลต้นทางเป็น FX
+   *   (currency ไม่ null) เท่านั้น · เมื่อบิลต้นทาง currency=null (ปกติ) ไม่มีความหมาย (amount กรอกตรงเหมือนเดิม)
+   */
+  fxAmount?: number | null;
   amount: number;
   vatAmount: number;
 };
@@ -157,6 +163,8 @@ export type NoteLineInput = {
   accountName?: unknown;
   amount: unknown;
   vatAmount?: unknown;
+  /** เฟส 10 ส่วน AA (0.10) — ยอดต้นฉบับสกุลต่างประเทศ (มีความหมายเฉพาะบิลต้นทาง FX เท่านั้น) */
+  fxAmount?: unknown;
 };
 
 /** input ดิบทั้งใบ จาก client */
@@ -206,19 +214,35 @@ export function validateNoteInput(input: NoteInput, entry: PaymentEntryInfo): No
     return { ok: false, message: `บรรทัดมากเกินไป (สูงสุด ${MAX_LINES} บรรทัด)` };
   }
 
+  // ★ เฟส 10 ส่วน AA (0.10) — บิลต้นทาง FX (entry.currency ไม่ null): amount ต่อบรรทัด derive จาก
+  //   fxAmount × entry.fxRate (fx_rate "ของบิลต้นฉบับ" เสมอ — ไม่ใช่อัตราวันออก CN/DN) — บิลต้นทาง THB ปกติ
+  //   (currency=null): amount ยังกรอกตรงเหมือนเดิมทุกประการ (backward-compat)
+  const isFx = !!entry.currency;
+
   const lines: CreditDebitNoteLine[] = [];
   for (let i = 0; i < input.lines.length; i++) {
     const raw = input.lines[i];
     const accountCode = clampText(raw.accountCode, ACCOUNT_CODE_MAX);
     if (!accountCode) return { ok: false, message: `บรรทัดที่ ${i + 1}: ต้องเลือกรหัสบัญชี` };
 
-    const amount = asAmount(raw.amount);
-    if (!nonZero(amount)) return { ok: false, message: `บรรทัดที่ ${i + 1}: ต้องระบุจำนวนเงินมากกว่า 0` };
+    let amount: number;
+    let fxAmount: number | null = null;
+    if (isFx) {
+      fxAmount = asAmount(raw.fxAmount);
+      if (!nonZero(fxAmount)) {
+        return { ok: false, message: `บรรทัดที่ ${i + 1}: ต้องระบุจำนวนเงินตราต่างประเทศมากกว่า 0` };
+      }
+      amount = deriveThbAmount(fxAmount, entry.fxRate ?? 0);
+      if (!nonZero(amount)) return { ok: false, message: `บรรทัดที่ ${i + 1}: ต้องระบุจำนวนเงินมากกว่า 0` };
+    } else {
+      amount = asAmount(raw.amount);
+      if (!nonZero(amount)) return { ok: false, message: `บรรทัดที่ ${i + 1}: ต้องระบุจำนวนเงินมากกว่า 0` };
+    }
 
     const vatAmount = asAmount(raw.vatAmount);
     const accountName = clampText(raw.accountName, ACCOUNT_NAME_MAX);
     const description = clampText(raw.description, DESCRIPTION_MAX);
-    lines.push({ lineNo: i + 1, description, accountCode, accountName, amount, vatAmount });
+    lines.push({ lineNo: i + 1, description, accountCode, accountName, fxAmount, amount, vatAmount });
   }
 
   return { ok: true, value: { docType, docDate, docNo, reason, lines } };
@@ -388,13 +412,15 @@ type RawLine = {
   description: string | null;
   account_code: string;
   account_name: string | null;
+  fx_amount?: number | string | null;
   amount: number | string;
   vat_amount: number | string;
 };
 
 const NOTE_COLUMNS =
   "id, tenant_id, entry_id, customer_id, doc_type, doc_date, doc_no, reason, status, created_at, confirmed_at";
-const LINE_COLUMNS = "id, note_id, line_no, description, account_code, account_name, amount, vat_amount";
+const LINE_COLUMNS =
+  "id, note_id, line_no, description, account_code, account_name, fx_amount, amount, vat_amount";
 
 function mapNote(r: RawHead, lines: CreditDebitNoteLine[]): CreditDebitNote {
   return {
@@ -420,6 +446,7 @@ function mapLine(r: RawLine): CreditDebitNoteLine {
     description: r.description,
     accountCode: r.account_code,
     accountName: r.account_name,
+    fxAmount: r.fx_amount === null || r.fx_amount === undefined ? null : numLocal(r.fx_amount),
     amount: numLocal(r.amount),
     vatAmount: numLocal(r.vat_amount),
   };
@@ -565,6 +592,8 @@ export async function createDraftNote(
     paymentMethod: scope.paymentMethod,
     status: scope.status,
     lines,
+    currency: scope.currency,
+    fxRate: scope.fxRate,
   });
   if (!v.ok) return { ok: false, message: v.message };
 
@@ -593,6 +622,7 @@ export async function createDraftNote(
       description: l.description,
       account_code: l.accountCode,
       account_name: l.accountName,
+      fx_amount: l.fxAmount ?? null,
       amount: l.amount,
       vat_amount: l.vatAmount,
     }))
@@ -664,6 +694,8 @@ export async function updateDraftNote(
     paymentMethod: scope.paymentMethod,
     status: scope.status,
     lines,
+    currency: scope.currency,
+    fxRate: scope.fxRate,
   });
   if (!v.ok) return { ok: false, message: v.message };
 
@@ -697,6 +729,7 @@ export async function updateDraftNote(
       description: l.description,
       account_code: l.accountCode,
       account_name: l.accountName,
+      fx_amount: l.fxAmount ?? null,
       amount: l.amount,
       vat_amount: l.vatAmount,
     }))

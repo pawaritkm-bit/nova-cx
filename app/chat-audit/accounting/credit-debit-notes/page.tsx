@@ -118,6 +118,9 @@ export default async function CreditDebitNotesPage({
             netTotal: billNetTotal(e),
             outstanding: billOutstanding(e, payments, netAdjByEntry.get(e.id) ?? 0),
             notes: notesByEntry.get(e.id) ?? [],
+            // เฟส 10 ส่วน AA (0.10) — สกุลเงิน/อัตราแลกเปลี่ยนของบิลต้นทาง (null = บิล THB ปกติ)
+            currency: e.currency ?? null,
+            fxRate: e.fxRate ?? null,
           };
         })
         .sort((a, b) => (b.docDate ?? "").localeCompare(a.docDate ?? ""));

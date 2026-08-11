@@ -38,6 +38,9 @@ function entryInfo(p: Partial<PaymentEntryInfo> = {}): PaymentEntryInfo {
     paymentMethod: "paymentMethod" in p ? p.paymentMethod! : "credit",
     status: p.status ?? "confirmed",
     lines: p.lines ?? [{ amount: 1000, vatAmount: 70, whtAmount: 0 }],
+    // เฟส 10 ส่วน AA (0.10) — undefined เมื่อไม่ส่ง (backward-compat กับเทสต์เดิมทั้งหมดก่อนเฟสนี้)
+    currency: p.currency,
+    fxRate: p.fxRate,
   };
 }
 
@@ -156,6 +159,57 @@ describe("validateNoteInput", () => {
     const r = validateNoteInput({ ...validInput, docNo: "" }, entryInfo());
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.docNo).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------
+// validateNoteInput — บิลต้นทาง FX (เฟส 10 ส่วน AA, 0.10) — amount derive จาก fxAmount × entry.fxRate
+// ---------------------------------------------------------------------
+describe("validateNoteInput — บิลต้นทาง FX (0.10)", () => {
+  const fxEntry = () => entryInfo({ currency: "USD", fxRate: 35.0 });
+
+  it("★ amount derive จาก fxAmount × entry.fxRate (ของบิลต้นฉบับ) เสมอ — ไม่สนวันที่ของ CN/DN เลย (เทสต์บังคับ)", () => {
+    const input: NoteInput = {
+      docType: "credit_note",
+      docDate: "2099-01-01", // ★ ตั้งใจให้ต่างจากวันบิลต้นทางมาก ๆ — ต้องไม่ถูกใช้คำนวณ amount
+      docNo: "CN-001",
+      reason: "สินค้าชำรุด",
+      lines: [{ accountCode: "4010", amount: undefined, fxAmount: 50 }],
+    };
+    const r = validateNoteInput(input, fxEntry());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.lines[0].amount).toBe(1750); // 50 × 35.0
+      expect(r.value.lines[0].fxAmount).toBe(50);
+    }
+  });
+
+  it("บิลต้นทาง FX + fxAmount ≤ 0 หรือไม่ระบุ → ปฏิเสธ", () => {
+    const input: NoteInput = {
+      docType: "credit_note",
+      docDate: "2026-08-01",
+      reason: "x",
+      lines: [{ accountCode: "4010", amount: undefined }],
+    };
+    expect(validateNoteInput(input, fxEntry()).ok).toBe(false);
+    expect(
+      validateNoteInput({ ...input, lines: [{ accountCode: "4010", amount: undefined, fxAmount: -10 }] }, fxEntry()).ok
+    ).toBe(false);
+  });
+
+  it("บิลต้นทาง THB ปกติ (currency=undefined) → ยัง derive จาก amount ตรง ๆ เหมือนเดิมทุกประการ (regression บังคับ)", () => {
+    const input: NoteInput = {
+      docType: "credit_note",
+      docDate: "2026-08-01",
+      reason: "x",
+      lines: [{ accountCode: "4010", amount: 1000, fxAmount: 999 }], // fxAmount ต้องถูกเมิน (ไม่ใช่บิล FX)
+    };
+    const r = validateNoteInput(input, entryInfo());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.lines[0].amount).toBe(1000);
+      expect(r.value.lines[0].fxAmount).toBeNull();
+    }
   });
 });
 
@@ -406,7 +460,15 @@ describe("getNoteEntryScope", () => {
   it("re-export ตรงจาก getBillPaymentScope — โหลดสโคปได้ถูกต้อง", async () => {
     const { db } = makeFakeDb(seedSaleEntry());
     const scope = await getNoteEntryScope(db, "t1", "e1");
-    expect(scope).toEqual({ customerId: "c1", entryType: "sale", paymentMethod: "credit", status: "confirmed" });
+    expect(scope).toEqual({
+      customerId: "c1",
+      entryType: "sale",
+      paymentMethod: "credit",
+      status: "confirmed",
+      docNo: null,
+      currency: null,
+      fxRate: null,
+    });
   });
 });
 

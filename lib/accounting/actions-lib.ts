@@ -40,6 +40,13 @@ export type UpsertEntryInput = {
   uploadPath?: string | null;
   uploadName?: string | null;
   uploadMime?: string | null;
+  /**
+   * สกุลเงินต่างประเทศของบิล (เฟส 10 ส่วน Z, ISO 4217) — undefined = ไม่แตะค่าเดิม · null = ล้าง (กลับเป็นบิล THB)
+   *   ★ 0.9: ถ้าบิลนี้มี bill_payments ที่ยังไม่ถูกยกเลิกผูกอยู่แล้ว ≥1 แถว → ปฏิเสธการเปลี่ยนค่านี้ (ล็อก)
+   */
+  currency?: string | null;
+  /** อัตราแลกเปลี่ยน "ตอนออกบิล" — undefined = ไม่แตะค่าเดิม · null = ล้าง (guard เดียวกับ currency, 0.9) */
+  fxRate?: number | null;
 };
 
 export type LineInput = {
@@ -54,6 +61,12 @@ export type LineInput = {
   productId?: string | null;
   /** จำนวนสต็อกของบรรทัดนี้ (เฟส 8 ส่วน Y) — undefined = ไม่แตะ (update) · null = ล้าง */
   quantity?: number | null;
+  /**
+   * ยอดต้นฉบับสกุลต่างประเทศ ก่อน VAT (เฟส 10 ส่วน Z) — undefined = ไม่แตะ (update) · null = ล้าง
+   *   ★ caller (actions.ts) เป็นคน derive `amount` จาก fxAmount×fxRate ก่อนส่งเข้ามาที่นี่แล้ว (0.6) —
+   *   ไฟล์นี้แค่เก็บค่า fxAmount ไว้เป็น metadata อ้างอิงเฉย ๆ ไม่คำนวณซ้ำ
+   */
+  fxAmount?: number | null;
   amount?: number | null;
   vatAmount?: number | null;
   whtRate?: number | null;
@@ -124,18 +137,42 @@ export async function upsertEntry(
   if (input.uploadMime !== undefined) payload.upload_mime = input.uploadMime;
 
   if (input.id) {
-    // กันแก้ของที่ยืนยันแล้ว
+    // กันแก้ของที่ยืนยันแล้ว + โหลด currency/fx_rate ปัจจุบัน (guard 0.9 ของเฟส 10 ด้านล่าง)
     const { data: cur } = await db
       .from("bill_entries")
-      .select("status")
+      .select("status, currency, fx_rate")
       .eq("id", input.id)
       .eq("tenant_id", tenantId)
       .is("deleted_at", null)
       .maybeSingle();
     if (!cur) return { ok: false, error: "not_found" };
-    if (!opts?.allowConfirmed && (cur as { status?: string }).status === "confirmed") {
+    const curRow = cur as { status?: string; currency?: string | null; fx_rate?: number | string | null };
+    if (!opts?.allowConfirmed && curRow.status === "confirmed") {
       return { ok: false, error: "entry_confirmed" };
     }
+
+    // ★ เฟส 10 (0.9): ล็อก currency/fx_rate ทันทีที่บิลนี้มี bill_payments ที่ยังไม่ถูกยกเลิกผูกอยู่ ≥1 แถว
+    //   เช็คเฉพาะเมื่อ payload "จะเปลี่ยนค่าจริง" (ต่างจากค่าเดิมใน DB) — ไม่ใช่แค่เช็คว่า field ถูกส่งมา
+    //   (ส่งค่าเดิมซ้ำ = ไม่นับว่าพยายามเปลี่ยน, mirror hint จากหมวด 5 ของแผนเฟส 10)
+    const curFxRate =
+      curRow.fx_rate === null || curRow.fx_rate === undefined ? null : Number(curRow.fx_rate);
+    const wantsCurrencyChange = input.currency !== undefined && (input.currency ?? null) !== (curRow.currency ?? null);
+    const wantsFxRateChange = input.fxRate !== undefined && (input.fxRate ?? null) !== curFxRate;
+    if (wantsCurrencyChange || wantsFxRateChange) {
+      const { data: paidRows } = await db
+        .from("bill_payments")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("entry_id", input.id)
+        .is("deleted_at", null)
+        .limit(1);
+      if (paidRows && paidRows.length > 0) {
+        return { ok: false, error: "fx_locked" };
+      }
+    }
+    if (input.currency !== undefined) payload.currency = input.currency ?? null;
+    if (input.fxRate !== undefined) payload.fx_rate = input.fxRate ?? null;
+
     const { error } = await db
       .from("bill_entries")
       .update(payload)
@@ -144,6 +181,10 @@ export async function upsertEntry(
     if (error) return { ok: false, error: "update_failed" };
     return { ok: true, data: { id: input.id } };
   }
+
+  // insert ใหม่ — ไม่มีทางมี bill_payments ผูกอยู่ก่อนแล้ว (ยังไม่มีบิล) → ไม่ต้อง guard 0.9
+  if (input.currency !== undefined) payload.currency = input.currency ?? null;
+  if (input.fxRate !== undefined) payload.fx_rate = input.fxRate ?? null;
 
   // insert ใหม่ (คีย์เอง)
   const { data, error } = await db
@@ -216,6 +257,7 @@ export async function addLine(
       account_name: input.accountName ?? null,
       product_id: input.productId ?? null,
       quantity: input.quantity ?? null,
+      fx_amount: input.fxAmount ?? null,
       amount,
       vat_amount: safeAmount(input.vatAmount),
       wht_rate: wht.rate,
@@ -254,6 +296,7 @@ export async function updateLine(
   if (input.accountName !== undefined) patch.account_name = input.accountName;
   if (input.productId !== undefined) patch.product_id = input.productId;
   if (input.quantity !== undefined) patch.quantity = input.quantity;
+  if (input.fxAmount !== undefined) patch.fx_amount = input.fxAmount;
   if (input.lineNo !== undefined) patch.line_no = input.lineNo;
   if (input.amount !== undefined) patch.amount = safeAmount(input.amount);
   if (input.vatAmount !== undefined) patch.vat_amount = safeAmount(input.vatAmount);

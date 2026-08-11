@@ -12,6 +12,12 @@ import type { FlowAccountDocType, FlowAccountPurchaseDocType } from "@/lib/integ
  *   บิลซื้อ: contact ของเอกสาร (`contactName`/`contactTaxId`) ต้องมาจาก `entry.counterpartyName/
  *   counterpartyTaxId` (ผู้ขาย/vendor จริง) เท่านั้น — ห้ามใช้ `customers` (ตัวลูกค้า NOVA-CX เอง/เจ้าของ
  *   FlowAccount instance) เด็ดขาด (นั่นเป็นช่องว่างที่พบในมัปเปอร์บิลขายเดิม — ตัดสินใจไม่แก้ในเฟสนี้ ดู 0.6)
+ *
+ * ★★ เฟส 10 (multi-currency, decision 0.13 — T96) ★★ ไฟล์นี้ "ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว" ในเฟส 10 —
+ *   `line.amount`/`line.vatAmount` ที่อ่านอยู่แล้วเป็น THB ที่ derive มาแล้วเสมอ (ทั้งบิล THB ปกติและบิล FX
+ *   ตาม 0.6 ของเฟส 10) มัปเปอร์นี้จึงไม่ต้องรู้จัก currency/fx_rate/fx_amount เลย — FlowAccount เห็นเฉพาะ
+ *   ยอด/VAT เป็น THB ล้วน 100% ไม่มี currency/rate ปนไปด้วย (ยืนยันจาก help center จริงว่า FlowAccount เอง
+ *   ก็บันทึกบัญชี GL เป็น THB เสมอ)
  */
 
 /** วิธีจ่าย/รับเงิน → ชนิดเอกสารขาย (ยังไม่ระบุ = ถือเป็นเชื่อ ตาม convention journal.ts contraAccountFor) */

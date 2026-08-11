@@ -142,6 +142,9 @@ export default async function PaymentsPage({
             outstanding: billOutstanding(e, payments, netAdjByEntry.get(e.id) ?? 0),
             bucket: ageBucket(e.dueDate, asOfDate) as AgingBucketKey,
             payments,
+            // เฟส 10 ส่วน AA — สกุลเงิน/อัตราแลกเปลี่ยนตอนออกบิล (null = บิล THB ปกติ, ไม่โชว์ช่อง fx เลย)
+            currency: e.currency ?? null,
+            fxRate: e.fxRate ?? null,
           };
         })
         .filter((b) => b.outstanding > EPSILON)

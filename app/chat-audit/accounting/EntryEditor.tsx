@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { saveEntryAction, deleteEntryAction, type SaveEntryInput } from "./actions";
+import { saveEntryAction, deleteEntryAction, fetchBotRateAction, type SaveEntryInput } from "./actions";
 import { buildChartByCode, type ChartAccount } from "@/lib/accounting/chart-of-accounts";
 import { searchProducts, type Product } from "@/lib/accounting/products";
 import AccountCombobox from "./AccountCombobox";
+import CurrencyCombobox from "./CurrencyCombobox";
 import { lineBadge } from "@/lib/accounting/line-status";
 import {
   parseAmountInput,
@@ -18,6 +19,7 @@ import type { BillEntry, EntryType, VatType, WhtForm, PaymentMethod } from "@/li
 import { resolveEntryNav } from "@/lib/accounting/entry-nav";
 import { contraAccountFor, paymentMethodLabel } from "@/lib/accounting/payment";
 import { taxMonthOptions, taxMonthLabel } from "@/lib/accounting/tax-month";
+import { validateFxRate, fxRatePlausibilityWarning, deriveThbAmount } from "@/lib/accounting/currency";
 
 /**
  * EntryEditor — หน้าต่างตรวจ/แก้บิล (verify panel)
@@ -51,6 +53,8 @@ type LineRow = {
    *   โชว์เฉพาะบรรทัดที่เลือกสินค้าไว้แล้ว (mirror เงื่อนไข ProductCell) — ปล่อยว่างได้ตามปกติ
    */
   quantity: string;
+  /** เฟส 10 ส่วน Z — ยอดต้นฉบับสกุลต่างประเทศ (มีความหมายเฉพาะเมื่อหัวบิลตั้ง currency ไว้) */
+  fxAmount: string;
   amount: string;
   vatAmount: string;
   whtRate: string;
@@ -96,7 +100,7 @@ function thaiToIso(s: string): string {
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
     return [
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, quantity: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, quantity: "", fxAmount: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ];
   }
   return entry.lines.map((l) => ({
@@ -109,6 +113,8 @@ function initLines(entry: BillEntry): LineRow[] {
     productId: l.productId ?? null,
     // จำนวนสต็อก (เฟส 8 ส่วน Y) — reuse numToInput เหมือนช่องตัวเลขอื่น (null/0 → ว่าง)
     quantity: numToInput(l.quantity ?? 0),
+    // ยอดต้นฉบับสกุลต่างประเทศ (เฟส 10 ส่วน Z)
+    fxAmount: numToInput(l.fxAmount ?? 0),
     amount: numToInput(l.amount),
     vatAmount: numToInput(l.vatAmount),
     whtRate: numToInput(l.whtRate),
@@ -129,6 +135,7 @@ export default function EntryEditor({
   onNavigate,
   chart,
   products,
+  fxLocked = false,
 }: {
   entry: BillEntry;
   viewUrl: string | null;
@@ -152,6 +159,11 @@ export default function EntryEditor({
    *   ต่อบรรทัด (เลือกแล้ว prefill description+account_code/name ให้ — ไม่ auto-fill amount)
    */
   products: Product[];
+  /**
+   * เฟส 10 ส่วน Z (0.9) — บิลนี้มีการรับ/จ่ายเงินไปแล้ว ≥1 รายการ → ล็อกช่อง currency/fx_rate เท่านั้น
+   *   (คำนวณจาก DB โดย page.tsx ครั้งเดียว — แค่ hint ของ UI, guard จริงอยู่ที่ actions-lib.ts::upsertEntry)
+   */
+  fxLocked?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -190,6 +202,13 @@ export default function EntryEditor({
   // วันครบกำหนดชำระ (เฟส 2 ส่วน E/F) — เก็บเป็นข้อความไทย เหมือน docDate · แสดงเฉพาะบิลเชื่อ (payment_method='credit')
   //   ★ ค่าไม่ถูกล้างเมื่อเปลี่ยนวิธีจ่ายไปมา (state คงอยู่ ซ่อน/โชว์แค่ UI เท่านั้น)
   const [dueDate, setDueDate] = useState<string>(entry.dueDate ? isoToThai(entry.dueDate) : "");
+  // เฟส 10 ส่วน Z — สกุลเงินต่างประเทศ + อัตราแลกเปลี่ยนตอนออกบิล ("" = บิล THB ปกติ)
+  const [currency, setCurrency] = useState<string>(entry.currency ?? "");
+  const [fxRate, setFxRate] = useState<string>(entry.fxRate ? String(entry.fxRate) : "");
+  const [fxMsg, setFxMsg] = useState<string | null>(null);
+  const [botFetching, setBotFetching] = useState(false);
+  // ล็อกเฉพาะช่อง currency/fx_rate (0.9) — มีการรับ/จ่ายเงินไปแล้ว ล็อกแม้กำลังแก้บิลที่ยืนยันแล้วอยู่ก็ตาม
+  const fxFieldsReadOnly = locked || fxLocked;
 
   // ---- lines state ----
   const [lines, setLines] = useState<LineRow[]>(() => initLines(entry));
@@ -262,10 +281,58 @@ export default function EntryEditor({
     patchLine(l.key, { whtRate: raw, whtAmount: numToInput(calcWht(amt, parseAmountInput(raw))) });
   };
 
+  /**
+   * เฟส 10 ส่วน Z (0.6) — บิล FX: ยอดต้นฉบับสกุลต่างประเทศต่อบรรทัดเปลี่ยน → derive `amount` (THB) ใหม่
+   *   ด้วยอัตราแลกเปลี่ยนของหัวบิล (currency ตั้งไว้เท่านั้นถึงมีผล) + คำนวณ VAT/หัก ณ ที่จ่ายต่อจาก amount ใหม่
+   */
+  const onFxAmountChange = (l: LineRow, raw: string) => {
+    const fxAmt = parseAmountInput(raw);
+    const rate = parseAmountInput(fxRate);
+    const amt = deriveThbAmount(fxAmt, rate);
+    const vat = calcVat(amt, l.vatType);
+    const wht = calcWht(amt, parseAmountInput(l.whtRate));
+    patchLine(l.key, { fxAmount: raw, amount: numToInput(amt), vatAmount: numToInput(vat), whtAmount: numToInput(wht) });
+  };
+
+  // fx_rate ของหัวบิลเปลี่ยน → derive amount ของทุกบรรทัดใหม่ (ยึด fx_amount เดิมของแต่ละบรรทัด)
+  const onFxRateChange = (raw: string) => {
+    setFxRate(raw);
+    const rate = parseAmountInput(raw);
+    setLines((prev) =>
+      prev.map((l) => {
+        const amt = deriveThbAmount(parseAmountInput(l.fxAmount), rate);
+        return { ...l, amount: numToInput(amt), vatAmount: numToInput(calcVat(amt, l.vatType)) };
+      })
+    );
+    const check = validateFxRate(raw);
+    setFxMsg(check.ok ? fxRatePlausibilityWarning(currency, check.value) : null);
+  };
+
+  // ปุ่ม "ดึงอัตรา ธปท." — best-effort prefill (0.12) ไม่ block การบันทึกบิลเลยถ้าล้ม
+  const onFetchBotRate = () => {
+    if (!currency) return;
+    const iso = thaiToIso(docDate) || entry.docDate || "";
+    if (!iso) {
+      setFxMsg("กรุณาระบุวันที่เอกสารก่อนดึงอัตรา ธปท.");
+      return;
+    }
+    setBotFetching(true);
+    setFxMsg(null);
+    fetchBotRateAction(currency, iso)
+      .then((res) => {
+        if (res.ok) {
+          onFxRateChange(String(res.rate));
+        } else {
+          setFxMsg("ดึงอัตราอัตโนมัติไม่สำเร็จ กรุณากรอกเอง");
+        }
+      })
+      .finally(() => setBotFetching(false));
+  };
+
   const addLine = () => {
     setLines((prev) => [
       ...prev,
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, quantity: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, quantity: "", fxAmount: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ]);
   };
 
@@ -314,6 +381,9 @@ export default function EntryEditor({
       dueDate: thaiToIso(dueDate) || null,
       // เดือนที่ใช้ภาษีซื้อ — เฉพาะบิลซื้อ (ขาย/รอระบุ = null)
       inputTaxMonth: entryType === "purchase" ? (inputTaxMonth || null) : null,
+      // เฟส 10 ส่วน Z (0.3/0.9) — สกุลเงินต่างประเทศ + อัตราแลกเปลี่ยนตอนออกบิล ("" = บิล THB ปกติ)
+      currency: currency || null,
+      fxRate: currency ? parseAmountInput(fxRate) || null : null,
       lines: lines.map((l) => ({
         id: l.id,
         vatType: l.vatType,
@@ -325,6 +395,8 @@ export default function EntryEditor({
         productId: l.productId,
         // จำนวนสต็อก (เฟส 8 ส่วน Y) — reuse parseAmountInput เหมือน amount/vatAmount (server จะเช็ค ≤0 → null)
         quantity: parseAmountInput(l.quantity),
+        // ยอดต้นฉบับสกุลต่างประเทศ (เฟส 10 ส่วน Z) — server derive amount (THB) จากค่านี้เมื่อ currency ตั้งไว้
+        fxAmount: currency ? parseAmountInput(l.fxAmount) : null,
         amount: parseAmountInput(l.amount),
         vatAmount: parseAmountInput(l.vatAmount),
         whtRate: parseAmountInput(l.whtRate),
@@ -589,6 +661,51 @@ export default function EntryEditor({
                 </label>
               ) : null}
 
+              {/* เฟส 10 ส่วน Z (0.3/0.9/0.12) — สกุลเงินต่างประเทศ + อัตราแลกเปลี่ยนตอนออกบิล
+                  ★ ล็อกเฉพาะ 2 ช่องนี้เมื่อบิลมีการรับ/จ่ายเงินไปแล้ว (fxLocked) — ฟิลด์อื่นแก้ได้ตามปกติ */}
+              <label className="acc-field">
+                <span>สกุลเงิน {fxFieldsReadOnly ? <span title="ล็อกสกุลเงิน/อัตราแลกเปลี่ยน — มีการรับ/จ่ายเงินแล้ว">🔒</span> : null}</span>
+                <CurrencyCombobox
+                  currency={currency}
+                  readOnly={fxFieldsReadOnly}
+                  onSelect={(code) => {
+                    setCurrency(code);
+                    setFxMsg(null);
+                  }}
+                  onClear={() => {
+                    setCurrency("");
+                    setFxRate("");
+                    setFxMsg(null);
+                  }}
+                />
+              </label>
+              {currency ? (
+                <label className="acc-field">
+                  <span>อัตราแลกเปลี่ยนตอนออกบิล ({currency} → THB)</span>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input
+                      className="num"
+                      inputMode="decimal"
+                      value={fxRate}
+                      onChange={(e) => onFxRateChange(e.target.value)}
+                      placeholder="เช่น 35.500000"
+                      disabled={fxFieldsReadOnly}
+                    />
+                    {!fxFieldsReadOnly ? (
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={onFetchBotRate} disabled={botFetching}>
+                        {botFetching ? "กำลังดึง…" : "ดึงอัตรา ธปท."}
+                      </button>
+                    ) : null}
+                  </div>
+                </label>
+              ) : null}
+              {fxFieldsReadOnly && currency ? (
+                <div className="acc-field acc-field-wide acc-contra-hint">
+                  🔒 ล็อกสกุลเงิน/อัตราแลกเปลี่ยน — มีการรับ/จ่ายเงินแล้ว
+                </div>
+              ) : null}
+              {fxMsg ? <div className="acc-field acc-field-wide action-msg err">{fxMsg}</div> : null}
+
               {/* hint บัญชีคู่ที่จะเป็นเครดิต (ช่วยตรวจ — ยังไม่ลงจริง แค่บอกให้เห็น)
                   เงินโอน → บัญชีคู่ = เงินฝากธนาคาร (default 1020) */}
               {contraHint ? (
@@ -683,6 +800,19 @@ export default function EntryEditor({
                           title="จำนวนที่รับ/จ่ายสต็อกจากบรรทัดนี้ (ไม่บังคับ)"
                         />
                       ) : null}
+                      {/* ยอดต้นฉบับสกุลต่างประเทศ (เฟส 10 ส่วน Z) — โชว์เฉพาะบิลที่ตั้ง currency ไว้ */}
+                      {!locked && currency ? (
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          className="acc-qty-input"
+                          value={l.fxAmount}
+                          onChange={(e) => onFxAmountChange(l, e.target.value)}
+                          placeholder={`0.00 ${currency}`}
+                          aria-label={`ยอดต้นฉบับ (${currency})`}
+                          title={`ยอดต้นฉบับสกุล ${currency} ก่อน VAT — ระบบแปลงเป็นบาทให้อัตโนมัติด้วยอัตราแลกเปลี่ยนของหัวบิล`}
+                        />
+                      ) : null}
                       <select
                         value={l.vatType}
                         onChange={(e) => onVatSelect(l, e.target.value)}
@@ -706,7 +836,14 @@ export default function EntryEditor({
                         onClear={() => patchLine(l.key, { accountCode: "", accountName: "" })}
                       />
                     </div>
-                    <input className="num" inputMode="decimal" value={l.amount} onChange={(e) => onAmountChange(l, e.target.value)} disabled={locked} placeholder="0.00" aria-label="มูลค่า" />
+                    {currency ? (
+                      // เฟส 10 ส่วน Z (0.6) — บิล FX: มูลค่า (THB) เป็นค่า derived อย่างเดียว (ไม่ให้กรอกตรงอีก)
+                      <span className="num acc-net" title="แปลงจากยอดต้นฉบับสกุลต่างประเทศ × อัตราแลกเปลี่ยนของหัวบิล — แก้ไม่ได้ตรง (แก้ที่ช่องยอดต้นฉบับด้านซ้าย)">
+                        {formatMoney(amt)}
+                      </span>
+                    ) : (
+                      <input className="num" inputMode="decimal" value={l.amount} onChange={(e) => onAmountChange(l, e.target.value)} disabled={locked} placeholder="0.00" aria-label="มูลค่า" />
+                    )}
                     <input className="num" inputMode="decimal" value={l.vatAmount} onChange={(e) => patchLine(l.key, { vatAmount: e.target.value })} disabled={locked} placeholder="0.00" aria-label="VAT" />
                     <input className="num" inputMode="decimal" value={l.whtRate} onChange={(e) => onWhtRateChange(l, e.target.value)} disabled={locked} placeholder="0" aria-label="อัตราหัก %" />
                     <input className="num" inputMode="decimal" value={l.whtAmount} onChange={(e) => patchLine(l.key, { whtAmount: e.target.value })} disabled={locked} placeholder="0.00" aria-label="หัก ณ ที่จ่าย" />

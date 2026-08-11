@@ -138,6 +138,60 @@ describe("validateManualEntryInput", () => {
       expect(r.value.lines[0].accountName).toBe(chartByCode["5370"].name);
     }
   });
+
+  // -----------------------------------------------------------------
+  // เฟส 10 ส่วน AA — fx metadata (0.14) ผ่านเฉย ๆ ไม่ validate ความสัมพันธ์กับ debit/credit
+  // -----------------------------------------------------------------
+  it("★ fx metadata ถูกต้อง (currency/rate/amount) → ผ่านเข้าไปเก็บตรง ๆ ไม่กระทบสมดุล", () => {
+    const r = validateManualEntryInput(
+      {
+        ...validInput,
+        lines: [
+          { accountCode: "5370", debit: 1000, credit: 0, fxCurrency: "usd", fxRate: 35.5, fxAmount: 28.17 },
+          { accountCode: "1615.1", debit: 0, credit: 1000 },
+        ],
+      },
+      chartByCode
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      // uppercase ให้อัตโนมัติ (0.3 ของ currency.ts)
+      expect(r.value.lines[0].fxCurrency).toBe("USD");
+      expect(r.value.lines[0].fxRate).toBe(35.5);
+      expect(r.value.lines[0].fxAmount).toBe(28.17);
+      // บรรทัดที่ไม่มี metadata → null ทั้ง 3 ค่า
+      expect(r.value.lines[1].fxCurrency).toBeNull();
+    }
+  });
+
+  it("fx metadata รูปแบบผิด (currency ผิดรูป/rate ≤0) → เก็บเป็น null เงียบ ๆ ไม่ทำให้ทั้งใบปฏิเสธ", () => {
+    const r = validateManualEntryInput(
+      {
+        ...validInput,
+        lines: [
+          { accountCode: "5370", debit: 1000, credit: 0, fxCurrency: "US", fxRate: -5, fxAmount: 100 },
+          { accountCode: "1615.1", debit: 0, credit: 1000 },
+        ],
+      },
+      chartByCode
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.lines[0].fxCurrency).toBeNull();
+      expect(r.value.lines[0].fxRate).toBeNull();
+      expect(r.value.lines[0].fxAmount).toBeNull();
+    }
+  });
+
+  it("ไม่ส่ง fx metadata เลย (JV ปกติ) → null ทั้ง 3 ค่าเสมอ (ไม่กระทบ JV เดิม)", () => {
+    const r = validateManualEntryInput(validInput, chartByCode);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.lines[0].fxCurrency).toBeNull();
+      expect(r.value.lines[0].fxRate).toBeNull();
+      expect(r.value.lines[0].fxAmount).toBeNull();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------
@@ -205,6 +259,29 @@ describe("toJournalLines", () => {
     const lines = toJournalLines(entry);
     expect(lines[0].counterparty).toBe("รายละเอียดบรรทัด");
     expect(lines[1].counterparty).toBe("memo ทั้งใบ");
+  });
+});
+
+describe("toJournalLines/toJournalPosting — fx metadata ไม่กระทบเลย (เฟส 10 ส่วน AA, regression บังคับ T95)", () => {
+  it("บรรทัดมี fx metadata → toJournalLines/isBalanced ยังอ่านจาก debit/credit ตรง ๆ เหมือนเดิมเป๊ะ", () => {
+    const withFx = mkManualEntry({
+      lines: [
+        { id: "l1", lineNo: 1, accountCode: "1140", accountName: "ลูกหนี้การค้า", description: null, debit: 100, credit: 0, fxCurrency: "USD", fxRate: 36, fxAmount: 100 / 36 },
+        { id: "l2", lineNo: 2, accountCode: "4025", accountName: "กำไร(ขาดทุน)จากอัตราแลกเปลี่ยน", description: null, debit: 0, credit: 100, fxCurrency: "USD", fxRate: 36, fxAmount: 100 / 36 },
+      ],
+    });
+    const withoutFx = mkManualEntry({
+      lines: [
+        { id: "l1", lineNo: 1, accountCode: "1140", accountName: "ลูกหนี้การค้า", description: null, debit: 100, credit: 0 },
+        { id: "l2", lineNo: 2, accountCode: "4025", accountName: "กำไร(ขาดทุน)จากอัตราแลกเปลี่ยน", description: null, debit: 0, credit: 100 },
+      ],
+    });
+    expect(isBalanced(withFx.lines)).toBe(true);
+    // ผลลัพธ์ toJournalLines/toJournalPosting เหมือนกันเป๊ะไม่ว่ามี fx metadata หรือไม่ (ยกเว้น id ที่ต่างกันได้)
+    const linesWithFx = toJournalLines(withFx).map(({ ...l }) => l);
+    const linesWithoutFx = toJournalLines(withoutFx).map(({ ...l }) => l);
+    expect(linesWithFx).toEqual(linesWithoutFx);
+    expect(toJournalPosting(withFx)).toEqual(toJournalPosting(withoutFx));
   });
 });
 
@@ -339,6 +416,48 @@ describe("listManualEntries", () => {
     const rows = await listManualEntries(db, "t1", "c1");
     expect(rows).toEqual([]);
   });
+
+  it("★ โหลดกลับมา → เห็น fxCurrency/fxRate/fxAmount ถูกต้องตรงกับที่บันทึกไว้ (badge FX ที่ JournalEntryPanel)", async () => {
+    const { db } = makeDb({
+      "manual_journal_entries:list": [
+        {
+          id: "je1",
+          tenant_id: "t1",
+          customer_id: "c1",
+          doc_type: "JV",
+          doc_date: "2026-08-01",
+          doc_no: null,
+          memo: "แนะนำกำไรจากอัตราแลกเปลี่ยน",
+          status: "draft",
+          created_at: "2026-08-01T00:00:00Z",
+          confirmed_at: null,
+        },
+      ],
+      "manual_journal_entry_lines:list": [
+        { id: "l1", entry_id: "je1", line_no: 1, account_code: "1140", account_name: "ลูกหนี้การค้า", description: null, debit: 100, credit: 0, fx_currency: "USD", fx_rate: 36, fx_amount: 2.78 },
+        { id: "l2", entry_id: "je1", line_no: 2, account_code: "4025", account_name: "กำไรจากอัตราแลกเปลี่ยน", description: null, debit: 0, credit: 100, fx_currency: "USD", fx_rate: 36, fx_amount: 2.78 },
+      ],
+    });
+    const rows = await listManualEntries(db, "t1", "c1");
+    expect(rows[0].lines[0].fxCurrency).toBe("USD");
+    expect(rows[0].lines[0].fxRate).toBe(36);
+    expect(rows[0].lines[0].fxAmount).toBe(2.78);
+  });
+
+  it("JV ปกติที่ไม่มี fx metadata (column ค่า null ทั้งหมด) → fxCurrency/fxRate/fxAmount เป็น null", async () => {
+    const { db } = makeDb({
+      "manual_journal_entries:list": [
+        { id: "je1", tenant_id: "t1", customer_id: "c1", doc_type: "JV", doc_date: "2026-08-01", doc_no: null, memo: null, status: "draft", created_at: "2026-08-01T00:00:00Z", confirmed_at: null },
+      ],
+      "manual_journal_entry_lines:list": [
+        { id: "l1", entry_id: "je1", line_no: 1, account_code: "5370", account_name: "x", description: null, debit: 100, credit: 0, fx_currency: null, fx_rate: null, fx_amount: null },
+      ],
+    });
+    const rows = await listManualEntries(db, "t1", "c1");
+    expect(rows[0].lines[0].fxCurrency).toBeNull();
+    expect(rows[0].lines[0].fxRate).toBeNull();
+    expect(rows[0].lines[0].fxAmount).toBeNull();
+  });
 });
 
 describe("upsertManualEntry", () => {
@@ -381,6 +500,62 @@ describe("upsertManualEntry", () => {
     const { db } = makeDb({ manual_journal_entries: null });
     const res = await upsertManualEntry(db, "t1", "c1", validEntryInput, chartByCode, "missing");
     expect(res.ok).toBe(false);
+  });
+
+  // -----------------------------------------------------------------
+  // เฟส 10 ส่วน AA — insert lines best-effort สำหรับคอลัมน์ fx_* (migration 0089): ลองพร้อม fx ก่อน ถ้า
+  //   คอลัมน์ยังไม่ apply (จำลอง error) → ต้อง retry แบบไม่มีคอลัมน์ fx ทันที ไม่ throw ทั้งการบันทึก JV
+  // -----------------------------------------------------------------
+  it("★ insert lines คอลัมน์ fx_* ยังไม่ apply migration (error รอบแรก) → retry ไม่มีคอลัมน์ fx สำเร็จ ไม่ throw ทั้งการบันทึก", async () => {
+    const insertPayloads: Record<string, unknown>[][] = [];
+    let headerInserted = false;
+    function qb(table: string) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const api: any = {};
+      let mode = "select";
+      let payload: unknown = null;
+      api.select = () => api;
+      api.eq = () => api;
+      api.is = () => api;
+      api.in = () => api;
+      api.order = () => api;
+      api.limit = () => api;
+      api.insert = (p: unknown) => {
+        mode = "insert";
+        payload = p;
+        return api;
+      };
+      api.update = () => api;
+      api.delete = () => api;
+      api.maybeSingle = () => {
+        if (table === "manual_journal_entries" && mode === "insert") {
+          headerInserted = true;
+          return Promise.resolve({ data: { id: "je1" }, error: null });
+        }
+        return Promise.resolve({ data: null, error: null });
+      };
+      api.then = (onF: (v: { data: unknown; error: unknown }) => unknown) => {
+        if (table === "manual_journal_entry_lines" && mode === "insert") {
+          const rows = payload as Record<string, unknown>[];
+          insertPayloads.push(rows);
+          // รอบแรก (มี fx_currency ในคอลัมน์) → error (จำลอง migration ยังไม่ apply) · รอบถัดไป (ไม่มี) → สำเร็จ
+          const hasFx = rows.some((r) => "fx_currency" in r);
+          const result = hasFx ? { data: null, error: { code: "42703" } } : { data: null, error: null };
+          return Promise.resolve(result).then(onF);
+        }
+        return Promise.resolve({ data: null, error: null }).then(onF);
+      };
+      return api;
+    }
+    const db = { from: (t: string) => qb(t) } as unknown as SupabaseClient;
+
+    const res = await upsertManualEntry(db, "t1", "c1", validEntryInput, chartByCode);
+    expect(res.ok).toBe(true);
+    expect(headerInserted).toBe(true);
+    // ★ ต้องมี 2 ครั้ง: รอบแรก (มี fx) ล้ม → retry (ไม่มี fx) สำเร็จ
+    expect(insertPayloads).toHaveLength(2);
+    expect(insertPayloads[0].some((r) => "fx_currency" in r)).toBe(true);
+    expect(insertPayloads[1].some((r) => "fx_currency" in r)).toBe(false);
   });
 });
 
