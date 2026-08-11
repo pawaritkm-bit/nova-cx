@@ -5,6 +5,7 @@ import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, type AccountingAccess } from "@/lib/accounting/access";
 import { listRuns, getRunWithLines } from "@/lib/accounting/payroll";
+import { listActiveFilingReminders, countPendingFilingUnits } from "@/lib/accounting/payroll-filing-reminders";
 import PayrollRunPanel from "./PayrollRunPanel";
 import ChatAuditFrame from "../../_Frame";
 import "../../chat-admin.css";
@@ -84,6 +85,11 @@ export default async function PayrollPage({
   const validRunId = UUID_RE.test(rawRunId) && runs.some((r) => r.id === rawRunId) ? rawRunId : "";
   const detail = validCustomerId && validRunId ? await getRunWithLines(service, access.tenantId, validCustomerId, validRunId) : null;
 
+  const pendingReminders = validCustomerId
+    ? await listActiveFilingReminders(service, access.tenantId, validCustomerId)
+    : [];
+  const pendingReminderCount = countPendingFilingUnits(pendingReminders);
+
   return (
     <ChatAuditFrame
       active="chat-accounting"
@@ -137,6 +143,17 @@ export default async function PayrollPage({
         ) : (
           <div className="card">
             <div className="acc-opening-cust-label">{selectedLabel}</div>
+            {pendingReminderCount > 0 ? (
+              <div className="card acc-review-warn" style={{ marginBottom: 12 }} role="alert">
+                <span className="acc-review-warn-icon" aria-hidden="true">⚠️</span>
+                <div className="acc-review-warn-body">
+                  {pendingReminderCount} หน่วยยื่นใกล้/เกินกำหนด (ภ.ง.ด.1/สปส.1-10){" "}
+                  <Link href={`/chat-audit/accounting/payroll/filing?customerId=${validCustomerId}`}>
+                    ไปหน้าสรุปการยื่นรายเดือน →
+                  </Link>
+                </div>
+              </div>
+            ) : null}
             <PayrollRunPanel
               customerId={validCustomerId}
               runs={runs}
