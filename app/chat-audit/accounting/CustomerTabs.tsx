@@ -46,6 +46,8 @@ export default function CustomerTabs({
   bankReconciliationHref,
   fixedAssetsHref,
   inventoryHref,
+  payrollEmployeesHref,
+  payrollHref,
   tables,
   shareCircle,
   shareCircleCount,
@@ -92,6 +94,10 @@ export default function CustomerTabs({
   fixedAssetsHref?: string;
   /** สต็อกสินค้าคงเหลือ — บัตรสต็อก/สินค้าคงเหลือแยกหมวด (เฟส 8 ส่วน X) */
   inventoryHref?: string;
+  /** ทะเบียนพนักงานของบริษัทลูกค้า + ตั้งค่าบัญชีเงินเดือน (เฟส 9 ส่วน AC) — ★ ไม่ใช่พนักงานภายใน Finovas */
+  payrollEmployeesHref?: string;
+  /** รอบเงินเดือน — คำนวณภาษีหัก ณ ที่จ่าย/ประกันสังคม + สร้างรายการบัญชี (เฟส 9 ส่วน AD/AE) */
+  payrollHref?: string;
   tables: Record<EntryType, ReactNode>;
   /** เนื้อในแท็บ "วงแชร์" — undefined = ลูกค้ารายนี้ไม่ใช่ท้าวแชร์ (ไม่โชว์แท็บ) */
   shareCircle?: ReactNode;
@@ -245,6 +251,14 @@ export default function CustomerTabs({
             {/* สต็อกสินค้าคงเหลือ — บัตรสต็อก/สินค้าคงเหลือแยกหมวด (เฟส 8 ส่วน X) */}
             {inventoryHref ? (
               <a href={inventoryHref} className="btn btn-ghost">สต็อกสินค้า</a>
+            ) : null}
+            {/* ทะเบียนพนักงานของบริษัทลูกค้า + ตั้งค่าบัญชีเงินเดือน (เฟส 9 ส่วน AC) */}
+            {payrollEmployeesHref ? (
+              <a href={payrollEmployeesHref} className="btn btn-ghost">ทะเบียนพนักงาน</a>
+            ) : null}
+            {/* รอบเงินเดือน — คำนวณภาษีหัก ณ ที่จ่าย/ประกันสังคม + สร้างรายการบัญชี (เฟส 9 ส่วน AD/AE) */}
+            {payrollHref ? (
+              <a href={payrollHref} className="btn btn-ghost">เงินเดือน</a>
             ) : null}
           </>
         ) : null}

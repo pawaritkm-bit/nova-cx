@@ -1,0 +1,467 @@
+"use client";
+
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { upsertEmployeeAction, deleteEmployeeAction, revealIdCardAction, upsertSettingsAction } from "./actions";
+import type { PayrollEmployee } from "@/lib/accounting/payroll-employees";
+import type { PayrollSettings } from "@/lib/accounting/payroll-settings";
+import { buildChartByCode, type ChartAccount } from "@/lib/accounting/chart-of-accounts";
+import { parseAmountInput, formatMoney } from "@/lib/accounting/calc";
+import AccountCombobox from "../AccountCombobox";
+
+/**
+ * PayrollEmployeesPanel — ตั้ง/แก้/ลบทะเบียนพนักงานของลูกค้า 1 ราย (0.2, 0.12) + ตั้งค่าบัญชี 6 ช่อง
+ *   ที่ใช้เมื่อสร้างรายการบัญชีจากรอบเงินเดือน (0.11) — เฟส 9 ส่วน AC
+ *
+ * ★ 0.12 PDPA: เลขบัตรประชาชนที่ได้รับจาก server (props) มาสก์มาแล้วเสมอ (page.tsx ทำก่อนส่งลงมา) —
+ *   ปุ่ม "เผยเลขเต็ม" เรียก revealIdCardAction ต่อแถวเอง เก็บผลไว้ใน state ชั่วคราว (ไม่ persist/ไม่ log)
+ * ★ ทุกการเขียนผ่าน server action (guard requireAccountingAccess + assertCustomerInScope + service-role)
+ */
+
+function todayIso(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatDateThai(iso: string | null): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? "");
+  return m ? `${m[3]}/${m[2]}/${Number(m[1]) + 543}` : "—";
+}
+
+type FormState = {
+  employeeCode: string;
+  fullName: string;
+  idCardNo: string;
+  passportNo: string;
+  position: string;
+  baseSalary: string;
+  startDate: string;
+  resignDate: string;
+  isActive: boolean;
+};
+
+function blankForm(): FormState {
+  return {
+    employeeCode: "",
+    fullName: "",
+    idCardNo: "",
+    passportNo: "",
+    position: "",
+    baseSalary: "",
+    startDate: todayIso(),
+    resignDate: "",
+    isActive: true,
+  };
+}
+
+type SettingsFormState = {
+  salaryExpenseAccountCode: string;
+  salaryExpenseAccountName: string;
+  ssoEmployerExpenseAccountCode: string;
+  ssoEmployerExpenseAccountName: string;
+  ssoPayableAccountCode: string;
+  ssoPayableAccountName: string;
+  pitPayableAccountCode: string;
+  pitPayableAccountName: string;
+  otherDeductionsAccountCode: string;
+  otherDeductionsAccountName: string;
+  netPayAccountCode: string;
+  netPayAccountName: string;
+  netPayIsPaidImmediately: boolean;
+};
+
+export default function PayrollEmployeesPanel({
+  customerId,
+  employees,
+  settings,
+  chart,
+}: {
+  customerId: string;
+  /** ★ เลขบัตรประชาชนมาสก์มาแล้วจาก page.tsx เสมอ (0.12) */
+  employees: PayrollEmployee[];
+  settings: PayrollSettings;
+  chart: ChartAccount[];
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const chartByCode = useMemo(() => buildChartByCode(chart), [chart]);
+
+  const [tab, setTab] = useState<"employees" | "settings">("employees");
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<FormState>(() => blankForm());
+  const [revealed, setRevealed] = useState<Record<string, { idCardNo: string | null; passportNo: string | null }>>({});
+
+  const activeEmployees = useMemo(() => employees.filter((e) => e.isActive), [employees]);
+  const inactiveEmployees = useMemo(() => employees.filter((e) => !e.isActive), [employees]);
+
+  const resetForm = () => {
+    setEditingId(null);
+    setForm(blankForm());
+  };
+
+  const startEdit = (e: PayrollEmployee) => {
+    setMsg(null);
+    setTab("employees");
+    setEditingId(e.id);
+    setForm({
+      employeeCode: e.employeeCode ?? "",
+      fullName: e.fullName,
+      // ★ 0.12: ปล่อยว่างตอนแก้ไข = คงเลขบัตร/passport เดิมไว้ (server-side preserve — ดู actions.ts)
+      idCardNo: "",
+      passportNo: "",
+      position: e.position ?? "",
+      baseSalary: String(e.baseSalary),
+      startDate: e.startDate ?? "",
+      resignDate: e.resignDate ?? "",
+      isActive: e.isActive,
+    });
+  };
+
+  const submitEmployee = () => {
+    setMsg(null);
+    startTransition(async () => {
+      const res = await upsertEmployeeAction({
+        id: editingId ?? undefined,
+        customerId,
+        employeeCode: form.employeeCode,
+        fullName: form.fullName,
+        idCardNo: form.idCardNo,
+        passportNo: form.passportNo,
+        position: form.position,
+        baseSalary: parseAmountInput(form.baseSalary),
+        startDate: form.startDate || null,
+        resignDate: form.resignDate || null,
+        isActive: form.isActive,
+      });
+      setMsg({ ok: res.ok, text: res.message });
+      if (res.ok) {
+        resetForm();
+        router.refresh();
+      }
+    });
+  };
+
+  const removeEmployee = (id: string) => {
+    if (!confirm("ยืนยันลบทะเบียนพนักงานนี้?")) return;
+    startTransition(async () => {
+      const res = await deleteEmployeeAction(id, customerId);
+      setMsg({ ok: res.ok, text: res.message });
+      if (res.ok) router.refresh();
+    });
+  };
+
+  const reveal = (id: string) => {
+    startTransition(async () => {
+      const res = await revealIdCardAction(id, customerId);
+      if (res.ok) setRevealed((m) => ({ ...m, [id]: { idCardNo: res.idCardNo, passportNo: res.passportNo } }));
+      else setMsg({ ok: false, text: res.message });
+    });
+  };
+
+  // ---- ตั้งค่าบัญชี ----
+  const [settingsForm, setSettingsForm] = useState<SettingsFormState>(() => ({
+    salaryExpenseAccountCode: settings.salaryExpenseAccountCode,
+    salaryExpenseAccountName: chartByCode[settings.salaryExpenseAccountCode]?.name ?? settings.salaryExpenseAccountCode,
+    ssoEmployerExpenseAccountCode: settings.ssoEmployerExpenseAccountCode,
+    ssoEmployerExpenseAccountName:
+      chartByCode[settings.ssoEmployerExpenseAccountCode]?.name ?? settings.ssoEmployerExpenseAccountCode,
+    ssoPayableAccountCode: settings.ssoPayableAccountCode,
+    ssoPayableAccountName: chartByCode[settings.ssoPayableAccountCode]?.name ?? settings.ssoPayableAccountCode,
+    pitPayableAccountCode: settings.pitPayableAccountCode,
+    pitPayableAccountName: chartByCode[settings.pitPayableAccountCode]?.name ?? settings.pitPayableAccountCode,
+    otherDeductionsAccountCode: settings.otherDeductionsAccountCode ?? "",
+    otherDeductionsAccountName: settings.otherDeductionsAccountCode
+      ? chartByCode[settings.otherDeductionsAccountCode]?.name ?? settings.otherDeductionsAccountCode
+      : "",
+    netPayAccountCode: settings.netPayAccountCode ?? "",
+    netPayAccountName: settings.netPayAccountCode ? chartByCode[settings.netPayAccountCode]?.name ?? settings.netPayAccountCode : "",
+    netPayIsPaidImmediately: settings.netPayIsPaidImmediately,
+  }));
+
+  const submitSettings = () => {
+    setMsg(null);
+    startTransition(async () => {
+      const res = await upsertSettingsAction({
+        customerId,
+        salaryExpenseAccountCode: settingsForm.salaryExpenseAccountCode,
+        ssoEmployerExpenseAccountCode: settingsForm.ssoEmployerExpenseAccountCode,
+        ssoPayableAccountCode: settingsForm.ssoPayableAccountCode,
+        pitPayableAccountCode: settingsForm.pitPayableAccountCode,
+        otherDeductionsAccountCode: settingsForm.otherDeductionsAccountCode || null,
+        netPayAccountCode: settingsForm.netPayAccountCode || null,
+        netPayIsPaidImmediately: settingsForm.netPayIsPaidImmediately,
+      });
+      setMsg({ ok: res.ok, text: res.message });
+      if (res.ok) router.refresh();
+    });
+  };
+
+  return (
+    <div>
+      <div className="acc-subtabs">
+        <button type="button" className={`acc-subtab${tab === "employees" ? " active" : ""}`} onClick={() => setTab("employees")}>
+          ทะเบียนพนักงาน <span className="acc-subtab-n">{employees.length}</span>
+        </button>
+        <button type="button" className={`acc-subtab${tab === "settings" ? " active" : ""}`} onClick={() => setTab("settings")}>
+          ตั้งค่าบัญชี
+        </button>
+      </div>
+
+      {msg ? <div className={`action-msg ${msg.ok ? "ok" : "err"}`}>{msg.text}</div> : null}
+
+      {tab === "employees" ? (
+        <>
+          <div className="card" style={{ marginBottom: 12 }}>
+            <div className="section-title"><span>{editingId ? "แก้ไขพนักงาน" : "เพิ่มพนักงานใหม่"}</span></div>
+            <div className="acc-field-grid">
+              <label className="acc-field">
+                <span>รหัสพนักงาน</span>
+                <input value={form.employeeCode} onChange={(e) => setForm((f) => ({ ...f, employeeCode: e.target.value }))} />
+              </label>
+              <label className="acc-field">
+                <span>ชื่อ-นามสกุล *</span>
+                <input value={form.fullName} onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))} />
+              </label>
+              <label className="acc-field">
+                <span>เลขบัตรประชาชน (13 หลัก){editingId ? " — ปล่อยว่าง = ไม่เปลี่ยน" : ""}</span>
+                <input
+                  value={form.idCardNo}
+                  onChange={(e) => setForm((f) => ({ ...f, idCardNo: e.target.value }))}
+                  placeholder={editingId ? "(ไม่เปลี่ยน)" : "เช่น 1-2345-67890-12-3"}
+                />
+              </label>
+              <label className="acc-field">
+                <span>เลข Passport (ต่างชาติ){editingId ? " — ปล่อยว่าง = ไม่เปลี่ยน" : ""}</span>
+                <input
+                  value={form.passportNo}
+                  onChange={(e) => setForm((f) => ({ ...f, passportNo: e.target.value }))}
+                  placeholder={editingId ? "(ไม่เปลี่ยน)" : ""}
+                />
+              </label>
+              <label className="acc-field">
+                <span>ตำแหน่ง</span>
+                <input value={form.position} onChange={(e) => setForm((f) => ({ ...f, position: e.target.value }))} />
+              </label>
+              <label className="acc-field">
+                <span>เงินเดือนฐาน (บาท) *</span>
+                <input className="num" inputMode="decimal" value={form.baseSalary} onChange={(e) => setForm((f) => ({ ...f, baseSalary: e.target.value }))} />
+              </label>
+              <label className="acc-field">
+                <span>วันที่เริ่มงาน</span>
+                <input type="date" value={form.startDate} onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))} />
+              </label>
+              <label className="acc-field">
+                <span>วันที่ลาออก</span>
+                <input type="date" value={form.resignDate} onChange={(e) => setForm((f) => ({ ...f, resignDate: e.target.value }))} />
+              </label>
+              <label className="acc-field">
+                <span>สถานะ</span>
+                <span>
+                  <input type="checkbox" checked={form.isActive} onChange={(e) => setForm((f) => ({ ...f, isActive: e.target.checked }))} /> ยังทำงานอยู่ (active)
+                </span>
+              </label>
+            </div>
+            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+              <button type="button" className="btn" disabled={pending} onClick={submitEmployee}>
+                {editingId ? "บันทึกการแก้ไข" : "เพิ่มพนักงาน"}
+              </button>
+              {editingId ? (
+                <button type="button" className="btn btn-ghost" onClick={resetForm}>ยกเลิก</button>
+              ) : null}
+            </div>
+          </div>
+
+          <EmployeeTable
+            title="พนักงานที่ยังทำงานอยู่"
+            list={activeEmployees}
+            revealed={revealed}
+            onEdit={startEdit}
+            onDelete={removeEmployee}
+            onReveal={reveal}
+            pending={pending}
+            formatDateThai={formatDateThai}
+          />
+          {inactiveEmployees.length > 0 ? (
+            <EmployeeTable
+              title="พนักงานที่ไม่ทำงานแล้ว (inactive)"
+              list={inactiveEmployees}
+              revealed={revealed}
+              onEdit={startEdit}
+              onDelete={removeEmployee}
+              onReveal={reveal}
+              pending={pending}
+              formatDateThai={formatDateThai}
+            />
+          ) : null}
+        </>
+      ) : (
+        <div className="card">
+          <div className="section-title"><span>ตั้งค่าบัญชี — ใช้เมื่อสร้างรายการบัญชีจากรอบเงินเดือน</span></div>
+          <div className="acc-field-grid">
+            <label className="acc-field">
+              <span>รหัสบัญชีเงินเดือน/ค่าจ้าง (ค่าใช้จ่าย)</span>
+              <AccountCombobox
+                accountCode={settingsForm.salaryExpenseAccountCode}
+                accountName={settingsForm.salaryExpenseAccountName}
+                chart={chart}
+                readOnly={false}
+                onSelect={(code, name) => setSettingsForm((f) => ({ ...f, salaryExpenseAccountCode: code, salaryExpenseAccountName: name }))}
+                onNameChange={(name) => setSettingsForm((f) => ({ ...f, salaryExpenseAccountName: name }))}
+                onClear={() => setSettingsForm((f) => ({ ...f, salaryExpenseAccountCode: "", salaryExpenseAccountName: "" }))}
+              />
+            </label>
+            <label className="acc-field">
+              <span>รหัสบัญชีประกันสังคม (ส่วนนายจ้าง — ค่าใช้จ่าย)</span>
+              <AccountCombobox
+                accountCode={settingsForm.ssoEmployerExpenseAccountCode}
+                accountName={settingsForm.ssoEmployerExpenseAccountName}
+                chart={chart}
+                readOnly={false}
+                onSelect={(code, name) => setSettingsForm((f) => ({ ...f, ssoEmployerExpenseAccountCode: code, ssoEmployerExpenseAccountName: name }))}
+                onNameChange={(name) => setSettingsForm((f) => ({ ...f, ssoEmployerExpenseAccountName: name }))}
+                onClear={() => setSettingsForm((f) => ({ ...f, ssoEmployerExpenseAccountCode: "", ssoEmployerExpenseAccountName: "" }))}
+              />
+            </label>
+            <label className="acc-field">
+              <span>รหัสบัญชีประกันสังคมค้างนำส่ง (หนี้สิน)</span>
+              <AccountCombobox
+                accountCode={settingsForm.ssoPayableAccountCode}
+                accountName={settingsForm.ssoPayableAccountName}
+                chart={chart}
+                readOnly={false}
+                onSelect={(code, name) => setSettingsForm((f) => ({ ...f, ssoPayableAccountCode: code, ssoPayableAccountName: name }))}
+                onNameChange={(name) => setSettingsForm((f) => ({ ...f, ssoPayableAccountName: name }))}
+                onClear={() => setSettingsForm((f) => ({ ...f, ssoPayableAccountCode: "", ssoPayableAccountName: "" }))}
+              />
+            </label>
+            <label className="acc-field">
+              <span>รหัสบัญชีภาษีหัก ณ ที่จ่ายค้างจ่าย (หนี้สิน)</span>
+              <AccountCombobox
+                accountCode={settingsForm.pitPayableAccountCode}
+                accountName={settingsForm.pitPayableAccountName}
+                chart={chart}
+                readOnly={false}
+                onSelect={(code, name) => setSettingsForm((f) => ({ ...f, pitPayableAccountCode: code, pitPayableAccountName: name }))}
+                onNameChange={(name) => setSettingsForm((f) => ({ ...f, pitPayableAccountName: name }))}
+                onClear={() => setSettingsForm((f) => ({ ...f, pitPayableAccountCode: "", pitPayableAccountName: "" }))}
+              />
+            </label>
+            <label className="acc-field">
+              <span>รหัสบัญชีหักอื่น ๆ ค้างจ่าย (หนี้สิน, ไม่บังคับ)</span>
+              <AccountCombobox
+                accountCode={settingsForm.otherDeductionsAccountCode}
+                accountName={settingsForm.otherDeductionsAccountName}
+                chart={chart}
+                readOnly={false}
+                onSelect={(code, name) => setSettingsForm((f) => ({ ...f, otherDeductionsAccountCode: code, otherDeductionsAccountName: name }))}
+                onNameChange={(name) => setSettingsForm((f) => ({ ...f, otherDeductionsAccountName: name }))}
+                onClear={() => setSettingsForm((f) => ({ ...f, otherDeductionsAccountCode: "", otherDeductionsAccountName: "" }))}
+              />
+            </label>
+            <label className="acc-field">
+              <span>รหัสบัญชีเงินเดือนสุทธิ (หนี้สินค้างจ่าย หรือเงินสด/ธนาคารถ้าโอนทันที — บังคับก่อนสร้าง JE ได้จริง)</span>
+              <AccountCombobox
+                accountCode={settingsForm.netPayAccountCode}
+                accountName={settingsForm.netPayAccountName}
+                chart={chart}
+                readOnly={false}
+                onSelect={(code, name) => setSettingsForm((f) => ({ ...f, netPayAccountCode: code, netPayAccountName: name }))}
+                onNameChange={(name) => setSettingsForm((f) => ({ ...f, netPayAccountName: name }))}
+                onClear={() => setSettingsForm((f) => ({ ...f, netPayAccountCode: "", netPayAccountName: "" }))}
+              />
+            </label>
+            <label className="acc-field">
+              <span>โอนเงินเดือนวันเดียวกับปิดรอบทันที</span>
+              <span>
+                <input
+                  type="checkbox"
+                  checked={settingsForm.netPayIsPaidImmediately}
+                  onChange={(e) => setSettingsForm((f) => ({ ...f, netPayIsPaidImmediately: e.target.checked }))}
+                />{" "}
+                เลือกรหัสบัญชีเงินสด/ธนาคารด้านบนแทนบัญชีค้างจ่าย
+              </span>
+            </label>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <button type="button" className="btn" disabled={pending} onClick={submitSettings}>บันทึกตั้งค่าบัญชี</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmployeeTable({
+  title,
+  list,
+  revealed,
+  onEdit,
+  onDelete,
+  onReveal,
+  pending,
+  formatDateThai,
+}: {
+  title: string;
+  list: PayrollEmployee[];
+  revealed: Record<string, { idCardNo: string | null; passportNo: string | null }>;
+  onEdit: (e: PayrollEmployee) => void;
+  onDelete: (id: string) => void;
+  onReveal: (id: string) => void;
+  pending: boolean;
+  formatDateThai: (iso: string | null) => string;
+}) {
+  if (list.length === 0) return null;
+  return (
+    <div className="table-wrap" style={{ marginBottom: 16 }}>
+      <div className="section-title"><span>{title}</span></div>
+      <table className="dlv-table acc-table">
+        <thead>
+          <tr>
+            <th>รหัส</th>
+            <th>ชื่อ-นามสกุล</th>
+            <th>เลขบัตร/Passport</th>
+            <th>ตำแหน่ง</th>
+            <th className="num">เงินเดือนฐาน</th>
+            <th>เริ่มงาน</th>
+            <th>ลาออก</th>
+            <th className="center">จัดการ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((e) => {
+            const r = revealed[e.id];
+            const idDisplay = r ? r.idCardNo ?? "—" : e.idCardNo ?? "—";
+            const passportDisplay = r ? r.passportNo : e.passportNo;
+            return (
+              <tr key={e.id}>
+                <td>{e.employeeCode || "—"}</td>
+                <td>{e.fullName}</td>
+                <td>
+                  {e.idCardNo ? idDisplay : passportDisplay || "—"}
+                  {e.idCardNo && !r ? (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => onReveal(e.id)} disabled={pending} style={{ marginLeft: 6 }}>
+                      เผยเลขเต็ม
+                    </button>
+                  ) : null}
+                </td>
+                <td>{e.position || "—"}</td>
+                <td className="num">{formatMoney(e.baseSalary)}</td>
+                <td>{formatDateThai(e.startDate)}</td>
+                <td>{e.resignDate ? formatDateThai(e.resignDate) : "—"}</td>
+                <td className="center">
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => onEdit(e)}>แก้ไข</button>{" "}
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => onDelete(e.id)}>ลบ</button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}

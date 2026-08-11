@@ -1249,6 +1249,12 @@ export default async function AccountingPage({
         inventoryHref={
           g.customerId ? `/chat-audit/accounting/inventory?customerId=${g.customerId}` : undefined
         }
+        payrollEmployeesHref={
+          g.customerId ? `/chat-audit/accounting/payroll-employees?customerId=${g.customerId}` : undefined
+        }
+        payrollHref={
+          g.customerId ? `/chat-audit/accounting/payroll?customerId=${g.customerId}` : undefined
+        }
         paymentsHref={g.customerId ? `/chat-audit/accounting/payments?customerId=${g.customerId}` : undefined}
         agingHref={g.customerId ? `/chat-audit/accounting/ar-ap-aging?customer=${g.customerId}` : undefined}
         creditDebitNotesHref={
