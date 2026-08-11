@@ -50,9 +50,11 @@ import {
   calcSsoContribution,
   remainingPeriodsInYear,
   PERSONAL_ALLOWANCE_STANDARD,
+  ENABLE_EXTRA_DEDUCTIONS_IN_PIT,
 } from "@/lib/accounting/payroll-tax";
 import { calcProratedGrossSalary } from "@/lib/accounting/payroll-prorate";
 import { listEmployees } from "@/lib/accounting/payroll-employees";
+import { sumAndCapDeductions, listDeductionsForEmployees } from "@/lib/accounting/payroll-deductions";
 import { getSettings, type PayrollSettings } from "@/lib/accounting/payroll-settings";
 import { getOrCreateFilingPeriod } from "@/lib/accounting/payroll-monthly-filing";
 
@@ -131,6 +133,15 @@ export type PayrollRunLine = {
   isProrated: boolean;
   proratedDaysWorked: number;
   proratedDaysInMonth: number;
+  /** ★ เฟส 9b กลุ่ม BE (0.2, T154) — ยอดค่าลดหย่อนอื่นรวม (หลัง cap ตาม sumAndCapDeductions) ของปีภาษีนี้
+   *   ต่อพนักงาน — คำนวณสด ๆ ทุกครั้งที่แสดงผล (ไม่ persist ลง DB) */
+  extraDeductionsPreviewTotal: number;
+  /** personalAllowancePreview = PERSONAL_ALLOWANCE_STANDARD + extraDeductionsPreviewTotal — ตัวเลขที่แสดง
+   *   ในหน้าจอเสมอ (ไม่ว่า flag เปิด/ปิด) ★ ยอดที่ใช้จริงในการคำนวณ pit_withheld ขึ้นกับ
+   *   ENABLE_EXTRA_DEDUCTIONS_IN_PIT เท่านั้น (ดู recalcRunLines) */
+  personalAllowancePreview: number;
+  /** จุดที่ถูกตัดยอดเพราะชนเพดานค่าลดหย่อน (ถ้ามี) — แสดงเป็น notice ในหน้าจอ */
+  deductionWarnings: string[];
 };
 
 /** ผลลัพธ์ที่ server action ใช้แสดง toast/inline */
@@ -483,31 +494,33 @@ async function fetchRawLines(db: DB, tenantId: string, runId: string): Promise<R
   return (data ?? []) as unknown as RawLineRow[];
 }
 
+type EmployeeInfo = {
+  fullName: string;
+  employeeCode: string | null;
+  startDate: string | null;
+  resignDate: string | null;
+  /** ★ เฟส 9b กลุ่ม BE (0.2, T150) — ยอดประมาณเงินได้ทั้งปีที่นักบัญชีกรอกเอง (nullable) ใช้เป็นฐานคำนวณ
+   *   เพดาน PVD/RMF/กบข ใน sumAndCapDeductions เท่านั้น */
+  annualIncomeEstimateOverride: number | null;
+};
+
 /**
- * ข้อมูลพนักงาน (fullName/employeeCode/start_date/resign_date) ของ payrollEmployeeIds ที่ระบุ — chunkIds
- *   กัน `.in()` ยาวเกิน limit เมื่อลูกค้ามีพนักงาน 100+ คน (0.1, บทเรียน commit 7ab9f91)
- *   ★ เฟส 9b กลุ่ม BB — เพิ่ม start_date/resign_date เพื่อคำนวณ badge "prorate อัตโนมัติ" ตอนแสดงผล
- *   (getRunWithLines) — ไม่กระทบยอด gross_salary ที่บันทึกจริงเลย (แค่ข้อมูลช่วยตัดสินใจของนักบัญชี)
+ * ข้อมูลพนักงาน (fullName/employeeCode/start_date/resign_date/annual_income_estimate_override) ของ
+ *   payrollEmployeeIds ที่ระบุ — chunkIds กัน `.in()` ยาวเกิน limit เมื่อลูกค้ามีพนักงาน 100+ คน (0.1,
+ *   บทเรียน commit 7ab9f91)
+ *   ★ เฟส 9b กลุ่ม BB — start_date/resign_date คำนวณ badge "prorate อัตโนมัติ" ตอนแสดงผล (getRunWithLines)
+ *   — ไม่กระทบยอด gross_salary ที่บันทึกจริงเลย (แค่ข้อมูลช่วยตัดสินใจของนักบัญชี)
+ *   ★ เฟส 9b กลุ่ม BE — annual_income_estimate_override ใช้คำนวณ personalAllowancePreview เท่านั้น
  */
-async function fetchEmployeeInfo(
-  db: DB,
-  tenantId: string,
-  customerId: string,
-  ids: string[]
-): Promise<
-  Map<string, { fullName: string; employeeCode: string | null; startDate: string | null; resignDate: string | null }>
-> {
-  const map = new Map<
-    string,
-    { fullName: string; employeeCode: string | null; startDate: string | null; resignDate: string | null }
-  >();
+async function fetchEmployeeInfo(db: DB, tenantId: string, customerId: string, ids: string[]): Promise<Map<string, EmployeeInfo>> {
+  const map = new Map<string, EmployeeInfo>();
   const uniqIds = [...new Set(ids)];
   if (uniqIds.length === 0) return map;
   const chunks = await Promise.all(
     chunkIds(uniqIds).map((chunk) =>
       db
         .from("payroll_employees")
-        .select("id, full_name, employee_code, start_date, resign_date")
+        .select("id, full_name, employee_code, start_date, resign_date, annual_income_estimate_override")
         .eq("tenant_id", tenantId)
         .eq("customer_id", customerId)
         .in("id", chunk)
@@ -520,8 +533,19 @@ async function fetchEmployeeInfo(
       employee_code: string | null;
       start_date: string | null;
       resign_date: string | null;
+      annual_income_estimate_override?: number | string | null;
     }[]) {
-      map.set(r.id, { fullName: r.full_name, employeeCode: r.employee_code, startDate: r.start_date, resignDate: r.resign_date });
+      const override =
+        r.annual_income_estimate_override === null || r.annual_income_estimate_override === undefined
+          ? null
+          : round2(Number(r.annual_income_estimate_override));
+      map.set(r.id, {
+        fullName: r.full_name,
+        employeeCode: r.employee_code,
+        startDate: r.start_date,
+        resignDate: r.resign_date,
+        annualIncomeEstimateOverride: override,
+      });
     }
   }
   return map;
@@ -529,7 +553,17 @@ async function fetchEmployeeInfo(
 
 function mapLineAmounts(
   r: RawLineRow
-): Omit<PayrollRunLine, "employeeFullName" | "employeeCode" | "isProrated" | "proratedDaysWorked" | "proratedDaysInMonth"> {
+): Omit<
+  PayrollRunLine,
+  | "employeeFullName"
+  | "employeeCode"
+  | "isProrated"
+  | "proratedDaysWorked"
+  | "proratedDaysInMonth"
+  | "extraDeductionsPreviewTotal"
+  | "personalAllowancePreview"
+  | "deductionWarnings"
+> {
   return {
     id: r.id,
     runId: r.run_id,
@@ -570,6 +604,15 @@ export async function getRunWithLines(
     customerId,
     rawLines.map((l) => l.payroll_employee_id)
   );
+  // ★★ เฟส 9b กลุ่ม BE (0.2, T154) — ค่าลดหย่อนของปีภาษีนี้ (pay_period_year) ต่อพนักงาน ใช้แสดง
+  //   personalAllowancePreview เท่านั้น — ไม่กระทบยอด pit_withheld ที่บันทึกจริงในตาราง (คำนวณแยกที่
+  //   recalcRunLines ตาม ENABLE_EXTRA_DEDUCTIONS_IN_PIT)
+  const deductionsByEmployee = await listDeductionsForEmployees(
+    db,
+    tenantId,
+    rawLines.map((l) => l.payroll_employee_id),
+    run.payPeriodYear
+  );
   const lines: PayrollRunLine[] = rawLines
     .map((r) => {
       const amounts = mapLineAmounts(r);
@@ -584,6 +627,20 @@ export async function getRunWithLines(
         emp?.startDate ?? null,
         emp?.resignDate ?? null
       );
+
+      // ★★ BE — annualIncomeEstimate: ใช้ annual_income_estimate_override ถ้ากรอกไว้ ไม่งั้นประมาณจาก
+      //   ยอดเงินได้ประจำของบรรทัดนี้ (ไม่รวมโบนัส เหมือนฐาน annualize ของ calcMonthlyPitForRegularIncome)
+      //   × จำนวนงวดที่เหลือในปี (mirror recalcRunLines ทุกประการเพื่อให้ preview ตรงกับยอดจริงที่จะคำนวณ
+      //   ถ้าเปิด flag)
+      const periodsPerYear = remainingPeriodsInYear(run.payDate, emp?.startDate ?? null);
+      const grossThisPeriod = round2(amounts.grossSalary + amounts.otherAdditions);
+      const annualIncomeEstimate = emp?.annualIncomeEstimateOverride ?? round2(grossThisPeriod * periodsPerYear);
+      const deductionRows = (deductionsByEmployee.get(r.payroll_employee_id) ?? []).map((d) => ({
+        deductionType: d.deductionType,
+        amount: d.amount,
+      }));
+      const capped = sumAndCapDeductions(deductionRows, annualIncomeEstimate);
+
       return {
         ...amounts,
         employeeFullName: emp?.fullName ?? "(ไม่พบพนักงาน)",
@@ -591,6 +648,9 @@ export async function getRunWithLines(
         isProrated: prorate.isProrated,
         proratedDaysWorked: prorate.daysWorked,
         proratedDaysInMonth: prorate.daysInMonth,
+        extraDeductionsPreviewTotal: capped.totalOtherAllowance,
+        personalAllowancePreview: round2(PERSONAL_ALLOWANCE_STANDARD + capped.totalOtherAllowance),
+        deductionWarnings: capped.warnings,
       };
     })
     .sort((a, b) => a.employeeFullName.localeCompare(b.employeeFullName, "th"));
@@ -706,22 +766,42 @@ export async function recalcRunLines(
   const startDateByEmp = new Map<string, string | null>();
   // ★★ เฟส 9b กลุ่ม BA — โหลด sso_exempt คู่กับ start_date ต่อพนักงาน (0.3)
   const ssoExemptByEmp = new Map<string, boolean>();
+  // ★★ เฟส 9b กลุ่ม BE (0.2, T150) — ยอดประมาณเงินได้ทั้งปีที่นักบัญชีกรอกเอง (nullable)
+  const annualIncomeOverrideByEmp = new Map<string, number | null>();
   const chunks = await Promise.all(
     chunkIds([...new Set(empIds)]).map((chunk) =>
       db
         .from("payroll_employees")
-        .select("id, start_date, sso_exempt")
+        .select("id, start_date, sso_exempt, annual_income_estimate_override")
         .eq("tenant_id", tenantId)
         .eq("customer_id", customerId)
         .in("id", chunk)
     )
   );
   for (const { data } of chunks) {
-    for (const r of (data ?? []) as { id: string; start_date: string | null; sso_exempt: boolean | null }[]) {
+    for (const r of (data ?? []) as {
+      id: string;
+      start_date: string | null;
+      sso_exempt: boolean | null;
+      annual_income_estimate_override?: number | string | null;
+    }[]) {
       startDateByEmp.set(r.id, r.start_date);
       ssoExemptByEmp.set(r.id, !!r.sso_exempt);
+      annualIncomeOverrideByEmp.set(
+        r.id,
+        r.annual_income_estimate_override === null || r.annual_income_estimate_override === undefined
+          ? null
+          : round2(Number(r.annual_income_estimate_override))
+      );
     }
   }
+
+  // ★★ เฟส 9b กลุ่ม BE (0.2 ★★★ gate, T154) — ค่าลดหย่อนภาษีอื่นของปีภาษีนี้ (pay_period_year) ต่อพนักงาน
+  //   ใช้คำนวณ personalAllowancePreview เสมอ (แสดงในหน้าจอ) — ยอดที่ใช้จริงในการคำนวณ pit_withheld ขึ้นกับ
+  //   ENABLE_EXTRA_DEDUCTIONS_IN_PIT เท่านั้น (payroll-tax.ts) — ตราบใด flag=false ยอด pit_withheld ที่
+  //   บันทึกจริงจะเท่ากับก่อนเฟสนี้เป๊ะไม่ว่าตาราง payroll_employee_deductions จะมีข้อมูลอยู่หรือไม่ก็ตาม
+  //   (regression-safe 100%)
+  const deductionsByEmployee = await listDeductionsForEmployees(db, tenantId, [...new Set(empIds)], run.payPeriodYear);
 
   // ★★ ชั้น 1: คำนวณทุกบรรทัดก่อน (ยังไม่เขียน DB) — ให้ตรวจ net_pay ติดลบได้ทั้งชุดก่อนบันทึกจริงบรรทัดใดเลย
   type Computed = { rawId: string; payrollEmployeeId: string; pit: number; ssoEmployee: number; ssoEmployer: number; netPay: number };
@@ -732,7 +812,22 @@ export async function recalcRunLines(
     // ★ grossThisPeriod (ฐาน annualize เงินได้ประจำ + ฐาน SSO) ไม่รวม bonusAmount เสมอ — bonus ถูกส่งเข้า
     //   calcMonthlyPitWithBonus แยกเป็นพารามิเตอร์ของตัวเอง (0.5, verify แล้ว) ไม่ผสมเข้า grossThisPeriod
     const grossThisPeriod = round2(amounts.grossSalary + amounts.otherAdditions);
-    const pit = calcMonthlyPitWithBonus(grossThisPeriod, amounts.bonusAmount, periodsPerYear, PERSONAL_ALLOWANCE_STANDARD, brackets).totalPit;
+
+    // ★★ BE — personalAllowancePreview คำนวณเสมอ (ไม่ว่า flag เปิด/ปิด) เพื่อใช้เมื่อ flag=true เท่านั้น —
+    //   annualIncomeEstimate: override ถ้ากรอกไว้ ไม่งั้นประมาณจาก grossThisPeriod×periodsPerYear ของงวดนี้
+    const annualIncomeEstimate =
+      annualIncomeOverrideByEmp.get(raw.payroll_employee_id) ?? round2(grossThisPeriod * periodsPerYear);
+    const deductionRows = (deductionsByEmployee.get(raw.payroll_employee_id) ?? []).map((d) => ({
+      deductionType: d.deductionType,
+      amount: d.amount,
+    }));
+    const personalAllowancePreview = round2(
+      PERSONAL_ALLOWANCE_STANDARD + sumAndCapDeductions(deductionRows, annualIncomeEstimate).totalOtherAllowance
+    );
+    // ★★★ 0.2 gate — ยอดที่ใช้จริงตรง ๆ ตาม flag เท่านั้น (ห้ามลืมเผื่อกรณีอื่นแบบ implicit ใด ๆ)
+    const personalAllowance = ENABLE_EXTRA_DEDUCTIONS_IN_PIT ? personalAllowancePreview : PERSONAL_ALLOWANCE_STANDARD;
+
+    const pit = calcMonthlyPitWithBonus(grossThisPeriod, amounts.bonusAmount, periodsPerYear, personalAllowance, brackets).totalPit;
     // ★★ เฟส 9b กลุ่ม BA (0.3) — ข้าม calcSsoContribution เมื่อ sso_exempt=true (employee/employer=0 เสมอ
     //   ไม่ว่าค่าจ้างเท่าไหร่) — เงื่อนไขก่อนเรียกเท่านั้น ไม่แก้ calcSsoContribution เอง
     const isSsoExempt = ssoExemptByEmp.get(raw.payroll_employee_id) ?? false;

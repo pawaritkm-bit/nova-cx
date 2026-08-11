@@ -124,6 +124,29 @@ describe("validatePayrollEmployeeInput (0.12)", () => {
       expect(res.value.priorEmployerNote).toBe("บริษัท เอบีซี จำกัด");
     }
   });
+
+  // ★★ เฟส 9b กลุ่ม BE (0.2, T150/T151)
+  it("★ BE: ไม่กรอกยอดประมาณเงินได้ทั้งปีเลย → ผ่าน (nullable)", () => {
+    const res = validatePayrollEmployeeInput(baseInput());
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.annualIncomeEstimateOverride).toBeNull();
+  });
+
+  it("★ BE: กรอกยอดประมาณเงินได้ทั้งปีติดลบ → ปฏิเสธ", () => {
+    expect(validatePayrollEmployeeInput(baseInput({ annualIncomeEstimateOverride: -1 })).ok).toBe(false);
+  });
+
+  it("★ BE: กรอกยอดประมาณเงินได้ทั้งปีถูกต้อง → ผ่าน บันทึกค่าตามที่กรอก", () => {
+    const res = validatePayrollEmployeeInput(baseInput({ annualIncomeEstimateOverride: 1200000 }));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.annualIncomeEstimateOverride).toBe(1200000);
+  });
+
+  it("★ BE: แก้ค่าเดิมเป็น null (ล้างค่า) ได้ — ส่งค่าว่างมาแทน", () => {
+    const res = validatePayrollEmployeeInput(baseInput({ annualIncomeEstimateOverride: "" }));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.annualIncomeEstimateOverride).toBeNull();
+  });
 });
 
 describe("maskIdCardNo (0.12 PDPA)", () => {

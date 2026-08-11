@@ -85,6 +85,10 @@ export type PayrollEmployee = {
   priorEmployerYtdPitWithheld: number | null;
   priorEmployerYtdSsoEmployee: number | null;
   priorEmployerNote: string | null;
+  /** ★ เฟส 9b กลุ่ม BE (0.2, T150) — ยอดประมาณเงินได้ทั้งปีที่นักบัญชีกรอกเอง (nullable) ใช้เป็นฐานคำนวณ
+   *   เพดาน PVD/RMF/กบข (≤30% ของเงินได้) ใน sumAndCapDeductions เท่านั้น — ไม่กรอก (null) ให้
+   *   payroll.ts ประมาณจากยอดรายเดือนปัจจุบัน×จำนวนงวดแทน */
+  annualIncomeEstimateOverride: number | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -107,6 +111,8 @@ export type PayrollEmployeeInput = {
   priorEmployerYtdPitWithheld?: unknown;
   priorEmployerYtdSsoEmployee?: unknown;
   priorEmployerNote?: unknown;
+  /** ★ BE (0.2, T150) — nullable ไม่กรอก = ให้ payroll.ts ประมาณจากยอดรายเดือนปัจจุบันเอง */
+  annualIncomeEstimateOverride?: unknown;
 };
 
 type ValidatedPayrollEmployee = {
@@ -124,6 +130,7 @@ type ValidatedPayrollEmployee = {
   priorEmployerYtdPitWithheld: number | null;
   priorEmployerYtdSsoEmployee: number | null;
   priorEmployerNote: string | null;
+  annualIncomeEstimateOverride: number | null;
 };
 
 export type PayrollEmployeeValidationResult =
@@ -186,6 +193,10 @@ export function validatePayrollEmployeeInput(input: PayrollEmployeeInput): Payro
   if (!ytdSsoRes.ok) return { ok: false, message: "ยอดประกันสังคมยกมาจากนายจ้างเดิมต้องเป็นตัวเลขไม่ติดลบ" };
   const priorEmployerNote = clampText(input.priorEmployerNote, 500);
 
+  // ★ BE (0.2, T150) — nullable ตัวเลขไม่ติดลบถ้ากรอก (ใช้เป็นฐานคำนวณเพดาน PVD/RMF/กบข เท่านั้น)
+  const annualIncomeRes = parseMoneyOrNullField(input.annualIncomeEstimateOverride);
+  if (!annualIncomeRes.ok) return { ok: false, message: "ยอดประมาณเงินได้ทั้งปีต้องเป็นตัวเลขไม่ติดลบ" };
+
   return {
     ok: true,
     value: {
@@ -203,6 +214,7 @@ export function validatePayrollEmployeeInput(input: PayrollEmployeeInput): Payro
       priorEmployerYtdPitWithheld: ytdPitRes.value,
       priorEmployerYtdSsoEmployee: ytdSsoRes.value,
       priorEmployerNote,
+      annualIncomeEstimateOverride: annualIncomeRes.value,
     },
   };
 }
@@ -230,12 +242,14 @@ type RawRow = {
   prior_employer_ytd_pit_withheld?: number | string | null;
   prior_employer_ytd_sso_employee?: number | string | null;
   prior_employer_note?: string | null;
+  /** ★ BE — undefined ถ้า migration 0097 ยังไม่ apply บน DB นี้ (defensive, ไม่ควรเกิดในโปรดักชัน) */
+  annual_income_estimate_override?: number | string | null;
   created_at: string;
   updated_at: string;
 };
 
 const COLUMNS =
-  "id, tenant_id, customer_id, employee_code, full_name, id_card_no, passport_no, position, base_salary, start_date, resign_date, is_active, sso_exempt, prior_employer_ytd_gross, prior_employer_ytd_pit_withheld, prior_employer_ytd_sso_employee, prior_employer_note, created_at, updated_at";
+  "id, tenant_id, customer_id, employee_code, full_name, id_card_no, passport_no, position, base_salary, start_date, resign_date, is_active, sso_exempt, prior_employer_ytd_gross, prior_employer_ytd_pit_withheld, prior_employer_ytd_sso_employee, prior_employer_note, annual_income_estimate_override, created_at, updated_at";
 
 /** ตัวเลข nullable จาก DB (numeric อาจมาเป็น string) → number | null */
 function numOrNull(v: number | string | null | undefined): number | null {
@@ -263,6 +277,7 @@ function mapRow(r: RawRow): PayrollEmployee {
     priorEmployerYtdPitWithheld: numOrNull(r.prior_employer_ytd_pit_withheld),
     priorEmployerYtdSsoEmployee: numOrNull(r.prior_employer_ytd_sso_employee),
     priorEmployerNote: r.prior_employer_note ?? null,
+    annualIncomeEstimateOverride: numOrNull(r.annual_income_estimate_override),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -355,6 +370,7 @@ export async function upsertEmployee(
     prior_employer_ytd_pit_withheld: v.value.priorEmployerYtdPitWithheld,
     prior_employer_ytd_sso_employee: v.value.priorEmployerYtdSsoEmployee,
     prior_employer_note: v.value.priorEmployerNote,
+    annual_income_estimate_override: v.value.annualIncomeEstimateOverride,
   };
 
   if (id) {

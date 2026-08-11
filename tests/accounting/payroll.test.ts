@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { makeInMemoryDb, type Tables, type Row } from "../helpers/fake-payroll-db";
 import { TEST_CHART } from "./fixtures/chart";
 import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
@@ -15,6 +15,7 @@ import {
   type PayrollRunLineAmounts,
 } from "@/lib/accounting/payroll";
 import type { PayrollSettings } from "@/lib/accounting/payroll-settings";
+import * as payrollTax from "@/lib/accounting/payroll-tax";
 
 /** cast debit/credit (unknown จาก ManualEntryLineInput) → number ก่อนส่งเข้า isBalanced (buildPayrollJournalEntry
  *   สร้างค่าเป็น number เสมอในทางปฏิบัติ — cast นี้แค่ให้ตรงกับ signature ของ isBalanced) */
@@ -445,6 +446,158 @@ describe("recalcRunLines (T114) — idempotent", () => {
     const line = tables.payroll_run_lines[0];
     expect(line.pit_withheld).toBe(0);
     expect(line.net_pay).toBe(0);
+  });
+});
+
+// ★★★ เฟส 9b กลุ่ม BE (0.2 ★★★ gate, T154/T156) — ค่าลดหย่อนภาษีอื่นต้องไม่กระทบยอดจริงเลยตราบใด flag=false
+//   (regression-safe 100%) และต้องกระทบยอดจริงถูกต้องตามสูตร T152 เมื่อ flag=true เท่านั้น
+describe("recalcRunLines — เฟส 9b กลุ่ม BE (0.2 gate, T154)", () => {
+  let tables: Tables;
+  let runId: string;
+  let empId: string;
+  let lineId: string;
+
+  beforeEach(async () => {
+    tables = baseTables();
+    const { db } = makeInMemoryDb(tables);
+    seedEmployees(tables, 1);
+    const res = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" });
+    runId = (res as { id: string }).id;
+    lineId = tables.payroll_run_lines[0].id as string;
+    empId = tables.payroll_run_lines[0].payroll_employee_id as string;
+  });
+
+  function seedDeduction(taxYear: number, deductionType: string, amount: number) {
+    tables.payroll_employee_deductions ??= [];
+    tables.payroll_employee_deductions.push({
+      id: `ded-${tables.payroll_employee_deductions.length}`,
+      tenant_id: TENANT,
+      payroll_employee_id: empId,
+      tax_year: taxYear,
+      deduction_type: deductionType,
+      amount,
+      note: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+  }
+
+  it("★★★ flag=false (ค่า default ปิด) → pit_withheld เท่ากับก่อนเฟสนี้เป๊ะแม้มีข้อมูล deductions อยู่ในตาราง (regression-safe 100%)", async () => {
+    const spy = vi.spyOn(payrollTax, "ENABLE_EXTRA_DEDUCTIONS_IN_PIT", "get").mockReturnValue(false);
+    try {
+      // gross=60,000 (เหมือนเทสต์โบนัสด้านบน) → pit ไม่มี deductions = 3,041.67 ตามสูตรเดิม
+      const { db } = makeInMemoryDb(tables);
+      seedDeduction(2569, "mortgage_interest", 50000);
+      const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 60000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0 },
+      ]);
+      expect(res.ok).toBe(true);
+      const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+      // ★ ต้องเท่ากับยอดที่คำนวณได้ก่อนเฟสนี้ (ไม่มีค่าลดหย่อนอื่นเลย) เป๊ะ — เทียบกับเทสต์ "โบนัส=0" ด้านบน
+      expect(line.pit_withheld).toBe(3041.67);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("★★★ flag=true (จำลองในเทสต์เท่านั้น) → pit_withheld ลดลงตามค่าลดหย่อนที่เพิ่มถูกต้องตามสูตร T152", async () => {
+    const spy = vi.spyOn(payrollTax, "ENABLE_EXTRA_DEDUCTIONS_IN_PIT", "get").mockReturnValue(true);
+    try {
+      const { db } = makeInMemoryDb(tables);
+      seedDeduction(2569, "mortgage_interest", 50000);
+      const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 60000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0 },
+      ]);
+      expect(res.ok).toBe(true);
+      const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+      // ★ เทียบมือ: annual=720,000, expense cap=100,000, allowance=60,000+50,000(mortgage_interest,ไม่ชนเพดาน
+      //   100,000)=110,000 → taxable=510,000 → tax = 0(0-150k) + 7,500(150k-300k@5%) + 20,000(300k-500k@10%)
+      //   + 1,500(500k-510k@15%) = 29,000 → pit = 29,000/12 = 2,416.67 (ลดลงจาก 3,041.67 พอดี 625 = ผลต่าง
+      //   ค่าลดหย่อน 50,000 บาท × 15% (bracket เดิมที่ taxable เดิมตกอยู่) ÷ 12 งวด)
+      expect(line.pit_withheld).toBe(2416.67);
+      expect(3041.67 - 2416.67).toBe(625);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("flag=true แต่ไม่มีแถว payroll_employee_deductions ของปีภาษีนี้เลย → personalAllowance ยังเท่ากับ PERSONAL_ALLOWANCE_STANDARD เป๊ะ (ค่า default ของลูกค้าทุกรายก่อนกรอกข้อมูลเพิ่ม)", async () => {
+    const spy = vi.spyOn(payrollTax, "ENABLE_EXTRA_DEDUCTIONS_IN_PIT", "get").mockReturnValue(true);
+    try {
+      const { db } = makeInMemoryDb(tables);
+      const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 60000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0 },
+      ]);
+      expect(res.ok).toBe(true);
+      const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+      expect(line.pit_withheld).toBe(3041.67);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("deductions ของปีภาษีอื่น (ไม่ตรงกับ pay_period_year ของรอบนี้) → ไม่ถูกนำมาคำนวณ", async () => {
+    const spy = vi.spyOn(payrollTax, "ENABLE_EXTRA_DEDUCTIONS_IN_PIT", "get").mockReturnValue(true);
+    try {
+      const { db } = makeInMemoryDb(tables);
+      seedDeduction(2568, "mortgage_interest", 50000); // ปีภาษีอื่น ไม่ใช่ 2569 ของรอบนี้
+      const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 60000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0 },
+      ]);
+      expect(res.ok).toBe(true);
+      const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+      expect(line.pit_withheld).toBe(3041.67);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("getRunWithLines — เฟส 9b กลุ่ม BE (0.2 gate, T154/T155) — personalAllowancePreview", () => {
+  let tables: Tables;
+  let runId: string;
+  let empId: string;
+  let lineId: string;
+
+  beforeEach(async () => {
+    tables = baseTables();
+    const { db } = makeInMemoryDb(tables);
+    seedEmployees(tables, 1);
+    const res = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" });
+    runId = (res as { id: string }).id;
+    lineId = tables.payroll_run_lines[0].id as string;
+    empId = tables.payroll_run_lines[0].payroll_employee_id as string;
+  });
+
+  it("ไม่มี deductions เลย → personalAllowancePreview เท่ากับ PERSONAL_ALLOWANCE_STANDARD (60,000) เป๊ะ, extraDeductionsPreviewTotal=0", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const detail = await getRunWithLines(db, TENANT, CUSTOMER_A, runId);
+    expect(detail).not.toBeNull();
+    const line = detail!.lines.find((l) => l.id === lineId)!;
+    expect(line.personalAllowancePreview).toBe(60000);
+    expect(line.extraDeductionsPreviewTotal).toBe(0);
+    expect(line.deductionWarnings).toEqual([]);
+  });
+
+  it("มี deductions ของปีภาษีของรอบนี้ → personalAllowancePreview รวมค่าลดหย่อนหลัง cap เข้าไปด้วย (แสดงในหน้าจอเสมอไม่ว่า flag เปิด/ปิด)", async () => {
+    tables.payroll_employee_deductions ??= [];
+    tables.payroll_employee_deductions.push({
+      id: "ded-x",
+      tenant_id: TENANT,
+      payroll_employee_id: empId,
+      tax_year: 2569,
+      deduction_type: "spouse_no_income",
+      amount: 90000, // เกินเพดาน 60,000 → ต้องถูกตัด + มี warning
+      note: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+    const { db } = makeInMemoryDb(tables);
+    const detail = await getRunWithLines(db, TENANT, CUSTOMER_A, runId);
+    const line = detail!.lines.find((l) => l.id === lineId)!;
+    expect(line.extraDeductionsPreviewTotal).toBe(60000);
+    expect(line.personalAllowancePreview).toBe(120000);
+    expect(line.deductionWarnings.length).toBe(1);
   });
 });
 

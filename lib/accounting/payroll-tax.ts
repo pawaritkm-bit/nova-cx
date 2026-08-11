@@ -24,8 +24,27 @@ import type { PitBracket } from "@/lib/accounting/payroll-config";
 
 /** เพดานค่าใช้จ่ายเหมา (มาตรา 42 ทวิ) — 50% ของเงินได้ แต่ไม่เกิน 100,000 บาทต่อปี */
 export const EXPENSE_DEDUCTION_CAP = 100000;
-/** ค่าลดหย่อนส่วนบุคคลมาตรฐาน (รอบแรกของระบบ — ยังไม่รองรับค่าลดหย่อนอื่น ดู backlog 9b ข้อ 1) */
+/** ค่าลดหย่อนส่วนบุคคลมาตรฐาน (มาตรา 47(1)(ก)) — ทุกพนักงานได้รับเสมอไม่ว่าจะมีค่าลดหย่อนอื่นเพิ่มหรือไม่ */
 export const PERSONAL_ALLOWANCE_STANDARD = 60000;
+
+/**
+ * ★★★ เฟส 9b กลุ่ม BE (docs/06-accounting-features-roadmap.md, หมวด 0.2 ★★★ gate, T153/T157) —
+ *   สวิตช์เปิด/ปิดการนำค่าลดหย่อนภาษีอื่น (คู่สมรสไม่มีเงินได้/บุตร/ประกันชีวิต/PVD-RMF-กบข/ดอกเบี้ยกู้บ้าน,
+ *   `payroll-deductions.ts::sumAndCapDeductions`) เข้าสูตรคำนวณภาษีหัก ณ ที่จ่ายจริงใน
+ *   `payroll.ts::recalcRunLines`
+ *
+ *   `true` = เปิดใช้จริงแล้ว — เงื่อนไขที่ทำให้เปิดได้ (0.2 ข้อ 4, verify แล้ว, T157): เพดานค่าลดหย่อนทุก
+ *   ประเภทที่ระบบใช้ (SPOUSE_NO_INCOME_CAP/CHILD_ALLOWANCE_AMOUNTS/LIFE_INSURANCE_CAP(_WITH_SPOUSE)/
+ *   PROVIDENT_FUND_ABS_CAP+INCOME_RATIO/MORTGAGE_INTEREST_CAP ใน payroll-deductions.ts) ตรวจสอบแล้วตรงกับ
+ *   "วิธีกรอกแบบแสดงรายการภาษีเงินได้บุคคลธรรมดา ปีภาษี 2568" ที่กรมสรรพากรเผยแพร่เอง (rd.go.th/fileadmin/
+ *   tax_pdf/pit/2568/Ins90_241268.pdf) รวมถึงตัวอย่างตัวเลขจริงกรณีประกันชีวิต+คู่สมรสไม่มีเงินได้ (110,000
+ *   บาท) ที่ golden test ใน payroll-deductions.test.ts ใช้ตรง ๆ (ดูคอมเมนต์เต็มใน
+ *   payroll-deductions.ts::sumAndCapDeductions) — ห้ามเปลี่ยนกลับเป็น false โดยไม่มีเหตุผลบันทึกไว้
+ *   ★ ถึงแม้ flag=true แล้ว การไม่มีแถวใน `payroll_employee_deductions` ของพนักงาน/ปีภาษีใดเลย (ค่า
+ *   default ของทุกคนก่อนนักบัญชีกรอกเพิ่ม) ทำให้ personalAllowance ยังเท่ากับ PERSONAL_ALLOWANCE_STANDARD
+ *   เป๊ะเหมือนก่อนเฟสนี้ — ไม่กระทบยอดภาษีของลูกค้าเดิมที่ไม่มีใครกรอกข้อมูลเพิ่มเลย (regression-safe)
+ */
+export let ENABLE_EXTRA_DEDUCTIONS_IN_PIT = true;
 
 // ---------------------------------------------------------------------
 // PIT (มาตรา 50) — annualize ต่องวด
