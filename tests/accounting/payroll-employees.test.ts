@@ -76,6 +76,54 @@ describe("validatePayrollEmployeeInput (0.12)", () => {
       expect(res.value.resignDate).toBeNull();
     }
   });
+
+  // ★★ เฟส 9b กลุ่ม BA (0.3)
+  it("★ BA: ssoExempt undefined จาก input เก่า → default false ไม่ throw", () => {
+    const res = validatePayrollEmployeeInput(baseInput());
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.ssoExempt).toBe(false);
+  });
+
+  it("★ BA: ssoExempt=true บันทึกได้ปกติ", () => {
+    const res = validatePayrollEmployeeInput(baseInput({ ssoExempt: true }));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.ssoExempt).toBe(true);
+  });
+
+  // ★★ เฟส 9b กลุ่ม BD (0.4)
+  it("★ BD: ไม่กรอกยอด YTD นายจ้างเดิมเลย → ผ่าน (nullable ทั้งหมด)", () => {
+    const res = validatePayrollEmployeeInput(baseInput());
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.priorEmployerYtdGross).toBeNull();
+      expect(res.value.priorEmployerYtdPitWithheld).toBeNull();
+      expect(res.value.priorEmployerYtdSsoEmployee).toBeNull();
+    }
+  });
+
+  it("★ BD: กรอกยอด YTD นายจ้างเดิมติดลบ → ปฏิเสธ", () => {
+    expect(validatePayrollEmployeeInput(baseInput({ priorEmployerYtdGross: -1 })).ok).toBe(false);
+    expect(validatePayrollEmployeeInput(baseInput({ priorEmployerYtdPitWithheld: -1 })).ok).toBe(false);
+    expect(validatePayrollEmployeeInput(baseInput({ priorEmployerYtdSsoEmployee: -1 })).ok).toBe(false);
+  });
+
+  it("★ BD: กรอกยอด YTD นายจ้างเดิมถูกต้อง → ผ่าน บันทึกค่าตามที่กรอก", () => {
+    const res = validatePayrollEmployeeInput(
+      baseInput({
+        priorEmployerYtdGross: 150000,
+        priorEmployerYtdPitWithheld: 5000,
+        priorEmployerYtdSsoEmployee: 3000,
+        priorEmployerNote: "บริษัท เอบีซี จำกัด",
+      })
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.priorEmployerYtdGross).toBe(150000);
+      expect(res.value.priorEmployerYtdPitWithheld).toBe(5000);
+      expect(res.value.priorEmployerYtdSsoEmployee).toBe(3000);
+      expect(res.value.priorEmployerNote).toBe("บริษัท เอบีซี จำกัด");
+    }
+  });
 });
 
 describe("maskIdCardNo (0.12 PDPA)", () => {
@@ -181,5 +229,48 @@ describe("data layer (mock DB in-memory)", () => {
     await softDeleteEmployee(db, TENANT, id);
     const scope = await getEmployeeScope(db, TENANT, id);
     expect(scope).toBeNull();
+  });
+
+  // ★★★ เฟส 9b กลุ่ม BA (0.3) — ยกเว้นเงินสมทบประกันสังคมรายพนักงาน
+  it("★ BA: upsertEmployee บันทึก ssoExempt=true แล้วโหลดกลับมาถูกต้อง", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const created = await upsertEmployee(db, TENANT, CUSTOMER_A, baseInput({ ssoExempt: true }));
+    const id = (created as { id: string }).id;
+    const full = await getEmployeeById(db, TENANT, id);
+    expect(full?.ssoExempt).toBe(true);
+  });
+
+  it("★ BA: พนักงานเดิมที่ไม่เคยตั้ง sso_exempt (undefined จาก DB) → default false ผ่าน mapRow", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const created = await upsertEmployee(db, TENANT, CUSTOMER_A, baseInput());
+    const id = (created as { id: string }).id;
+    const full = await getEmployeeById(db, TENANT, id);
+    expect(full?.ssoExempt).toBe(false);
+  });
+
+  // ★★★ เฟส 9b กลุ่ม BD (0.4) — YTD นายจ้างเดิม
+  it("★ BD: upsertEmployee บันทึก/โหลดยอด YTD นายจ้างเดิมถูกต้อง", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const created = await upsertEmployee(
+      db,
+      TENANT,
+      CUSTOMER_A,
+      baseInput({ priorEmployerYtdGross: 150000, priorEmployerYtdPitWithheld: 5000, priorEmployerNote: "บริษัทเดิม" })
+    );
+    const id = (created as { id: string }).id;
+    const full = await getEmployeeById(db, TENANT, id);
+    expect(full?.priorEmployerYtdGross).toBe(150000);
+    expect(full?.priorEmployerYtdPitWithheld).toBe(5000);
+    expect(full?.priorEmployerYtdSsoEmployee).toBeNull();
+    expect(full?.priorEmployerNote).toBe("บริษัทเดิม");
+  });
+
+  it("★ BD: แก้ไขล้างค่า YTD นายจ้างเดิมกลับเป็น null ได้ (ปล่อยช่องว่าง)", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const created = await upsertEmployee(db, TENANT, CUSTOMER_A, baseInput({ priorEmployerYtdGross: 150000 }));
+    const id = (created as { id: string }).id;
+    await upsertEmployee(db, TENANT, CUSTOMER_A, baseInput({ priorEmployerYtdGross: undefined }), id);
+    const full = await getEmployeeById(db, TENANT, id);
+    expect(full?.priorEmployerYtdGross).toBeNull();
   });
 });

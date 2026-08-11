@@ -41,6 +41,13 @@ type FormState = {
   startDate: string;
   resignDate: string;
   isActive: boolean;
+  /** ★ เฟส 9b กลุ่ม BA (0.3) — นักบัญชีพิจารณาเงื่อนไขเอง ไม่ผูกเหตุผลทางกฎหมายในระบบ */
+  ssoExempt: boolean;
+  /** ★ เฟส 9b กลุ่ม BD (0.4) — อ้างอิงเพื่อพิมพ์ 50 ทวิเท่านั้น ไม่กระทบการคำนวณภาษีหัก ณ ที่จ่ายรายเดือน */
+  priorEmployerYtdGross: string;
+  priorEmployerYtdPitWithheld: string;
+  priorEmployerYtdSsoEmployee: string;
+  priorEmployerNote: string;
 };
 
 function blankForm(): FormState {
@@ -54,6 +61,11 @@ function blankForm(): FormState {
     startDate: todayIso(),
     resignDate: "",
     isActive: true,
+    ssoExempt: false,
+    priorEmployerYtdGross: "",
+    priorEmployerYtdPitWithheld: "",
+    priorEmployerYtdSsoEmployee: "",
+    priorEmployerNote: "",
   };
 }
 
@@ -119,6 +131,11 @@ export default function PayrollEmployeesPanel({
       startDate: e.startDate ?? "",
       resignDate: e.resignDate ?? "",
       isActive: e.isActive,
+      ssoExempt: e.ssoExempt,
+      priorEmployerYtdGross: e.priorEmployerYtdGross !== null ? String(e.priorEmployerYtdGross) : "",
+      priorEmployerYtdPitWithheld: e.priorEmployerYtdPitWithheld !== null ? String(e.priorEmployerYtdPitWithheld) : "",
+      priorEmployerYtdSsoEmployee: e.priorEmployerYtdSsoEmployee !== null ? String(e.priorEmployerYtdSsoEmployee) : "",
+      priorEmployerNote: e.priorEmployerNote ?? "",
     });
   };
 
@@ -137,6 +154,13 @@ export default function PayrollEmployeesPanel({
         startDate: form.startDate || null,
         resignDate: form.resignDate || null,
         isActive: form.isActive,
+        ssoExempt: form.ssoExempt,
+        priorEmployerYtdGross: form.priorEmployerYtdGross.trim() === "" ? null : parseAmountInput(form.priorEmployerYtdGross),
+        priorEmployerYtdPitWithheld:
+          form.priorEmployerYtdPitWithheld.trim() === "" ? null : parseAmountInput(form.priorEmployerYtdPitWithheld),
+        priorEmployerYtdSsoEmployee:
+          form.priorEmployerYtdSsoEmployee.trim() === "" ? null : parseAmountInput(form.priorEmployerYtdSsoEmployee),
+        priorEmployerNote: form.priorEmployerNote || null,
       });
       setMsg({ ok: res.ok, text: res.message });
       if (res.ok) {
@@ -264,6 +288,59 @@ export default function PayrollEmployeesPanel({
                 <span>
                   <input type="checkbox" checked={form.isActive} onChange={(e) => setForm((f) => ({ ...f, isActive: e.target.checked }))} /> ยังทำงานอยู่ (active)
                 </span>
+              </label>
+              <label className="acc-field">
+                <span>ประกันสังคม</span>
+                <span>
+                  <input
+                    type="checkbox"
+                    checked={form.ssoExempt}
+                    onChange={(e) => setForm((f) => ({ ...f, ssoExempt: e.target.checked }))}
+                  />{" "}
+                  ยกเว้นเงินสมทบประกันสังคม (นักบัญชีพิจารณาเงื่อนไขเอง)
+                </span>
+              </label>
+            </div>
+            <div className="section-title" style={{ marginTop: 14 }}>
+              <span>ยอดยกมาจากนายจ้างเดิม (สำหรับพิมพ์ 50 ทวิ เท่านั้น ไม่กระทบการคำนวณภาษีหัก ณ ที่จ่ายรายเดือน)</span>
+            </div>
+            <div className="acc-field-grid">
+              <label className="acc-field">
+                <span>เงินได้ยกมา (บาท)</span>
+                <input
+                  className="num"
+                  inputMode="decimal"
+                  value={form.priorEmployerYtdGross}
+                  onChange={(e) => setForm((f) => ({ ...f, priorEmployerYtdGross: e.target.value }))}
+                  placeholder="ไม่มี = เว้นว่าง"
+                />
+              </label>
+              <label className="acc-field">
+                <span>ภาษีหัก ณ ที่จ่ายยกมา (บาท)</span>
+                <input
+                  className="num"
+                  inputMode="decimal"
+                  value={form.priorEmployerYtdPitWithheld}
+                  onChange={(e) => setForm((f) => ({ ...f, priorEmployerYtdPitWithheld: e.target.value }))}
+                  placeholder="ไม่มี = เว้นว่าง"
+                />
+              </label>
+              <label className="acc-field">
+                <span>ประกันสังคม (ลูกจ้าง) ยกมา (บาท)</span>
+                <input
+                  className="num"
+                  inputMode="decimal"
+                  value={form.priorEmployerYtdSsoEmployee}
+                  onChange={(e) => setForm((f) => ({ ...f, priorEmployerYtdSsoEmployee: e.target.value }))}
+                  placeholder="ไม่มี = เว้นว่าง"
+                />
+              </label>
+              <label className="acc-field">
+                <span>หมายเหตุ (เช่น ชื่อนายจ้างเดิม)</span>
+                <input
+                  value={form.priorEmployerNote}
+                  onChange={(e) => setForm((f) => ({ ...f, priorEmployerNote: e.target.value }))}
+                />
               </label>
             </div>
             <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
@@ -429,6 +506,7 @@ function EmployeeTable({
             <th className="num">เงินเดือนฐาน</th>
             <th>เริ่มงาน</th>
             <th>ลาออก</th>
+            <th className="center">ประกันสังคม</th>
             <th className="center">จัดการ</th>
           </tr>
         </thead>
@@ -453,6 +531,7 @@ function EmployeeTable({
                 <td className="num">{formatMoney(e.baseSalary)}</td>
                 <td>{formatDateThai(e.startDate)}</td>
                 <td>{e.resignDate ? formatDateThai(e.resignDate) : "—"}</td>
+                <td className="center">{e.ssoExempt ? "ยกเว้น" : "—"}</td>
                 <td className="center">
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => onEdit(e)}>แก้ไข</button>{" "}
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => onDelete(e.id)}>ลบ</button>

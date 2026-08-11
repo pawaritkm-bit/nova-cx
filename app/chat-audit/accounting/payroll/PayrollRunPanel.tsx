@@ -301,7 +301,18 @@ export default function PayrollRunPanel({
                   const e = getEdit(l);
                   return (
                     <tr key={l.id}>
-                      <td>{l.employeeFullName}{l.employeeCode ? ` (${l.employeeCode})` : ""}</td>
+                      <td>
+                        {l.employeeFullName}{l.employeeCode ? ` (${l.employeeCode})` : ""}
+                        {l.isProrated ? (
+                          <span
+                            className="st-badge st-draft"
+                            style={{ marginLeft: 6 }}
+                            title="ยอด prefill คำนวณตามสัดส่วนวันทำงานจริง — ฐานประกันสังคมยังคำนวณจากยอดที่ prorate แล้วตามปกติ (floor/ceiling ไม่เปลี่ยนพฤติกรรม) นักบัญชียืนยัน/แก้ไขยอดได้ก่อนคำนวณจริง"
+                          >
+                            prorate อัตโนมัติ ({l.proratedDaysWorked}/{l.proratedDaysInMonth} วัน)
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="num">
                         <input
                           className="num"

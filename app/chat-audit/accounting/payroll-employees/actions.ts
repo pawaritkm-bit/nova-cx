@@ -54,6 +54,13 @@ export type SaveEmployeeInput = {
   startDate: unknown;
   resignDate: unknown;
   isActive: unknown;
+  /** ★ เฟส 9b กลุ่ม BA (0.3) */
+  ssoExempt?: unknown;
+  /** ★ เฟส 9b กลุ่ม BD (0.4) — อ้างอิงเพื่อพิมพ์ 50 ทวิเท่านั้น ไม่กระทบการคำนวณภาษีรายเดือน */
+  priorEmployerYtdGross?: unknown;
+  priorEmployerYtdPitWithheld?: unknown;
+  priorEmployerYtdSsoEmployee?: unknown;
+  priorEmployerNote?: unknown;
 };
 
 /** บันทึกทะเบียนพนักงาน (สร้างใหม่/แก้ไข) */
@@ -99,6 +106,11 @@ export async function upsertEmployeeAction(input: SaveEmployeeInput): Promise<Pa
       startDate: input.startDate,
       resignDate: input.resignDate,
       isActive: input.isActive,
+      ssoExempt: input.ssoExempt,
+      priorEmployerYtdGross: input.priorEmployerYtdGross,
+      priorEmployerYtdPitWithheld: input.priorEmployerYtdPitWithheld,
+      priorEmployerYtdSsoEmployee: input.priorEmployerYtdSsoEmployee,
+      priorEmployerNote: input.priorEmployerNote,
     };
 
     const res = await upsertEmployee(service, ctx.tenantId, input.customerId, employeeInput, input.id);

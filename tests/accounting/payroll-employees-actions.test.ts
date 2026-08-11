@@ -203,6 +203,32 @@ describe("upsertEmployeeAction", () => {
     });
     expect(res.ok).toBe(false);
   });
+
+  // ★★★ เฟส 9b กลุ่ม BA/BD — ssoExempt/priorEmployerYtd* ไหลผ่าน action ลง data layer ถูกต้อง
+  it("★ BA/BD: บันทึก ssoExempt + priorEmployerYtd* ผ่าน action สำเร็จ", async () => {
+    const res = await upsertEmployeeAction({
+      customerId: CUSTOMER_A,
+      employeeCode: "E2",
+      fullName: "สมหญิง รักงาน",
+      idCardNo: "9876543210987",
+      passportNo: null,
+      position: null,
+      baseSalary: 18000,
+      startDate: null,
+      resignDate: null,
+      isActive: true,
+      ssoExempt: true,
+      priorEmployerYtdGross: 100000,
+      priorEmployerYtdPitWithheld: 3000,
+      priorEmployerNote: "นายจ้างเดิม",
+    });
+    expect(res.ok).toBe(true);
+    const row = tables.payroll_employees.find((e) => e.employee_code === "E2")!;
+    expect(row.sso_exempt).toBe(true);
+    expect(row.prior_employer_ytd_gross).toBe(100000);
+    expect(row.prior_employer_ytd_pit_withheld).toBe(3000);
+    expect(row.prior_employer_note).toBe("นายจ้างเดิม");
+  });
 });
 
 describe("deleteEmployeeAction", () => {

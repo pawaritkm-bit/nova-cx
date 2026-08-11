@@ -152,6 +152,38 @@ describe("createDraftRun (T114)", () => {
     expect(tables.payroll_run_lines.every((l) => l.gross_salary === 20000)).toBe(true);
   });
 
+  // ★★★ เฟส 9b กลุ่ม BB (T130) — auto-prorate ตอน prefill
+  it("★ BB: พนักงานทุกคนทำงานเต็มเดือน (ไม่มีใครเข้า/ออกกลางเดือน) → prefill เหมือนก่อนเฟส 9b เป๊ะ (regression-safe)", async () => {
+    const { db } = makeInMemoryDb(tables);
+    seedEmployees(tables, 5);
+    const res = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" });
+    expect(res.ok).toBe(true);
+    expect(tables.payroll_run_lines.every((l) => l.gross_salary === 20000)).toBe(true);
+  });
+
+  it("★ BB: พนักงานเข้าใหม่กลางเดือน (start_date ตกในเดือนของรอบ) → prefill ต่ำกว่า base_salary ตามสัดส่วนวันทำงาน", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const ids = seedEmployees(tables, 1);
+    const empRow = tables.payroll_employees.find((r) => r.id === ids[0])!;
+    empRow.start_date = "2026-08-16"; // เข้าใหม่ 16 ส.ค. 2569(ค.ศ.2026, ส.ค.=31 วัน) → daysWorked=16
+    const res = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-31" });
+    expect(res.ok).toBe(true);
+    const line = tables.payroll_run_lines[0];
+    // 20000/31*16 = 10322.58
+    expect(line.gross_salary).toBe(10322.58);
+  });
+
+  it("★ BB: พนักงานลาออกกลางเดือน (resign_date ตกในเดือนของรอบ) → prefill ตามสัดส่วนวันทำงาน", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const ids = seedEmployees(tables, 1);
+    const empRow = tables.payroll_employees.find((r) => r.id === ids[0])!;
+    empRow.resign_date = "2026-08-10"; // ลาออกวันที่ 10 ส.ค. → daysWorked=10/31
+    const res = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" });
+    expect(res.ok).toBe(true);
+    const line = tables.payroll_run_lines[0];
+    expect(line.gross_salary).toBe(Math.round((20000 / 31) * 10 * 100) / 100);
+  });
+
   it("★ พนักงาน 150+ คน (mock) → สร้างบรรทัดครบทุกคนไม่ตกหล่น, ใช้ query แบบ chunk ไม่ error", async () => {
     const { db } = makeInMemoryDb(tables);
     seedEmployees(tables, 180);
@@ -251,6 +283,40 @@ describe("recalcRunLines (T114) — idempotent", () => {
     expect(res.ok).toBe(true);
     const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
     expect(line.gross_salary).toBe(50000);
+  });
+
+  // ★★★ เฟส 9b กลุ่ม BA (T126, 0.3) — ยกเว้นเงินสมทบประกันสังคมรายพนักงาน
+  it("★★★ BA: พนักงาน sso_exempt=true → sso_employee/sso_employer=0 เสมอไม่ว่าค่าจ้างเท่าไหร่", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const empId = tables.payroll_run_lines[0].payroll_employee_id as string;
+    const empRow = tables.payroll_employees.find((r) => r.id === empId)!;
+    empRow.sso_exempt = true;
+    const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId);
+    expect(res.ok).toBe(true);
+    const line = tables.payroll_run_lines.find((l) => l.payroll_employee_id === empId)!;
+    expect(line.sso_employee).toBe(0);
+    expect(line.sso_employer).toBe(0);
+    // net_pay ต้องไม่ถูกหัก sso_employee (คำนวณจาก gross - pit - 0 - other_deductions)
+    expect(line.net_pay).toBe(Number(line.gross_salary) - Number(line.pit_withheld));
+  });
+
+  it("★★★ BA: พนักงานอื่นในรอบเดียวกันที่ sso_exempt=false ยังคำนวณ SSO ปกติ ไม่ถูกกระทบจากคนที่ยกเว้น", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const exemptEmpId = tables.payroll_run_lines[0].payroll_employee_id as string;
+    tables.payroll_employees.find((r) => r.id === exemptEmpId)!.sso_exempt = true;
+    const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId);
+    expect(res.ok).toBe(true);
+    const otherLine = tables.payroll_run_lines.find((l) => l.payroll_employee_id !== exemptEmpId)!;
+    // เงินเดือน 20000 > ceiling 17500 → sso_employee/employer = 875 ตามปกติ (เหมือนเทสต์ไม่มี BA)
+    expect(otherLine.sso_employee).toBe(875);
+    expect(otherLine.sso_employer).toBe(875);
+  });
+
+  it("★ BA: sso_exempt=false (ปกติ, ค่า default) → คำนวณ SSO ตามปกติเหมือนก่อนเฟส 9b เป๊ะ (regression-safe)", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId);
+    expect(res.ok).toBe(true);
+    expect(tables.payroll_run_lines.every((l) => l.sso_employee === 875 && l.sso_employer === 875)).toBe(true);
   });
 
   // ★★ 0.5 โบนัส verify แล้ว/เปิดใช้งานจริง (T112) — เทียบมือตามสูตร calcMonthlyPitWithBonus (ป.96/2543
@@ -411,6 +477,28 @@ describe("getRunWithLines/listRuns/getRunScope", () => {
     await softDeleteRun(db, TENANT, id);
     const scope = await getRunScope(db, TENANT, id);
     expect(scope).toBeNull();
+  });
+
+  // ★★★ เฟส 9b กลุ่ม BB (T131) — badge "prorate อัตโนมัติ" คำนวณสด ๆ ตอนแสดงผล
+  it("★ BB: getRunWithLines คืน isProrated=true + daysWorked/daysInMonth ถูกต้องสำหรับพนักงานเข้าใหม่กลางเดือน", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const ids = seedEmployees(tables, 1);
+    tables.payroll_employees.find((r) => r.id === ids[0])!.start_date = "2026-08-16";
+    const created = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-31" });
+    const runId = (created as { id: string }).id;
+    const detail = await getRunWithLines(db, TENANT, CUSTOMER_A, runId);
+    expect(detail?.lines[0].isProrated).toBe(true);
+    expect(detail?.lines[0].proratedDaysWorked).toBe(16);
+    expect(detail?.lines[0].proratedDaysInMonth).toBe(31);
+  });
+
+  it("★ BB: พนักงานทำงานเต็มเดือน → isProrated=false", async () => {
+    const { db } = makeInMemoryDb(tables);
+    seedEmployees(tables, 1);
+    const created = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" });
+    const runId = (created as { id: string }).id;
+    const detail = await getRunWithLines(db, TENANT, CUSTOMER_A, runId);
+    expect(detail?.lines[0].isProrated).toBe(false);
   });
 });
 
