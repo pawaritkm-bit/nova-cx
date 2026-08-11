@@ -1,7 +1,7 @@
 -- เฟส 10b (docs/06-accounting-features-roadmap.md บรรทัด 5485-6084, 0.7) — unrealized FX revaluation
 --   ปลายงวด + auto-reversing เต็มรูป — ไม่แก้ bill_entries.fx_rate เลย (เข้ากันได้กับ 0.9 เฟส 10a ที่ล็อกไว้)
---   ⚠️ เลข migration นี้ถูกจองเป็น 0100 (ไม่ใช่ 0091 ตามที่แผนเดิมเขียนไว้) เพราะมีงานคู่ขนานอื่นจองเลข
---   0091/0092 ไปก่อนแล้วจาก main เดียวกัน — ดูคำสั่งงานที่มอบหมายจริงของรอบนี้
+--   ⚠️ เลข migration นี้ถูกจองเป็น 0102 (ไม่ใช่ 0091/0100 ตามที่แผนเดิมเขียนไว้) เพราะมีงานคู่ขนานอื่นจองเลข
+--   0091-0101 ไปก่อนแล้วจาก main เดียวกัน (เฟส 9b กลุ่ม BA/BB/BD/BE/BF) — ดูคำสั่งงานที่มอบหมายจริงของรอบนี้
 
 create table if not exists public.fx_period_revaluations (
   id                    uuid primary key default gen_random_uuid(),
