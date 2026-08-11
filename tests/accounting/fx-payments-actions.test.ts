@@ -57,7 +57,11 @@ function accountantCtx(allowed: string[]) {
   };
 }
 
+// ★ QC เฟส 10 (fix): บัญชีคู่ของ JV แนะนำเปลี่ยนจาก AR/AP → เงินสด/ธนาคารจริงของงวดนั้น (contraAccountFor) —
+//   ต้องมี 1010 (เงินสด, fixture ทุกงวดในไฟล์นี้ใช้ method='cash') ในผังบัญชีทดสอบด้วย ไม่งั้น
+//   validateManualEntryInput จะปฏิเสธ ("รหัสบัญชีไม่อยู่ในผังบัญชี")
 const RAW_CHART = [
+  { code: "1010", name: "เงินสด", category: "สินทรัพย์", is_bank: false },
   { code: "1140", name: "ลูกหนี้การค้า", category: "สินทรัพย์", is_bank: false },
   { code: "2010", name: "เจ้าหนี้การค้า", category: "หนี้สิน", is_bank: false },
   { code: "4025", name: "กำไร(ขาดทุน)จากอัตราแลกเปลี่ยน", category: "รายได้", is_bank: false },

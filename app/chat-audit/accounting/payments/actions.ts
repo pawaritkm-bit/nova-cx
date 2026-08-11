@@ -175,7 +175,17 @@ export async function suggestFxGainLossNoteAction(
         : DEFAULT_FX_GAIN_LOSS_ACCOUNT_CODE;
 
     const suggestion = suggestFxGainLossEntryInput(
-      { payDate: payment.payDate, fxAmount: payment.fxAmount, fxRate: payment.fxRate, currency: payment.currency, docNo: entryScope.docNo },
+      {
+        payDate: payment.payDate,
+        fxAmount: payment.fxAmount,
+        fxRate: payment.fxRate,
+        currency: payment.currency,
+        docNo: entryScope.docNo,
+        // ★ QC เฟส 10 (fix): บัญชีคู่ของ JV แนะนำต้องเป็นเงินสด/ธนาคารจริงของงวดนี้ (ไม่ใช่ AR/AP) — derive จาก
+        //   วิธีรับ/จ่ายเงิน + บัญชีเงินฝากจริงของงวดนี้ (เดียวกับที่ toJournalLines ใช้ตัดบัญชีคู่ตอนบันทึกงวดนี้)
+        method: payment.method,
+        bankAccountCode: payment.bankAccountCode,
+      },
       { entryType: entryScope.entryType, fxRate: entryScope.fxRate },
       accountCode,
       chartByCode
