@@ -7,6 +7,9 @@
 /* ตัวคั่นดันปุ่มไปชิดขวาใน toolbar/แถวปุ่ม */
 .nova-dash .acc-toolbar-spacer { flex: 1 1 auto; }
 .nova-dash .acc-inline { display: inline; margin: 0; }
+/* ฟอร์มกรอง (GET) ที่ห่อด้วย div.bills-filter แทน form (กัน form ซ้อน form) —
+   ต้อง flex เองเพื่อให้ช่องค้นหา/เดือน/ปุ่มเรียงแนวนอนเหมือนเดิม */
+.nova-dash .acc-inline-flex { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* ---- แท็บย่อยในลูกค้า (ภาษีซื้อ/ขาย/รอระบุ) ---- */
 .nova-dash .acc-subtabs {
