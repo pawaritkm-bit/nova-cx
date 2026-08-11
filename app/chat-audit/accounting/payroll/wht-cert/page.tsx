@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, customerInScope, type AccountingAccess } from "@/lib/accounting/access";
-import { listEmployees } from "@/lib/accounting/payroll-employees";
+import { listEmployees, maskIdCardNo } from "@/lib/accounting/payroll-employees";
 import { buildPayrollWhtCertData, type PayrollWhtCertRunLine } from "@/lib/accounting/payroll-wht-cert";
 import PayrollWhtCertDoc from "./PayrollWhtCertDoc";
 import "../../wht-cert/wht-cert.css";
@@ -52,11 +52,6 @@ async function fetchScopedCustomers(
   const { data } = await q;
   const rows = (data ?? []) as { id: string; customer_code: string | null; name: string | null }[];
   return rows.map((c) => ({ id: c.id, label: customerLabel(c.customer_code, c.name) }));
-}
-
-function maskIdCardNoLocal(idCardNo: string | null): string | null {
-  if (!idCardNo || idCardNo.length !== 13) return idCardNo;
-  return `x-xxxx-xxxxx-xx-${idCardNo.slice(-1)}`;
 }
 
 function currentBuddhistYear(): number {
@@ -222,7 +217,7 @@ export default async function PayrollWhtCertPage({
         employeeId={validEmployeeId}
         customerId={validCustomerId}
         employeeFullName={employee.fullName}
-        employeeIdCardNoMasked={maskIdCardNoLocal(employee.idCardNo)}
+        employeeIdCardNoMasked={maskIdCardNo(employee.idCardNo)}
         certData={certData}
         backHref={`/chat-audit/accounting/payroll?customerId=${validCustomerId}`}
       />
