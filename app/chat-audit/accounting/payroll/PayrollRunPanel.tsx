@@ -7,8 +7,6 @@ import {
   recalcRunAction,
   generateJournalEntryAction,
   deleteRunAction,
-  markFiledAction,
-  unmarkFiledAction,
 } from "./actions";
 import type { PayrollRun, PayrollRunLine } from "@/lib/accounting/payroll";
 import { parseAmountInput, formatMoney } from "@/lib/accounting/calc";
@@ -21,6 +19,10 @@ import SlipView from "./SlipView";
  *   T112) — ดูคอมเมนต์เต็มใน lib/accounting/payroll-tax.ts (calcMonthlyPitWithBonus)
  * ★ 0.7/0.9 ปุ่ม "สร้างรายการบัญชี (JE)" สร้าง draft เสมอ + กันกดซ้ำสอง (server-side atomic claim)
  * ★ ล็อกแก้ไขยอด/คำนวณซ้ำหลังรอบ status='finalized' (มี JE แล้ว)
+ * ★★★ เฟส 9b กลุ่ม BC (T141) — ปุ่ม "บันทึกว่ายื่นแล้ว" ย้ายไปหน้า /chat-audit/accounting/payroll/filing
+ *   (สถานะยื่นตัวจริงอยู่ที่ระดับหน่วยยื่นรายเดือนแล้ว ไม่ใช่ระดับรอบ) — ที่นี่แสดงสถานะแบบ read-only เท่านั้น
+ *   พร้อมลิงก์ไปหน้านั้น (สำหรับลูกค้า monthly เดิม เดือนหนึ่งมีแค่ 1 รอบเสมอ — ผลลัพธ์การกดยื่นเหมือนเดิม
+ *   ทุกประการจากมุมมอง UX)
  */
 
 const MONTH_LABELS = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
@@ -157,18 +159,6 @@ export default function PayrollRunPanel({
     });
   };
 
-  const toggleFiled = (kind: "pit" | "sso", filed: boolean) => {
-    if (!detail) return;
-    setMsg(null);
-    startTransition(async () => {
-      const res = filed
-        ? await unmarkFiledAction(detail.run.id, customerId, kind)
-        : await markFiledAction(detail.run.id, customerId, kind);
-      setMsg({ ok: res.ok, text: res.message });
-      if (res.ok) router.refresh();
-    });
-  };
-
   return (
     <div>
       {msg ? <div className={`action-msg ${msg.ok ? "ok" : "err"}`}>{msg.text}</div> : null}
@@ -263,19 +253,14 @@ export default function PayrollRunPanel({
           {isFinalized ? (
             <div className="card" style={{ marginBottom: 10 }}>
               <div className="section-title"><span>สถานะยื่นภาษี/ประกันสังคม</span></div>
-              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-                <div>
-                  ภ.ง.ด.1: {detail.run.pitFilingStatus === "filed" ? `ยื่นแล้ว (${detail.run.pitFiledAt ?? ""})` : "ยังไม่ยื่น"}{" "}
-                  <button type="button" className="btn btn-ghost btn-sm" disabled={pending} onClick={() => toggleFiled("pit", detail.run.pitFilingStatus === "filed")}>
-                    {detail.run.pitFilingStatus === "filed" ? "ยกเลิกสถานะ" : "บันทึกว่ายื่นแล้ว"}
-                  </button>
-                </div>
-                <div>
-                  สปส.1-10: {detail.run.ssoFilingStatus === "filed" ? `ยื่นแล้ว (${detail.run.ssoFiledAt ?? ""})` : "ยังไม่ยื่น"}{" "}
-                  <button type="button" className="btn btn-ghost btn-sm" disabled={pending} onClick={() => toggleFiled("sso", detail.run.ssoFilingStatus === "filed")}>
-                    {detail.run.ssoFilingStatus === "filed" ? "ยกเลิกสถานะ" : "บันทึกว่ายื่นแล้ว"}
-                  </button>
-                </div>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+                <div>ภ.ง.ด.1: {detail.run.pitFilingStatus === "filed" ? `ยื่นแล้ว (${detail.run.pitFiledAt ?? ""})` : "ยังไม่ยื่น"}</div>
+                <div>สปส.1-10: {detail.run.ssoFilingStatus === "filed" ? `ยื่นแล้ว (${detail.run.ssoFiledAt ?? ""})` : "ยังไม่ยื่น"}</div>
+                {/* ★ เฟส 9b กลุ่ม BC (T141) — บันทึก/ยกเลิกสถานะยื่นย้ายไปทำที่หน้าสรุปรายเดือนแทน (รวมได้
+                    หลายรอบจ่ายต่อเดือนสำหรับลูกค้า non_monthly) */}
+                <a href={`/chat-audit/accounting/payroll/filing?customerId=${customerId}`} className="btn btn-ghost btn-sm">
+                  ไปหน้าบันทึกสถานะยื่น →
+                </a>
               </div>
             </div>
           ) : null}

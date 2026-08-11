@@ -4,12 +4,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, type AccountingAccess } from "@/lib/accounting/access";
-import { listRuns, getRunWithLines } from "@/lib/accounting/payroll";
-import PayrollRunPanel from "./PayrollRunPanel";
-import ChatAuditFrame from "../../_Frame";
-import "../../chat-admin.css";
-import "../../bills/bills.css";
-import "../accounting.css";
+import { listFilingPeriods, getFilingPeriodDetail } from "@/lib/accounting/payroll-monthly-filing";
+import FilingPeriodPanel from "./FilingPeriodPanel";
+import ChatAuditFrame from "../../../_Frame";
+import "../../../chat-admin.css";
+import "../../../bills/bills.css";
+import "../../accounting.css";
 
 export const dynamic = "force-dynamic";
 
@@ -44,20 +44,23 @@ async function fetchScopedCustomers(
 }
 
 /**
- * /chat-audit/accounting/payroll — "รอบเงินเดือน" (เฟส 9 ส่วน AD/AE)
- *   เลือกลูกค้า → รายการรอบเงินเดือน (ปี/เดือน/สถานะ/สถานะยื่น) + สร้างรอบใหม่ → เลือกรอบ → ตารางบรรทัด
- *   ต่อพนักงาน (คำนวณภาษี/ประกันสังคม, สร้าง JE, บันทึกสถานะยื่น ภ.ง.ด.1/สปส.1-10)
+ * /chat-audit/accounting/payroll/filing — "สรุปการยื่นภาษี/ประกันสังคมรายเดือน" (เฟส 9b กลุ่ม BC, T139)
+ *   เลือกลูกค้า → รายการหน่วยยื่นรายเดือน (payroll_monthly_filings) → เลือกเดือน → เห็นทุกรอบจ่ายที่รวมอยู่
+ *   ในเดือนนั้น + ยอดรวม PIT/SSO ข้ามรอบ + ปุ่มยื่นแล้ว 1 ชุด/เดือน (แทนต่อรอบเหมือนเดิม)
+ *
+ * ★ สำหรับลูกค้า pay_frequency='monthly' (ส่วนใหญ่/ทุกรายก่อนเฟสนี้) หน่วยยื่นแต่ละเดือนมีแค่ 1 รอบเสมอ —
+ *   หน้านี้ทำงานเหมือนหน้ารอบเงินเดือนเดิมทุกประการจากมุมมอง UX (1 รอบ = 1 เดือนเป๊ะ)
  */
-export default async function PayrollPage({
+export default async function PayrollFilingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ customerId?: string; runId?: string }>;
+  searchParams: Promise<{ customerId?: string; periodId?: string }>;
 }) {
   const sp = await searchParams;
 
   if (!getSupabaseEnv()) {
     return (
-      <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="รอบเงินเดือน" subtitle="คำนวณภาษีหัก ณ ที่จ่าย + ประกันสังคม + สร้างรายการบัญชี">
+      <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="สรุปการยื่นรายเดือน" subtitle="ภ.ง.ด.1 / สปส.1-10 รวมทุกรอบจ่ายของเดือนนั้น">
         <div className="card">ยังไม่ได้ตั้งค่าฐานข้อมูล (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)</div>
       </ChatAuditFrame>
     );
@@ -78,11 +81,12 @@ export default async function PayrollPage({
     UUID_RE.test(rawCustomer) && customers.some((c) => c.id === rawCustomer) ? rawCustomer : "";
   const selectedLabel = customers.find((c) => c.id === validCustomerId)?.label ?? "";
 
-  const runs = validCustomerId ? await listRuns(service, access.tenantId, validCustomerId) : [];
+  const periods = validCustomerId ? await listFilingPeriods(service, access.tenantId, validCustomerId) : [];
 
-  const rawRunId = (sp.runId ?? "").trim();
-  const validRunId = UUID_RE.test(rawRunId) && runs.some((r) => r.id === rawRunId) ? rawRunId : "";
-  const detail = validCustomerId && validRunId ? await getRunWithLines(service, access.tenantId, validCustomerId, validRunId) : null;
+  const rawPeriodId = (sp.periodId ?? "").trim();
+  const validPeriodId = UUID_RE.test(rawPeriodId) && periods.some((p) => p.id === rawPeriodId) ? rawPeriodId : "";
+  const detail =
+    validCustomerId && validPeriodId ? await getFilingPeriodDetail(service, access.tenantId, validCustomerId, validPeriodId) : null;
 
   return (
     <ChatAuditFrame
@@ -90,8 +94,8 @@ export default async function PayrollPage({
       role={navRole}
       authed
       staffOnly={staffOnly}
-      title="รอบเงินเดือน"
-      subtitle="คำนวณภาษีหัก ณ ที่จ่าย (ภ.ง.ด.1) + เงินสมทบประกันสังคม + สร้างรายการบัญชีรวมยอดต่อรอบ"
+      title="สรุปการยื่นรายเดือน"
+      subtitle="ภ.ง.ด.1 / สปส.1-10 รวมทุกรอบจ่ายของเดือนนั้น — บันทึกว่ายื่นแล้ว 1 ชุดต่อเดือน"
     >
       <div className="dash-views">
         <div className="card acc-review-head">
@@ -111,19 +115,12 @@ export default async function PayrollPage({
           </form>
           <span className="acc-toolbar-spacer" />
           {validCustomerId ? (
-            <>
-              <Link href={`/chat-audit/accounting/payroll-employees?customerId=${validCustomerId}`} className="btn btn-ghost">
-                ทะเบียนพนักงาน/ตั้งค่าบัญชี
-              </Link>
-              <Link href={`/chat-audit/accounting/payroll/filing?customerId=${validCustomerId}`} className="btn btn-ghost">
-                สรุปการยื่นรายเดือน
-              </Link>
-              <Link href={`/chat-audit/accounting/payroll/wht-cert?customerId=${validCustomerId}`} className="btn btn-ghost">
-                พิมพ์หนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ)
-              </Link>
-            </>
-          ) : null}
-          <Link href="/chat-audit/accounting" className="btn btn-ghost">← กลับไปลงบันทึกบัญชี</Link>
+            <Link href={`/chat-audit/accounting/payroll?customerId=${validCustomerId}`} className="btn btn-ghost">
+              ← กลับไปรอบเงินเดือน
+            </Link>
+          ) : (
+            <Link href="/chat-audit/accounting/payroll" className="btn btn-ghost">← กลับไปรอบเงินเดือน</Link>
+          )}
         </div>
 
         {customers.length === 0 ? (
@@ -132,16 +129,12 @@ export default async function PayrollPage({
           </div>
         ) : !validCustomerId ? (
           <div className="card">
-            <p className="empty">เลือกลูกค้าด้านบนเพื่อจัดการรอบเงินเดือน</p>
+            <p className="empty">เลือกลูกค้าด้านบนเพื่อดูสรุปการยื่นรายเดือน</p>
           </div>
         ) : (
           <div className="card">
             <div className="acc-opening-cust-label">{selectedLabel}</div>
-            <PayrollRunPanel
-              customerId={validCustomerId}
-              runs={runs}
-              detail={detail}
-            />
+            <FilingPeriodPanel customerId={validCustomerId} periods={periods} detail={detail} />
           </div>
         )}
       </div>

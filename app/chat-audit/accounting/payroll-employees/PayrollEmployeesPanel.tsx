@@ -83,6 +83,8 @@ type SettingsFormState = {
   netPayAccountCode: string;
   netPayAccountName: string;
   netPayIsPaidImmediately: boolean;
+  /** ★ เฟส 9b กลุ่ม BC (T140) */
+  payFrequency: "monthly" | "non_monthly";
 };
 
 export default function PayrollEmployeesPanel({
@@ -205,6 +207,7 @@ export default function PayrollEmployeesPanel({
     netPayAccountCode: settings.netPayAccountCode ?? "",
     netPayAccountName: settings.netPayAccountCode ? chartByCode[settings.netPayAccountCode]?.name ?? settings.netPayAccountCode : "",
     netPayIsPaidImmediately: settings.netPayIsPaidImmediately,
+    payFrequency: settings.payFrequency,
   }));
 
   const submitSettings = () => {
@@ -219,6 +222,7 @@ export default function PayrollEmployeesPanel({
         otherDeductionsAccountCode: settingsForm.otherDeductionsAccountCode || null,
         netPayAccountCode: settingsForm.netPayAccountCode || null,
         netPayIsPaidImmediately: settingsForm.netPayIsPaidImmediately,
+        payFrequency: settingsForm.payFrequency,
       });
       setMsg({ ok: res.ok, text: res.message });
       if (res.ok) router.refresh();
@@ -464,6 +468,30 @@ export default function PayrollEmployeesPanel({
               </span>
             </label>
           </div>
+
+          {/* ★ เฟส 9b กลุ่ม BC (T140) — ความถี่จ่ายเงินเดือน */}
+          <div className="section-title" style={{ marginTop: 14 }}>
+            <span>รอบจ่ายเงินเดือน</span>
+          </div>
+          <div className="acc-field-grid">
+            <label className="acc-field">
+              <span>ความถี่จ่าย</span>
+              <select
+                value={settingsForm.payFrequency}
+                onChange={(e) => setSettingsForm((f) => ({ ...f, payFrequency: e.target.value === "non_monthly" ? "non_monthly" : "monthly" }))}
+              >
+                <option value="monthly">รายเดือน (ปกติ — 1 รอบ/เดือนเท่านั้น)</option>
+                <option value="non_monthly">ไม่ใช่รายเดือน (เช่น รายสัปดาห์/รายปักษ์ — สร้างหลายรอบ/เดือนได้)</option>
+              </select>
+            </label>
+          </div>
+          {settingsForm.payFrequency === "non_monthly" ? (
+            <p className="muted" style={{ marginTop: 6 }}>
+              ⚠️ เปิดโหมดนี้แล้วจะสร้างรอบเงินเดือนหลายรอบในเดือน/ปีเดียวกันได้ — ภ.ง.ด.1/สปส.1-10 ยังยื่นรวมเป็นชุดเดียวต่อเดือนเสมอ
+              (ดูที่หน้า &quot;สรุปการยื่นรายเดือน&quot;) เปลี่ยนกลับเป็น &quot;รายเดือน&quot; ได้ตลอดโดยไม่กระทบรอบที่สร้างไปแล้ว
+            </p>
+          ) : null}
+
           <div style={{ marginTop: 10 }}>
             <button type="button" className="btn" disabled={pending} onClick={submitSettings}>บันทึกตั้งค่าบัญชี</button>
           </div>

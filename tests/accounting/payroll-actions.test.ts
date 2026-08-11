@@ -50,6 +50,9 @@ const RUN_DRAFT = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const RUN_FINALIZED = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 const LINE_1 = "11111111-1111-1111-1111-111111111111";
 const EMP_1 = "22222222-2222-2222-2222-222222222222";
+// ★ เฟส 9b กลุ่ม BC — หน่วยยื่นรายเดือน (payroll_monthly_filings) ที่ RUN_DRAFT/RUN_FINALIZED ผูกอยู่
+const FILING_DRAFT = "33333333-3333-3333-3333-333333333333";
+const FILING_FINALIZED = "44444444-4444-4444-4444-444444444444";
 
 const adminCtx = {
   tenantId: TENANT,
@@ -95,6 +98,7 @@ function setupTables(): Tables {
         sso_filing_status: "not_filed",
         sso_filed_at: null,
         sso_filed_by: null,
+        filing_period_id: FILING_DRAFT,
         deleted_at: null,
         created_at: "2026-08-01T00:00:00Z",
         updated_at: "2026-08-01T00:00:00Z",
@@ -114,7 +118,41 @@ function setupTables(): Tables {
         sso_filing_status: "not_filed",
         sso_filed_at: null,
         sso_filed_by: null,
+        filing_period_id: FILING_FINALIZED,
         deleted_at: null,
+        created_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    ],
+    // ★ เฟส 9b กลุ่ม BC — หน่วยยื่นรายเดือนตัวจริง (สถานะยื่นย้ายมาอยู่ที่นี่แล้ว, ไม่ใช่บน payroll_runs ตรง ๆ)
+    payroll_monthly_filings: [
+      {
+        id: FILING_DRAFT,
+        tenant_id: TENANT,
+        customer_id: CUSTOMER_A,
+        period_year: 2569,
+        period_month: 8,
+        pit_filing_status: "not_filed",
+        pit_filed_at: null,
+        pit_filed_by: null,
+        sso_filing_status: "not_filed",
+        sso_filed_at: null,
+        sso_filed_by: null,
+        created_at: "2026-08-01T00:00:00Z",
+        updated_at: "2026-08-01T00:00:00Z",
+      },
+      {
+        id: FILING_FINALIZED,
+        tenant_id: TENANT,
+        customer_id: CUSTOMER_A,
+        period_year: 2569,
+        period_month: 7,
+        pit_filing_status: "not_filed",
+        pit_filed_at: null,
+        pit_filed_by: null,
+        sso_filing_status: "not_filed",
+        sso_filed_at: null,
+        sso_filed_by: null,
         created_at: "2026-07-01T00:00:00Z",
         updated_at: "2026-07-01T00:00:00Z",
       },
@@ -169,6 +207,7 @@ function setupTables(): Tables {
         other_deductions_account_code: null,
         net_pay_account_code: "2040",
         net_pay_is_paid_immediately: false,
+        pay_frequency: "monthly",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
       },
@@ -314,20 +353,20 @@ describe("markFiledAction/unmarkFiledAction (T116, 0.3)", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("รอบ finalized → mark ภ.ง.ด.1 สำเร็จ", async () => {
+  it("รอบ finalized → mark ภ.ง.ด.1 สำเร็จ (สถานะจริงย้ายไป payroll_monthly_filings แล้ว, เฟส 9b กลุ่ม BC)", async () => {
     const res = await markFiledAction(RUN_FINALIZED, CUSTOMER_A, "pit");
     expect(res.ok).toBe(true);
-    const run = tables.payroll_runs.find((r) => r.id === RUN_FINALIZED)!;
-    expect(run.pit_filing_status).toBe("filed");
-    expect(run.pit_filed_at).toBeTruthy();
+    const filing = tables.payroll_monthly_filings.find((f) => f.id === FILING_FINALIZED)!;
+    expect(filing.pit_filing_status).toBe("filed");
+    expect(filing.pit_filed_at).toBeTruthy();
   });
 
   it("mark สปส.1-10 สำเร็จ แล้ว unmark กลับเป็นยังไม่ยื่นได้", async () => {
     await markFiledAction(RUN_FINALIZED, CUSTOMER_A, "sso");
     const res = await unmarkFiledAction(RUN_FINALIZED, CUSTOMER_A, "sso");
     expect(res.ok).toBe(true);
-    const run = tables.payroll_runs.find((r) => r.id === RUN_FINALIZED)!;
-    expect(run.sso_filing_status).toBe("not_filed");
+    const filing = tables.payroll_monthly_filings.find((f) => f.id === FILING_FINALIZED)!;
+    expect(filing.sso_filing_status).toBe("not_filed");
   });
 
   it("★ ลูกค้านอกสโคป → ปฏิเสธ mark/unmark", async () => {

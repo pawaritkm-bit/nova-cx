@@ -26,6 +26,13 @@
  *   requireAccountingAccess + assertCustomerInScope + derive scope จาก resource id ที่กำลังเขียนจริง
  * ★ chunkIds ทุกจุดที่ query `.in()` รายชื่อพนักงานที่อาจมี 100+ คน (0.1, บทเรียน commit 7ab9f91)
  * ★ PDPA: ไม่ log ชื่อพนักงาน/เลขบัตร/เงินเดือน/ชื่อลูกค้าที่ไหนในไฟล์นี้
+ * ★★★ เฟส 9b กลุ่ม BC (0.5) — "รอบจ่าย" (payroll_runs) แยกจาก "หน่วยยื่นภาษี/ประกันสังคมรายเดือน"
+ *   (payroll_monthly_filings, lib/accounting/payroll-monthly-filing.ts) — createDraftRun ผูก
+ *   filing_period_id ทุกรอบใหม่เสมอ (ทั้งลูกค้า monthly/non_monthly) + ปฏิเสธสร้างรอบซ้ำเดือน/ปีเดียวกัน
+ *   ที่ชั้นแอปพลิเคชันเมื่อ payroll_settings.pay_frequency='monthly' (ค่า default — regression-safe 100%
+ *   กับพฤติกรรมก่อนเฟสนี้ แม้ unique constraint เดิมที่ DB จะถูกเอาออกไปแล้ว) — markPitFiled/unmarkPitFiled/
+ *   markSsoFiled/unmarkSsoFiled ย้ายไปทำงานบน payroll_monthly_filings แล้ว (re-export ท้ายไฟล์นี้เพื่อ
+ *   backward-compat กันโค้ดอื่น import พัง)
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
@@ -47,6 +54,7 @@ import {
 import { calcProratedGrossSalary } from "@/lib/accounting/payroll-prorate";
 import { listEmployees } from "@/lib/accounting/payroll-employees";
 import { getSettings, type PayrollSettings } from "@/lib/accounting/payroll-settings";
+import { getOrCreateFilingPeriod } from "@/lib/accounting/payroll-monthly-filing";
 
 type DB = SupabaseClient;
 
@@ -75,12 +83,17 @@ export type PayrollRun = {
   payDate: string;
   status: PayrollRunStatus;
   manualEntryId: string | null;
+  /** ★ เฟส 9b กลุ่ม BC — แหล่งข้อมูลจริงของสถานะยื่นคือ payroll_monthly_filings (join ผ่าน filingPeriodId
+   *   เสมอ, ดู attachFilingStatus) — ฟิลด์นี้ยังคงชื่อเดิมกันโค้ด/หน้าจอเดิมพัง แต่ค่าที่เห็นมาจากหน่วยยื่น
+   *   รายเดือนจริงแล้ว ไม่ใช่คอลัมน์ deprecated บน payroll_runs ตรง ๆ อีกต่อไป */
   pitFilingStatus: PayrollFilingStatus;
   pitFiledAt: string | null;
   pitFiledBy: string | null;
   ssoFilingStatus: PayrollFilingStatus;
   ssoFiledAt: string | null;
   ssoFiledBy: string | null;
+  /** ★ เฟส 9b กลุ่ม BC — หน่วยยื่นรายเดือนที่รอบนี้ผูกอยู่ (null เฉพาะแถวเก่าที่หลุด backfill ก่อนเฟสนี้) */
+  filingPeriodId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -93,6 +106,8 @@ export type PayrollRunScope = {
   payDate: string;
   payPeriodYear: number;
   payPeriodMonth: number;
+  /** ★ เฟส 9b กลุ่ม BC — ใช้บันทึกสถานะยื่นที่ระดับหน่วยยื่นรายเดือน (payroll-monthly-filing.ts) */
+  filingPeriodId: string | null;
 };
 
 /** บรรทัดรอบเงินเดือนต่อพนักงาน 1 คน (แสดงผล — join ชื่อพนักงานจาก payroll_employees) */
@@ -164,6 +179,34 @@ export async function createDraftRun(
   const v = validateCreateRunInput(input);
   if (!v.ok) return v;
 
+  // ★★★ เฟส 9b กลุ่ม BC (T138) — guard ที่ชั้นแอปพลิเคชัน แทน unique constraint เดิมที่ DB (เอาออกแล้วใน
+  //   migration 0096 เพื่อให้ลูกค้า non_monthly สร้างหลายรอบ/เดือนได้) — ลูกค้า pay_frequency='monthly'
+  //   (ค่า default ของทุกรายที่ไม่มีแถว payroll_settings เลยด้วย) ยังถูกปฏิเสธสร้างรอบซ้ำเดือน/ปีเดียวกัน
+  //   เหมือนก่อนเฟสนี้ทุกประการ (ข้อความปฏิเสธเดียวกันเป๊ะ, regression-safe 100%)
+  const settings = await getSettings(db, tenantId, customerId);
+  const payFrequency = settings?.payFrequency ?? "monthly";
+  if (payFrequency === "monthly") {
+    const { data: dup } = await db
+      .from("payroll_runs")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("customer_id", customerId)
+      .eq("pay_period_year", v.value.payPeriodYear)
+      .eq("pay_period_month", v.value.payPeriodMonth)
+      .is("deleted_at", null)
+      .limit(1);
+    if (dup && dup.length > 0) {
+      return { ok: false, message: "มีรอบเงินเดือนของเดือน/ปีนี้อยู่แล้ว (ลบรอบเดิมก่อนถ้าต้องการสร้างใหม่)" };
+    }
+  }
+
+  // ★★★ เฟส 9b กลุ่ม BC (T138) — ทุกรอบใหม่ (ทั้ง 2 โหมด) ผูก filing_period_id เสมอ (idempotent get-or-create
+  //   ต่อ tenant+customer+ปี+เดือน — หลายรอบจ่ายในเดือนเดียวกันได้แถวเดียวกัน)
+  const filingPeriod = await getOrCreateFilingPeriod(db, tenantId, customerId, v.value.payPeriodYear, v.value.payPeriodMonth);
+  if (!filingPeriod) {
+    return { ok: false, message: "สร้างรอบเงินเดือนไม่สำเร็จ (สร้างหน่วยยื่นภาษี/ประกันสังคมรายเดือนไม่สำเร็จ) กรุณาลองใหม่" };
+  }
+
   // ★ ตั้งค่าเริ่มต้นทุกช่องตรง ๆ (ไม่พึ่ง DB default เฉย ๆ) — mirror pattern เดิมทั้งระบบ (เช่น
   //   manual-journal.ts::upsertManualEntry ตั้ง status:"draft" ตรง ๆ ตอน insert เสมอ)
   const { data, error } = await db
@@ -182,10 +225,14 @@ export async function createDraftRun(
       sso_filing_status: "not_filed",
       sso_filed_at: null,
       sso_filed_by: null,
+      filing_period_id: filingPeriod.id,
     })
     .select("id")
     .maybeSingle();
   if (error || !data) {
+    // ★ defense-in-depth — ปกติ guard ด้านบนกันไว้แล้วสำหรับลูกค้า monthly แต่ถ้า race เกิดขึ้นจริง (2 request
+    //   พร้อมกัน) ยังต้องรับมือ error message เดียวกัน (ไม่มี unique constraint ที่ DB แล้วหลัง 0096 แต่คง
+    //   branch นี้ไว้เผื่อ deploy ข้ามช่วง migration หรือ DB error อื่นที่มี code เดียวกันโดยบังเอิญ)
     if (error?.code === "23505") {
       return { ok: false, message: "มีรอบเงินเดือนของเดือน/ปีนี้อยู่แล้ว (ลบรอบเดิมก่อนถ้าต้องการสร้างใหม่)" };
     }
@@ -261,12 +308,13 @@ type RawRunRow = {
   sso_filing_status: string;
   sso_filed_at: string | null;
   sso_filed_by: string | null;
+  filing_period_id: string | null;
   created_at: string;
   updated_at: string;
 };
 
 const RUN_COLUMNS =
-  "id, tenant_id, customer_id, pay_period_year, pay_period_month, pay_date, status, manual_entry_id, pit_filing_status, pit_filed_at, pit_filed_by, sso_filing_status, sso_filed_at, sso_filed_by, created_at, updated_at";
+  "id, tenant_id, customer_id, pay_period_year, pay_period_month, pay_date, status, manual_entry_id, pit_filing_status, pit_filed_at, pit_filed_by, sso_filing_status, sso_filed_at, sso_filed_by, filing_period_id, created_at, updated_at";
 
 function mapRunRow(r: RawRunRow): PayrollRun {
   return {
@@ -278,15 +326,78 @@ function mapRunRow(r: RawRunRow): PayrollRun {
     payDate: r.pay_date,
     status: (r.status as PayrollRunStatus) ?? "draft",
     manualEntryId: r.manual_entry_id,
+    // ★ ค่าเริ่มต้นจากคอลัมน์ deprecated บน payroll_runs เอง (เผื่อ filingPeriodId เป็น null — แถวเก่าที่
+    //   หลุด backfill) — attachFilingStatus (เรียกจาก listRuns/getRunWithLines) จะ overlay ทับด้วยค่าจริง
+    //   จาก payroll_monthly_filings เสมอเมื่อมี filingPeriodId
     pitFilingStatus: (r.pit_filing_status as PayrollFilingStatus) ?? "not_filed",
     pitFiledAt: r.pit_filed_at,
     pitFiledBy: r.pit_filed_by,
     ssoFilingStatus: (r.sso_filing_status as PayrollFilingStatus) ?? "not_filed",
     ssoFiledAt: r.sso_filed_at,
     ssoFiledBy: r.sso_filed_by,
+    filingPeriodId: r.filing_period_id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
+}
+
+/**
+ * ★ เฟส 9b กลุ่ม BC — overlay สถานะยื่นจริงจาก payroll_monthly_filings ทับค่าเริ่มต้น (คอลัมน์ deprecated
+ *   บน payroll_runs) ตาม filingPeriodId ของแต่ละรอบ — ให้หน้าจอเห็นสถานะที่ถูกต้องเสมอไม่ว่าจะบันทึกว่ายื่น
+ *   จากหน้า filing/ (ระดับเดือน) เท่านั้นก็ตาม (payroll_runs เดิมไม่ถูกเขียนทับสถานะพวกนี้ต่อแล้ว)
+ */
+async function attachFilingStatus(db: DB, tenantId: string, runs: PayrollRun[]): Promise<PayrollRun[]> {
+  const periodIds = [...new Set(runs.map((r) => r.filingPeriodId).filter((x): x is string => !!x))];
+  if (periodIds.length === 0) return runs;
+
+  const map = new Map<
+    string,
+    { pit: PayrollFilingStatus; pitAt: string | null; pitBy: string | null; sso: PayrollFilingStatus; ssoAt: string | null; ssoBy: string | null }
+  >();
+  const chunks = await Promise.all(
+    chunkIds(periodIds).map((chunk) =>
+      db
+        .from("payroll_monthly_filings")
+        .select("id, pit_filing_status, pit_filed_at, pit_filed_by, sso_filing_status, sso_filed_at, sso_filed_by")
+        .eq("tenant_id", tenantId)
+        .in("id", chunk)
+    )
+  );
+  for (const { data } of chunks) {
+    for (const f of (data ?? []) as {
+      id: string;
+      pit_filing_status: string;
+      pit_filed_at: string | null;
+      pit_filed_by: string | null;
+      sso_filing_status: string;
+      sso_filed_at: string | null;
+      sso_filed_by: string | null;
+    }[]) {
+      map.set(f.id, {
+        pit: (f.pit_filing_status as PayrollFilingStatus) ?? "not_filed",
+        pitAt: f.pit_filed_at,
+        pitBy: f.pit_filed_by,
+        sso: (f.sso_filing_status as PayrollFilingStatus) ?? "not_filed",
+        ssoAt: f.sso_filed_at,
+        ssoBy: f.sso_filed_by,
+      });
+    }
+  }
+
+  return runs.map((r) => {
+    if (!r.filingPeriodId) return r;
+    const f = map.get(r.filingPeriodId);
+    if (!f) return r;
+    return {
+      ...r,
+      pitFilingStatus: f.pit,
+      pitFiledAt: f.pitAt,
+      pitFiledBy: f.pitBy,
+      ssoFilingStatus: f.sso,
+      ssoFiledAt: f.ssoAt,
+      ssoFiledBy: f.ssoBy,
+    };
+  });
 }
 
 /** รายการรอบเงินเดือนของลูกค้า 1 ราย เรียงปี/เดือนล่าสุดก่อน */
@@ -301,14 +412,15 @@ export async function listRuns(db: DB, tenantId: string, customerId: string): Pr
     .order("pay_period_month", { ascending: false })
     .limit(RUN_LIST_LIMIT);
   if (error || !data) return [];
-  return (data as unknown as RawRunRow[]).map(mapRunRow);
+  const runs = (data as unknown as RawRunRow[]).map(mapRunRow);
+  return attachFilingStatus(db, tenantId, runs);
 }
 
 /** โหลดสโคป+สถานะของรอบ 1 รอบ (scope tenant) — ใช้ตรวจสโคปก่อนแก้/ลบ/สร้าง JE ทุกครั้ง (0.15) */
 export async function getRunScope(db: DB, tenantId: string, id: string): Promise<PayrollRunScope | null> {
   const { data } = await db
     .from("payroll_runs")
-    .select("customer_id, status, manual_entry_id, pay_date, pay_period_year, pay_period_month")
+    .select("customer_id, status, manual_entry_id, pay_date, pay_period_year, pay_period_month, filing_period_id")
     .eq("id", id)
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
@@ -321,6 +433,7 @@ export async function getRunScope(db: DB, tenantId: string, id: string): Promise
     pay_date: string;
     pay_period_year: number;
     pay_period_month: number;
+    filing_period_id: string | null;
   };
   return {
     customerId: r.customer_id,
@@ -329,6 +442,7 @@ export async function getRunScope(db: DB, tenantId: string, id: string): Promise
     payDate: r.pay_date,
     payPeriodYear: r.pay_period_year,
     payPeriodMonth: r.pay_period_month,
+    filingPeriodId: r.filing_period_id ?? null,
   };
 }
 
@@ -437,7 +551,7 @@ export async function getRunWithLines(
     .is("deleted_at", null)
     .maybeSingle();
   if (!data) return null;
-  const run = mapRunRow(data as unknown as RawRunRow);
+  const [run] = await attachFilingStatus(db, tenantId, [mapRunRow(data as unknown as RawRunRow)]);
 
   const rawLines = await fetchRawLines(db, tenantId, runId);
   const info = await fetchEmployeeInfo(
@@ -903,52 +1017,11 @@ export async function softDeleteRun(db: DB, tenantId: string, id: string): Promi
 }
 
 // ---------------------------------------------------------------------
-// markPitFiled/unmarkPitFiled/markSsoFiled/unmarkSsoFiled (T116, 0.3)
+// markPitFiled/unmarkPitFiled/markSsoFiled/unmarkSsoFiled — ย้ายไป payroll-monthly-filing.ts (เฟส 9b
+//   กลุ่ม BC, T137) เพราะสถานะยื่นตัวจริงอยู่ที่ระดับ "หน่วยยื่นรายเดือน" (payroll_monthly_filings) ไม่ใช่
+//   ระดับ "รอบจ่าย" (payroll_runs) อีกต่อไป — ★ deprecated ในไฟล์นี้ คงไว้เป็น re-export เท่านั้นกันโค้ดอื่น
+//   import จาก "@/lib/accounting/payroll" พัง — ★★ พารามิเตอร์ที่ 3 เปลี่ยนความหมายจาก runId เป็น
+//   filingPeriodId (ผู้เรียกต้อง resolve filingPeriodId จาก getRunScope(...).filingPeriodId ก่อนเสมอ ดู
+//   app/chat-audit/accounting/payroll/actions.ts::markFiledAction เป็นตัวอย่าง)
 // ---------------------------------------------------------------------
-
-async function setFilingStatus(
-  db: DB,
-  tenantId: string,
-  runId: string,
-  kind: "pit" | "sso",
-  filed: boolean,
-  actorEmployeeId: string | null
-): Promise<PayrollActionResult> {
-  const scope = await getRunScope(db, tenantId, runId);
-  if (!scope) return { ok: false, message: "ไม่พบรอบเงินเดือน (อาจถูกลบไปแล้ว)" };
-  if (scope.status !== "finalized") {
-    return { ok: false, message: "รอบนี้ยังไม่สร้างรายการบัญชี (JE) — บันทึกสถานะยื่นได้เฉพาะรอบที่สร้าง JE แล้ว" };
-  }
-  const payload =
-    kind === "pit"
-      ? {
-          pit_filing_status: filed ? "filed" : "not_filed",
-          pit_filed_at: filed ? new Date().toISOString() : null,
-          pit_filed_by: filed ? actorEmployeeId : null,
-        }
-      : {
-          sso_filing_status: filed ? "filed" : "not_filed",
-          sso_filed_at: filed ? new Date().toISOString() : null,
-          sso_filed_by: filed ? actorEmployeeId : null,
-        };
-  const { error } = await db.from("payroll_runs").update(payload).eq("id", runId).eq("tenant_id", tenantId);
-  if (error) return { ok: false, message: "บันทึกสถานะไม่สำเร็จ กรุณาลองใหม่" };
-  return { ok: true, id: runId };
-}
-
-/** บันทึกว่ายื่น ภ.ง.ด.1 แล้ว — เฉพาะรอบที่ status='finalized' (0.3) */
-export function markPitFiled(db: DB, tenantId: string, runId: string, actorEmployeeId: string | null) {
-  return setFilingStatus(db, tenantId, runId, "pit", true, actorEmployeeId);
-}
-/** ยกเลิกสถานะยื่น ภ.ง.ด.1 (undo, 0.3) */
-export function unmarkPitFiled(db: DB, tenantId: string, runId: string) {
-  return setFilingStatus(db, tenantId, runId, "pit", false, null);
-}
-/** บันทึกว่ายื่น สปส.1-10 แล้ว — เฉพาะรอบที่ status='finalized' (0.3) */
-export function markSsoFiled(db: DB, tenantId: string, runId: string, actorEmployeeId: string | null) {
-  return setFilingStatus(db, tenantId, runId, "sso", true, actorEmployeeId);
-}
-/** ยกเลิกสถานะยื่น สปส.1-10 (undo, 0.3) */
-export function unmarkSsoFiled(db: DB, tenantId: string, runId: string) {
-  return setFilingStatus(db, tenantId, runId, "sso", false, null);
-}
+export { markPitFiled, unmarkPitFiled, markSsoFiled, unmarkSsoFiled } from "@/lib/accounting/payroll-monthly-filing";

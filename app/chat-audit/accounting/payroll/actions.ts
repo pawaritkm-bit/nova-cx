@@ -23,14 +23,11 @@ import {
   recalcRunLines,
   generateRunJournalEntry,
   softDeleteRun,
-  markPitFiled,
-  unmarkPitFiled,
-  markSsoFiled,
-  unmarkSsoFiled,
   getRunScope,
   type CreateRunInput,
   type LineAmountEdit,
 } from "@/lib/accounting/payroll";
+import { markPitFiled, unmarkPitFiled, markSsoFiled, unmarkSsoFiled } from "@/lib/accounting/payroll-monthly-filing";
 
 const PATH = "/chat-audit/accounting/payroll";
 
@@ -143,7 +140,13 @@ export async function deleteRunAction(runId: string, customerId: string): Promis
 
 type FilingKind = "pit" | "sso";
 
-/** บันทึกว่ายื่น ภ.ง.ด.1/สปส.1-10 แล้ว — เฉพาะรอบที่ status='finalized' (0.3) */
+/**
+ * บันทึกว่ายื่น ภ.ง.ด.1/สปส.1-10 แล้ว — เฉพาะรอบที่ status='finalized' (0.3)
+ *   ★★★ เฟส 9b กลุ่ม BC (T137/T138) — สถานะยื่นตัวจริงย้ายไปอยู่ที่ระดับ "หน่วยยื่นรายเดือน"
+ *   (payroll_monthly_filings) แล้ว ไม่ใช่ระดับรอบจ่ายตรง ๆ — resolve `scope.filingPeriodId` จาก run ที่กำลัง
+ *   เขียนจริงก่อนเสมอ (derive จาก resource, 0.15) แล้วค่อยเรียก markPitFiled/markSsoFiled ระดับหน่วยยื่น —
+ *   สำหรับลูกค้า monthly (1 รอบ = 1 เดือนเป๊ะ) ผลลัพธ์เหมือนเดิมทุกประการจากมุมมอง UX (T141)
+ */
 export async function markFiledAction(runId: string, customerId: string, kind: FilingKind): Promise<PayrollRunActionResult> {
   if (!isUuid(runId) || !isUuid(customerId)) return { ok: false, message: "ไม่พบรอบเงินเดือนที่เลือก" };
   try {
@@ -156,8 +159,17 @@ export async function markFiledAction(runId: string, customerId: string, kind: F
     if (!scope) return { ok: false, message: "ไม่พบรอบเงินเดือน (อาจถูกลบไปแล้ว)" };
     assertCustomerInScope(ctx, scope.customerId);
     if (scope.customerId !== customerId) return { ok: false, message: "ลูกค้าไม่ตรงกับรอบเงินเดือนนี้" };
+    if (scope.status !== "finalized") {
+      return { ok: false, message: "รอบนี้ยังไม่สร้างรายการบัญชี (JE) — บันทึกสถานะยื่นได้เฉพาะรอบที่สร้าง JE แล้ว" };
+    }
+    if (!scope.filingPeriodId) {
+      return { ok: false, message: "รอบนี้ยังไม่ผูกกับหน่วยยื่นภาษีรายเดือน (ข้อมูลเก่าก่อนอัปเดตระบบ) — กรุณาติดต่อผู้ดูแลระบบ" };
+    }
 
-    const res = kind === "pit" ? await markPitFiled(service, ctx.tenantId, runId, ctx.employeeId) : await markSsoFiled(service, ctx.tenantId, runId, ctx.employeeId);
+    const res =
+      kind === "pit"
+        ? await markPitFiled(service, ctx.tenantId, scope.filingPeriodId, ctx.employeeId)
+        : await markSsoFiled(service, ctx.tenantId, scope.filingPeriodId, ctx.employeeId);
     if (!res.ok) return { ok: false, message: res.message };
     revalidatePath(PATH);
     return { ok: true, message: kind === "pit" ? "บันทึกว่ายื่น ภ.ง.ด.1 แล้ว" : "บันทึกว่ายื่น สปส.1-10 แล้ว" };
@@ -167,7 +179,7 @@ export async function markFiledAction(runId: string, customerId: string, kind: F
   }
 }
 
-/** ยกเลิกสถานะยื่น (undo, 0.3) */
+/** ยกเลิกสถานะยื่น (undo, 0.3) — ดูคอมเมนต์เต็มใน markFiledAction (เฟส 9b กลุ่ม BC) */
 export async function unmarkFiledAction(runId: string, customerId: string, kind: FilingKind): Promise<PayrollRunActionResult> {
   if (!isUuid(runId) || !isUuid(customerId)) return { ok: false, message: "ไม่พบรอบเงินเดือนที่เลือก" };
   try {
@@ -180,8 +192,14 @@ export async function unmarkFiledAction(runId: string, customerId: string, kind:
     if (!scope) return { ok: false, message: "ไม่พบรอบเงินเดือน (อาจถูกลบไปแล้ว)" };
     assertCustomerInScope(ctx, scope.customerId);
     if (scope.customerId !== customerId) return { ok: false, message: "ลูกค้าไม่ตรงกับรอบเงินเดือนนี้" };
+    if (!scope.filingPeriodId) {
+      return { ok: false, message: "รอบนี้ยังไม่ผูกกับหน่วยยื่นภาษีรายเดือน (ข้อมูลเก่าก่อนอัปเดตระบบ) — กรุณาติดต่อผู้ดูแลระบบ" };
+    }
 
-    const res = kind === "pit" ? await unmarkPitFiled(service, ctx.tenantId, runId) : await unmarkSsoFiled(service, ctx.tenantId, runId);
+    const res =
+      kind === "pit"
+        ? await unmarkPitFiled(service, ctx.tenantId, scope.filingPeriodId)
+        : await unmarkSsoFiled(service, ctx.tenantId, scope.filingPeriodId);
     if (!res.ok) return { ok: false, message: res.message };
     revalidatePath(PATH);
     return { ok: true, message: "ยกเลิกสถานะยื่นแล้ว" };

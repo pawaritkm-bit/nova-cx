@@ -27,6 +27,9 @@ export const DEFAULT_SSO_EMPLOYER_EXPENSE_CODE = "5311";
 export const DEFAULT_SSO_PAYABLE_CODE = "2050";
 export const DEFAULT_PIT_PAYABLE_CODE = "2910";
 
+/** ★ เฟส 9b กลุ่ม BC/ข้อ3 (0.5) — ความถี่จ่ายเงินเดือน ('monthly' default = พฤติกรรมเดิมทุกประการ) */
+export type PayFrequency = "monthly" | "non_monthly";
+
 export type PayrollSettings = {
   id: string;
   tenantId: string;
@@ -38,6 +41,9 @@ export type PayrollSettings = {
   otherDeductionsAccountCode: string | null;
   netPayAccountCode: string | null;
   netPayIsPaidImmediately: boolean;
+  /** ★ เฟส 9b กลุ่ม BC (0.5) — 'monthly' (default) = สร้างรอบซ้ำเดือน/ปีเดียวกันไม่ได้เหมือนก่อนเฟสนี้เป๊ะ,
+   *   'non_monthly' = เปิดสร้างหลายรอบ/เดือนได้ (ลูกค้าตั้งค่าเองเท่านั้น) */
+  payFrequency: PayFrequency;
   createdAt: string;
   updatedAt: string;
 };
@@ -50,6 +56,9 @@ export type PayrollSettingsInput = {
   otherDeductionsAccountCode?: unknown;
   netPayAccountCode?: unknown;
   netPayIsPaidImmediately?: unknown;
+  /** ★ เฟส 9b กลุ่ม BC — ไม่ส่งมา/ค่าอื่นที่ไม่ใช่ 'non_monthly' เป๊ะ ๆ = default 'monthly' (regression-safe
+   *   กับโค้ดเดิมก่อนเฟสนี้ที่ไม่รู้จักฟิลด์นี้เลย) */
+  payFrequency?: unknown;
 };
 
 type ValidatedPayrollSettings = {
@@ -60,6 +69,7 @@ type ValidatedPayrollSettings = {
   otherDeductionsAccountCode: string | null;
   netPayAccountCode: string | null;
   netPayIsPaidImmediately: boolean;
+  payFrequency: PayFrequency;
 };
 
 export type PayrollSettingsValidationResult =
@@ -149,6 +159,9 @@ export function validatePayrollSettingsInput(
   if (!r6.ok) return r6;
 
   const netPayIsPaidImmediately = !!input.netPayIsPaidImmediately;
+  // ★ เฟส 9b กลุ่ม BC — ต้องเป็น 'non_monthly' เป๊ะ ๆ ถึงจะเปิดโหมดใหม่ ค่าอื่นใดรวมถึง undefined/ไม่ส่งมา
+  //   (โค้ดเก่าก่อนเฟสนี้ทั้งหมด) = default 'monthly' เสมอ (regression-safe)
+  const payFrequency: PayFrequency = input.payFrequency === "non_monthly" ? "non_monthly" : "monthly";
 
   return {
     ok: true,
@@ -161,6 +174,7 @@ export function validatePayrollSettingsInput(
       otherDeductionsAccountCode: r5.value,
       netPayAccountCode: r6.value,
       netPayIsPaidImmediately,
+      payFrequency,
     },
   };
 }
@@ -180,12 +194,13 @@ type RawRow = {
   other_deductions_account_code: string | null;
   net_pay_account_code: string | null;
   net_pay_is_paid_immediately: boolean;
+  pay_frequency: string | null;
   created_at: string;
   updated_at: string;
 };
 
 const COLUMNS =
-  "id, tenant_id, customer_id, salary_expense_account_code, sso_employer_expense_account_code, sso_payable_account_code, pit_payable_account_code, other_deductions_account_code, net_pay_account_code, net_pay_is_paid_immediately, created_at, updated_at";
+  "id, tenant_id, customer_id, salary_expense_account_code, sso_employer_expense_account_code, sso_payable_account_code, pit_payable_account_code, other_deductions_account_code, net_pay_account_code, net_pay_is_paid_immediately, pay_frequency, created_at, updated_at";
 
 function mapRow(r: RawRow): PayrollSettings {
   return {
@@ -199,6 +214,9 @@ function mapRow(r: RawRow): PayrollSettings {
     otherDeductionsAccountCode: r.other_deductions_account_code,
     netPayAccountCode: r.net_pay_account_code,
     netPayIsPaidImmediately: r.net_pay_is_paid_immediately,
+    // ★ แถวเก่าก่อน migration 0093 (ถ้าหลุดมาไม่มีคอลัมน์นี้จริง — ไม่ควรเกิดเพราะ DB default 'monthly'
+    //   เสมอ) ก็ยัง fallback เป็น 'monthly' (regression-safe)
+    payFrequency: r.pay_frequency === "non_monthly" ? "non_monthly" : "monthly",
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -239,6 +257,7 @@ export async function getOrCreateDefaultSettings(
     other_deductions_account_code: null,
     net_pay_account_code: null,
     net_pay_is_paid_immediately: false,
+    pay_frequency: "monthly",
   };
   const { data, error } = await db
     .from("payroll_settings")
@@ -274,6 +293,7 @@ export async function upsertSettings(
     other_deductions_account_code: v.value.otherDeductionsAccountCode,
     net_pay_account_code: v.value.netPayAccountCode,
     net_pay_is_paid_immediately: v.value.netPayIsPaidImmediately,
+    pay_frequency: v.value.payFrequency,
   };
 
   const existing = await getSettings(db, tenantId, customerId);
