@@ -253,15 +253,56 @@ describe("recalcRunLines (T114) — idempotent", () => {
     expect(line.gross_salary).toBe(50000);
   });
 
-  it("★★ 0.5 ปฏิเสธ bonus_amount > 0 ทั้งชุด (ปิดสวิตช์ชั่วคราว) — ไม่บันทึกบรรทัดใดเลย", async () => {
+  // ★★ 0.5 โบนัส verify แล้ว/เปิดใช้งานจริง (T112) — เทียบมือตามสูตร calcMonthlyPitWithBonus (ป.96/2543
+  //   ข้อ 1(5), ดู golden test เต็มใน payroll-tax.test.ts): gross=60,000/เดือน, periods=12,
+  //   allowance=PERSONAL_ALLOWANCE_STANDARD=60,000, bonus=90,000
+  //   A: annual=720,000, expense cap=100,000, taxable=720,000-100,000-60,000=560,000
+  //      tax=7,500+20,000+60,000*15%(9,000)=36,500 → regularPit=36,500/12=3,041.67
+  //   B: annualB=810,000, expenseB cap=100,000, taxableB=810,000-100,000-60,000=650,000
+  //      tax=7,500+20,000+150,000*15%(22,500)=50,000 → bonusPit=50,000-36,500=13,500
+  //   totalPit=3,041.67+13,500=16,541.67
+  //   sso: wage=60,000(grossThisPeriod ไม่รวม bonus)>ceiling 17,500 → base=17,500 → employee/employer=875
+  //   net_pay = 60,000+90,000-16,541.67-875-0 = 132,583.33
+  it("★★ 0.5 bonus_amount > 0 เปิดใช้งานแล้ว — คำนวณภาษีโบนัสตาม ป.96/2543 ข้อ 1(5) ถูกต้องตรงกับเทียบมือ", async () => {
     const { db } = makeInMemoryDb(tables);
     const lineId = tables.payroll_run_lines[0].id as string;
-    const before = JSON.stringify(tables.payroll_run_lines);
     const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
-      { id: lineId, grossSalary: 20000, otherAdditions: 0, bonusAmount: 5000, otherDeductions: 0 },
+      { id: lineId, grossSalary: 60000, otherAdditions: 0, bonusAmount: 90000, otherDeductions: 0 },
     ]);
-    expect(res.ok).toBe(false);
-    expect(JSON.stringify(tables.payroll_run_lines)).toBe(before);
+    expect(res.ok).toBe(true);
+    const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+    expect(line.bonus_amount).toBe(90000);
+    expect(line.pit_withheld).toBe(16541.67);
+    expect(line.sso_employee).toBe(875);
+    expect(line.sso_employer).toBe(875);
+    expect(line.net_pay).toBe(132583.33);
+  });
+
+  it("★ โบนัส=0 (ปกติ) → pit เท่ากับ calcMonthlyPitForRegularIncome เดิมทุกประการ ไม่ถูกกระทบจากฟีเจอร์ใหม่", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const lineId = tables.payroll_run_lines[0].id as string;
+    const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+      { id: lineId, grossSalary: 60000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0 },
+    ]);
+    expect(res.ok).toBe(true);
+    const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+    // annual=720000, expense cap100000, allowance60000, taxable=560000 → tax=36500 → /12=3041.67 (เหมือน regularPit ข้างบน)
+    expect(line.pit_withheld).toBe(3041.67);
+  });
+
+  it("★ edge case: พนักงานเข้าใหม่กลางปีได้โบนัสด้วย — regularPit หารด้วย remainingPeriodsInYear แต่ bonusPit ไม่หาร", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const empId = tables.payroll_run_lines[0].payroll_employee_id as string;
+    const empRow = tables.payroll_employees.find((r) => r.id === empId)!;
+    empRow.start_date = "2026-07-01"; // เข้าใหม่ ก.ค. ปีเดียวกับ pay_date (2026-08-10) → periods=6
+    const lineId = tables.payroll_run_lines[0].id as string;
+    // gross=100,000, periods=6, allowance=60,000, bonus=100,000 → ดู golden test เต็มใน payroll-tax.test.ts
+    // regularPit=3,583.33, bonusPit=12,000 (ไม่หารด้วย periods) → totalPit=15,583.33
+    await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+      { id: lineId, grossSalary: 100000, otherAdditions: 0, bonusAmount: 100000, otherDeductions: 0 },
+    ]);
+    const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+    expect(line.pit_withheld).toBe(15583.33);
   });
 
   it("★ พนักงานเข้าใหม่กลางปี — remainingPeriodsInYear ≠ 12 มีผลต่อ pit ที่คำนวณได้", async () => {
@@ -467,6 +508,22 @@ describe("buildPayrollJournalEntry (T115, 0.8) — pure", () => {
       // ★ ต้องเป็น Dr (ไม่ใช่ Cr ติดลบ) ด้วยยอด abs(netPayTotal)
       expect(Number(netPayLine?.credit ?? 0)).toBe(0);
       expect(Number(netPayLine?.debit ?? 0)).toBe(5875);
+      expect(isBalanced(toNumericLines(res.lines))).toBe(true);
+    }
+  });
+
+  // ★ 0.5/0.8 verify แล้ว — bonus_amount ต้องรวมเข้า Dr salary_expense เสมอตามสเปคเดิม (docs 0.8):
+  //   Dr salary_expense = Σ(gross_salary + other_additions + bonus_amount) — ยืนยันว่า logic เดิมของ
+  //   buildPayrollJournalEntry รองรับ bonus_amount ใน sum นี้อยู่แล้วตั้งแต่แรก ไม่ต้องแก้เพิ่ม
+  it("★ 0.5 bonus_amount รวมเข้า Dr salary_expense (Σ gross+additions+bonus) — Dr=Cr เสมอ", () => {
+    const lines = [
+      line({ grossSalary: 60000, bonusAmount: 90000, pitWithheld: 16541.67, ssoEmployee: 875, ssoEmployer: 875, netPay: 132583.33 }),
+    ];
+    const res = buildPayrollJournalEntry(lines, DEFAULT_SETTINGS);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const salaryLine = res.lines.find((l) => l.accountCode === DEFAULT_SETTINGS.salaryExpenseAccountCode);
+      expect(Number(salaryLine?.debit ?? 0)).toBe(150000); // 60000(gross) + 90000(bonus)
       expect(isBalanced(toNumericLines(res.lines))).toBe(true);
     }
   });

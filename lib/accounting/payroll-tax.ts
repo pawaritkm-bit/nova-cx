@@ -5,15 +5,13 @@
  * บริบท: เฟส 9 ส่วน AD (docs/06-accounting-features-roadmap.md, หมวด 0.4/0.5/0.6) — จุดที่สำคัญที่สุด
  *   ของเฟสนี้ เพราะกระทบเงินจริงของพนักงานลูกค้าโดยตรง
  *
- * ★★★ 0.5 สูตรภาษีโบนัส (คำสั่งกรมสรรพากร ทป.4/2528 ข้อ 3) — [ยังไม่เปิดใช้งาน — ดูหมายเหตุด้านล่าง]:
- *   ไม่มีฟังก์ชัน `calcMonthlyPitWithBonus` ในไฟล์นี้โดยตั้งใจ — เอกสารแผนสั่งให้ต้องหาตัวอย่างคำนวณ
- *   อ้างอิงที่เชื่อถือได้จริง (เอกสารประกอบคำสั่ง ทป.4/2528 ฉบับเต็ม หรือแหล่งที่ระบุเลขอ้างอิงชัดเจน) มาทำเป็น
- *   golden test case ก่อนถือว่า T112 เสร็จ — ในรอบ implement นี้หาแหล่งอ้างอิงที่เชื่อถือได้จริงทันเวลาไม่ได้
- *   (ไม่มีเครื่องมือค้นเว็บให้ verify ในสภาพแวดล้อมที่ implement งานนี้) → เลือกทางเลือก (ข) ตามที่เอกสารแผน
- *   ระบุไว้: **ไม่ deploy engine โบนัสที่ยังไม่ verify** — ปฏิเสธ `bonus_amount > 0` ที่ชั้น validate ของ
- *   `lib/accounting/payroll.ts` (recalcRunLines/updateRunLineAction) และ UI (ช่องกรอกโบนัสถูกปิดใช้งาน/
- *   แจ้งเหตุผลชัดเจน) ไปก่อน — เปิด backlog 9b ทำต่อเมื่อหาตัวอย่างอ้างอิงที่เชื่อถือได้จริงมาได้แล้ว
- *   ห้ามเขียนสูตรเดามาใช้กับเงินจริงของลูกค้าเด็ดขาด
+ * ★★★ 0.5 สูตรภาษีโบนัส — **verify แล้ว เปิดใช้งานจริง** (T112 เสร็จ, แก้จากรอบก่อนที่อ้างอิงกฎหมายผิด):
+ *   เดิมโค้ด/คอมเมนต์อ้างอิง "ทป.4/2528 ข้อ 3" ผิด — ข้อนั้นจริง ๆ คือเรื่องหักภาษี ณ ที่จ่าย 0.75% สำหรับ
+ *   นิติบุคคลซื้อสินค้าเกษตร ไม่เกี่ยวกับโบนัส/เงินเดือนเลย (ยืนยันจาก rd.go.th + วิกิซอร์ซ อิสระ 2 แหล่ง) —
+ *   กฎหมายที่ถูกต้องคือ **คำสั่งกรมสรรพากรที่ ป.96/2543 ข้อ 1(5)** เรื่อง "การคำนวณภาษีเงินได้บุคคลธรรมดา
+ *   หัก ณ ที่จ่ายตามมาตรา 50(1) กรณีเงินได้พึงประเมินตามมาตรา 40(1)" ครอบคลุม "เงินได้พิเศษที่จ่ายเป็น
+ *   ครั้งคราวระหว่างปี เช่น ค่าล่วงเวลา เงินโบนัส" (rd.go.th/3558.html) — ดูฟังก์ชัน `calcMonthlyPitWithBonus`
+ *   ด้านล่าง + golden test ที่ verify ตัวเลขแล้วใน `payroll-tax.test.ts`
  *
  * ★ 0.4 คำนวณอิสระทุกงวดจากยอดของงวดนั้นเอง — ไม่ต้องเก็บ/อ้างอิงยอดสะสม (YTD) ข้ามงวด (ตรงตามวิธีที่กรม
  *   สรรพากรใช้จริงสำหรับเงินได้ประจำ) — periodsPerYear=12 คงที่สำหรับพนักงานเก่า, พนักงานเข้าใหม่กลางปี
@@ -113,6 +111,61 @@ export function calcMonthlyPitForRegularIncome(
   const taxableIncome = Math.max(round2(annualEstimate - expense - allowance), 0);
   const annualTax = calcAnnualTax(taxableIncome, brackets);
   return round2(annualTax / periods);
+}
+
+export type MonthlyPitWithBonusResult = {
+  /** ภาษีเงินได้ประจำของงวดนี้ (ไม่รวมโบนัส) — เท่ากับ calcMonthlyPitForRegularIncome ทุกประการ (A/periods) */
+  regularPit: number;
+  /** ภาษีที่ต้องหักจากโบนัสงวดนี้ (B − A) — หักเต็มจำนวน ไม่หารด้วย periodsPerYear */
+  bonusPit: number;
+  /** ภาษีรวมที่ต้องหักงวดนี้ = regularPit + bonusPit */
+  totalPit: number;
+};
+
+/**
+ * ภาษีหัก ณ ที่จ่ายของงวดที่มีเงินได้พิเศษ/โบนัส (มาตรา 40(1)) — ตามคำสั่งกรมสรรพากรที่ **ป.96/2543 ข้อ 1(5)**
+ *   (verify แล้ว, 0.5 — ดูคอมเมนต์เต็มด้านบนไฟล์เรื่องแก้การอ้างอิงกฎหมายที่ผิดจากรอบก่อน "ทป.4/2528"):
+ *   1) A = ภาษีทั้งปีไม่รวมโบนัส — annualize ปกติเหมือน `calcMonthlyPitForRegularIncome` (ก่อนหารงวด)
+ *   2) B = ภาษีทั้งปีอีกครั้งโดยรวมโบนัสเข้า annualEstimate **ก่อน**หักค่าใช้จ่ายเหมา/ค่าลดหย่อน (ใช้ชุด
+ *      ลดหย่อนเดียวกันกับ A) — ★ ค่าใช้จ่ายเหมาคำนวณใหม่จาก annualEstimate ที่รวมโบนัสแล้ว (ผ่าน
+ *      `expenseDeduction` ตรง ๆ — ไม่ได้ reuse ค่า A เดิม เพราะฐานเงินได้เปลี่ยนไป แม้ในทางปฏิบัติมักชนเพดาน
+ *      100,000 เท่ากันทั้ง 2 กรณีเมื่อเงินได้สูงพอ)
+ *   3) ภาษีจากโบนัส = B − A หักเต็มจำนวนในงวดที่จ่ายจริง (**ไม่หารด้วย periodsPerYear**)
+ *   4) ภาษีรวมที่หักงวดนี้ = ภาษีเงินได้ประจำ (A/periods, หารงวดตามปกติ) + ภาษีจากโบนัส (ไม่หาร)
+ *   ★ reuse `expenseDeduction`/`calcAnnualTax`/`calcMonthlyPitForRegularIncome` ล้วน — ไม่คำนวณภาษีก้าวหน้าซ้ำ
+ *   ★ periodsPerYear เป็นตัวเดียวกับที่ใช้กับเงินได้ประจำ (รองรับ `remainingPeriodsInYear` ของพนักงานเข้าใหม่
+ *   กลางปี, 0.4) — มีผลกับ regularPit เท่านั้น ส่วน bonusPit (B−A) ไม่ถูกหารด้วย periods เลยตามข้อ 1(5)
+ *   ★ golden test case verify ตัวเลขแล้วใน payroll-tax.test.ts (อ้างอิงคำสั่ง ป.96/2543 ข้อ 1(5) +
+ *   ตัวอย่างจำลองจาก hiperc.sru.ac.th)
+ */
+export function calcMonthlyPitWithBonus(
+  grossThisPeriod: number,
+  bonusAmount: number,
+  periodsPerYear: number,
+  personalAllowance: number,
+  brackets: PitBracket[]
+): MonthlyPitWithBonusResult {
+  const gross = Number.isFinite(grossThisPeriod) && grossThisPeriod > 0 ? grossThisPeriod : 0;
+  const bonus = Number.isFinite(bonusAmount) && bonusAmount > 0 ? bonusAmount : 0;
+  const periods = Number.isFinite(periodsPerYear) && periodsPerYear > 0 ? periodsPerYear : 12;
+  const allowance = Number.isFinite(personalAllowance) && personalAllowance >= 0 ? personalAllowance : 0;
+
+  const regularPit = calcMonthlyPitForRegularIncome(gross, periods, allowance, brackets);
+  if (bonus <= 0) return { regularPit, bonusPit: 0, totalPit: regularPit };
+
+  // A: ภาษีทั้งปีไม่รวมโบนัส (คำนวณตรง ๆ อีกครั้งเพื่อหาผลต่าง B−A ที่แม่นยำ — ไม่ derive จาก regularPit*periods
+  //   ที่ปัดเศษไปแล้ว กัน error สะสมจากการปัดเศษซ้อน)
+  const annualEstimateA = round2(gross * periods);
+  const taxableA = Math.max(round2(annualEstimateA - expenseDeduction(annualEstimateA) - allowance), 0);
+  const annualTaxA = calcAnnualTax(taxableA, brackets);
+
+  // B: รวมโบนัสเข้า annualEstimate ก่อนหักค่าใช้จ่าย/ลดหย่อน (ชุดลดหย่อนเดียวกัน)
+  const annualEstimateB = round2(annualEstimateA + bonus);
+  const taxableB = Math.max(round2(annualEstimateB - expenseDeduction(annualEstimateB) - allowance), 0);
+  const annualTaxB = calcAnnualTax(taxableB, brackets);
+
+  const bonusPit = round2(annualTaxB - annualTaxA);
+  return { regularPit, bonusPit, totalPit: round2(regularPit + bonusPit) };
 }
 
 // ---------------------------------------------------------------------
