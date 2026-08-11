@@ -41,6 +41,15 @@ function parseMoney(v: unknown): number | null {
   return Number.isFinite(n) ? round2(n) : null;
 }
 
+/** ★ BD (0.4) — nullable ตัวเลขไม่ติดลบ: ไม่กรอกเลย (null/undefined/"") → null (ไม่มี YTD นายจ้างเดิม)
+ *   ผิดรูปแบบ/ติดลบ → { ok: false } */
+function parseMoneyOrNullField(v: unknown): { ok: true; value: number | null } | { ok: false } {
+  if (v === null || v === undefined || v === "") return { ok: true, value: null };
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n) || n < 0) return { ok: false };
+  return { ok: true, value: round2(n) };
+}
+
 function parseDateOrNull(v: unknown): { ok: true; value: string | null } | { ok: false } {
   if (v === null || v === undefined || v === "") return { ok: true, value: null };
   if (typeof v !== "string" || !DATE_RE.test(v) || !isValidCalendarDate(v)) return { ok: false };
@@ -67,6 +76,15 @@ export type PayrollEmployee = {
   startDate: string | null;
   resignDate: string | null;
   isActive: boolean;
+  /** ★ เฟส 9b กลุ่ม BA (0.3) — ยกเว้นเงินสมทบประกันสังคมรายพนักงาน นักบัญชีพิจารณาเงื่อนไขเอง ไม่ผูก
+   *   เหตุผลทางกฎหมายในระบบ (reframe จาก "ม.39/40" เดิมที่เข้าใจผิดข้อเท็จจริง) */
+  ssoExempt: boolean;
+  /** ★ เฟส 9b กลุ่ม BD (0.4) — ยอดยกมาจากนายจ้างเดิม (ข้อมูลอ้างอิงเพื่อพิมพ์ 50 ทวิเท่านั้น ห้ามใช้ในสูตร
+   *   คำนวณภาษีหัก ณ ที่จ่ายรายเดือนเด็ดขาด) */
+  priorEmployerYtdGross: number | null;
+  priorEmployerYtdPitWithheld: number | null;
+  priorEmployerYtdSsoEmployee: number | null;
+  priorEmployerNote: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -82,6 +100,13 @@ export type PayrollEmployeeInput = {
   startDate?: unknown;
   resignDate?: unknown;
   isActive?: unknown;
+  /** ★ BA (0.3) — undefined จาก input เก่า/ฟอร์มที่ยังไม่มีช่องนี้ → default false (ไม่ throw) */
+  ssoExempt?: unknown;
+  /** ★ BD (0.4) — nullable ทั้งหมด ไม่กรอก = ไม่มี YTD นายจ้างเดิม */
+  priorEmployerYtdGross?: unknown;
+  priorEmployerYtdPitWithheld?: unknown;
+  priorEmployerYtdSsoEmployee?: unknown;
+  priorEmployerNote?: unknown;
 };
 
 type ValidatedPayrollEmployee = {
@@ -94,6 +119,11 @@ type ValidatedPayrollEmployee = {
   startDate: string | null;
   resignDate: string | null;
   isActive: boolean;
+  ssoExempt: boolean;
+  priorEmployerYtdGross: number | null;
+  priorEmployerYtdPitWithheld: number | null;
+  priorEmployerYtdSsoEmployee: number | null;
+  priorEmployerNote: string | null;
 };
 
 export type PayrollEmployeeValidationResult =
@@ -144,6 +174,18 @@ export function validatePayrollEmployeeInput(input: PayrollEmployeeInput): Payro
 
   const isActive = input.isActive === undefined ? true : !!input.isActive;
 
+  // ★ BA (0.3) — undefined (input เก่า/ฟอร์มที่ยังไม่มีช่องนี้) → default false เสมอ ไม่ throw
+  const ssoExempt = input.ssoExempt === undefined ? false : !!input.ssoExempt;
+
+  // ★ BD (0.4) — ยอด YTD นายจ้างเดิม (nullable, ตัวเลขไม่ติดลบถ้ากรอก) — ใช้แค่พิมพ์ 50 ทวิเท่านั้น
+  const ytdGrossRes = parseMoneyOrNullField(input.priorEmployerYtdGross);
+  if (!ytdGrossRes.ok) return { ok: false, message: "ยอดเงินได้ยกมาจากนายจ้างเดิมต้องเป็นตัวเลขไม่ติดลบ" };
+  const ytdPitRes = parseMoneyOrNullField(input.priorEmployerYtdPitWithheld);
+  if (!ytdPitRes.ok) return { ok: false, message: "ยอดภาษีหัก ณ ที่จ่ายยกมาจากนายจ้างเดิมต้องเป็นตัวเลขไม่ติดลบ" };
+  const ytdSsoRes = parseMoneyOrNullField(input.priorEmployerYtdSsoEmployee);
+  if (!ytdSsoRes.ok) return { ok: false, message: "ยอดประกันสังคมยกมาจากนายจ้างเดิมต้องเป็นตัวเลขไม่ติดลบ" };
+  const priorEmployerNote = clampText(input.priorEmployerNote, 500);
+
   return {
     ok: true,
     value: {
@@ -156,6 +198,11 @@ export function validatePayrollEmployeeInput(input: PayrollEmployeeInput): Payro
       startDate: startRes.value,
       resignDate: resignRes.value,
       isActive,
+      ssoExempt,
+      priorEmployerYtdGross: ytdGrossRes.value,
+      priorEmployerYtdPitWithheld: ytdPitRes.value,
+      priorEmployerYtdSsoEmployee: ytdSsoRes.value,
+      priorEmployerNote,
     },
   };
 }
@@ -177,12 +224,25 @@ type RawRow = {
   start_date: string | null;
   resign_date: string | null;
   is_active: boolean;
+  /** ★ BA — undefined ถ้า migration 0091 ยังไม่ apply บน DB นี้ (defensive, ไม่ควรเกิดในโปรดักชัน) */
+  sso_exempt?: boolean | null;
+  prior_employer_ytd_gross?: number | string | null;
+  prior_employer_ytd_pit_withheld?: number | string | null;
+  prior_employer_ytd_sso_employee?: number | string | null;
+  prior_employer_note?: string | null;
   created_at: string;
   updated_at: string;
 };
 
 const COLUMNS =
-  "id, tenant_id, customer_id, employee_code, full_name, id_card_no, passport_no, position, base_salary, start_date, resign_date, is_active, created_at, updated_at";
+  "id, tenant_id, customer_id, employee_code, full_name, id_card_no, passport_no, position, base_salary, start_date, resign_date, is_active, sso_exempt, prior_employer_ytd_gross, prior_employer_ytd_pit_withheld, prior_employer_ytd_sso_employee, prior_employer_note, created_at, updated_at";
+
+/** ตัวเลข nullable จาก DB (numeric อาจมาเป็น string) → number | null */
+function numOrNull(v: number | string | null | undefined): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? round2(n) : null;
+}
 
 function mapRow(r: RawRow): PayrollEmployee {
   return {
@@ -198,6 +258,11 @@ function mapRow(r: RawRow): PayrollEmployee {
     startDate: r.start_date,
     resignDate: r.resign_date,
     isActive: r.is_active,
+    ssoExempt: !!r.sso_exempt,
+    priorEmployerYtdGross: numOrNull(r.prior_employer_ytd_gross),
+    priorEmployerYtdPitWithheld: numOrNull(r.prior_employer_ytd_pit_withheld),
+    priorEmployerYtdSsoEmployee: numOrNull(r.prior_employer_ytd_sso_employee),
+    priorEmployerNote: r.prior_employer_note ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -285,6 +350,11 @@ export async function upsertEmployee(
     start_date: v.value.startDate,
     resign_date: v.value.resignDate,
     is_active: v.value.isActive,
+    sso_exempt: v.value.ssoExempt,
+    prior_employer_ytd_gross: v.value.priorEmployerYtdGross,
+    prior_employer_ytd_pit_withheld: v.value.priorEmployerYtdPitWithheld,
+    prior_employer_ytd_sso_employee: v.value.priorEmployerYtdSsoEmployee,
+    prior_employer_note: v.value.priorEmployerNote,
   };
 
   if (id) {

@@ -44,6 +44,7 @@ import {
   remainingPeriodsInYear,
   PERSONAL_ALLOWANCE_STANDARD,
 } from "@/lib/accounting/payroll-tax";
+import { calcProratedGrossSalary } from "@/lib/accounting/payroll-prorate";
 import { listEmployees } from "@/lib/accounting/payroll-employees";
 import { getSettings, type PayrollSettings } from "@/lib/accounting/payroll-settings";
 
@@ -109,6 +110,12 @@ export type PayrollRunLine = {
   ssoEmployee: number;
   ssoEmployer: number;
   netPay: number;
+  /** ★ เฟส 9b กลุ่ม BB — ข้อมูล badge "prorate อัตโนมัติ" (คำนวณสด ๆ จาก start_date/resign_date ของ
+   *   พนักงานเทียบกับงวดของรอบนี้เสมอ — ไม่ผูกกับว่ายอด gross_salary ปัจจุบันถูกแก้ทับไปแล้วหรือไม่ เป็นแค่
+   *   ข้อมูลช่วยตัดสินใจของนักบัญชี ไม่ใช่ยอดที่บันทึกจริง) */
+  isProrated: boolean;
+  proratedDaysWorked: number;
+  proratedDaysInMonth: number;
 };
 
 /** ผลลัพธ์ที่ server action ใช้แสดง toast/inline */
@@ -192,19 +199,33 @@ export async function createDraftRun(
     const byId = new Map(employees.map((e) => [e.id, e]));
     // ★ ตั้งค่าเริ่มต้นทุกช่องตัวเลขตรง ๆ (ไม่พึ่ง DB default เฉย ๆ) — payload ชัดเจนในตัวเอง
     //   (mirror pattern fixed-assets.ts::upsertAsset ที่ตั้ง accumulated_depreciation: 0 ตรง ๆ ตอน insert)
-    const rows = chunk.map((id) => ({
-      tenant_id: tenantId,
-      run_id: runId,
-      payroll_employee_id: id,
-      gross_salary: byId.get(id)?.baseSalary ?? 0,
-      other_additions: 0,
-      bonus_amount: 0,
-      other_deductions: 0,
-      pit_withheld: 0,
-      sso_employee: 0,
-      sso_employer: 0,
-      net_pay: 0,
-    }));
+    // ★★ เฟส 9b กลุ่ม BB — prefill ด้วย calcProratedGrossSalary เฉพาะพนักงานที่ start_date/resign_date
+    //   ตกอยู่ในช่วงเดือนของรอบนี้เท่านั้น — พนักงานปกตินอกช่วง (ทำงานเต็มเดือน) ยังได้ prorated===baseSalary
+    //   เป๊ะ (isProrated=false) ไม่มีการปัดเศษเพี้ยน (regression-safe 100% กับพฤติกรรมก่อนเฟสนี้)
+    const rows = chunk.map((id) => {
+      const emp = byId.get(id);
+      const base = emp?.baseSalary ?? 0;
+      const { prorated } = calcProratedGrossSalary(
+        base,
+        v.value.payPeriodYear,
+        v.value.payPeriodMonth,
+        emp?.startDate ?? null,
+        emp?.resignDate ?? null
+      );
+      return {
+        tenant_id: tenantId,
+        run_id: runId,
+        payroll_employee_id: id,
+        gross_salary: prorated,
+        other_additions: 0,
+        bonus_amount: 0,
+        other_deductions: 0,
+        pit_withheld: 0,
+        sso_employee: 0,
+        sso_employer: 0,
+        net_pay: 0,
+      };
+    });
     if (rows.length > 0) {
       const { error: lineErr } = await db.from("payroll_run_lines").insert(rows);
       // ★★ แก้บั๊ก QC เฟส 9: เดิมไม่เช็ค error ปล่อยผ่านเงียบ ๆ — ถ้า insert chunk ใดล้มเหลว (เช่น DB blip
@@ -339,37 +360,52 @@ async function fetchRawLines(db: DB, tenantId: string, runId: string): Promise<R
 }
 
 /**
- * ชื่อพนักงาน (fullName/employeeCode) ของ payrollEmployeeIds ที่ระบุ — chunkIds กัน `.in()` ยาวเกิน limit
- *   เมื่อลูกค้ามีพนักงาน 100+ คน (0.1, บทเรียน commit 7ab9f91)
+ * ข้อมูลพนักงาน (fullName/employeeCode/start_date/resign_date) ของ payrollEmployeeIds ที่ระบุ — chunkIds
+ *   กัน `.in()` ยาวเกิน limit เมื่อลูกค้ามีพนักงาน 100+ คน (0.1, บทเรียน commit 7ab9f91)
+ *   ★ เฟส 9b กลุ่ม BB — เพิ่ม start_date/resign_date เพื่อคำนวณ badge "prorate อัตโนมัติ" ตอนแสดงผล
+ *   (getRunWithLines) — ไม่กระทบยอด gross_salary ที่บันทึกจริงเลย (แค่ข้อมูลช่วยตัดสินใจของนักบัญชี)
  */
-async function fetchEmployeeNames(
+async function fetchEmployeeInfo(
   db: DB,
   tenantId: string,
   customerId: string,
   ids: string[]
-): Promise<Map<string, { fullName: string; employeeCode: string | null }>> {
-  const map = new Map<string, { fullName: string; employeeCode: string | null }>();
+): Promise<
+  Map<string, { fullName: string; employeeCode: string | null; startDate: string | null; resignDate: string | null }>
+> {
+  const map = new Map<
+    string,
+    { fullName: string; employeeCode: string | null; startDate: string | null; resignDate: string | null }
+  >();
   const uniqIds = [...new Set(ids)];
   if (uniqIds.length === 0) return map;
   const chunks = await Promise.all(
     chunkIds(uniqIds).map((chunk) =>
       db
         .from("payroll_employees")
-        .select("id, full_name, employee_code")
+        .select("id, full_name, employee_code, start_date, resign_date")
         .eq("tenant_id", tenantId)
         .eq("customer_id", customerId)
         .in("id", chunk)
     )
   );
   for (const { data } of chunks) {
-    for (const r of (data ?? []) as { id: string; full_name: string; employee_code: string | null }[]) {
-      map.set(r.id, { fullName: r.full_name, employeeCode: r.employee_code });
+    for (const r of (data ?? []) as {
+      id: string;
+      full_name: string;
+      employee_code: string | null;
+      start_date: string | null;
+      resign_date: string | null;
+    }[]) {
+      map.set(r.id, { fullName: r.full_name, employeeCode: r.employee_code, startDate: r.start_date, resignDate: r.resign_date });
     }
   }
   return map;
 }
 
-function mapLineAmounts(r: RawLineRow): Omit<PayrollRunLine, "employeeFullName" | "employeeCode"> {
+function mapLineAmounts(
+  r: RawLineRow
+): Omit<PayrollRunLine, "employeeFullName" | "employeeCode" | "isProrated" | "proratedDaysWorked" | "proratedDaysInMonth"> {
   return {
     id: r.id,
     runId: r.run_id,
@@ -404,7 +440,7 @@ export async function getRunWithLines(
   const run = mapRunRow(data as unknown as RawRunRow);
 
   const rawLines = await fetchRawLines(db, tenantId, runId);
-  const names = await fetchEmployeeNames(
+  const info = await fetchEmployeeInfo(
     db,
     tenantId,
     customerId,
@@ -413,11 +449,24 @@ export async function getRunWithLines(
   const lines: PayrollRunLine[] = rawLines
     .map((r) => {
       const amounts = mapLineAmounts(r);
-      const info = names.get(r.payroll_employee_id);
+      const emp = info.get(r.payroll_employee_id);
+      // ★ BB — badge คำนวณสด ๆ จาก base_salary ปัจจุบันของบรรทัด (amounts.grossSalary) เทียบ start/resign
+      //   date ของพนักงาน — ใช้แค่ daysWorked/daysInMonth/isProrated (ไม่ใช้ผลลัพธ์ prorated ที่คืนมา เพราะ
+      //   ยอดจริงที่บันทึกอาจถูกนักบัญชีแก้ทับไปแล้ว, 0.13)
+      const prorate = calcProratedGrossSalary(
+        amounts.grossSalary,
+        run.payPeriodYear,
+        run.payPeriodMonth,
+        emp?.startDate ?? null,
+        emp?.resignDate ?? null
+      );
       return {
         ...amounts,
-        employeeFullName: info?.fullName ?? "(ไม่พบพนักงาน)",
-        employeeCode: info?.employeeCode ?? null,
+        employeeFullName: emp?.fullName ?? "(ไม่พบพนักงาน)",
+        employeeCode: emp?.employeeCode ?? null,
+        isProrated: prorate.isProrated,
+        proratedDaysWorked: prorate.daysWorked,
+        proratedDaysInMonth: prorate.daysInMonth,
       };
     })
     .sort((a, b) => a.employeeFullName.localeCompare(b.employeeFullName, "th"));
@@ -531,14 +580,22 @@ export async function recalcRunLines(
 
   const empIds = rawLines.map((l) => l.payroll_employee_id);
   const startDateByEmp = new Map<string, string | null>();
+  // ★★ เฟส 9b กลุ่ม BA — โหลด sso_exempt คู่กับ start_date ต่อพนักงาน (0.3)
+  const ssoExemptByEmp = new Map<string, boolean>();
   const chunks = await Promise.all(
     chunkIds([...new Set(empIds)]).map((chunk) =>
-      db.from("payroll_employees").select("id, start_date").eq("tenant_id", tenantId).eq("customer_id", customerId).in("id", chunk)
+      db
+        .from("payroll_employees")
+        .select("id, start_date, sso_exempt")
+        .eq("tenant_id", tenantId)
+        .eq("customer_id", customerId)
+        .in("id", chunk)
     )
   );
   for (const { data } of chunks) {
-    for (const r of (data ?? []) as { id: string; start_date: string | null }[]) {
+    for (const r of (data ?? []) as { id: string; start_date: string | null; sso_exempt: boolean | null }[]) {
       startDateByEmp.set(r.id, r.start_date);
+      ssoExemptByEmp.set(r.id, !!r.sso_exempt);
     }
   }
 
@@ -552,7 +609,12 @@ export async function recalcRunLines(
     //   calcMonthlyPitWithBonus แยกเป็นพารามิเตอร์ของตัวเอง (0.5, verify แล้ว) ไม่ผสมเข้า grossThisPeriod
     const grossThisPeriod = round2(amounts.grossSalary + amounts.otherAdditions);
     const pit = calcMonthlyPitWithBonus(grossThisPeriod, amounts.bonusAmount, periodsPerYear, PERSONAL_ALLOWANCE_STANDARD, brackets).totalPit;
-    const sso = calcSsoContribution(grossThisPeriod, ssoConfig);
+    // ★★ เฟส 9b กลุ่ม BA (0.3) — ข้าม calcSsoContribution เมื่อ sso_exempt=true (employee/employer=0 เสมอ
+    //   ไม่ว่าค่าจ้างเท่าไหร่) — เงื่อนไขก่อนเรียกเท่านั้น ไม่แก้ calcSsoContribution เอง
+    const isSsoExempt = ssoExemptByEmp.get(raw.payroll_employee_id) ?? false;
+    const sso = isSsoExempt
+      ? { wageBase: 0, employeeContribution: 0, employerContribution: 0 }
+      : calcSsoContribution(grossThisPeriod, ssoConfig);
     const netPay = round2(
       amounts.grossSalary + amounts.otherAdditions + amounts.bonusAmount - pit - sso.employeeContribution - amounts.otherDeductions
     );
@@ -572,7 +634,7 @@ export async function recalcRunLines(
   //   ไม่ใช่การ log ลงที่เก็บถาวรใด ๆ — ไม่ขัดกับ PDPA note ด้านบนไฟล์ที่ห้าม log ชื่อพนักงาน)
   const negative = computed.find((c) => c.netPay < 0);
   if (negative) {
-    const names = await fetchEmployeeNames(db, tenantId, customerId, [negative.payrollEmployeeId]);
+    const names = await fetchEmployeeInfo(db, tenantId, customerId, [negative.payrollEmployeeId]);
     const name = names.get(negative.payrollEmployeeId)?.fullName ?? "(ไม่พบพนักงาน)";
     return {
       ok: false,

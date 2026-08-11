@@ -111,9 +111,14 @@ export default async function PayrollPage({
           </form>
           <span className="acc-toolbar-spacer" />
           {validCustomerId ? (
-            <Link href={`/chat-audit/accounting/payroll-employees?customerId=${validCustomerId}`} className="btn btn-ghost">
-              ทะเบียนพนักงาน/ตั้งค่าบัญชี
-            </Link>
+            <>
+              <Link href={`/chat-audit/accounting/payroll-employees?customerId=${validCustomerId}`} className="btn btn-ghost">
+                ทะเบียนพนักงาน/ตั้งค่าบัญชี
+              </Link>
+              <Link href={`/chat-audit/accounting/payroll/wht-cert?customerId=${validCustomerId}`} className="btn btn-ghost">
+                พิมพ์หนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ)
+              </Link>
+            </>
           ) : null}
           <Link href="/chat-audit/accounting" className="btn btn-ghost">← กลับไปลงบันทึกบัญชี</Link>
         </div>
