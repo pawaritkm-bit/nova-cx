@@ -89,10 +89,13 @@ export default function PayrollRunPanel({
       otherDeductions: String(l.otherDeductions),
     };
 
-  const setEdit = (id: string, patch: Partial<LineEditState>) => {
+  // ★ ต้องรับ line เดิม (ไม่ใช่แค่ id) — ตอนแก้ฟิลด์ใดฟิลด์หนึ่งเป็นครั้งแรกของแถวนี้ (m[id] ยังไม่มี)
+  //   ต้อง seed ค่าฐานจากข้อมูลจริงของแถว (getEdit(l)) ไม่ใช่ค่าว่างเปล่า มิฉะนั้นฟิลด์อื่นที่ยังไม่ได้แตะ
+  //   จะถูกส่งเป็น 0 ตอนคำนวณ (เช่น กรอกโบนัสอย่างเดียว เงินเดือนที่ prefill ไว้จะหายไปเป็น 0)
+  const setEdit = (l: PayrollRunLine, patch: Partial<LineEditState>) => {
     setEdits((m) => ({
       ...m,
-      [id]: { ...(m[id] ?? { grossSalary: "", otherAdditions: "", bonusAmount: "", otherDeductions: "" }), ...patch },
+      [l.id]: { ...(m[l.id] ?? getEdit(l)), ...patch },
     }));
   };
 
@@ -306,7 +309,7 @@ export default function PayrollRunPanel({
                           style={{ width: 100 }}
                           disabled={!isDraft}
                           value={e.grossSalary}
-                          onChange={(ev) => setEdit(l.id, { grossSalary: ev.target.value })}
+                          onChange={(ev) => setEdit(l, { grossSalary: ev.target.value })}
                         />
                       </td>
                       <td className="num">
@@ -316,7 +319,7 @@ export default function PayrollRunPanel({
                           style={{ width: 90 }}
                           disabled={!isDraft}
                           value={e.otherAdditions}
-                          onChange={(ev) => setEdit(l.id, { otherAdditions: ev.target.value })}
+                          onChange={(ev) => setEdit(l, { otherAdditions: ev.target.value })}
                         />
                       </td>
                       <td className="num">
@@ -326,7 +329,7 @@ export default function PayrollRunPanel({
                           style={{ width: 90 }}
                           disabled={!isDraft}
                           value={e.bonusAmount}
-                          onChange={(ev) => setEdit(l.id, { bonusAmount: ev.target.value })}
+                          onChange={(ev) => setEdit(l, { bonusAmount: ev.target.value })}
                         />
                       </td>
                       <td className="num">
@@ -336,7 +339,7 @@ export default function PayrollRunPanel({
                           style={{ width: 90 }}
                           disabled={!isDraft}
                           value={e.otherDeductions}
-                          onChange={(ev) => setEdit(l.id, { otherDeductions: ev.target.value })}
+                          onChange={(ev) => setEdit(l, { otherDeductions: ev.target.value })}
                         />
                       </td>
                       <td className="num">{formatMoney(l.pitWithheld)}</td>
