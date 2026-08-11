@@ -179,10 +179,14 @@ export async function createDraftRun(
   const v = validateCreateRunInput(input);
   if (!v.ok) return v;
 
-  // ★★★ เฟส 9b กลุ่ม BC (T138) — guard ที่ชั้นแอปพลิเคชัน แทน unique constraint เดิมที่ DB (เอาออกแล้วใน
-  //   migration 0096 เพื่อให้ลูกค้า non_monthly สร้างหลายรอบ/เดือนได้) — ลูกค้า pay_frequency='monthly'
-  //   (ค่า default ของทุกรายที่ไม่มีแถว payroll_settings เลยด้วย) ยังถูกปฏิเสธสร้างรอบซ้ำเดือน/ปีเดียวกัน
-  //   เหมือนก่อนเฟสนี้ทุกประการ (ข้อความปฏิเสธเดียวกันเป๊ะ, regression-safe 100%)
+  // ★★★ เฟส 9b กลุ่ม BC (T138, แก้บั๊ก QC race condition) — atomicity ที่แท้จริงกลับมาอยู่ที่ DB เหมือนเดิม
+  //   ผ่าน partial unique index `uq_payroll_runs_period_monthly` (migration 0097) บนคอลัมน์
+  //   `pay_frequency_snapshot` (copy ค่า pay_frequency ของลูกค้า ณ ตอน insert แต่ละรอบ — ดูตอน insert ด้านล่าง)
+  //   — unique เฉพาะแถวที่ snapshot='monthly' เท่านั้น จึงไม่กระทบลูกค้า non_monthly เลย (0096 เอา unique
+  //   constraint เดิมของ DB ออกไปโดยไม่ทดแทนด้วยอะไรที่ atomic เท่ากัน ทำให้ race จริงได้ — พิสูจน์แล้วด้วย
+  //   Promise.all 2 ครั้งพร้อมกันสร้างสำเร็จทั้งคู่)
+  //   precheck ข้างล่างนี้เป็นแค่ fast-fail ที่ชั้นแอป (UX เร็ว ไม่ต้องรอ insert แล้ว error ก่อนปฏิเสธ) — ไม่ใช่
+  //   ตัวคุม atomicity อีกต่อไป — ตัวคุมจริงคือ unique index ที่ DB ผ่าน error code 23505 ตอน insert (ด้านล่าง)
   const settings = await getSettings(db, tenantId, customerId);
   const payFrequency = settings?.payFrequency ?? "monthly";
   if (payFrequency === "monthly") {
@@ -226,13 +230,19 @@ export async function createDraftRun(
       sso_filed_at: null,
       sso_filed_by: null,
       filing_period_id: filingPeriod.id,
+      // ★★★ เฟส 9b กลุ่ม BC (migration 0097) — snapshot ค่า pay_frequency ของลูกค้า ณ ตอน insert รอบนี้เสมอ
+      //   (ไม่ใช่แค่ตอน guard ด้านบน) — เป็นคอลัมน์ที่ partial unique index `uq_payroll_runs_period_monthly`
+      //   อ้างอิงจริงที่ DB จึงต้องตรงกับ payFrequency ที่ใช้ตัดสินใจ guard เป๊ะเสมอ
+      pay_frequency_snapshot: payFrequency,
     })
     .select("id")
     .maybeSingle();
   if (error || !data) {
-    // ★ defense-in-depth — ปกติ guard ด้านบนกันไว้แล้วสำหรับลูกค้า monthly แต่ถ้า race เกิดขึ้นจริง (2 request
-    //   พร้อมกัน) ยังต้องรับมือ error message เดียวกัน (ไม่มี unique constraint ที่ DB แล้วหลัง 0096 แต่คง
-    //   branch นี้ไว้เผื่อ deploy ข้ามช่วง migration หรือ DB error อื่นที่มี code เดียวกันโดยบังเอิญ)
+    // ★ defense-in-depth (T138, migration 0097) — precheck ด้านบนเป็นแค่ fast-fail กันเคสส่วนใหญ่ แต่ atomicity
+    //   จริงมาจาก partial unique index ที่ DB (uq_payroll_runs_period_monthly, เฉพาะแถว snapshot='monthly')
+    //   ถ้ามี 2 request ชนกันพร้อมกันจริง (ผ่าน precheck ทั้งคู่แล้วเพราะยังไม่มีแถวตอนเช็ค) ฝั่งที่ insert ทีหลัง
+    //   จะโดน DB ปฏิเสธด้วย 23505 จริง (ไม่ใช่แค่ทฤษฎีเหมือนก่อน 0097 ที่ไม่มี unique index ให้ throw เลย) —
+    //   แปลง error code นี้เป็นข้อความเดิมเป๊ะให้ผู้ใช้เห็นเหมือนกันไม่ว่าจะโดน precheck หรือโดน DB ปฏิเสธ
     if (error?.code === "23505") {
       return { ok: false, message: "มีรอบเงินเดือนของเดือน/ปีนี้อยู่แล้ว (ลบรอบเดิมก่อนถ้าต้องการสร้างใหม่)" };
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { makeInMemoryDb, type Tables } from "../helpers/fake-payroll-db";
+import { makeInMemoryDb, type Tables, type Row } from "../helpers/fake-payroll-db";
 import {
   getOrCreateFilingPeriod,
   getFilingPeriodById,
@@ -72,6 +72,26 @@ describe("getOrCreateFilingPeriod (T137) — idempotent", () => {
     const found = await getFilingPeriodByYearMonth(db, TENANT, CUSTOMER_A, 2569, 8);
     expect(found).toBeNull();
     expect(tables.payroll_monthly_filings).toHaveLength(0);
+  });
+
+  // ★★★ พบโดย reviewer QC — เดิมไม่มีเทสต์ที่ force ให้เข้า branch insert-conflict-then-retry จริง (มีแต่เทสต์
+  //   idempotent แบบเรียกซ้ำต่อเนื่อง ไม่ใช่ race จริง) — ใช้ uniqueIndexes ของ fake DB (mirror unique index
+  //   จริงที่ DB บน tenant_id,customer_id,period_year,period_month — migration 0094) + Promise.all จำลอง
+  //   2 request ชนกันพร้อมกันจริง (ผ่าน `existing` check ของทั้งคู่ก่อนที่ฝั่งใดฝั่งหนึ่งจะ insert ทัน)
+  it("★★★ 2 request เรียก getOrCreateFilingPeriod พร้อมกันด้วยคีย์เดียวกัน (จำลอง race จริง) → insert ฝั่งที่แพ้โดน unique ปฏิเสธ (23505) แล้ว retry เจอแถวที่ฝั่งชนะสร้างไว้ → ได้ id เดียวกัน ไม่สร้างซ้ำ", async () => {
+    const uniqueIndexes = [
+      { table: "payroll_monthly_filings", columns: ["tenant_id", "customer_id", "period_year", "period_month"] as string[], where: (_r: Row) => true },
+    ];
+    const { db } = makeInMemoryDb(tables, { uniqueIndexes });
+    const [p1, p2] = await Promise.all([
+      getOrCreateFilingPeriod(db, TENANT, CUSTOMER_A, 2569, 8),
+      getOrCreateFilingPeriod(db, TENANT, CUSTOMER_A, 2569, 8),
+    ]);
+    expect(p1).toBeTruthy();
+    expect(p2).toBeTruthy();
+    // ★ ใจความของเทสต์นี้ — ทั้งคู่ต้องได้แถวเดียวกัน (ฝั่งแพ้ retry เจอแถวที่ฝั่งชนะสร้างไว้แล้ว) ไม่ใช่คนละแถว
+    expect(p1?.id).toBe(p2?.id);
+    expect(tables.payroll_monthly_filings).toHaveLength(1);
   });
 });
 

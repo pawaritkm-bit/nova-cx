@@ -8,8 +8,10 @@ import { TEST_CHART } from "./fixtures/chart";
  *   mock ชั้นล่าง (supabase/access/next-cache) ตาม pattern
  *   tests/accounting/recurring-journal-actions.test.ts (fake DB stateful in-memory + uuid จริง)
  *
- * ★ 0.15 เน้นเทสต์บังคับตาม DoD: guard สโคปครบทุก action, ล็อกแก้บรรทัด/คำนวณซ้ำหลังสร้าง JE,
- *   markFiledAction/unmarkFiledAction เฉพาะรอบที่ status='finalized'
+ * ★ 0.15 เน้นเทสต์บังคับตาม DoD: guard สโคปครบทุก action, ล็อกแก้บรรทัด/คำนวณซ้ำหลังสร้าง JE
+ * ★ เฟส 9b กลุ่ม BC — markFiledAction/unmarkFiledAction เดิม (dead code, ไม่มีจุดเรียกจาก UI) ถูกลบออกจาก
+ *   actions.ts แล้ว — เทสต์ IDOR ของตรรกะเดียวกัน (ทำงานบน filingPeriodId) อยู่ที่
+ *   tests/accounting/payroll-filing-actions.test.ts (mirror app/chat-audit/accounting/payroll/filing/actions.ts)
  */
 
 const { requireAccountingAccessMock } = vi.hoisted(() => ({
@@ -39,8 +41,6 @@ import {
   recalcRunAction,
   generateJournalEntryAction,
   deleteRunAction,
-  markFiledAction,
-  unmarkFiledAction,
 } from "@/app/chat-audit/accounting/payroll/actions";
 
 const TENANT = "tenant-1";
@@ -347,33 +347,6 @@ describe("deleteRunAction (0.14)", () => {
   });
 });
 
-describe("markFiledAction/unmarkFiledAction (T116, 0.3)", () => {
-  it("รอบยัง draft (ไม่มี JE) → mark ปฏิเสธ", async () => {
-    const res = await markFiledAction(RUN_DRAFT, CUSTOMER_A, "pit");
-    expect(res.ok).toBe(false);
-  });
-
-  it("รอบ finalized → mark ภ.ง.ด.1 สำเร็จ (สถานะจริงย้ายไป payroll_monthly_filings แล้ว, เฟส 9b กลุ่ม BC)", async () => {
-    const res = await markFiledAction(RUN_FINALIZED, CUSTOMER_A, "pit");
-    expect(res.ok).toBe(true);
-    const filing = tables.payroll_monthly_filings.find((f) => f.id === FILING_FINALIZED)!;
-    expect(filing.pit_filing_status).toBe("filed");
-    expect(filing.pit_filed_at).toBeTruthy();
-  });
-
-  it("mark สปส.1-10 สำเร็จ แล้ว unmark กลับเป็นยังไม่ยื่นได้", async () => {
-    await markFiledAction(RUN_FINALIZED, CUSTOMER_A, "sso");
-    const res = await unmarkFiledAction(RUN_FINALIZED, CUSTOMER_A, "sso");
-    expect(res.ok).toBe(true);
-    const filing = tables.payroll_monthly_filings.find((f) => f.id === FILING_FINALIZED)!;
-    expect(filing.sso_filing_status).toBe("not_filed");
-  });
-
-  it("★ ลูกค้านอกสโคป → ปฏิเสธ mark/unmark", async () => {
-    requireAccountingAccessMock.mockResolvedValue(accountantCtx([CUSTOMER_B]));
-    const markRes = await markFiledAction(RUN_FINALIZED, CUSTOMER_A, "pit");
-    expect(markRes.ok).toBe(false);
-    const unmarkRes = await unmarkFiledAction(RUN_FINALIZED, CUSTOMER_A, "pit");
-    expect(unmarkRes.ok).toBe(false);
-  });
-});
+// ★ เฟส 9b กลุ่ม BC — describe("markFiledAction/unmarkFiledAction") เดิมถูกลบออกพร้อมฟังก์ชัน dead code
+//   (ดูคอมเมนต์ท้าย actions.ts) — เทสต์ IDOR ของตรรกะเดียวกันย้ายไปอยู่ที่
+//   tests/accounting/payroll-filing-actions.test.ts (mirror markFilingAction/unmarkFilingAction)

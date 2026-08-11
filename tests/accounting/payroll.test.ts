@@ -769,4 +769,66 @@ describe("เฟส 9b กลุ่ม BC — createDraftRun ผูก filing_pe
     const scope = await getRunScope(db, TENANT, id);
     expect(scope?.filingPeriodId).toBeTruthy();
   });
+
+  // ★★★ แก้บั๊ก QC (race condition จริง, migration 0097) — พิสูจน์ด้วยเทสต์ concurrent จริง (Promise.all) ว่า
+  //   partial unique index `uq_payroll_runs_period_monthly` (บน pay_frequency_snapshot='monthly') คุม
+  //   atomicity ได้จริงที่ระดับ DB ไม่ใช่แค่ precheck ที่ชั้นแอปที่ไม่ atomic (เดิม 0096 เอา unique constraint
+  //   ออกจาก DB ไปเฉย ๆ ทำให้ 2 request พร้อมกันสร้างสำเร็จทั้งคู่ได้จริง — mirror pattern เดียวกับเทสต์
+  //   0.9 ของ generateRunJournalEntry ด้านบนที่พิสูจน์ atomicity ด้วย Promise.all เหมือนกัน)
+  describe("★★★ แก้บั๊ก QC — race condition จริง เมื่อ 2 request สร้างรอบเดือน/ปีเดียวกันพร้อมกัน (migration 0097)", () => {
+    function withMonthlyUniqueIndex(t: Tables) {
+      const uniqueIndexes = [
+        {
+          table: "payroll_runs",
+          columns: ["tenant_id", "customer_id", "pay_period_year", "pay_period_month"],
+          // ★ mirror partial unique index จริงที่ DB — unique เฉพาะแถว deleted_at is null และ
+          //   pay_frequency_snapshot='monthly' เท่านั้น (ตรงกับ uq_payroll_runs_period_monthly ใน 0097)
+          where: (r: Row) => !r.deleted_at && r.pay_frequency_snapshot === "monthly",
+        },
+      ];
+      return makeInMemoryDb(t, { uniqueIndexes });
+    }
+
+    it("ลูกค้า pay_frequency='monthly' — 2 request สร้างรอบเดือน/ปีเดียวกันพร้อมกัน → สำเร็จแค่ 1 ใน 2 เท่านั้น (ไม่ใช่ทั้งคู่)", async () => {
+      const { db } = withMonthlyUniqueIndex(tables);
+      const [r1, r2] = await Promise.all([
+        createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" }),
+        createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-20" }),
+      ]);
+      const successes = [r1, r2].filter((r) => r.ok);
+      const failures = [r1, r2].filter((r) => !r.ok);
+      expect(successes).toHaveLength(1);
+      expect(failures).toHaveLength(1);
+      if (!failures[0].ok) expect(failures[0].message).toContain("มีรอบเงินเดือนของเดือน/ปีนี้อยู่แล้ว");
+      // ★ มีรอบเดียวจริงในฐานข้อมูล ไม่ใช่ 2 รอบ (นี่คือใจความของบั๊ก — เดิมสร้างสำเร็จทั้ง 2 ครั้ง)
+      expect(tables.payroll_runs.filter((r) => !r.deleted_at)).toHaveLength(1);
+    });
+
+    it("ลูกค้า pay_frequency='non_monthly' — 2 request สร้างรอบเดือน/ปีเดียวกันพร้อมกัน → สำเร็จทั้งคู่ (ไม่ถูกกระทบจาก unique index ใหม่)", async () => {
+      tables.payroll_settings = [
+        {
+          id: "settings-nm",
+          tenant_id: TENANT,
+          customer_id: CUSTOMER_A,
+          salary_expense_account_code: "5310",
+          sso_employer_expense_account_code: "5311",
+          sso_payable_account_code: "2050",
+          pit_payable_account_code: "2910",
+          other_deductions_account_code: null,
+          net_pay_account_code: null,
+          net_pay_is_paid_immediately: false,
+          pay_frequency: "non_monthly",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ];
+      const { db } = withMonthlyUniqueIndex(tables);
+      const [r1, r2] = await Promise.all([
+        createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-07" }),
+        createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-14" }),
+      ]);
+      expect([r1, r2].every((r) => r.ok)).toBe(true);
+      expect(tables.payroll_runs.filter((r) => !r.deleted_at)).toHaveLength(2);
+    });
+  });
 });

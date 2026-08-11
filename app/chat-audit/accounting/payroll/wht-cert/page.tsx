@@ -5,6 +5,7 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, customerInScope, type AccountingAccess } from "@/lib/accounting/access";
 import { listEmployees, maskIdCardNo } from "@/lib/accounting/payroll-employees";
 import { buildPayrollWhtCertData, type PayrollWhtCertRunLine } from "@/lib/accounting/payroll-wht-cert";
+import { chunkIds } from "@/lib/accounting/id-chunk";
 import PayrollWhtCertDoc from "./PayrollWhtCertDoc";
 import "../../wht-cert/wht-cert.css";
 
@@ -58,8 +59,12 @@ function currentBuddhistYear(): number {
   return new Date().getFullYear() + 543;
 }
 
-/** ★ payroll_runs ต่อปีของลูกค้าหนึ่งราย มีจำนวนจำกัด (สูงสุด 12 รอบ/ปีสำหรับลูกค้า pay_frequency=monthly
- *   ซึ่งเป็นค่าเดียวที่มีอยู่จริงในเฟสนี้ — เฟส 9b ยังไม่ทำกลุ่ม BC/รอบจ่ายไม่รายเดือน) — ไม่ต้อง chunkIds */
+/** ★ payroll_runs ต่อปีของลูกค้าหนึ่งราย ปกติมีไม่เกิน 12 รอบ/ปีสำหรับลูกค้า pay_frequency='monthly' แต่หลัง
+ *   เฟส 9b กลุ่ม BC เปิดให้ลูกค้าตั้งค่า pay_frequency='non_monthly' ได้แล้ว (จ่ายรายสัปดาห์/รายปักษ์ ฯลฯ)
+ *   จำนวนรอบ/ปีของลูกค้ากลุ่มนี้ไม่มีเพดานตายตัวอีกต่อไป (เช่น จ่ายทุกสัปดาห์ = ~52 รอบ/ปี, ถี่กว่านั้นอาจเกิน
+ *   150 รอบ) — ต้องผ่าน chunkIds() เหมือนทุกจุดอื่นในโปรเจกต์ กัน `.in("run_id", ids)` ยาวเกิน limit ของ
+ *   PostgREST แล้วถูกปฏิเสธเงียบ ๆ (ยอด 50 ทวิ จะขาดโดยไม่มี error ใดๆ ให้เห็น — ดูคอมเมนต์ chunkIds() ในไฟล์
+ *   lib/accounting/id-chunk.ts) */
 async function loadRunLinesOfYear(
   service: SupabaseClient,
   tenantId: string,
@@ -78,20 +83,26 @@ async function loadRunLinesOfYear(
   if (runRows.length === 0) return [];
   const monthByRunId = new Map(runRows.map((r) => [r.id, r.pay_period_month]));
 
-  const { data: lines } = await service
-    .from("payroll_run_lines")
-    .select("run_id, gross_salary, other_additions, bonus_amount, pit_withheld")
-    .eq("tenant_id", tenantId)
-    .eq("payroll_employee_id", employeeId)
-    .in("run_id", runRows.map((r) => r.id));
-
-  const lineRows = (lines ?? []) as {
-    run_id: string;
-    gross_salary: number | string;
-    other_additions: number | string;
-    bonus_amount: number | string;
-    pit_withheld: number | string;
-  }[];
+  const lineChunks = await Promise.all(
+    chunkIds(runRows.map((r) => r.id)).map((chunk) =>
+      service
+        .from("payroll_run_lines")
+        .select("run_id, gross_salary, other_additions, bonus_amount, pit_withheld")
+        .eq("tenant_id", tenantId)
+        .eq("payroll_employee_id", employeeId)
+        .in("run_id", chunk)
+    )
+  );
+  const lineRows = lineChunks.flatMap(
+    ({ data }) =>
+      (data ?? []) as {
+        run_id: string;
+        gross_salary: number | string;
+        other_additions: number | string;
+        bonus_amount: number | string;
+        pit_withheld: number | string;
+      }[]
+  );
 
   return lineRows
     .filter((l) => monthByRunId.has(l.run_id))
