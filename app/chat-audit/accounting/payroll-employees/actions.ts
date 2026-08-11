@@ -28,6 +28,13 @@ import {
   type PayrollEmployeeInput,
 } from "@/lib/accounting/payroll-employees";
 import { upsertSettings, type PayrollSettingsInput } from "@/lib/accounting/payroll-settings";
+import {
+  listDeductions,
+  upsertDeduction,
+  deleteDeduction,
+  type PayrollEmployeeDeduction,
+  type PayrollEmployeeDeductionInput,
+} from "@/lib/accounting/payroll-deductions";
 
 const PATH = "/chat-audit/accounting/payroll-employees";
 
@@ -61,6 +68,8 @@ export type SaveEmployeeInput = {
   priorEmployerYtdPitWithheld?: unknown;
   priorEmployerYtdSsoEmployee?: unknown;
   priorEmployerNote?: unknown;
+  /** ★ เฟส 9b กลุ่ม BE (0.2) — ฐานคำนวณเพดาน PVD/RMF/กบข เท่านั้น ไม่กระทบสูตรคำนวณภาษีตรง ๆ */
+  annualIncomeEstimateOverride?: unknown;
 };
 
 /** บันทึกทะเบียนพนักงาน (สร้างใหม่/แก้ไข) */
@@ -111,6 +120,7 @@ export async function upsertEmployeeAction(input: SaveEmployeeInput): Promise<Pa
       priorEmployerYtdPitWithheld: input.priorEmployerYtdPitWithheld,
       priorEmployerYtdSsoEmployee: input.priorEmployerYtdSsoEmployee,
       priorEmployerNote: input.priorEmployerNote,
+      annualIncomeEstimateOverride: input.annualIncomeEstimateOverride,
     };
 
     const res = await upsertEmployee(service, ctx.tenantId, input.customerId, employeeInput, input.id);
@@ -223,5 +233,111 @@ export async function upsertSettingsAction(input: SaveSettingsInput): Promise<Pa
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "บันทึกไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+// ---------------------------------------------------------------------
+// ค่าลดหย่อนภาษีอื่นของพนักงาน (เฟส 9b กลุ่ม BE, 0.2 ★★★ gate — ดูคอมเมนต์เต็มใน payroll-deductions.ts)
+// ---------------------------------------------------------------------
+
+export type DeductionListResult = { ok: true; deductions: PayrollEmployeeDeduction[] } | { ok: false; message: string };
+
+/** โหลดค่าลดหย่อนของพนักงาน 1 คน ในปีภาษีที่ระบุ */
+export async function listDeductionsAction(
+  employeeId: string,
+  customerId: string,
+  taxYear: number
+): Promise<DeductionListResult> {
+  if (!isUuid(employeeId) || !isUuid(customerId)) return { ok: false, message: "ไม่พบพนักงานที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    assertCustomerInScope(ctx, customerId);
+
+    const scope = await getEmployeeScope(service, ctx.tenantId, employeeId);
+    if (!scope) return { ok: false, message: "ไม่พบพนักงาน (อาจถูกลบไปแล้ว)" };
+    assertCustomerInScope(ctx, scope.customerId);
+    if (scope.customerId !== customerId) return { ok: false, message: "ลูกค้าไม่ตรงกับพนักงานเดิม" };
+
+    const deductions = await listDeductions(service, ctx.tenantId, customerId, employeeId, taxYear);
+    return { ok: true, deductions };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ดึงข้อมูลไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+export type SaveDeductionInput = {
+  /** มี id = แก้รายการเดิม · ไม่มี = สร้างใหม่ */
+  id?: string;
+  employeeId: string;
+  customerId: string;
+  taxYear: unknown;
+  deductionType: unknown;
+  amount: unknown;
+  note?: unknown;
+};
+
+/** บันทึกค่าลดหย่อน 1 แถว (สร้างใหม่/แก้ไข) */
+export async function upsertDeductionAction(input: SaveDeductionInput): Promise<PayrollSaveResult> {
+  if (!isUuid(input.employeeId) || !isUuid(input.customerId)) return { ok: false, message: "ไม่พบพนักงานที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    assertCustomerInScope(ctx, input.customerId);
+
+    // ★ defense-in-depth (0.15) — เช็คสโคปซ้ำสองชั้นเหมือน listDeductionsAction: ครั้งแรกเช็ค customerId
+    //   ที่ client ส่งมา ครั้งที่สองเช็ค scope.customerId ที่ derive จาก employeeId จริง (กัน customerId
+    //   ปลอมที่อยู่ในสโคปนักบัญชีแต่ไม่ตรงกับพนักงานจริง — data layer เช็คซ้ำอยู่แล้วก็จริง แต่เช็คที่ชั้น
+    //   action ด้วยทำให้ปฏิเสธเร็วกว่า ไม่ต้องพึ่งพา data layer อย่างเดียว)
+    const scope = await getEmployeeScope(service, ctx.tenantId, input.employeeId);
+    if (!scope) return { ok: false, message: "ไม่พบพนักงาน (อาจถูกลบไปแล้ว)" };
+    assertCustomerInScope(ctx, scope.customerId);
+    if (scope.customerId !== input.customerId) return { ok: false, message: "ลูกค้าไม่ตรงกับพนักงานเดิม" };
+
+    const deductionInput: PayrollEmployeeDeductionInput = {
+      taxYear: input.taxYear,
+      deductionType: input.deductionType,
+      amount: input.amount,
+      note: input.note,
+    };
+
+    const res = await upsertDeduction(service, ctx.tenantId, input.customerId, input.employeeId, deductionInput, input.id);
+    if (!res.ok) return { ok: false, message: res.message };
+
+    revalidatePath(PATH);
+    return { ok: true, message: "บันทึกค่าลดหย่อนแล้ว", id: res.id };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "บันทึกไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/** ลบค่าลดหย่อน 1 แถว */
+export async function deleteDeductionAction(id: string, employeeId: string, customerId: string): Promise<PayrollSaveResult> {
+  if (!isUuid(id) || !isUuid(employeeId) || !isUuid(customerId)) return { ok: false, message: "ไม่พบรายการที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    assertCustomerInScope(ctx, customerId);
+
+    // ★ defense-in-depth (0.15) — เช็คสโคปซ้ำสองชั้นเหมือน listDeductionsAction (ดูคอมเมนต์เต็มใน
+    //   upsertDeductionAction ด้านบน)
+    const scope = await getEmployeeScope(service, ctx.tenantId, employeeId);
+    if (!scope) return { ok: false, message: "ไม่พบพนักงาน (อาจถูกลบไปแล้ว)" };
+    assertCustomerInScope(ctx, scope.customerId);
+    if (scope.customerId !== customerId) return { ok: false, message: "ลูกค้าไม่ตรงกับพนักงานเดิม" };
+
+    const res = await deleteDeduction(service, ctx.tenantId, customerId, employeeId, id);
+    if (!res.ok) return { ok: false, message: res.message };
+
+    revalidatePath(PATH);
+    return { ok: true, message: "ลบค่าลดหย่อนแล้ว" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
   }
 }

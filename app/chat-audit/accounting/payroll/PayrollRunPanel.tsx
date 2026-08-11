@@ -9,6 +9,7 @@ import {
   deleteRunAction,
 } from "./actions";
 import type { PayrollRun, PayrollRunLine } from "@/lib/accounting/payroll";
+import { ENABLE_EXTRA_DEDUCTIONS_IN_PIT } from "@/lib/accounting/payroll-tax";
 import { parseAmountInput, formatMoney } from "@/lib/accounting/calc";
 import SlipView from "./SlipView";
 
@@ -103,18 +104,19 @@ export default function PayrollRunPanel({
 
   const totals = useMemo(() => {
     if (!detail) return null;
-    let gross = 0, additions = 0, bonus = 0, deductions = 0, pit = 0, ssoEmp = 0, ssoEmpr = 0, net = 0;
+    let gross = 0, additions = 0, bonus = 0, deductions = 0, extraDeductionsPreview = 0, pit = 0, ssoEmp = 0, ssoEmpr = 0, net = 0;
     for (const l of detail.lines) {
       gross += l.grossSalary;
       additions += l.otherAdditions;
       bonus += l.bonusAmount;
       deductions += l.otherDeductions;
+      extraDeductionsPreview += l.extraDeductionsPreviewTotal;
       pit += l.pitWithheld;
       ssoEmp += l.ssoEmployee;
       ssoEmpr += l.ssoEmployer;
       net += l.netPay;
     }
-    return { gross, additions, bonus, deductions, pit, ssoEmp, ssoEmpr, net };
+    return { gross, additions, bonus, deductions, extraDeductionsPreview, pit, ssoEmp, ssoEmpr, net };
   }, [detail]);
 
   const recalc = () => {
@@ -265,6 +267,17 @@ export default function PayrollRunPanel({
             </div>
           ) : null}
 
+          <div className="card" style={{ marginBottom: 10 }}>
+            <div className="section-title"><span>ค่าลดหย่อนภาษีอื่น (คู่สมรส/บุตร/ประกันชีวิต/PVD-RMF-กบข/ดอกเบี้ยกู้บ้าน)</span></div>
+            <p className="muted">
+              {ENABLE_EXTRA_DEDUCTIONS_IN_PIT
+                ? "ค่าลดหย่อนที่กรอกไว้ในทะเบียนพนักงาน (ต่อปีภาษี) มีผลต่อยอดภาษีหัก ณ ที่จ่ายจริงแล้ว — ดูยอดค่าลดหย่อนต่อคนที่คอลัมน์ \"ค่าลดหย่อนอื่น\" ด้านล่าง"
+                : "คอลัมน์ \"ค่าลดหย่อนอื่น\" ด้านล่างเป็น preview เท่านั้น — ยังไม่มีผลต่อยอดหักภาษีจริงจนกว่าจะ verify"}
+              {" "}จัดการค่าลดหย่อนของพนักงานแต่ละคนได้ที่หน้า{" "}
+              <a href={`/chat-audit/accounting/payroll-employees?customerId=${customerId}`}>ทะเบียนพนักงาน/ตั้งค่าเงินเดือน</a>
+            </p>
+          </div>
+
           <div className="table-wrap">
             <table className="dlv-table acc-table">
               <thead>
@@ -274,6 +287,16 @@ export default function PayrollRunPanel({
                   <th className="num">รายรับเพิ่มเติม</th>
                   <th className="num" title="โบนัส/เงินได้ครั้งเดียว — ภาษีคำนวณตามคำสั่งกรมสรรพากรที่ ป.96/2543 ข้อ 1(5) หักเต็มจำนวนในงวดที่จ่ายจริง">โบนัส</th>
                   <th className="num">หักอื่น ๆ</th>
+                  <th
+                    className="num"
+                    title={
+                      ENABLE_EXTRA_DEDUCTIONS_IN_PIT
+                        ? "ค่าลดหย่อนภาษีอื่นรวม (หลังตัดเพดานแล้ว) ของปีภาษีนี้ — มีผลต่อยอดภาษีหัก ณ ที่จ่ายด้านขวาแล้ว"
+                        : "preview เท่านั้น ยังไม่มีผลต่อยอดหักภาษีจริงจนกว่าจะ verify"
+                    }
+                  >
+                    ค่าลดหย่อนอื่น{ENABLE_EXTRA_DEDUCTIONS_IN_PIT ? "" : " (preview)"}
+                  </th>
                   <th className="num">ภาษีหัก ณ ที่จ่าย</th>
                   <th className="num">ประกันสังคม (ลูกจ้าง)</th>
                   <th className="num">ประกันสังคม (นายจ้าง)</th>
@@ -338,6 +361,13 @@ export default function PayrollRunPanel({
                           onChange={(ev) => setEdit(l, { otherDeductions: ev.target.value })}
                         />
                       </td>
+                      <td
+                        className="num"
+                        title={l.deductionWarnings.length > 0 ? l.deductionWarnings.join(" / ") : undefined}
+                      >
+                        {formatMoney(l.extraDeductionsPreviewTotal)}
+                        {l.deductionWarnings.length > 0 ? " ⚠️" : ""}
+                      </td>
                       <td className="num">{formatMoney(l.pitWithheld)}</td>
                       <td className="num">{formatMoney(l.ssoEmployee)}</td>
                       <td className="num">{formatMoney(l.ssoEmployer)}</td>
@@ -355,6 +385,7 @@ export default function PayrollRunPanel({
                     <td className="num strong">{formatMoney(totals.additions)}</td>
                     <td className="num strong">{formatMoney(totals.bonus)}</td>
                     <td className="num strong">{formatMoney(totals.deductions)}</td>
+                    <td className="num strong">{formatMoney(totals.extraDeductionsPreview)}</td>
                     <td className="num strong">{formatMoney(totals.pit)}</td>
                     <td className="num strong">{formatMoney(totals.ssoEmp)}</td>
                     <td className="num strong">{formatMoney(totals.ssoEmpr)}</td>

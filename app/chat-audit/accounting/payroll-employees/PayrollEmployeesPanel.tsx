@@ -2,12 +2,41 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { upsertEmployeeAction, deleteEmployeeAction, revealIdCardAction, upsertSettingsAction } from "./actions";
+import {
+  upsertEmployeeAction,
+  deleteEmployeeAction,
+  revealIdCardAction,
+  upsertSettingsAction,
+  listDeductionsAction,
+  upsertDeductionAction,
+  deleteDeductionAction,
+} from "./actions";
 import type { PayrollEmployee } from "@/lib/accounting/payroll-employees";
 import type { PayrollSettings } from "@/lib/accounting/payroll-settings";
+import {
+  DEDUCTION_TYPES,
+  CHILD_ALLOWANCE_AMOUNTS,
+  type PayrollEmployeeDeduction,
+  type DeductionType,
+} from "@/lib/accounting/payroll-deductions";
+import { ENABLE_EXTRA_DEDUCTIONS_IN_PIT } from "@/lib/accounting/payroll-tax";
 import { buildChartByCode, type ChartAccount } from "@/lib/accounting/chart-of-accounts";
 import { parseAmountInput, formatMoney } from "@/lib/accounting/calc";
 import AccountCombobox from "../AccountCombobox";
+
+const DEDUCTION_TYPE_LABELS: Record<DeductionType, string> = {
+  spouse_no_income: "คู่สมรสไม่มีเงินได้ (ไม่เกิน 60,000 บาท)",
+  child: "บุตร (30,000 หรือ 60,000 บาทต่อคน)",
+  // ★ แยกเป็น 2 ประเภท cap อิสระคนละก้อน (แก้บั๊ก QC ที่เดิมเก็บก้อนเดียวแล้ว cap จากยอดรวมผิดกฎหมาย)
+  life_insurance_self: "เบี้ยประกันชีวิตของผู้มีเงินได้เอง (ไม่เกิน 100,000 บาท)",
+  life_insurance_spouse: "เบี้ยประกันชีวิตของคู่สมรส (ไม่เกิน 10,000 บาท — หักได้เฉพาะกรณีมีรายการ \"คู่สมรสไม่มีเงินได้\" ของปีภาษีนี้ด้วย)",
+  provident_fund: "PVD/RMF/กบข รวมกัน (ไม่เกิน 500,000 บาท และไม่เกิน 30% ของเงินได้ทั้งปี)",
+  mortgage_interest: "ดอกเบี้ยกู้ยืมเพื่อที่อยู่อาศัย (ไม่เกิน 100,000 บาท)",
+};
+
+function currentBuddhistYear(): number {
+  return new Date().getFullYear() + 543;
+}
 
 /**
  * PayrollEmployeesPanel — ตั้ง/แก้/ลบทะเบียนพนักงานของลูกค้า 1 ราย (0.2, 0.12) + ตั้งค่าบัญชี 6 ช่อง
@@ -48,6 +77,8 @@ type FormState = {
   priorEmployerYtdPitWithheld: string;
   priorEmployerYtdSsoEmployee: string;
   priorEmployerNote: string;
+  /** ★ เฟส 9b กลุ่ม BE (0.2) — ฐานคำนวณเพดาน PVD/RMF/กบข เท่านั้น ไม่กระทบสูตรคำนวณภาษีตรง ๆ */
+  annualIncomeEstimateOverride: string;
 };
 
 function blankForm(): FormState {
@@ -66,6 +97,7 @@ function blankForm(): FormState {
     priorEmployerYtdPitWithheld: "",
     priorEmployerYtdSsoEmployee: "",
     priorEmployerNote: "",
+    annualIncomeEstimateOverride: "",
   };
 }
 
@@ -138,6 +170,7 @@ export default function PayrollEmployeesPanel({
       priorEmployerYtdPitWithheld: e.priorEmployerYtdPitWithheld !== null ? String(e.priorEmployerYtdPitWithheld) : "",
       priorEmployerYtdSsoEmployee: e.priorEmployerYtdSsoEmployee !== null ? String(e.priorEmployerYtdSsoEmployee) : "",
       priorEmployerNote: e.priorEmployerNote ?? "",
+      annualIncomeEstimateOverride: e.annualIncomeEstimateOverride !== null ? String(e.annualIncomeEstimateOverride) : "",
     });
   };
 
@@ -163,6 +196,8 @@ export default function PayrollEmployeesPanel({
         priorEmployerYtdSsoEmployee:
           form.priorEmployerYtdSsoEmployee.trim() === "" ? null : parseAmountInput(form.priorEmployerYtdSsoEmployee),
         priorEmployerNote: form.priorEmployerNote || null,
+        annualIncomeEstimateOverride:
+          form.annualIncomeEstimateOverride.trim() === "" ? null : parseAmountInput(form.annualIncomeEstimateOverride),
       });
       setMsg({ ok: res.ok, text: res.message });
       if (res.ok) {
@@ -347,6 +382,21 @@ export default function PayrollEmployeesPanel({
                 />
               </label>
             </div>
+            <div className="section-title" style={{ marginTop: 14 }}>
+              <span>ค่าลดหย่อนภาษีอื่น (เฟส 9b — {ENABLE_EXTRA_DEDUCTIONS_IN_PIT ? "มีผลต่อยอดภาษีหัก ณ ที่จ่ายจริงแล้ว" : "preview เท่านั้น ยังไม่มีผลต่อยอดหักภาษีจริงจนกว่าจะ verify"})</span>
+            </div>
+            <div className="acc-field-grid">
+              <label className="acc-field">
+                <span>ยอดประมาณเงินได้ทั้งปี (บาท) — ใช้คำนวณเพดาน PVD/RMF/กบข เท่านั้น</span>
+                <input
+                  className="num"
+                  inputMode="decimal"
+                  value={form.annualIncomeEstimateOverride}
+                  onChange={(e) => setForm((f) => ({ ...f, annualIncomeEstimateOverride: e.target.value }))}
+                  placeholder="ไม่กรอก = ระบบประมาณจากเงินเดือนปัจจุบันเอง"
+                />
+              </label>
+            </div>
             <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
               <button type="button" className="btn" disabled={pending} onClick={submitEmployee}>
                 {editingId ? "บันทึกการแก้ไข" : "เพิ่มพนักงาน"}
@@ -355,6 +405,11 @@ export default function PayrollEmployeesPanel({
                 <button type="button" className="btn btn-ghost" onClick={resetForm}>ยกเลิก</button>
               ) : null}
             </div>
+            {editingId ? (
+              <EmployeeDeductionsEditor employeeId={editingId} customerId={customerId} pendingOuter={pending} />
+            ) : (
+              <p className="muted" style={{ marginTop: 10 }}>บันทึกพนักงานก่อน แล้วกด &ldquo;แก้ไข&rdquo; อีกครั้งเพื่อกรอกค่าลดหย่อนภาษีอื่นของพนักงานคนนี้</p>
+            )}
           </div>
 
           <EmployeeTable
@@ -569,6 +624,165 @@ function EmployeeTable({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * EmployeeDeductionsEditor — ฟอร์มค่าลดหย่อนภาษีอื่นต่อพนักงาน/ปีภาษี (เฟส 9b กลุ่ม BE, T155)
+ *   ★ โหลดข้อมูลผ่าน server action เอง (ไม่ผ่าน props จาก page.tsx) เพราะเลือกปีภาษีเปลี่ยนได้อิสระต่อพนักงาน
+ *     ที่กำลังแก้ไข — ไม่กระทบ initial load ของหน้าทะเบียนพนักงานหลัก
+ */
+function EmployeeDeductionsEditor({
+  employeeId,
+  customerId,
+  pendingOuter,
+}: {
+  employeeId: string;
+  customerId: string;
+  pendingOuter: boolean;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [taxYear, setTaxYear] = useState(String(currentBuddhistYear()));
+  const [loadedYear, setLoadedYear] = useState<string | null>(null);
+  const [rows, setRows] = useState<PayrollEmployeeDeduction[]>([]);
+
+  const [newType, setNewType] = useState<DeductionType>("spouse_no_income");
+  const [newAmount, setNewAmount] = useState("");
+  const [newNote, setNewNote] = useState("");
+
+  const load = (year: string) => {
+    setMsg(null);
+    startTransition(async () => {
+      const res = await listDeductionsAction(employeeId, customerId, Number(year));
+      if (res.ok) {
+        setRows(res.deductions);
+        setLoadedYear(year);
+      } else {
+        setMsg({ ok: false, text: res.message });
+      }
+    });
+  };
+
+  const addRow = () => {
+    setMsg(null);
+    startTransition(async () => {
+      const res = await upsertDeductionAction({
+        employeeId,
+        customerId,
+        taxYear: Number(taxYear),
+        deductionType: newType,
+        amount: newType === "child" ? Number(newAmount) : parseAmountInput(newAmount),
+        note: newNote || null,
+      });
+      setMsg({ ok: res.ok, text: res.message });
+      if (res.ok) {
+        setNewAmount("");
+        setNewNote("");
+        load(taxYear);
+        router.refresh();
+      }
+    });
+  };
+
+  const removeRow = (id: string) => {
+    if (!confirm("ยืนยันลบค่าลดหย่อนรายการนี้?")) return;
+    setMsg(null);
+    startTransition(async () => {
+      const res = await deleteDeductionAction(id, employeeId, customerId);
+      setMsg({ ok: res.ok, text: res.message });
+      if (res.ok) {
+        load(taxYear);
+        router.refresh();
+      }
+    });
+  };
+
+  const busy = pending || pendingOuter;
+
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <div className="section-title"><span>ค่าลดหย่อนภาษีอื่นของพนักงานคนนี้ (ต่อปีภาษี)</span></div>
+      {msg ? <div className={`action-msg ${msg.ok ? "ok" : "err"}`}>{msg.text}</div> : null}
+      <div className="acc-field-grid">
+        <label className="acc-field">
+          <span>ปีภาษี (พ.ศ.)</span>
+          <input value={taxYear} onChange={(e) => setTaxYear(e.target.value)} inputMode="numeric" style={{ width: 90 }} />
+        </label>
+        <div style={{ display: "flex", alignItems: "flex-end" }}>
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => load(taxYear)}>
+            โหลดค่าลดหย่อนปีนี้
+          </button>
+        </div>
+      </div>
+
+      {loadedYear !== null ? (
+        <>
+          <table className="dlv-table acc-table" style={{ marginTop: 8 }}>
+            <thead>
+              <tr>
+                <th>ประเภท</th>
+                <th className="num">จำนวนเงิน</th>
+                <th>หมายเหตุ</th>
+                <th className="center">จัดการ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr><td colSpan={4}><p className="empty">ยังไม่มีค่าลดหย่อนของปีภาษี {loadedYear}</p></td></tr>
+              ) : (
+                rows.map((d) => (
+                  <tr key={d.id}>
+                    <td>{DEDUCTION_TYPE_LABELS[d.deductionType]}</td>
+                    <td className="num">{formatMoney(d.amount)}</td>
+                    <td>{d.note || "—"}</td>
+                    <td className="center">
+                      <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => removeRow(d.id)}>ลบ</button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+
+          <div className="section-title" style={{ marginTop: 10 }}><span>เพิ่มค่าลดหย่อนใหม่ (ปีภาษี {taxYear})</span></div>
+          <div className="acc-field-grid">
+            <label className="acc-field">
+              <span>ประเภท</span>
+              <select value={newType} onChange={(e) => setNewType(e.target.value as DeductionType)}>
+                {DEDUCTION_TYPES.map((t) => (
+                  <option key={t} value={t}>{DEDUCTION_TYPE_LABELS[t]}</option>
+                ))}
+              </select>
+            </label>
+            {newType === "child" ? (
+              <label className="acc-field">
+                <span>จำนวนเงิน (บาท)</span>
+                <select value={newAmount} onChange={(e) => setNewAmount(e.target.value)}>
+                  <option value="">— เลือก —</option>
+                  {CHILD_ALLOWANCE_AMOUNTS.map((a) => (
+                    <option key={a} value={a}>{formatMoney(a)}</option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label className="acc-field">
+                <span>จำนวนเงิน (บาท)</span>
+                <input className="num" inputMode="decimal" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} />
+              </label>
+            )}
+            <label className="acc-field">
+              <span>หมายเหตุ (ไม่บังคับ)</span>
+              <input value={newNote} onChange={(e) => setNewNote(e.target.value)} />
+            </label>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <button type="button" className="btn" disabled={busy || !newAmount} onClick={addRow}>เพิ่มค่าลดหย่อน</button>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
