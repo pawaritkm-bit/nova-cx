@@ -186,6 +186,8 @@ export type SaveSettingsInput = {
   otherDeductionsAccountCode: unknown;
   netPayAccountCode: unknown;
   netPayIsPaidImmediately: unknown;
+  /** ★ เฟส 9b กลุ่ม BC (T140) — 'monthly' (default) / 'non_monthly' */
+  payFrequency?: unknown;
 };
 
 /** บันทึกตั้งค่าบัญชี 6 ช่องของลูกค้า 1 ราย (0.11) */
@@ -209,6 +211,7 @@ export async function upsertSettingsAction(input: SaveSettingsInput): Promise<Pa
       otherDeductionsAccountCode: input.otherDeductionsAccountCode,
       netPayAccountCode: input.netPayAccountCode,
       netPayIsPaidImmediately: input.netPayIsPaidImmediately,
+      payFrequency: input.payFrequency,
     };
 
     const res = await upsertSettings(service, ctx.tenantId, input.customerId, settingsInput, chartByCode);

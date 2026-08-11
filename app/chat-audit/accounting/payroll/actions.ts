@@ -23,10 +23,6 @@ import {
   recalcRunLines,
   generateRunJournalEntry,
   softDeleteRun,
-  markPitFiled,
-  unmarkPitFiled,
-  markSsoFiled,
-  unmarkSsoFiled,
   getRunScope,
   type CreateRunInput,
   type LineAmountEdit,
@@ -141,52 +137,7 @@ export async function deleteRunAction(runId: string, customerId: string): Promis
   }
 }
 
-type FilingKind = "pit" | "sso";
-
-/** บันทึกว่ายื่น ภ.ง.ด.1/สปส.1-10 แล้ว — เฉพาะรอบที่ status='finalized' (0.3) */
-export async function markFiledAction(runId: string, customerId: string, kind: FilingKind): Promise<PayrollRunActionResult> {
-  if (!isUuid(runId) || !isUuid(customerId)) return { ok: false, message: "ไม่พบรอบเงินเดือนที่เลือก" };
-  try {
-    const authed = await createClient();
-    const service = createServiceRoleClient();
-    const ctx = await requireAccountingAccess(authed, service);
-    assertCustomerInScope(ctx, customerId);
-
-    const scope = await getRunScope(service, ctx.tenantId, runId);
-    if (!scope) return { ok: false, message: "ไม่พบรอบเงินเดือน (อาจถูกลบไปแล้ว)" };
-    assertCustomerInScope(ctx, scope.customerId);
-    if (scope.customerId !== customerId) return { ok: false, message: "ลูกค้าไม่ตรงกับรอบเงินเดือนนี้" };
-
-    const res = kind === "pit" ? await markPitFiled(service, ctx.tenantId, runId, ctx.employeeId) : await markSsoFiled(service, ctx.tenantId, runId, ctx.employeeId);
-    if (!res.ok) return { ok: false, message: res.message };
-    revalidatePath(PATH);
-    return { ok: true, message: kind === "pit" ? "บันทึกว่ายื่น ภ.ง.ด.1 แล้ว" : "บันทึกว่ายื่น สปส.1-10 แล้ว" };
-  } catch (e) {
-    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
-    return { ok: false, message: "บันทึกไม่สำเร็จ กรุณาลองใหม่" };
-  }
-}
-
-/** ยกเลิกสถานะยื่น (undo, 0.3) */
-export async function unmarkFiledAction(runId: string, customerId: string, kind: FilingKind): Promise<PayrollRunActionResult> {
-  if (!isUuid(runId) || !isUuid(customerId)) return { ok: false, message: "ไม่พบรอบเงินเดือนที่เลือก" };
-  try {
-    const authed = await createClient();
-    const service = createServiceRoleClient();
-    const ctx = await requireAccountingAccess(authed, service);
-    assertCustomerInScope(ctx, customerId);
-
-    const scope = await getRunScope(service, ctx.tenantId, runId);
-    if (!scope) return { ok: false, message: "ไม่พบรอบเงินเดือน (อาจถูกลบไปแล้ว)" };
-    assertCustomerInScope(ctx, scope.customerId);
-    if (scope.customerId !== customerId) return { ok: false, message: "ลูกค้าไม่ตรงกับรอบเงินเดือนนี้" };
-
-    const res = kind === "pit" ? await unmarkPitFiled(service, ctx.tenantId, runId) : await unmarkSsoFiled(service, ctx.tenantId, runId);
-    if (!res.ok) return { ok: false, message: res.message };
-    revalidatePath(PATH);
-    return { ok: true, message: "ยกเลิกสถานะยื่นแล้ว" };
-  } catch (e) {
-    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
-    return { ok: false, message: "ยกเลิกไม่สำเร็จ กรุณาลองใหม่" };
-  }
-}
+// ★ เฟส 9b กลุ่ม BC (พบโดย reviewer QC) — markFiledAction/unmarkFiledAction เดิม (ทำงานบน runId +
+//   payroll_monthly_filing::markPitFiled/markSsoFiled) ถูกลบออกแล้ว เพราะไม่มีจุดเรียกจาก UI เหลืออยู่เลย
+//   (dead code) — ตรรกะเดียวกันย้ายไปอยู่ที่ app/chat-audit/accounting/payroll/filing/actions.ts::
+//   markFilingAction/unmarkFilingAction (ทำงานบน filingPeriodId ตรง ๆ ซึ่งเป็นจุดที่ UI จริงเรียกใช้)

@@ -85,6 +85,25 @@ describe("validatePayrollSettingsInput (0.11)", () => {
     const res = validatePayrollSettingsInput(validInput({ netPayAccountCode: "4010" }), chartByCode);
     expect(res.ok).toBe(false);
   });
+
+  // ★★★ เฟส 9b กลุ่ม BC (T133, 0.5) — payFrequency
+  it("★ ไม่ส่ง payFrequency มาเลย (โค้ดเก่าก่อนเฟส 9b ทั้งหมด) → default 'monthly' (regression-safe)", () => {
+    const res = validatePayrollSettingsInput(validInput(), chartByCode);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.payFrequency).toBe("monthly");
+  });
+
+  it("payFrequency ส่งค่าอื่นที่ไม่ใช่ 'non_monthly' เป๊ะ ๆ (เช่น ค่าว่าง/พิมพ์ผิด) → default 'monthly'", () => {
+    const res = validatePayrollSettingsInput(validInput({ payFrequency: "weekly" }), chartByCode);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.payFrequency).toBe("monthly");
+  });
+
+  it("payFrequency='non_monthly' เป๊ะ ๆ → ผ่าน", () => {
+    const res = validatePayrollSettingsInput(validInput({ payFrequency: "non_monthly" }), chartByCode);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.payFrequency).toBe("non_monthly");
+  });
 });
 
 describe("data layer", () => {
@@ -102,6 +121,8 @@ describe("data layer", () => {
     expect(settings.pitPayableAccountCode).toBe("2910");
     expect(settings.otherDeductionsAccountCode).toBeNull();
     expect(settings.netPayAccountCode).toBeNull();
+    // ★ เฟส 9b กลุ่ม BC (T133) — ลูกค้าใหม่/เดิมทุกรายได้ pay_frequency='monthly' อัตโนมัติ (regression-safe)
+    expect(settings.payFrequency).toBe("monthly");
   });
 
   it("getOrCreateDefaultSettings — เรียกซ้ำ → คืนแถวเดิม ไม่สร้างซ้ำ", async () => {
@@ -146,5 +167,23 @@ describe("data layer", () => {
     const res = await upsertSettings(db, TENANT, CUSTOMER_A, validInput({ salaryExpenseAccountCode: "2910" }), chartByCode);
     expect(res.ok).toBe(false);
     expect(tables.payroll_settings).toHaveLength(0);
+  });
+
+  // ★★★ เฟส 9b กลุ่ม BC (T140) — เปลี่ยน pay_frequency ผ่าน upsertSettings
+  it("upsertSettings — เปลี่ยน payFrequency เป็น 'non_monthly' แล้วโหลดกลับมาถูกต้อง", async () => {
+    const { db } = makeInMemoryDb(tables);
+    await upsertSettings(db, TENANT, CUSTOMER_A, validInput(), chartByCode);
+    const updated = await upsertSettings(db, TENANT, CUSTOMER_A, validInput({ payFrequency: "non_monthly" }), chartByCode);
+    expect(updated.ok).toBe(true);
+    const settings = await getSettings(db, TENANT, CUSTOMER_A);
+    expect(settings?.payFrequency).toBe("non_monthly");
+  });
+
+  it("upsertSettings — เปลี่ยนเป็น non_monthly แล้วเปลี่ยนกลับเป็น monthly ได้ปกติ", async () => {
+    const { db } = makeInMemoryDb(tables);
+    await upsertSettings(db, TENANT, CUSTOMER_A, validInput({ payFrequency: "non_monthly" }), chartByCode);
+    await upsertSettings(db, TENANT, CUSTOMER_A, validInput(), chartByCode);
+    const settings = await getSettings(db, TENANT, CUSTOMER_A);
+    expect(settings?.payFrequency).toBe("monthly");
   });
 });

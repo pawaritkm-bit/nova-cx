@@ -12,9 +12,6 @@ import {
   buildPayrollJournalEntry,
   generateRunJournalEntry,
   softDeleteRun,
-  markPitFiled,
-  unmarkPitFiled,
-  markSsoFiled,
   type PayrollRunLineAmounts,
 } from "@/lib/accounting/payroll";
 import type { PayrollSettings } from "@/lib/accounting/payroll-settings";
@@ -54,6 +51,7 @@ const DEFAULT_SETTINGS: PayrollSettings = {
   otherDeductionsAccountCode: "2015",
   netPayAccountCode: "2040",
   netPayIsPaidImmediately: false,
+  payFrequency: "monthly",
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
 };
@@ -92,6 +90,7 @@ function baseTables(): Tables {
         other_deductions_account_code: DEFAULT_SETTINGS.otherDeductionsAccountCode,
         net_pay_account_code: DEFAULT_SETTINGS.netPayAccountCode,
         net_pay_is_paid_immediately: DEFAULT_SETTINGS.netPayIsPaidImmediately,
+        pay_frequency: DEFAULT_SETTINGS.payFrequency,
         created_at: DEFAULT_SETTINGS.createdAt,
         updated_at: DEFAULT_SETTINGS.updatedAt,
       },
@@ -698,57 +697,138 @@ describe("generateRunJournalEntry (T115, 0.7/0.9)", () => {
   });
 });
 
-describe("markPitFiled/unmarkPitFiled/markSsoFiled (T116, 0.3)", () => {
+// ★★★ เฟส 9b กลุ่ม BC (0.5) — markPitFiled/unmarkPitFiled/markSsoFiled/unmarkSsoFiled ย้ายไปทำงานบน
+//   payroll_monthly_filings แล้ว (lib/accounting/payroll-monthly-filing.ts) — เทสต์ตัวฟังก์ชันเหล่านี้เต็ม ๆ
+//   อยู่ที่ tests/accounting/payroll-monthly-filing.test.ts — ที่นี่ทดสอบเฉพาะว่า createDraftRun/
+//   getRunScope/getRunWithLines/listRuns ของไฟล์นี้ผูก/แสดง filing_period_id ถูกต้อง (ส่วนที่ยังอยู่ในไฟล์นี้)
+describe("เฟส 9b กลุ่ม BC — createDraftRun ผูก filing_period_id + pay_frequency guard (T138)", () => {
   let tables: Tables;
-  let runId: string;
-
-  beforeEach(async () => {
+  beforeEach(() => {
     tables = baseTables();
+  });
+
+  it("ลูกค้า pay_frequency='monthly' (ค่า default, ไม่มีแถว payroll_settings เลย) → รอบใหม่ได้ filing_period_id เสมอ", async () => {
     const { db } = makeInMemoryDb(tables);
-    seedEmployees(tables, 2);
+    tables.payroll_settings = [];
     const res = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" });
-    runId = (res as { id: string }).id;
-  });
-
-  it("รอบยัง draft (ไม่มี JE) → mark filed ถูกปฏิเสธ", async () => {
-    const { db } = makeInMemoryDb(tables);
-    const res = await markPitFiled(db, TENANT, runId, "acc-1");
-    expect(res.ok).toBe(false);
-  });
-
-  it("รอบ finalized → mark สำเร็จ ตั้ง filed_at/filed_by ถูกต้อง", async () => {
-    const runRow = tables.payroll_runs.find((r) => r.id === runId)!;
-    runRow.status = "finalized";
-    const { db } = makeInMemoryDb(tables);
-    const res = await markPitFiled(db, TENANT, runId, "acc-1");
     expect(res.ok).toBe(true);
-    const row = tables.payroll_runs.find((r) => r.id === runId)!;
-    expect(row.pit_filing_status).toBe("filed");
-    expect(row.pit_filed_by).toBe("acc-1");
-    expect(row.pit_filed_at).toBeTruthy();
+    const run = tables.payroll_runs[0];
+    expect(run.filing_period_id).toBeTruthy();
+    expect(tables.payroll_monthly_filings).toHaveLength(1);
+    const filing = tables.payroll_monthly_filings[0];
+    expect(filing.period_year).toBe(2569);
+    expect(filing.period_month).toBe(8);
   });
 
-  it("unmark รีเซ็ตกลับ not_filed ได้", async () => {
-    const runRow = tables.payroll_runs.find((r) => r.id === runId)!;
-    runRow.status = "finalized";
+  it("★ regression: ลูกค้า pay_frequency='monthly' สร้างรอบซ้ำเดือน/ปีเดียวกัน → ปฏิเสธเหมือนก่อนเฟส 9b เป๊ะ", async () => {
     const { db } = makeInMemoryDb(tables);
-    await markPitFiled(db, TENANT, runId, "acc-1");
-    const res = await unmarkPitFiled(db, TENANT, runId);
-    expect(res.ok).toBe(true);
-    const row = tables.payroll_runs.find((r) => r.id === runId)!;
-    expect(row.pit_filing_status).toBe("not_filed");
-    expect(row.pit_filed_by ?? null).toBeNull();
+    const first = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" });
+    expect(first.ok).toBe(true);
+    const second = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-20" });
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.message).toContain("มีรอบเงินเดือนของเดือน/ปีนี้อยู่แล้ว");
+    // ★ ไม่มีการสร้างหน่วยยื่นซ้ำ (idempotent)
+    expect(tables.payroll_monthly_filings).toHaveLength(1);
   });
 
-  it("markSsoFiled แยกอิสระจาก pit (mark pit ไม่กระทบสถานะ sso)", async () => {
-    const runRow = tables.payroll_runs.find((r) => r.id === runId)!;
-    runRow.status = "finalized";
+  it("★★★ ลูกค้า pay_frequency='non_monthly' → สร้างหลายรอบเดือน/ปีเดียวกันได้ ทุกรอบผูก filing_period_id เดียวกัน", async () => {
+    tables.payroll_settings = [
+      {
+        id: "settings-nm",
+        tenant_id: TENANT,
+        customer_id: CUSTOMER_A,
+        salary_expense_account_code: "5310",
+        sso_employer_expense_account_code: "5311",
+        sso_payable_account_code: "2050",
+        pit_payable_account_code: "2910",
+        other_deductions_account_code: null,
+        net_pay_account_code: null,
+        net_pay_is_paid_immediately: false,
+        pay_frequency: "non_monthly",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
     const { db } = makeInMemoryDb(tables);
-    await markPitFiled(db, TENANT, runId, "acc-1");
-    const res = await markSsoFiled(db, TENANT, runId, "acc-1");
-    expect(res.ok).toBe(true);
-    const row = tables.payroll_runs.find((r) => r.id === runId)!;
-    expect(row.pit_filing_status).toBe("filed");
-    expect(row.sso_filing_status).toBe("filed");
+    const r1 = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-07" });
+    const r2 = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-14" });
+    const r3 = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-21" });
+    const r4 = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-28" });
+    expect([r1, r2, r3, r4].every((r) => r.ok)).toBe(true);
+    expect(tables.payroll_runs).toHaveLength(4);
+    // ★ หน่วยยื่นเดือนนี้มีแถวเดียว (idempotent get-or-create) ทุกรอบชี้แถวเดียวกัน
+    expect(tables.payroll_monthly_filings).toHaveLength(1);
+    const filingId = tables.payroll_monthly_filings[0].id;
+    expect(tables.payroll_runs.every((r) => r.filing_period_id === filingId)).toBe(true);
+  });
+
+  it("getRunScope คืน filingPeriodId ของรอบที่สร้างแล้ว", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const created = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" });
+    const id = (created as { id: string }).id;
+    const scope = await getRunScope(db, TENANT, id);
+    expect(scope?.filingPeriodId).toBeTruthy();
+  });
+
+  // ★★★ แก้บั๊ก QC (race condition จริง, migration 0097) — พิสูจน์ด้วยเทสต์ concurrent จริง (Promise.all) ว่า
+  //   partial unique index `uq_payroll_runs_period_monthly` (บน pay_frequency_snapshot='monthly') คุม
+  //   atomicity ได้จริงที่ระดับ DB ไม่ใช่แค่ precheck ที่ชั้นแอปที่ไม่ atomic (เดิม 0096 เอา unique constraint
+  //   ออกจาก DB ไปเฉย ๆ ทำให้ 2 request พร้อมกันสร้างสำเร็จทั้งคู่ได้จริง — mirror pattern เดียวกับเทสต์
+  //   0.9 ของ generateRunJournalEntry ด้านบนที่พิสูจน์ atomicity ด้วย Promise.all เหมือนกัน)
+  describe("★★★ แก้บั๊ก QC — race condition จริง เมื่อ 2 request สร้างรอบเดือน/ปีเดียวกันพร้อมกัน (migration 0097)", () => {
+    function withMonthlyUniqueIndex(t: Tables) {
+      const uniqueIndexes = [
+        {
+          table: "payroll_runs",
+          columns: ["tenant_id", "customer_id", "pay_period_year", "pay_period_month"],
+          // ★ mirror partial unique index จริงที่ DB — unique เฉพาะแถว deleted_at is null และ
+          //   pay_frequency_snapshot='monthly' เท่านั้น (ตรงกับ uq_payroll_runs_period_monthly ใน 0097)
+          where: (r: Row) => !r.deleted_at && r.pay_frequency_snapshot === "monthly",
+        },
+      ];
+      return makeInMemoryDb(t, { uniqueIndexes });
+    }
+
+    it("ลูกค้า pay_frequency='monthly' — 2 request สร้างรอบเดือน/ปีเดียวกันพร้อมกัน → สำเร็จแค่ 1 ใน 2 เท่านั้น (ไม่ใช่ทั้งคู่)", async () => {
+      const { db } = withMonthlyUniqueIndex(tables);
+      const [r1, r2] = await Promise.all([
+        createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" }),
+        createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-20" }),
+      ]);
+      const successes = [r1, r2].filter((r) => r.ok);
+      const failures = [r1, r2].filter((r) => !r.ok);
+      expect(successes).toHaveLength(1);
+      expect(failures).toHaveLength(1);
+      if (!failures[0].ok) expect(failures[0].message).toContain("มีรอบเงินเดือนของเดือน/ปีนี้อยู่แล้ว");
+      // ★ มีรอบเดียวจริงในฐานข้อมูล ไม่ใช่ 2 รอบ (นี่คือใจความของบั๊ก — เดิมสร้างสำเร็จทั้ง 2 ครั้ง)
+      expect(tables.payroll_runs.filter((r) => !r.deleted_at)).toHaveLength(1);
+    });
+
+    it("ลูกค้า pay_frequency='non_monthly' — 2 request สร้างรอบเดือน/ปีเดียวกันพร้อมกัน → สำเร็จทั้งคู่ (ไม่ถูกกระทบจาก unique index ใหม่)", async () => {
+      tables.payroll_settings = [
+        {
+          id: "settings-nm",
+          tenant_id: TENANT,
+          customer_id: CUSTOMER_A,
+          salary_expense_account_code: "5310",
+          sso_employer_expense_account_code: "5311",
+          sso_payable_account_code: "2050",
+          pit_payable_account_code: "2910",
+          other_deductions_account_code: null,
+          net_pay_account_code: null,
+          net_pay_is_paid_immediately: false,
+          pay_frequency: "non_monthly",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ];
+      const { db } = withMonthlyUniqueIndex(tables);
+      const [r1, r2] = await Promise.all([
+        createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-07" }),
+        createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-14" }),
+      ]);
+      expect([r1, r2].every((r) => r.ok)).toBe(true);
+      expect(tables.payroll_runs.filter((r) => !r.deleted_at)).toHaveLength(2);
+    });
   });
 });
