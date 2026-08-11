@@ -1357,25 +1357,29 @@ export default async function AccountingPage({
 
         {/* ---- toolbar ---- */}
         <div className="card">
-          <form method="get" className="inline-form bills-filter">
-            {/* คงบริบทนักบัญชีที่กำลังดูไว้เวลากรอง (form GET จะไม่ทิ้ง accountant) */}
-            {accParam ? <input type="hidden" name="accountant" value={accParam} /> : null}
-            <input
-              type="search"
-              name="q"
-              defaultValue={q}
-              placeholder="ค้นหาลูกค้า / รหัส…"
-              className="bills-search"
-              aria-label="ค้นหาลูกค้าหรือรหัส"
-            />
-            <label htmlFor="f-month" style={{ fontWeight: 600, fontSize: 14 }}>เดือน:</label>
-            <select id="f-month" name="month" defaultValue={selectedMonth}>
-              <option value="">— ทุกเดือน —</option>
-              {monthOptions.map((m) => (
-                <option key={m} value={m}>{thaiMonthLabel(m)}</option>
-              ))}
-            </select>
-            <button type="submit" className="btn">กรอง</button>
+          {/* ★ div ห่อ ไม่ใช่ form — ข้างในมี 2 form คนละหน้าที่ (กรอง GET / เพิ่มรายการ POST)
+              ซ้อน <form> ในกันไม่ได้ตามกฎ HTML (ทำให้เกิด hydration error) */}
+          <div className="inline-form bills-filter">
+            <form method="get" className="acc-inline-flex">
+              {/* คงบริบทนักบัญชีที่กำลังดูไว้เวลากรอง (form GET จะไม่ทิ้ง accountant) */}
+              {accParam ? <input type="hidden" name="accountant" value={accParam} /> : null}
+              <input
+                type="search"
+                name="q"
+                defaultValue={q}
+                placeholder="ค้นหาลูกค้า / รหัส…"
+                className="bills-search"
+                aria-label="ค้นหาลูกค้าหรือรหัส"
+              />
+              <label htmlFor="f-month" style={{ fontWeight: 600, fontSize: 14 }}>เดือน:</label>
+              <select id="f-month" name="month" defaultValue={selectedMonth}>
+                <option value="">— ทุกเดือน —</option>
+                {monthOptions.map((m) => (
+                  <option key={m} value={m}>{thaiMonthLabel(m)}</option>
+                ))}
+              </select>
+              <button type="submit" className="btn">กรอง</button>
+            </form>
             {hasAnyFilter ? <Link href={`/chat-audit/accounting${buildQuery({ accountant: accParam })}`} className="btn btn-ghost">ล้าง</Link> : null}
 
             <span className="acc-toolbar-spacer" />
@@ -1390,7 +1394,7 @@ export default async function AccountingPage({
             <UploadFileButton accountant={accParam} />
             {/* ตรวจทานทุกบรรทัดก่อนออก Excel รวม */}
             <a href={reviewAllHref} className="btn btn-ghost">ตรวจทาน / ออก Excel (รวม)</a>
-          </form>
+          </div>
         </div>
 
         {/* ================= เนื้อหาตามโหมด ================= */}
