@@ -45,7 +45,7 @@ import {
   type MonthKpi,
 } from "@/lib/accounting/monthly";
 import { createEntryAction } from "./actions";
-import { isCreditEligibleForPayment } from "@/lib/accounting/bill-payments";
+import { isCreditEligibleForPayment, hasActiveBillPaymentsForEntries } from "@/lib/accounting/bill-payments";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import { listProducts } from "@/lib/accounting/products";
 import ChatAuditFrame from "../_Frame";
@@ -1106,6 +1106,14 @@ export default async function AccountingPage({
     if (resized) editViewUrl = resized;
   }
 
+  // เฟส 10 ส่วน Z (0.9) — บิลไหนมีการรับ/จ่ายเงินไปแล้วบ้าง → ล็อกช่อง currency/fx_rate ที่ EntryEditor
+  //   (แค่ hint ของ UI — guard ที่บังคับจริงอยู่ที่ actions-lib.ts::upsertEntry)
+  const fxLockedEntryIds = await hasActiveBillPaymentsForEntries(
+    service,
+    tenantId,
+    [...new Set([...shownEntries.map((e) => e.id), ...(editEntry ? [editEntry.id] : [])])]
+  );
+
   // nav bills (แท็บปัจจุบัน) — sign รูปย่อทุกใบ (parallel) เฉพาะตอนเข้าหน้าแก้ → pager เลื่อน client + preload
   const editInNav = !!editEntry && navOrderIds.includes(editEntry.id);
   let pagerBills: PagerBill[] = [];
@@ -1119,7 +1127,14 @@ export default async function AccountingPage({
           const rz = await signResizedImage(service, p);
           if (rz) url = rz;
         }
-        return { id: e.id, entry: e, viewUrl: url, viewIsImage: isImg, fileName: e.uploadName };
+        return {
+          id: e.id,
+          entry: e,
+          viewUrl: url,
+          viewIsImage: isImg,
+          fileName: e.uploadName,
+          fxLocked: fxLockedEntryIds.has(e.id),
+        };
       })
     );
   }
@@ -1580,6 +1595,7 @@ export default async function AccountingPage({
             })}`}
             chart={chart}
             products={products}
+            fxLocked={fxLockedEntryIds.has(editEntry.id)}
           />
         )
       ) : null}

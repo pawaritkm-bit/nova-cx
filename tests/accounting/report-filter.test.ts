@@ -158,6 +158,10 @@ function bp(id: string, payDate: string): BillPayment {
     bankAccountCode: null,
     notes: null,
     createdAt: "2026-07-01T00:00:00Z",
+    currency: null,
+    fxRate: null,
+    fxAmount: null,
+    fxGainLossNoteId: null,
   };
 }
 

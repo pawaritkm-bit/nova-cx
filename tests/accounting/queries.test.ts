@@ -84,6 +84,9 @@ function entry(p: Partial<BillEntry>): BillEntry {
     aiConfidence: p.aiConfidence ?? null,
     notes: p.notes ?? null,
     inputTaxMonth: p.inputTaxMonth ?? null,
+    // เฟส 10 ส่วน Z — optional-safe (undefined = ไม่กระทบ fixture เดิมจำนวนมากที่ยังไม่รู้จักฟิลด์นี้)
+    currency: p.currency,
+    fxRate: p.fxRate,
     flowaccountSync:
       p.flowaccountSync ??
       ({
@@ -264,6 +267,8 @@ function makeListEntriesDb(spec: {
   inputTaxMonth?: Record<string, unknown>[] | "error";
   /** แถวดิบ stock sync (เฟส 8 ส่วน Y, 0.9 — คอลัมน์ bill_entries 4) — ไม่ส่ง = [] (ยังไม่มีข้อมูล) */
   stockSync?: Record<string, unknown>[] | "error";
+  /** แถวดิบ currency/fx_rate (เฟส 10 ส่วน Z, migration 0085) — ไม่ส่ง = [] (บิล THB ปกติทั้งหมด) */
+  fx?: Record<string, unknown>[] | "error";
   /** แถวดิบ bill_entry_lines (เฟส 1 ส่วน B: ทดสอบ mapping product_id) — ไม่ส่ง = [] (ไม่มี line) */
   lines?: Record<string, unknown>[];
 }): SupabaseClient {
@@ -297,6 +302,9 @@ function makeListEntriesDb(spec: {
             spec.stockSync === "error"
               ? { data: null, error: { code: "42703" } }
               : { data: spec.stockSync ?? [], error: null };
+        } else if (idx === 5) {
+          result =
+            spec.fx === "error" ? { data: null, error: { code: "42703" } } : { data: spec.fx ?? [], error: null };
         }
       } else if (table === "bill_entry_lines") {
         result = { data: spec.lines ?? [], error: null };
@@ -561,6 +569,96 @@ describe("listEntries — chunkIds (กัน .in() ยาวเกิน limit 
       if (e.lines.length === 1 && e.lines[0]!.amount === Number(e.id.slice(1)) + 1) withLines++;
     }
     expect(withLines).toBe(300);
+  });
+});
+
+describe("listEntries — currency/fxRate (เฟส 10 ส่วน Z, migration 0085, T81)", () => {
+  it("บิล FX (currency/fx_rate มีค่า) → map เข้า BillEntry ถูกต้อง", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      fx: [{ id: "e1", currency: "USD", fx_rate: 35.5 }],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.currency).toBe("USD");
+    expect(res.entries[0]!.fxRate).toBe(35.5);
+  });
+
+  it("บิล THB ปกติ (ไม่มีแถว fx) → currency/fxRate เป็น null (ค่าเริ่มต้น)", async () => {
+    const db = makeListEntriesDb({ entries: [rawEntryRow({ id: "e1" })], fx: [] });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.currency).toBeNull();
+    expect(res.entries[0]!.fxRate).toBeNull();
+  });
+
+  it("คอลัมน์ยังไม่ apply migration (select error) → ไม่ทำ list พัง, currency/fxRate = null ทุกแถว", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" }), rawEntryRow({ id: "e2" })],
+      fx: "error",
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries).toHaveLength(2);
+    for (const e of res.entries) {
+      expect(e.currency).toBeNull();
+      expect(e.fxRate).toBeNull();
+    }
+  });
+});
+
+describe("listEntries — lines mapping fxAmount (เฟส 10 ส่วน Z, migration 0086)", () => {
+  it("line มี fx_amount → map เป็น fxAmount ตรง ๆ (ไม่กระทบ amount ที่เป็น THB derived)", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      lines: [
+        {
+          id: "l1",
+          entry_id: "e1",
+          line_no: 1,
+          vat_type: "vat",
+          description: "ค่าสินค้า",
+          account_code: "4010",
+          account_name: "ขายสินค้า",
+          product_id: null,
+          fx_amount: 100,
+          amount: 3550,
+          vat_amount: 0,
+          wht_rate: 0,
+          wht_amount: 0,
+          ai_filled: false,
+          ai_low_confidence: false,
+        },
+      ],
+    });
+    const res = await listEntries(db, "t1", {});
+    const line = res.entries[0]!.lines[0]!;
+    expect(line.fxAmount).toBe(100);
+    expect(line.amount).toBe(3550);
+  });
+
+  it("line ไม่มี fx_amount (null) → fxAmount เป็น null", async () => {
+    const db = makeListEntriesDb({
+      entries: [rawEntryRow({ id: "e1" })],
+      lines: [
+        {
+          id: "l1",
+          entry_id: "e1",
+          line_no: 1,
+          vat_type: "vat",
+          description: null,
+          account_code: null,
+          account_name: null,
+          product_id: null,
+          fx_amount: null,
+          amount: 1000,
+          vat_amount: 70,
+          wht_rate: 0,
+          wht_amount: 0,
+          ai_filled: false,
+          ai_low_confidence: false,
+        },
+      ],
+    });
+    const res = await listEntries(db, "t1", {});
+    expect(res.entries[0]!.lines[0]!.fxAmount).toBeNull();
   });
 });
 

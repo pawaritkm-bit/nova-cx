@@ -45,6 +45,8 @@ export type UpsertNoteLineActionInput = {
   accountName?: unknown;
   amount: unknown;
   vatAmount?: unknown;
+  /** เฟส 10 ส่วน AA (0.10) — ยอดต้นฉบับสกุลต่างประเทศ (มีความหมายเฉพาะบิลต้นทาง FX เท่านั้น) */
+  fxAmount?: unknown;
 };
 
 export type UpsertNoteActionInput = {

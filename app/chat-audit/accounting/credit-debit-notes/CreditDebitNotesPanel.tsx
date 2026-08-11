@@ -11,6 +11,7 @@ import {
 } from "@/lib/accounting/credit-debit-notes";
 import type { ChartAccount } from "@/lib/accounting/chart-of-accounts";
 import { parseAmountInput, formatMoney } from "@/lib/accounting/calc";
+import { round2 } from "@/lib/accounting/queries";
 import AccountCombobox from "../AccountCombobox";
 
 /**
@@ -32,6 +33,10 @@ export type NoteBillRow = {
   netTotal: number;
   outstanding: number;
   notes: CreditDebitNote[];
+  /** เฟส 10 ส่วน AA — สกุลเงินของบิลต้นทาง (null = บิล THB ปกติ — ไม่โชว์ช่อง fx เลย) */
+  currency: string | null;
+  /** เฟส 10 ส่วน AA — อัตราแลกเปลี่ยนของบิลต้นทาง (read-only, อ้างอิงเท่านั้น — ใช้อัตรานี้เสมอ ไม่ใช่วันออก CN/DN) */
+  fxRate: number | null;
 };
 
 type LineRow = {
@@ -39,6 +44,8 @@ type LineRow = {
   accountCode: string;
   accountName: string;
   description: string;
+  /** เฟส 10 ส่วน AA — ยอดต้นฉบับสกุลต่างประเทศ (มีความหมายเฉพาะบิลต้นทาง FX) */
+  fxAmount: string;
   amount: string;
   vatAmount: string;
 };
@@ -50,7 +57,7 @@ function newKey(): string {
 }
 
 function blankLine(): LineRow {
-  return { key: newKey(), accountCode: "", accountName: "", description: "", amount: "", vatAmount: "" };
+  return { key: newKey(), accountCode: "", accountName: "", description: "", fxAmount: "", amount: "", vatAmount: "" };
 }
 
 function todayIso(): string {
@@ -154,6 +161,7 @@ export default function CreditDebitNotesPanel({
               accountCode: l.accountCode,
               accountName: l.accountName ?? "",
               description: l.description ?? "",
+              fxAmount: l.fxAmount ? String(l.fxAmount) : "",
               amount: l.amount ? String(l.amount) : "",
               vatAmount: l.vatAmount ? String(l.vatAmount) : "",
             }))
@@ -176,6 +184,8 @@ export default function CreditDebitNotesPanel({
           description: l.description || null,
           accountCode: l.accountCode,
           accountName: l.accountName || null,
+          // เฟส 10 ส่วน AA — ส่งเฉพาะบิลต้นทาง FX (currency ตั้งไว้) เท่านั้น
+          fxAmount: bill.currency ? parseAmountInput(l.fxAmount) : undefined,
           amount: parseAmountInput(l.amount),
           vatAmount: parseAmountInput(l.vatAmount),
         })),
@@ -317,11 +327,18 @@ export default function CreditDebitNotesPanel({
                             </label>
                           </div>
 
+                          {bill.currency ? (
+                            <div className="acc-field acc-field-wide acc-contra-hint">
+                              บิลต้นทางเป็นสกุล {bill.currency} (อัตราแลกเปลี่ยนตอนออกบิล {bill.fxRate ?? "—"}) —
+                              กรอก &quot;จำนวนเงินตราต่างประเทศ&quot; ต่อบรรทัด ระบบจะคำนวณยอด (บาท) ให้ด้วยอัตรานี้เสมอ
+                              (ไม่ใช่อัตราวันที่ออกใบลดหนี้/เพิ่มหนี้)
+                            </div>
+                          ) : null}
                           <div className="acc-je-lines">
                             <div className="acc-je-lines-head">
                               <span>บัญชี</span>
                               <span>รายละเอียด</span>
-                              <span className="num">ยอด</span>
+                              <span className="num">{bill.currency ? `จำนวนเงินตรา (${bill.currency})` : "ยอด"}</span>
                               <span className="num">VAT</span>
                               <span />
                             </div>
@@ -345,15 +362,31 @@ export default function CreditDebitNotesPanel({
                                   disabled={pending}
                                   aria-label="รายละเอียด"
                                 />
-                                <input
-                                  className="num"
-                                  inputMode="decimal"
-                                  value={l.amount}
-                                  onChange={(e) => patchLine(bill.entryId, l.key, { amount: e.target.value })}
-                                  placeholder="0.00"
-                                  disabled={pending}
-                                  aria-label="ยอด"
-                                />
+                                {bill.currency ? (
+                                  <input
+                                    className="num"
+                                    inputMode="decimal"
+                                    value={l.fxAmount}
+                                    onChange={(e) => {
+                                      const fx = e.target.value;
+                                      const derived = bill.fxRate ? round2(parseAmountInput(fx) * bill.fxRate) : 0;
+                                      patchLine(bill.entryId, l.key, { fxAmount: fx, amount: derived ? String(derived) : "" });
+                                    }}
+                                    placeholder="0.00"
+                                    disabled={pending}
+                                    aria-label={`จำนวนเงินตรา (${bill.currency})`}
+                                  />
+                                ) : (
+                                  <input
+                                    className="num"
+                                    inputMode="decimal"
+                                    value={l.amount}
+                                    onChange={(e) => patchLine(bill.entryId, l.key, { amount: e.target.value })}
+                                    placeholder="0.00"
+                                    disabled={pending}
+                                    aria-label="ยอด"
+                                  />
+                                )}
                                 <input
                                   className="num"
                                   inputMode="decimal"

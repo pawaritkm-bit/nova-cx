@@ -38,6 +38,11 @@ import {
  * ★★ เฟส 5 ส่วน P (T33) — เดิมชื่อ `syncSaleEntryToFlowAccount` (ผูกกับ "sale" ตรงๆ) เปลี่ยนเป็น
  *   `syncEntryToFlowAccount()` แล้ว dispatch ภายในตาม `entry.entry_type`:
  *     - sale     → path เดิม (M1/M2) + mapping ผังบัญชี/สินค้าจาก Q (T28) — ไม่เปลี่ยนพฤติกรรม
+ *
+ * ★★ เฟส 10 (multi-currency, decision 0.13 — T96) ★★ ไฟล์นี้ "ไม่ถูกแก้เลยแม้แต่บรรทัดเดียว" ในเฟส 10 —
+ *   ส่งบิล FX ไป FlowAccount ยังทำงานได้ปกติ เพราะ `flowaccount-mapper.ts` ที่ไฟล์นี้เรียกอยู่แล้วอ่าน
+ *   `line.amount`/`vatAmount` (THB ที่ derive แล้วเสมอ ตาม 0.6 ของเฟส 10) ไม่ต้องรู้จัก currency/fx_rate/
+ *   fx_amount เลย
  *     - purchase → path ใหม่ (T32/T31) — contact ของเอกสารมาจาก `entry.counterpartyName/
  *                  counterpartyTaxId` (ผู้ขายจริง — decision 0.6) ไม่ใช่ `customers`
  *     - อื่น ๆ (เช่น 'unspecified') → reason `unsupported_entry_type` ก่อน claim (decision 0.5 — ไม่ขยาย

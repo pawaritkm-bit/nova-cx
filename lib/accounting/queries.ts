@@ -50,6 +50,13 @@ export type BillEntryLine = {
    *   ★ optional เหมือน productId — กันกระทบ fixture เทสต์เดิมจำนวนมากที่ยังไม่รู้จักฟิลด์นี้
    */
   quantity?: number | null;
+  /**
+   * ยอดต้นฉบับสกุลต่างประเทศต่อบรรทัด ก่อน VAT (เฟส 10 ส่วน Z, migration 0086) — nullable
+   *   เมื่อ entry.currency ไม่ null: `amount` (THB) = derive จาก fxAmount × entry.fxRate (0.6)
+   *   เมื่อ entry.currency เป็น null (บิล THB ปกติ — ค่าเริ่มต้น/บิลเก่าทุกใบ): ไม่มีความหมาย (ไม่ derive)
+   *   ★ optional เหมือน productId/quantity — กันกระทบ fixture เทสต์เดิมจำนวนมากที่ยังไม่รู้จักฟิลด์นี้
+   */
+  fxAmount?: number | null;
   amount: number;
   vatAmount: number;
   whtRate: number;
@@ -115,6 +122,14 @@ export type BillEntry = {
    *     (mapLine ของจริงจาก DB จะเซ็ตให้เสมอ — ไม่มีทางเป็น undefined จากข้อมูลจริง)
    */
   stockSync?: StockSyncInfo;
+  /**
+   * สกุลเงินต่างประเทศของบิลนี้ (เฟส 10 ส่วน Z, migration 0085, ISO 4217) — null = บิล THB ปกติ
+   *   (ค่าเริ่มต้น/บิลเก่าทุกใบ — พฤติกรรมเดิม 100%) ★ optional เหมือน stockSync — degrade เป็น
+   *   undefined/null ถ้า migration ยังไม่ apply (pattern เดียวกับ inputTaxMonth)
+   */
+  currency?: string | null;
+  /** อัตราแลกเปลี่ยน "ตอนออกบิล" (spot rate ณ doc_date) — เก็บครั้งเดียว ไม่ revalue ซ้ำ (0.6/0.9) */
+  fxRate?: number | null;
   createdAt: string;
   confirmedAt: string | null;
   lines: BillEntryLine[];
@@ -304,6 +319,7 @@ type RawLine = {
   account_name: string | null;
   product_id: string | null;
   quantity: number | string | null;
+  fx_amount: number | string | null;
   amount: number | string | null;
   vat_amount: number | string | null;
   wht_rate: number | string | null;
@@ -346,6 +362,13 @@ type RawStockSync = {
   id: string;
   stock_synced_at: string | null;
   updated_at: string | null;
+};
+
+/** แถวสกุลเงิน/อัตราแลกเปลี่ยนของบิล (best-effort — คอลัมน์เพิ่ง add ใน migration 0085, เฟส 10) */
+type RawFx = {
+  id: string;
+  currency: string | null;
+  fx_rate: number | string | null;
 };
 
 /**
@@ -419,6 +442,7 @@ function mapLine(r: RawLine): BillEntryLine {
     accountName: r.account_name,
     productId: r.product_id,
     quantity: r.quantity === null || r.quantity === undefined ? null : num(r.quantity),
+    fxAmount: r.fx_amount === null || r.fx_amount === undefined ? null : num(r.fx_amount),
     amount: num(r.amount),
     vatAmount: num(r.vat_amount),
     whtRate: num(r.wht_rate),
@@ -587,6 +611,26 @@ export async function listEntries(
     // คอลัมน์ยังไม่ apply → คงเป็น default (ยังไม่บันทึก) ทั้งหมด
   }
 
+  // สกุลเงิน/อัตราแลกเปลี่ยนตอนออกบิล (migration 0085, เฟส 10 ส่วน Z) — ★ best-effort เหมือน stockSync ข้างบน
+  //   คอลัมน์ยังไม่ apply → select error → ทุก entry ได้ default (currency=null = บิล THB ปกติ) แทน
+  //   ไม่ทำ list ทั้งหน้าพัง (0.6 — ฟีเจอร์นี้ additive ล้วน)
+  const fxByEntry = new Map<string, { currency: string | null; fxRate: number | null }>();
+  try {
+    const fxChunks = await Promise.all(
+      chunkIds(entryIds).map((ids) =>
+        db.from("bill_entries").select("id, currency, fx_rate").eq("tenant_id", tenantId).in("id", ids)
+      )
+    );
+    for (const { data: fxData, error: fxErr } of fxChunks) {
+      if (fxErr) continue;
+      for (const r of (fxData ?? []) as unknown as RawFx[]) {
+        fxByEntry.set(r.id, { currency: r.currency ?? null, fxRate: r.fx_rate === null || r.fx_rate === undefined ? null : num(r.fx_rate) });
+      }
+    }
+  } catch {
+    // คอลัมน์ยังไม่ apply → คงเป็น null ทั้งหมด (บิล THB ปกติ)
+  }
+
   // lines ของ entry เหล่านี้ — ★ ตัดก้อน (chunkIds) เหมือนข้างบน กัน .in() ยาวเกิน limit เมื่อ entryIds เยอะ
   const linesByEntry = new Map<string, BillEntryLine[]>();
   const lineChunks = await Promise.all(
@@ -594,7 +638,7 @@ export async function listEntries(
       db
         .from("bill_entry_lines")
         .select(
-          "id, entry_id, line_no, vat_type, description, account_code, account_name, product_id, quantity, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence"
+          "id, entry_id, line_no, vat_type, description, account_code, account_name, product_id, quantity, fx_amount, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence"
         )
         .eq("tenant_id", tenantId)
         .in("entry_id", ids)
@@ -691,6 +735,8 @@ export async function listEntries(
     inputTaxMonth: inputTaxMonthByEntry.get(e.id) ?? null,
     flowaccountSync: flowaccountSyncByEntry.get(e.id) ?? defaultFlowAccountSync(),
     stockSync: stockSyncByEntry.get(e.id) ?? defaultStockSync(),
+    currency: fxByEntry.get(e.id)?.currency ?? null,
+    fxRate: fxByEntry.get(e.id)?.fxRate ?? null,
     createdAt: e.created_at,
     confirmedAt: e.confirmed_at,
     lines: linesByEntry.get(e.id) ?? [],

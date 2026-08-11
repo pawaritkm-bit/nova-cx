@@ -23,6 +23,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { round2 } from "@/lib/accounting/queries";
+import { isValidCurrencyCode } from "@/lib/accounting/currency";
 import { EPSILON } from "@/lib/accounting/statement-config";
 import type { JournalLine } from "@/lib/accounting/journal";
 import type { BookKind, JournalPosting, PostingLeg } from "@/lib/accounting/journal-books";
@@ -55,6 +56,15 @@ export type ManualJournalLine = {
   description: string | null;
   debit: number;
   credit: number;
+  /**
+   * เฟส 10 ส่วน AA (migration 0089) — metadata ล้วน บอกที่มาว่าบรรทัดนี้เกี่ยวกับ FX ไหม (เช่น บรรทัดที่
+   *   `fx.ts::suggestFxGainLossEntryInput` สร้างให้อัตโนมัติ) — ★ ไม่กระทบ isBalanced/toJournalLines/
+   *   toJournalPosting เลยแม้แต่จุดเดียว (ค่ายังอ่านจาก debit/credit ตรง ๆ เหมือนเดิม) · optional ทั้งชุด —
+   *   JV ปกติที่นักบัญชีสร้างเองไม่มี metadata นี้เลย (undefined/null)
+   */
+  fxCurrency?: string | null;
+  fxRate?: number | null;
+  fxAmount?: number | null;
 };
 
 /** หัว + บรรทัด manual JE 1 ใบ */
@@ -124,6 +134,10 @@ export type ManualEntryLineInput = {
   description?: unknown;
   debit: unknown;
   credit: unknown;
+  /** เฟส 10 ส่วน AA — metadata ล้วน (ดู ManualJournalLine) — รับ/เก็บผ่านเฉย ๆ ไม่ validate กับ debit/credit */
+  fxCurrency?: unknown;
+  fxRate?: unknown;
+  fxAmount?: unknown;
 };
 
 /** input ดิบทั้งใบ จาก client */
@@ -197,7 +211,17 @@ export function validateManualEntryInput(
 
     const accountName = clampText(raw.accountName, ACCOUNT_NAME_MAX) ?? chartAcc.name;
     const description = clampText(raw.description, DESCRIPTION_MAX);
-    lines.push({ lineNo: i + 1, accountCode, accountName, description, debit, credit });
+
+    // ★ เฟส 10 ส่วน AA — fx metadata: รับ/เก็บผ่านเฉย ๆ ไม่ validate ความสัมพันธ์กับ debit/credit (ไม่ใช่
+    //   แหล่งความจริงทางบัญชี แค่ metadata อธิบายที่มา) — รูปแบบผิด/ไม่ใช่ตัวเลข → เก็บเป็น null เงียบ ๆ
+    const fxCurrencyRaw = typeof raw.fxCurrency === "string" ? raw.fxCurrency.trim().toUpperCase() : "";
+    const fxCurrency = fxCurrencyRaw && isValidCurrencyCode(fxCurrencyRaw) ? fxCurrencyRaw : null;
+    const fxRateNum = typeof raw.fxRate === "number" ? raw.fxRate : Number(raw.fxRate);
+    const fxRate = fxCurrency && Number.isFinite(fxRateNum) && fxRateNum > 0 ? fxRateNum : null;
+    const fxAmountNum = typeof raw.fxAmount === "number" ? raw.fxAmount : Number(raw.fxAmount);
+    const fxAmount = fxCurrency && Number.isFinite(fxAmountNum) && fxAmountNum > 0 ? round2(fxAmountNum) : null;
+
+    lines.push({ lineNo: i + 1, accountCode, accountName, description, debit, credit, fxCurrency, fxRate, fxAmount });
   }
 
   if (!isBalanced(lines)) {
@@ -292,7 +316,84 @@ type RawLine = {
   description: string | null;
   debit: number | string;
   credit: number | string;
+  fx_currency?: string | null;
+  fx_rate?: number | string | null;
+  fx_amount?: number | string | null;
 };
+
+const LINE_COLUMNS_BASE = "id, entry_id, line_no, account_code, account_name, description, debit, credit";
+const LINE_COLUMNS_FX = `${LINE_COLUMNS_BASE}, fx_currency, fx_rate, fx_amount`;
+
+/**
+ * โหลด lines ของหลาย manual JE พร้อมกัน — best-effort สำหรับคอลัมน์ fx_* (migration 0089, เฟส 10 ส่วน AA)
+ *   ★ ลองเลือกพร้อมคอลัมน์ fx ก่อน — ถ้า error (คอลัมน์ยังไม่ apply) ลองใหม่แบบไม่มีคอลัมน์ fx (degrade
+ *   เงียบ เหมือน input_tax_month — ไม่ทำ list ทั้งหน้าพัง)
+ */
+async function loadManualLines(db: DB, tenantId: string, entryIds: string[]): Promise<RawLine[]> {
+  const withFx = await db
+    .from("manual_journal_entry_lines")
+    .select(LINE_COLUMNS_FX)
+    .eq("tenant_id", tenantId)
+    .in("entry_id", entryIds)
+    .order("line_no", { ascending: true });
+  if (!withFx.error) return (withFx.data ?? []) as unknown as RawLine[];
+
+  const fallback = await db
+    .from("manual_journal_entry_lines")
+    .select(LINE_COLUMNS_BASE)
+    .eq("tenant_id", tenantId)
+    .in("entry_id", entryIds)
+    .order("line_no", { ascending: true });
+  return (fallback.data ?? []) as unknown as RawLine[];
+}
+
+/** payload 1 บรรทัดสำหรับ insert — includeFx=false ใช้ตอน retry เมื่อ insert พร้อมคอลัมน์ fx พลาด (best-effort) */
+function lineInsertRow(
+  l: ManualJournalLine,
+  entryId: string,
+  tenantId: string,
+  includeFx: boolean
+): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    entry_id: entryId,
+    tenant_id: tenantId,
+    line_no: l.lineNo,
+    account_code: l.accountCode,
+    account_name: l.accountName,
+    description: l.description,
+    debit: l.debit,
+    credit: l.credit,
+  };
+  if (!includeFx) return base;
+  return {
+    ...base,
+    fx_currency: l.fxCurrency ?? null,
+    fx_rate: l.fxRate ?? null,
+    fx_amount: l.fxAmount ?? null,
+  };
+}
+
+/**
+ * insert บรรทัด manual JE ทั้งชุด — best-effort สำหรับคอลัมน์ fx_* (migration 0089) เหมือน loadManualLines
+ *   ★ ลอง insert พร้อมคอลัมน์ fx ก่อน — ถ้า error (คอลัมน์ยังไม่ apply) ลองใหม่แบบไม่มีคอลัมน์ fx ทันที
+ *   (degrade เงียบ ไม่ throw ทั้งการบันทึก JV)
+ */
+async function insertManualLines(
+  db: DB,
+  tenantId: string,
+  entryId: string,
+  lines: ManualJournalLine[]
+): Promise<{ error: unknown }> {
+  const withFx = await db
+    .from("manual_journal_entry_lines")
+    .insert(lines.map((l) => lineInsertRow(l, entryId, tenantId, true)));
+  if (!withFx.error) return { error: null };
+
+  const withoutFx = await db
+    .from("manual_journal_entry_lines")
+    .insert(lines.map((l) => lineInsertRow(l, entryId, tenantId, false)));
+  return { error: withoutFx.error };
+}
 
 /** ดึง manual JE ทั้งหมดของลูกค้า 1 ราย (draft+confirmed, scope tenant+customer) เรียงวันที่ล่าสุดก่อน */
 export async function listManualEntries(
@@ -314,15 +415,10 @@ export async function listManualEntries(
   if (rows.length === 0) return [];
 
   const ids = rows.map((r) => r.id);
-  const { data: lineData } = await db
-    .from("manual_journal_entry_lines")
-    .select("id, entry_id, line_no, account_code, account_name, description, debit, credit")
-    .eq("tenant_id", tenantId)
-    .in("entry_id", ids)
-    .order("line_no", { ascending: true });
+  const lineData = await loadManualLines(db, tenantId, ids);
 
   const linesByEntry = new Map<string, ManualJournalLine[]>();
-  for (const r of (lineData ?? []) as unknown as RawLine[]) {
+  for (const r of lineData) {
     const arr = linesByEntry.get(r.entry_id) ?? [];
     arr.push({
       id: r.id,
@@ -332,6 +428,9 @@ export async function listManualEntries(
       description: r.description,
       debit: asAmount(r.debit),
       credit: asAmount(r.credit),
+      fxCurrency: r.fx_currency ?? null,
+      fxRate: r.fx_rate === null || r.fx_rate === undefined ? null : Number(r.fx_rate),
+      fxAmount: r.fx_amount === null || r.fx_amount === undefined ? null : Number(r.fx_amount),
     });
     linesByEntry.set(r.entry_id, arr);
   }
@@ -413,18 +512,7 @@ export async function upsertManualEntry(
 
     // แทนที่ lines ทั้งหมด (จำนวนบรรทัดต่อใบน้อย ≤ MAX_LINES — ไม่ใช่ปัญหา perf)
     await db.from("manual_journal_entry_lines").delete().eq("entry_id", id).eq("tenant_id", tenantId);
-    const { error: lineErr } = await db.from("manual_journal_entry_lines").insert(
-      v.value.lines.map((l) => ({
-        entry_id: id,
-        tenant_id: tenantId,
-        line_no: l.lineNo,
-        account_code: l.accountCode,
-        account_name: l.accountName,
-        description: l.description,
-        debit: l.debit,
-        credit: l.credit,
-      }))
-    );
+    const { error: lineErr } = await insertManualLines(db, tenantId, id, v.value.lines);
     if (lineErr) return { ok: false, message: "บันทึกบรรทัดไม่สำเร็จ กรุณาลองใหม่" };
     return { ok: true, id };
   }
@@ -446,18 +534,7 @@ export async function upsertManualEntry(
   if (error || !data) return { ok: false, message: "เพิ่มรายการไม่สำเร็จ กรุณาลองใหม่" };
   const newId = (data as { id: string }).id;
 
-  const { error: lineErr } = await db.from("manual_journal_entry_lines").insert(
-    v.value.lines.map((l) => ({
-      entry_id: newId,
-      tenant_id: tenantId,
-      line_no: l.lineNo,
-      account_code: l.accountCode,
-      account_name: l.accountName,
-      description: l.description,
-      debit: l.debit,
-      credit: l.credit,
-    }))
-  );
+  const { error: lineErr } = await insertManualLines(db, tenantId, newId, v.value.lines);
   if (lineErr) {
     // ใส่บรรทัดไม่สำเร็จ → ลบหัวที่เพิ่งสร้างทิ้ง (กันหัวเปล่าไม่มีบรรทัดค้างใน DB)
     await db.from("manual_journal_entries").delete().eq("id", newId).eq("tenant_id", tenantId);

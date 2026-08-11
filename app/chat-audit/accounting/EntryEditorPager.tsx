@@ -13,6 +13,8 @@ export type PagerBill = {
   viewUrl: string | null;
   viewIsImage: boolean;
   fileName: string | null;
+  /** เฟส 10 ส่วน Z (0.9) — บิลนี้มีการรับ/จ่ายเงินไปแล้ว ≥1 รายการ → ล็อกช่อง currency/fx_rate ที่ EntryEditor */
+  fxLocked: boolean;
 };
 
 /**
@@ -67,6 +69,7 @@ export default function EntryEditorPager({
         onNavigate={(id) => setCurrentId(id)}
         chart={chart}
         products={products}
+        fxLocked={current.fxLocked}
       />
     </>
   );
