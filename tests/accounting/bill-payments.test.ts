@@ -67,13 +67,18 @@ describe("billOutstanding", () => {
     expect(billOutstanding(e, [])).toBe(1040);
   });
   it("จ่ายบางส่วน → ลดลงตามยอดที่จ่ายจริง", () => {
-    expect(billOutstanding(e, [{ amount: 400 }])).toBe(640);
+    expect(billOutstanding(e, [{ amount: 400, payDate: "2026-08-01" }])).toBe(640);
   });
   it("จ่ายครบพอดี → 0", () => {
-    expect(billOutstanding(e, [{ amount: 1040 }])).toBe(0);
+    expect(billOutstanding(e, [{ amount: 1040, payDate: "2026-08-01" }])).toBe(0);
   });
   it("หลายงวดสะสม → รวมทุกงวด", () => {
-    expect(billOutstanding(e, [{ amount: 400 }, { amount: 300 }])).toBe(340);
+    expect(
+      billOutstanding(e, [
+        { amount: 400, payDate: "2026-08-01" },
+        { amount: 300, payDate: "2026-08-05" },
+      ])
+    ).toBe(340);
   });
 
   // -----------------------------------------------------------------
@@ -93,7 +98,40 @@ describe("billOutstanding", () => {
 
   it("ผสม CN+DN หลายใบ + จ่ายบางส่วน → คำนวณรวมถูกต้อง", () => {
     // net=1040, netAdjustment = -300(CN) + 100(DN) = -200 → เต็มยอดใหม่ 840 − จ่าย 400 = 440
-    expect(billOutstanding(e, [{ amount: 400 }], -200)).toBe(440);
+    expect(billOutstanding(e, [{ amount: 400, payDate: "2026-08-01" }], -200)).toBe(440);
+  });
+
+  // -----------------------------------------------------------------
+  // asOfDate (เฟส 10b, 0.5) — ช่องโหว่ #2: ไม่ส่ง = พฤติกรรมเดิม 100% (regression บังคับ) · ส่งมา = กรอง
+  //   payments ที่ payDate > asOfDate ออกก่อนคำนวณ
+  // -----------------------------------------------------------------
+  describe("asOfDate (0.5)", () => {
+    const payments = [
+      { amount: 400, payDate: "2026-08-01" },
+      { amount: 300, payDate: "2026-08-15" },
+    ];
+
+    it("★ ไม่ส่ง asOfDate → ผลลัพธ์เหมือนก่อนแก้เป๊ะ (regression บังคับ — นับ payment ทุกแถวไม่กรอง)", () => {
+      expect(billOutstanding(e, payments)).toBe(340);
+      expect(billOutstanding(e, payments)).toBe(billOutstanding(e, payments, 0, undefined));
+    });
+
+    it("asOfDate อยู่ก่อน payment งวดที่ 2 → ไม่นับงวดที่ 2 (เหมือนยังไม่เกิดขึ้นจริง ณ วันนั้น)", () => {
+      expect(billOutstanding(e, payments, 0, "2026-08-10")).toBe(640); // หัก payment วันที่ 08-01 อย่างเดียว
+    });
+
+    it("asOfDate ตรงกับวันที่ payment เป๊ะ (เท่ากัน) → นับ payment วันนั้นด้วย (<=, inclusive)", () => {
+      expect(billOutstanding(e, payments, 0, "2026-08-01")).toBe(640);
+      expect(billOutstanding(e, payments, 0, "2026-08-15")).toBe(340);
+    });
+
+    it("asOfDate ก่อน payment ทุกแถว → ไม่หักอะไรเลย (เต็มยอด)", () => {
+      expect(billOutstanding(e, payments, 0, "2026-07-01")).toBe(1040);
+    });
+
+    it("asOfDate หลัง payment ทุกแถว → เหมือนไม่กรอง (ผลลัพธ์เท่ากับไม่ส่ง asOfDate)", () => {
+      expect(billOutstanding(e, payments, 0, "2026-12-31")).toBe(billOutstanding(e, payments));
+    });
   });
 });
 
@@ -261,7 +299,7 @@ describe("validatePaymentInput", () => {
 
   it("★ จำนวนเงินเกินยอดค้างชำระ → ปฏิเสธเสมอ (เทสต์บังคับ 0.8)", () => {
     const e = entryInfo({ lines: [{ amount: 1000, vatAmount: 0, whtAmount: 0 }] }); // net=1000
-    const r = validatePaymentInput({ ...validInput, amount: 1000.01 }, e, [{ amount: 500 }]);
+    const r = validatePaymentInput({ ...validInput, amount: 1000.01 }, e, [{ amount: 500, payDate: "2026-08-01" }]);
     // ค้างชำระ = 1000-500 = 500 → ขอ 1000.01 เกิน
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain("เกิน");
@@ -269,7 +307,7 @@ describe("validatePaymentInput", () => {
 
   it("จำนวนเงินเท่ากับยอดค้างพอดี → ผ่าน (ไม่ใช่ overpay)", () => {
     const e = entryInfo({ lines: [{ amount: 1000, vatAmount: 0, whtAmount: 0 }] });
-    const r = validatePaymentInput({ ...validInput, amount: 500 }, e, [{ amount: 500 }]);
+    const r = validatePaymentInput({ ...validInput, amount: 500 }, e, [{ amount: 500, payDate: "2026-08-01" }]);
     expect(r.ok).toBe(true);
   });
 
@@ -475,12 +513,14 @@ function makeFakeDb(seed: {
   const creditDebitNoteLines: Row[] = seed.creditDebitNoteLines ?? [];
   let nextId = 1;
 
-  type Filter = { col: string; op: "eq" | "is" | "in"; val: unknown };
+  type Filter = { col: string; op: "eq" | "is" | "in" | "lte"; val: unknown };
 
   function matchRow(row: Row, filters: Filter[]): boolean {
     return filters.every((f) => {
       if (f.op === "eq") return row[f.col] === f.val;
       if (f.op === "in") return (f.val as unknown[]).includes(row[f.col]);
+      // ★ เฟส 10b (0.5) — .lte("pay_date", asOfDate) กรอง payments ที่วันที่เกิดจริง ณ ตอนตั้งรายงาน
+      if (f.op === "lte") return (row[f.col] as string) <= (f.val as string);
       // op === "is"
       if (f.val === null) return row[f.col] === null || row[f.col] === undefined;
       return row[f.col] === f.val;
@@ -504,6 +544,10 @@ function makeFakeDb(seed: {
     };
     api.in = (c: string, v: unknown[]) => {
       filters.push({ col: c, op: "in", val: v });
+      return api;
+    };
+    api.lte = (c: string, v: unknown) => {
+      filters.push({ col: c, op: "lte", val: v });
       return api;
     };
     api.order = () => api;
@@ -674,6 +718,52 @@ describe("listBillPayments / listBillPaymentsForEntries", () => {
     const map = await listBillPaymentsForEntries(db, "t1", ["e1", "e2"]);
     expect(map.get("e1")).toHaveLength(2);
     expect(map.get("e2")).toHaveLength(1);
+  });
+
+  // -----------------------------------------------------------------
+  // asOfDate (เฟส 10b, 0.5) — filter query จริง (.lte("pay_date", asOfDate)) ไม่ส่ง = query เดิมทุกประการ
+  // -----------------------------------------------------------------
+  describe("asOfDate (0.5)", () => {
+    function seedTwoPayments() {
+      return makeFakeDb({
+        payments: [
+          { id: "p1", tenant_id: "t1", entry_id: "e1", customer_id: "c1", pay_date: "2026-08-01", amount: 100, method: "cash", bank_account_id: null, notes: null, created_at: "2026-08-01T00:00:00Z", deleted_at: null },
+          { id: "p2", tenant_id: "t1", entry_id: "e1", customer_id: "c1", pay_date: "2026-08-15", amount: 200, method: "cash", bank_account_id: null, notes: null, created_at: "2026-08-15T00:00:00Z", deleted_at: null },
+        ],
+      });
+    }
+
+    it("listBillPayments ★ ไม่ส่ง asOfDate → ผลลัพธ์เหมือนก่อนแก้เป๊ะ (regression บังคับ)", async () => {
+      const { db } = seedTwoPayments();
+      const rows = await listBillPayments(db, "t1", "e1");
+      expect(rows).toHaveLength(2);
+    });
+
+    it("listBillPayments ส่ง asOfDate ตัดก่อนวันที่ payment งวดที่ 2 → เห็นแค่งวดแรก", async () => {
+      const { db } = seedTwoPayments();
+      const rows = await listBillPayments(db, "t1", "e1", "2026-08-10");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].payDate).toBe("2026-08-01");
+    });
+
+    it("listBillPayments ส่ง asOfDate ตรงกับวันที่ payment เป๊ะ → นับรวม (<=, inclusive)", async () => {
+      const { db } = seedTwoPayments();
+      const rows = await listBillPayments(db, "t1", "e1", "2026-08-01");
+      expect(rows).toHaveLength(1);
+    });
+
+    it("listBillPaymentsForEntries ★ ไม่ส่ง asOfDate → ผลลัพธ์เหมือนก่อนแก้เป๊ะ (regression บังคับ)", async () => {
+      const { db } = seedTwoPayments();
+      const map = await listBillPaymentsForEntries(db, "t1", ["e1"]);
+      expect(map.get("e1")).toHaveLength(2);
+    });
+
+    it("listBillPaymentsForEntries ส่ง asOfDate → กรองก่อนคืนผล (ไม่ใช่กรองหลัง fetch)", async () => {
+      const { db } = seedTwoPayments();
+      const map = await listBillPaymentsForEntries(db, "t1", ["e1"], "2026-08-10");
+      expect(map.get("e1")).toHaveLength(1);
+      expect(map.get("e1")?.[0].payDate).toBe("2026-08-01");
+    });
   });
 
   it("entryIds ว่าง → Map ว่าง (ไม่ query)", async () => {

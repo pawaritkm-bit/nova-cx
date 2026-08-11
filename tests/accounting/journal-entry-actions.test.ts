@@ -73,6 +73,18 @@ function makeResolver(
   opts: {
     existingEntry?: { customer_id: string; status: string } | null;
     linesForConfirm?: { debit: number; credit: number }[];
+    /**
+     * เฟส 10b (0.13, T137) — ถ้า id ที่กำลังจะ confirm/unconfirm เป็น revaluation_je_id/reversing_je_id ของ
+     *   fx_period_revaluations ที่ยังไม่จบ cycle → ส่ง { status: "reval_draft" | "reversing_draft" } (ไม่ใช่
+     *   'voided'/'reversing_confirmed') · undefined/null = ไม่เกี่ยวกับ fx revaluation เลย (regression เดิม)
+     *   ★ ทั้ง 2 query ย่อยของ isRevaluationOrReversingJeId (revaluation_je_id / reversing_je_id) ใช้ค่านี้
+     *   ร่วมกัน — ผลลัพธ์สุดท้ายเป็น OR ของทั้งสอง ไม่จำเป็นต้องแยก เพราะเทสต์สนใจแค่บูลีนผลลัพธ์
+     *   ★ QC fix เฟส 10b (ปุ่ม "ลบ") — `revaluation_je_id` ในฟิลด์เดียวกันนี้ ใช้โดย isFxCycleConfirmedForJe
+     *   เพื่อหา id ของ revaluation JE ของ cycle นั้น แล้วเช็คสถานะจริงต่อผ่าน manual_journal_entries (ใช้ค่า
+     *   `existingEntry.status` ด้านบนร่วมกัน — "confirmed" = cycle confirmed แล้ว ลบไม่ได้ · "draft" = ยังไม่
+     *   confirm อะไรเลย ลบได้)
+     */
+    fxLocked?: { status: string; revaluation_je_id?: string } | null;
   } = {}
 ): Resolver {
   return ({ table, op, terminal }) => {
@@ -95,6 +107,9 @@ function makeResolver(
         return { data: opts.linesForConfirm ?? [{ debit: 1000, credit: 0 }, { debit: 0, credit: 1000 }], error: null };
       }
       return { data: null, error: null };
+    }
+    if (table === "fx_period_revaluations" && op === "select" && terminal === "maybeSingle") {
+      return { data: opts.fxLocked ?? null, error: null };
     }
     return { data: null, error: null };
   };
@@ -263,6 +278,27 @@ describe("confirmManualEntryAction", () => {
     const res = await confirmManualEntryAction("not-a-uuid", CUSTOMER_ID);
     expect(res.ok).toBe(false);
   });
+
+  // -----------------------------------------------------------------
+  // เฟส 10b (0.13, T137) — defense-in-depth: ปฏิเสธ id ที่ผูกกับ fx revaluation ที่ยังไม่จบ cycle
+  // -----------------------------------------------------------------
+  it("★ JE ผูกกับ fx revaluation ที่ยังไม่จบ cycle → ปฏิเสธ (ไม่ยืนยัน ไม่แตะ status)", async () => {
+    setupDb({ fxLocked: { status: "reval_draft" } });
+    const res = await confirmManualEntryAction(ENTRY_ID, CUSTOMER_ID);
+    expect(res.ok).toBe(false);
+    expect(res.message).toContain("ปรับปรุงอัตราแลกเปลี่ยน");
+    expect(
+      currentCapture.updates.find(
+        (u) => u.table === "manual_journal_entries" && (u.payload as Record<string, unknown>).status === "confirmed"
+      )
+    ).toBeUndefined();
+  });
+
+  it("JE ปกติ (ไม่เกี่ยว fx เลย) → ยืนยันทำงานเหมือนเดิมทุกประการ (regression บังคับ)", async () => {
+    setupDb({ fxLocked: null });
+    const res = await confirmManualEntryAction(ENTRY_ID, CUSTOMER_ID);
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("unconfirmManualEntryAction", () => {
@@ -278,6 +314,26 @@ describe("unconfirmManualEntryAction", () => {
     requireAccountingAccessMock.mockResolvedValue(accountantCtx([CUSTOMER_OTHER]));
     const res = await unconfirmManualEntryAction(ENTRY_ID, CUSTOMER_ID);
     expect(res.ok).toBe(false);
+  });
+
+  // -----------------------------------------------------------------
+  // เฟส 10b (0.13, T137)
+  // -----------------------------------------------------------------
+  it("★ JE ผูกกับ fx revaluation ที่ยังไม่จบ cycle → ปฏิเสธการยกเลิกยืนยัน (กัน status drift ตามหมวด 5)", async () => {
+    setupDb({ existingEntry: { customer_id: CUSTOMER_ID, status: "confirmed" }, fxLocked: { status: "reversing_draft" } });
+    const res = await unconfirmManualEntryAction(ENTRY_ID, CUSTOMER_ID);
+    expect(res.ok).toBe(false);
+    expect(
+      currentCapture.updates.find(
+        (u) => u.table === "manual_journal_entries" && (u.payload as Record<string, unknown>).status === "draft"
+      )
+    ).toBeUndefined();
+  });
+
+  it("JE ปกติ (ไม่เกี่ยว fx เลย) → ยกเลิกยืนยันทำงานเหมือนเดิมทุกประการ (regression บังคับ)", async () => {
+    setupDb({ existingEntry: { customer_id: CUSTOMER_ID, status: "confirmed" }, fxLocked: null });
+    const res = await unconfirmManualEntryAction(ENTRY_ID, CUSTOMER_ID);
+    expect(res.ok).toBe(true);
   });
 });
 
@@ -299,5 +355,42 @@ describe("deleteManualEntryAction", () => {
     setupDb({ existingEntry: null });
     const res = await deleteManualEntryAction(ENTRY_ID, CUSTOMER_ID);
     expect(res.ok).toBe(false);
+  });
+
+  // -----------------------------------------------------------------
+  // ★ QC fix เฟส 10b — ช่องโหว่ปุ่ม "ลบ" ทำให้ revaluation JV ตกค้างไม่ถูกกลับรายการ (isFxCycleConfirmedForJe)
+  // -----------------------------------------------------------------
+  it("★ JE ผูกกับ fx revaluation แต่ revaluation JE ของ cycle นั้นยังเป็น draft (ยังไม่ confirm อะไรเลย) → ลบได้ตามปกติ (ไม่มีอะไรตกค้าง)", async () => {
+    setupDb({
+      fxLocked: { status: "reval_draft", revaluation_je_id: "reval-je-id" },
+      existingEntry: { customer_id: CUSTOMER_ID, status: "draft" },
+    });
+    const res = await deleteManualEntryAction(ENTRY_ID, CUSTOMER_ID);
+    expect(res.ok).toBe(true);
+    const upd = currentCapture.updates.find(
+      (u) => u.table === "manual_journal_entries" && (u.payload as Record<string, unknown>).deleted_at
+    );
+    expect(upd).toBeTruthy();
+  });
+
+  it("★★★ JE ผูกกับ fx revaluation ที่ revaluation JE ของ cycle นั้น confirmed แล้ว → ลบไม่ได้ (ต้องยกเลิกยืนยันที่หน้า FX ก่อน) — ปิดช่องโหว่ 'ลบเฉพาะ reversing JE เดี่ยวๆ'", async () => {
+    setupDb({
+      fxLocked: { status: "reversing_draft", revaluation_je_id: "reval-je-id" },
+      existingEntry: { customer_id: CUSTOMER_ID, status: "confirmed" },
+    });
+    const res = await deleteManualEntryAction(ENTRY_ID, CUSTOMER_ID);
+    expect(res.ok).toBe(false);
+    expect(res.message).toContain("ปรับปรุงอัตราแลกเปลี่ยน");
+    expect(
+      currentCapture.updates.find(
+        (u) => u.table === "manual_journal_entries" && (u.payload as Record<string, unknown>).deleted_at
+      )
+    ).toBeUndefined();
+  });
+
+  it("JE ปกติ (ไม่เกี่ยว fx เลย) → ลบทำงานเหมือนเดิมทุกประการ (regression บังคับ)", async () => {
+    setupDb({ fxLocked: null, existingEntry: { customer_id: CUSTOMER_ID, status: "confirmed" } });
+    const res = await deleteManualEntryAction(ENTRY_ID, CUSTOMER_ID);
+    expect(res.ok).toBe(true);
   });
 });

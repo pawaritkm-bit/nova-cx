@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   saveManualEntryAction,
   confirmManualEntryAction,
@@ -74,16 +75,24 @@ export default function JournalEntryPanel({
   customerId,
   initial,
   chart,
+  fxLockedIds,
 }: {
   customerId: string;
   initial: ManualJournalEntry[];
   /** ผังบัญชีของ tenant (โหลดจาก DB ครั้งเดียวโดย page.tsx) */
   chart: ChartAccount[];
+  /**
+   * เฟส 10b (0.13) — id ของ JE ที่เป็น revaluation_je_id/reversing_je_id ของ fx_period_revaluations ที่ยัง
+   *   ไม่จบ cycle — ซ่อนปุ่ม "ยืนยัน"/"ยกเลิกยืนยัน" generic ของ JE เหล่านี้ (server ยัง defense-in-depth
+   *   ปฏิเสธจริงอีกชั้นที่ actions.ts เสมอ ไม่ได้พึ่ง UI hint นี้เป็นการบังคับจริง) · undefined/[] = ไม่มี
+   */
+  fxLockedIds?: string[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const chartByCode = useMemo(() => buildChartByCode(chart), [chart]);
+  const fxLockedSet = useMemo(() => new Set(fxLockedIds ?? []), [fxLockedIds]);
 
   // ---- form state (สร้างใหม่/แก้ไข) ----
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -380,7 +389,16 @@ export default function JournalEntryPanel({
                     <td className="num">{formatMoney(entryTotal(entry))}</td>
                     <td>{entry.status === "confirmed" ? "ยืนยันแล้ว" : "ร่าง"}</td>
                     <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {entry.status === "draft" ? (
+                      {fxLockedSet.has(entry.id) ? (
+                        // เฟส 10b (0.13) — JE นี้ผูกกับ fx revaluation ที่ยังไม่จบ cycle — ต้องจัดการผ่านหน้า
+                        // "ปรับปรุงอัตราแลกเปลี่ยนปลายงวด" เท่านั้น (ปุ่มยืนยัน/ยกเลิกยืนยัน generic ถูกซ่อน)
+                        <Link
+                          href={`/chat-audit/accounting/fx-revaluation?customerId=${customerId}`}
+                          className="btn btn-sm btn-ghost"
+                        >
+                          จัดการที่หน้า “ปรับปรุงอัตราแลกเปลี่ยนปลายงวด” →
+                        </Link>
+                      ) : entry.status === "draft" ? (
                         <>
                           <button
                             type="button"

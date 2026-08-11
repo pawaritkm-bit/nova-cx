@@ -113,10 +113,15 @@ export type AgingReport = {
  *   @param netAdjustmentByEntry ผลรวมสัญญาณของ CN/DN "confirmed" ต่อบิล (เฟส 3 ส่วน J, 0.6 —
  *     จาก credit-debit-notes.ts::netAdjustmentByEntry) default = Map ว่าง (backward-compat ระดับ compile
  *     — พฤติกรรมเดิมเป๊ะเมื่อไม่มี CN/DN)
+ *
+ *   ★ เฟส 10b (0.5, bonus correctness fix) — ส่ง `asOfDate` เข้า `billOutstanding` ด้วย (เดิมไม่ส่ง — bug):
+ *     หัก payment เฉพาะที่ `payDate ≤ asOfDate` เท่านั้น กัน payment วันที่ในอนาคต/ตั้งรายงานย้อนหลังไปหักยอด
+ *     ที่ยังไม่เกิดขึ้นจริง ณ วันตั้งรายงาน — สถานการณ์ปกติทั่วไป (payment ทุกแถว `payDate ≤ asOfDate` เสมอ)
+ *     ผลลัพธ์**ไม่เปลี่ยนแม้แต่บาทเดียว** (regression-safe)
  */
 export function buildAgingReport(
   entries: BillEntry[],
-  paymentsByEntry: Map<string, Pick<BillPayment, "amount">[]>,
+  paymentsByEntry: Map<string, Pick<BillPayment, "amount" | "payDate">[]>,
   asOfDate: string,
   netAdjustmentByEntry: Map<string, number> = new Map()
 ): AgingReport {
@@ -129,7 +134,7 @@ export function buildAgingReport(
     if (!isCreditEligibleForPayment(e)) continue;
 
     const payments = paymentsByEntry.get(e.id) ?? [];
-    const outstanding = billOutstanding(e, payments, netAdjustmentByEntry.get(e.id) ?? 0);
+    const outstanding = billOutstanding(e, payments, netAdjustmentByEntry.get(e.id) ?? 0, asOfDate);
     if (!(outstanding > EPSILON)) continue; // จ่ายครบแล้ว (หรือค่าผิดปกติ ≤ 0) — ไม่แสดง
 
     const bucket = ageBucket(e.dueDate, asOfDate);

@@ -5,6 +5,8 @@ import {
   noteLineTotal,
   noteNetTotal,
   noteSignedAdjustment,
+  noteFxSignedAdjustment,
+  netFxAdjustmentByEntry,
   validateNoteInput,
   toJournalLines,
   toJournalPosting,
@@ -98,6 +100,103 @@ describe("noteSignedAdjustment", () => {
   it("draft (ยังไม่ยืนยัน) → 0 เสมอ ไม่ว่าประเภทไหน", () => {
     expect(noteSignedAdjustment(mkNote({ docType: "credit_note", status: "draft" }))).toBe(0);
     expect(noteSignedAdjustment(mkNote({ docType: "debit_note", status: "draft" }))).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------
+// noteFxSignedAdjustment / netFxAdjustmentByEntry (เฟส 10b, 0.3/0.10) — mirror noteSignedAdjustment/
+//   netAdjustmentByEntry เป๊ะ แต่สรุปจาก line.fxAmount (ไม่รวม VAT) แทน amount+vatAmount
+// ---------------------------------------------------------------------
+describe("noteFxSignedAdjustment", () => {
+  const fxNote = (p: Partial<CreditDebitNote> = {}) =>
+    mkNote({
+      ...p,
+      lines: p.lines ?? [
+        { lineNo: 1, description: null, accountCode: "4010", accountName: "ขายสินค้า", fxAmount: 100, amount: 3500, vatAmount: 245 },
+      ],
+    });
+
+  it("credit_note confirmed → ลบ, ฐาน fxAmount เท่านั้น (ไม่รวม VAT เหมือน noteSignedAdjustment)", () => {
+    expect(noteFxSignedAdjustment(fxNote({ docType: "credit_note", status: "confirmed" }))).toBe(-100);
+  });
+  it("debit_note confirmed → บวก", () => {
+    expect(noteFxSignedAdjustment(fxNote({ docType: "debit_note", status: "confirmed" }))).toBe(100);
+  });
+  it("draft → 0 เสมอ ไม่ว่าประเภทไหน", () => {
+    expect(noteFxSignedAdjustment(fxNote({ docType: "credit_note", status: "draft" }))).toBe(0);
+    expect(noteFxSignedAdjustment(fxNote({ docType: "debit_note", status: "draft" }))).toBe(0);
+  });
+  it("★ บิลต้นทาง THB ปกติ (ไม่มี fxAmount ต่อบรรทัดเลย) → คืน 0 เสมอ (ไม่ throw)", () => {
+    const note = mkNote({
+      docType: "debit_note",
+      status: "confirmed",
+      lines: [{ lineNo: 1, description: null, accountCode: "4010", accountName: null, amount: 1000, vatAmount: 70 }],
+    });
+    expect(noteFxSignedAdjustment(note)).toBe(0);
+  });
+  it("หลายบรรทัด → รวมทุกบรรทัดก่อนใส่เครื่องหมาย", () => {
+    const note = fxNote({
+      docType: "credit_note",
+      status: "confirmed",
+      lines: [
+        { lineNo: 1, description: null, accountCode: "4010", accountName: null, fxAmount: 60, amount: 2100, vatAmount: 147 },
+        { lineNo: 2, description: null, accountCode: "4020", accountName: null, fxAmount: 40, amount: 1400, vatAmount: 98 },
+      ],
+    });
+    expect(noteFxSignedAdjustment(note)).toBe(-100);
+  });
+});
+
+describe("netFxAdjustmentByEntry", () => {
+  const fxLine = (fxAmount: number) => [
+    { lineNo: 1, description: null, accountCode: "4010", accountName: null, fxAmount, amount: fxAmount * 35, vatAmount: 0 },
+  ];
+
+  it("ผสม CN+DN confirmed หลายใบของบิลเดียวกัน → รวมสัญญาณถูกต้อง", () => {
+    const notesByEntry = new Map<string, CreditDebitNote[]>([
+      [
+        "e1",
+        [
+          mkNote({ docType: "credit_note", status: "confirmed", docDate: "2026-08-01", lines: fxLine(50) }),
+          mkNote({ docType: "debit_note", status: "confirmed", docDate: "2026-08-02", lines: fxLine(20) }),
+        ],
+      ],
+    ]);
+    expect(netFxAdjustmentByEntry(notesByEntry).get("e1")).toBe(-30);
+  });
+
+  it("draft ไม่ถูกนับเข้าผลรวม", () => {
+    const notesByEntry = new Map<string, CreditDebitNote[]>([
+      ["e1", [mkNote({ docType: "credit_note", status: "draft", lines: fxLine(50) })]],
+    ]);
+    expect(netFxAdjustmentByEntry(notesByEntry).get("e1")).toBe(0);
+  });
+
+  it("★ ไม่ส่ง asOfDate → ไม่กรอง (นับ confirmed ทุกใบไม่ว่า docDate ใด)", () => {
+    const notesByEntry = new Map<string, CreditDebitNote[]>([
+      ["e1", [mkNote({ docType: "debit_note", status: "confirmed", docDate: "2099-01-01", lines: fxLine(10) })]],
+    ]);
+    expect(netFxAdjustmentByEntry(notesByEntry).get("e1")).toBe(10);
+  });
+
+  it("ส่ง asOfDate → กรอง note.docDate > asOfDate ออก (CN/DN วันที่ในอนาคตยังไม่นับ)", () => {
+    const notesByEntry = new Map<string, CreditDebitNote[]>([
+      [
+        "e1",
+        [
+          mkNote({ docType: "debit_note", status: "confirmed", docDate: "2026-08-01", lines: fxLine(10) }),
+          mkNote({ docType: "debit_note", status: "confirmed", docDate: "2026-09-01", lines: fxLine(20) }),
+        ],
+      ],
+    ]);
+    expect(netFxAdjustmentByEntry(notesByEntry, "2026-08-15").get("e1")).toBe(10);
+  });
+
+  it("docDate ตรงกับ asOfDate เป๊ะ → นับรวม (<=, inclusive)", () => {
+    const notesByEntry = new Map<string, CreditDebitNote[]>([
+      ["e1", [mkNote({ docType: "debit_note", status: "confirmed", docDate: "2026-08-15", lines: fxLine(10) })]],
+    ]);
+    expect(netFxAdjustmentByEntry(notesByEntry, "2026-08-15").get("e1")).toBe(10);
   });
 });
 

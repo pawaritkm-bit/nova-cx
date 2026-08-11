@@ -35,6 +35,7 @@ export default function CustomerTabs({
   sbtHref,
   journalBooksHref,
   journalEntryHref,
+  fxRevaluationHref,
   paymentsHref,
   agingHref,
   creditDebitNotesHref,
@@ -72,6 +73,8 @@ export default function CustomerTabs({
   journalBooksHref?: string;
   /** ลงบันทึกบัญชีเอง (Manual Journal Entry: JV/PV/RV — เฟส 1 ส่วน C) */
   journalEntryHref?: string;
+  /** ปรับปรุงอัตราแลกเปลี่ยนปลายงวด (Unrealized FX Revaluation — เฟส 10b) */
+  fxRevaluationHref?: string;
   /** รายการบันทึกซ้ำ (Recurring JE — เฟส 6 ส่วน R) */
   recurringJournalHref?: string;
   /** บันทึกรับ/จ่ายเงินแยกจากบิล (เฟส 2 ส่วน F) */
@@ -195,6 +198,10 @@ export default function CustomerTabs({
             {/* ลงบันทึกบัญชีเอง (JV/PV/RV — เฟส 1 ส่วน C) */}
             {journalEntryHref ? (
               <a href={journalEntryHref} className="btn btn-ghost">ลงบันทึกบัญชีเอง</a>
+            ) : null}
+            {/* ปรับปรุงอัตราแลกเปลี่ยนปลายงวด (เฟส 10b) */}
+            {fxRevaluationHref ? (
+              <a href={fxRevaluationHref} className="btn btn-ghost">ปรับปรุงอัตราแลกเปลี่ยนปลายงวด</a>
             ) : null}
             {/* รายการบันทึกซ้ำ (เฟส 6 ส่วน R) — ตั้ง JV/PV/RV ให้สร้างซ้ำอัตโนมัติทุกเดือน/ไตรมาส/ปี */}
             {recurringJournalHref ? (

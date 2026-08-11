@@ -33,6 +33,7 @@ import { suggestFxGainLossEntryInput } from "@/lib/accounting/fx";
 import { DEFAULT_FX_GAIN_LOSS_ACCOUNT_CODE } from "@/lib/accounting/currency";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
+import { assertReversalConfirmedForPayment } from "@/lib/accounting/fx-revaluation";
 
 const PATH = "/chat-audit/accounting/payments";
 const JOURNAL_PATH = "/chat-audit/accounting/journal-entry";
@@ -166,6 +167,19 @@ export async function suggestFxGainLossNoteAction(
     if (entryScope.fxRate == null) {
       return { ok: false, message: "ไม่พบอัตราแลกเปลี่ยนตอนออกบิลของบิลต้นทาง" };
     }
+
+    // ⚠️ เฟส 10b (0.11) — hard-block guard #2: ห้าม "แนะนำ realized FX" ถ้า reversing ของงวดที่เกี่ยวข้อง
+    //   ยังไม่ confirm (สูตร realized เดิมสมมติว่า AR/AP ถูก reverse กลับไปที่ invoice rate แล้ว — ถ้ายังไม่
+    //   reverse จริง จะเกิด double-count FX gain/loss ที่ตรวจจับยากมากภายหลัง ดูหมวด 5 ของแผนเฟส 10b)
+    const guard2 = await assertReversalConfirmedForPayment(
+      service,
+      ctx.tenantId,
+      scope.customerId,
+      payment.currency,
+      entryScope.entryType,
+      payment.payDate
+    );
+    if (!guard2.ok) return { ok: false, message: guard2.message };
 
     const chart = await listChartOfAccounts(service, ctx.tenantId);
     const chartByCode = buildChartByCode(chart);

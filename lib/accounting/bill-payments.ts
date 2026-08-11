@@ -128,14 +128,20 @@ export function billNetTotal(entry: Pick<PaymentEntryInfo, "lines">): number {
  *   @param netAdjustment ผลรวมสัญญาณของ CN/DN ที่ "confirmed" แล้วของบิลนั้น (credit_note=ลบ, debit_note=บวก)
  *     default 0 = backward-compat ระดับ compile (พฤติกรรมเดิมเป๊ะเมื่อไม่มี CN/DN — credit-debit-notes.ts::
  *     netAdjustmentByEntry คำนวณค่านี้ให้)
+ *   @param asOfDate เฟส 10b (0.5) — YYYY-MM-DD, optional · ไม่ส่ง = ไม่กรอง = พฤติกรรมเดิม 100%
+ *     (backward-compat) · ส่งมา = ตัด payments ที่ payDate > asOfDate ออกก่อนคำนวณ (กัน payment วันที่ในอนาคต/
+ *     รายงานตั้งวันที่ย้อนหลังไปหักยอดที่ยังไม่เกิดขึ้นจริง ณ วันนั้น) — เทียบ string 'YYYY-MM-DD' ด้วย `<=`
+ *     ตรง ๆ ปลอดภัย (ISO lexicographic order, format คงที่เสมอจาก DATE_RE ที่ validate ไว้ทุกจุดที่เขียนลง DB)
  */
 export function billOutstanding(
   entry: Pick<PaymentEntryInfo, "lines">,
-  payments: Pick<BillPayment, "amount">[],
-  netAdjustment = 0
+  payments: Pick<BillPayment, "amount" | "payDate">[],
+  netAdjustment = 0,
+  asOfDate?: string
 ): number {
   const net = billNetTotal(entry);
-  const paid = round2(payments.reduce((s, p) => s + numLocal(p.amount), 0));
+  const eligible = asOfDate ? payments.filter((p) => p.payDate <= asOfDate) : payments;
+  const paid = round2(eligible.reduce((s, p) => s + numLocal(p.amount), 0));
   return round2(net + numLocal(netAdjustment) - paid);
 }
 
@@ -202,7 +208,7 @@ export type PaymentValidationResult =
 export function validatePaymentInput(
   input: BillPaymentInput,
   entry: PaymentEntryInfo,
-  existingPayments: Pick<BillPayment, "amount">[],
+  existingPayments: Pick<BillPayment, "amount" | "payDate">[],
   netAdjustment = 0
 ): PaymentValidationResult {
   if (!isCreditEligibleForPayment(entry)) {
@@ -504,14 +510,25 @@ function mapPayment(r: RawPayment, codeByBankAccount: Map<string, string | null>
 const PAYMENT_COLUMNS =
   "id, tenant_id, entry_id, customer_id, pay_date, amount, method, bank_account_id, notes, created_at, currency, fx_rate, fx_amount, fx_gain_loss_note_id";
 
-/** ประวัติการรับ/จ่ายเงินของบิล 1 ใบ (ไม่รวมรายการที่ยกเลิกแล้ว) เรียงวันที่เก่า→ใหม่ */
-export async function listBillPayments(db: DB, tenantId: string, entryId: string): Promise<BillPayment[]> {
-  const { data } = await db
+/**
+ * ประวัติการรับ/จ่ายเงินของบิล 1 ใบ (ไม่รวมรายการที่ยกเลิกแล้ว) เรียงวันที่เก่า→ใหม่
+ *   @param asOfDate เฟส 10b (0.5) — YYYY-MM-DD, optional · ไม่ส่ง = query เดิมทุกประการ (regression-safe) ·
+ *     ส่งมา = `.lte("pay_date", asOfDate)` กรองที่ query จริง (ลดปริมาณข้อมูลด้วย ไม่ใช่กรองหลัง fetch)
+ */
+export async function listBillPayments(
+  db: DB,
+  tenantId: string,
+  entryId: string,
+  asOfDate?: string
+): Promise<BillPayment[]> {
+  let q = db
     .from("bill_payments")
     .select(PAYMENT_COLUMNS)
     .eq("tenant_id", tenantId)
     .eq("entry_id", entryId)
-    .is("deleted_at", null)
+    .is("deleted_at", null);
+  if (asOfDate) q = q.lte("pay_date", asOfDate);
+  const { data } = await q
     .order("pay_date", { ascending: true })
     .order("created_at", { ascending: true })
     .limit(LIST_LIMIT);
@@ -522,28 +539,31 @@ export async function listBillPayments(db: DB, tenantId: string, entryId: string
   return rows.map((r) => mapPayment(r, codeByBankAccount));
 }
 
-/** ประวัติการรับ/จ่ายเงินของหลายบิลพร้อมกัน (ใช้กับหน้ารายการ/รายงานอายุหนี้) → Map<entryId, BillPayment[]> */
+/**
+ * ประวัติการรับ/จ่ายเงินของหลายบิลพร้อมกัน (ใช้กับหน้ารายการ/รายงานอายุหนี้) → Map<entryId, BillPayment[]>
+ *   @param asOfDate เฟส 10b (0.5) — เหมือน listBillPayments ข้างบน (optional, ไม่ส่ง = พฤติกรรมเดิม 100%)
+ */
 export async function listBillPaymentsForEntries(
   db: DB,
   tenantId: string,
-  entryIds: string[]
+  entryIds: string[],
+  asOfDate?: string
 ): Promise<Map<string, BillPayment[]>> {
   const result = new Map<string, BillPayment[]>();
   if (entryIds.length === 0) return result;
   // ★ ตัดก้อน (chunkIds) กัน .in("entry_id", entryIds) ยาวเกิน limit ของ PostgREST เมื่อ tenant มีบิล
   //   สะสมมาก (พบจริงใน listEntries() — ดู commit 7ab9f91 และ lib/accounting/id-chunk.ts)
   const chunks = await Promise.all(
-    chunkIds(entryIds).map((ids) =>
-      db
+    chunkIds(entryIds).map((ids) => {
+      let q = db
         .from("bill_payments")
         .select(PAYMENT_COLUMNS)
         .eq("tenant_id", tenantId)
         .in("entry_id", ids)
-        .is("deleted_at", null)
-        .order("pay_date", { ascending: true })
-        .order("created_at", { ascending: true })
-        .limit(BULK_LIST_LIMIT)
-    )
+        .is("deleted_at", null);
+      if (asOfDate) q = q.lte("pay_date", asOfDate);
+      return q.order("pay_date", { ascending: true }).order("created_at", { ascending: true }).limit(BULK_LIST_LIMIT);
+    })
   );
   const rows = chunks.flatMap(({ data }) => (data ?? []) as unknown as RawPayment[]);
   if (rows.length === 0) return result;
