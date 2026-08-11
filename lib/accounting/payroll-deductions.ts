@@ -25,7 +25,7 @@ type DB = SupabaseClient;
 const LIST_LIMIT = 5000;
 const NOTE_MAX = 300;
 
-/** ประเภทค่าลดหย่อนที่ระบบรองรับ (closed list — ตรงกับ check constraint ของ migration 0097)
+/** ประเภทค่าลดหย่อนที่ระบบรองรับ (closed list — ตรงกับ check constraint ของ migration 0099)
  *   ★ แก้บั๊ก QC (พบโดย independent code reviewer): เดิมมี `life_insurance` ตัวเดียวเก็บเบี้ยประกันของ
  *   ผู้มีเงินได้เอง+คู่สมรสเป็นก้อนเดียว แล้วเดา cap จากยอดรวม (`min(sum, 100000|110000)`) — ผิดกฎหมายจริง
  *   เมื่อยอดไม่ได้แบ่งสัดส่วนตรงกับที่โค้ดสมมติ (เช่น own=30,000+spouse=100,000 → โค้ดเดิมให้ 110,000 ทั้งที่
@@ -353,7 +353,7 @@ export type SumAndCapDeductionsResult = {
  *         แม้จะกรอกยอดไว้)
  *     ผลรวม = min(self,100000) + min(spouse, hasSpouseNoIncome?10000:0) — cap ของทั้งสองก้อนเป็นอิสระจากกัน
  *     ไม่ผสมยอดข้ามฝั่งก่อน cap เหมือนโค้ดเดิม
- *   - `provident_fund` (ครอบคลุม PVD + RMF + กบข รวมเป็นก้อนเดียวตามที่ระบบออกแบบไว้ ดู T152/migration 0097):
+ *   - `provident_fund` (ครอบคลุม PVD + RMF + กบข รวมเป็นก้อนเดียวตามที่ระบบออกแบบไว้ ดู T152/migration 0099):
  *     รวมทุกแถว แล้ว cap ที่ `min(500,000, 30% ของ annualIncomeEstimate)` — annualIncomeEstimate ≤0/ไม่ใช่
  *     ตัวเลข → ถือเป็น 0 (cap เป็น 0 ทันที ไม่ throw)
  *   - `mortgage_interest`: รวมทุกแถว แล้ว cap ที่ 100,000 บาท

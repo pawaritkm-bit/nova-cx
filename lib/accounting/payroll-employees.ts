@@ -242,7 +242,7 @@ type RawRow = {
   prior_employer_ytd_pit_withheld?: number | string | null;
   prior_employer_ytd_sso_employee?: number | string | null;
   prior_employer_note?: string | null;
-  /** ★ BE — undefined ถ้า migration 0097 ยังไม่ apply บน DB นี้ (defensive, ไม่ควรเกิดในโปรดักชัน) */
+  /** ★ BE — undefined ถ้า migration 0099 ยังไม่ apply บน DB นี้ (defensive, ไม่ควรเกิดในโปรดักชัน) */
   annual_income_estimate_override?: number | string | null;
   created_at: string;
   updated_at: string;
