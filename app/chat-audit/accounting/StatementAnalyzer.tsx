@@ -10,6 +10,7 @@ import {
   type StatementTxn,
   type TxnDirection,
 } from "@/lib/accounting/statement-analyze";
+import { toCsv } from "@/lib/accounting/csv-export";
 
 /** bucket เดียวกับบิล (ต้องตรงกับ STATEMENT actions / route) */
 const BILLS_BUCKET = "bills";
@@ -49,6 +50,17 @@ function monthLabel(m: string): string {
   const mm = /^(\d{4})-(\d{2})$/.exec(m);
   if (!mm) return "ไม่ระบุเดือน";
   return `${TH_MONTHS[Number(mm[2]) - 1] ?? mm[2]} ${Number(mm[1]) + 543}`;
+}
+
+/** สร้างไฟล์ CSV แล้วสั่งเบราว์เซอร์ดาวน์โหลดทันที (client-only — ไม่มี server round trip) */
+function downloadCsv(filename: string, content: string): void {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /** รันงานแบบ concurrency-bounded (worker pool ง่าย ๆ) — คืนผลลัพธ์เรียงตามลำดับ input เดิม */
@@ -196,6 +208,23 @@ export default function StatementAnalyzer({
     if (fileRef.current) fileRef.current.value = "";
   }
 
+  /** ดาวน์โหลดตารางธุรกรรมที่แสดงอยู่ (รวมส่วนที่แก้ไขเองแล้ว) เป็น CSV — Phase 1 ไม่ persist ลง DB
+   *  จึงต้อง export จากสิ่งที่แสดงบนจอตรง ๆ */
+  function exportCsv() {
+    const csv = toCsv(
+      ["วันที่", "รายละเอียด", "คู่ค้า", "เลขบัญชี", "ทิศทาง", "ยอดเงิน"],
+      txns.map((t) => [
+        t.date,
+        t.description,
+        t.counterparty_name,
+        t.counterparty_account_no,
+        t.direction === "in" ? "เข้า" : t.direction === "out" ? "ออก" : "",
+        t.amount,
+      ])
+    );
+    downloadCsv(`statement-${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  }
+
   const successCount = fileResults.filter((r) => r.ok).length;
   const hasAnyIssue = fileResults.some((r) => !r.ok || r.meta?.truncated || (r.meta?.failedChunks ?? 0) > 0);
   // ★ 2026-08-12 (พบจาก independent review) — เตือนถ้าไฟล์ที่เลือกรอบนี้ชื่อซ้ำกับไฟล์ที่อ่านสำเร็จไปแล้วในรอบก่อน
@@ -235,6 +264,11 @@ export default function StatementAnalyzer({
         {fileResults.length > 0 ? (
           <button type="button" className="btn btn-ghost" onClick={clearAll} disabled={pending}>
             ล้างรายการทั้งหมด
+          </button>
+        ) : null}
+        {txns.length > 0 ? (
+          <button type="button" className="btn btn-ghost" onClick={exportCsv}>
+            ดาวน์โหลด CSV
           </button>
         ) : null}
       </div>

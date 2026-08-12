@@ -12,6 +12,7 @@ import {
   type PlatformCategory,
   type PlatformLineDirection,
 } from "@/lib/accounting/platform-report-analyze";
+import { toCsv } from "@/lib/accounting/csv-export";
 
 /** bucket เดียวกับบิล/สเตทเมนต์ (ต้องตรงกับ PLATFORM_REPORT actions / route) */
 const BILLS_BUCKET = "bills";
@@ -60,6 +61,17 @@ function monthLabel(m: string): string {
   const mm = /^(\d{4})-(\d{2})$/.exec(m);
   if (!mm) return "ไม่ระบุเดือน";
   return `${TH_MONTHS[Number(mm[2]) - 1] ?? mm[2]} ${Number(mm[1]) + 543}`;
+}
+
+/** สร้างไฟล์ CSV แล้วสั่งเบราว์เซอร์ดาวน์โหลดทันที (client-only — ไม่มี server round trip) */
+function downloadCsv(filename: string, content: string): void {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /** รันงานแบบ concurrency-bounded (worker pool ง่าย ๆ) — คืนผลลัพธ์เรียงตามลำดับ input เดิม */
@@ -201,6 +213,23 @@ export default function PlatformReportAnalyzer({
     if (fileRef.current) fileRef.current.value = "";
   }
 
+  /** ดาวน์โหลดตารางรายการที่แสดงอยู่ (รวมส่วนที่แก้ไขเองแล้ว) เป็น CSV — ยังไม่ persist ลง DB
+   *  จึงต้อง export จากสิ่งที่แสดงบนจอตรง ๆ */
+  function exportCsv() {
+    const csv = toCsv(
+      ["วันที่", "เลขคำสั่งซื้อ", "รายละเอียด", "ประเภท", "ทิศทาง", "ยอดเงิน"],
+      lines.map((l) => [
+        l.date,
+        l.order_no,
+        l.description,
+        l.category ? PLATFORM_CATEGORY_LABEL[l.category] : "",
+        l.direction === "credit" ? "เครดิต (ได้รับ)" : l.direction === "deduct" ? "หัก (ถูกตัด)" : "",
+        l.amount,
+      ])
+    );
+    downloadCsv(`platform-report-${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  }
+
   const successCount = fileResults.filter((r) => r.ok).length;
   const hasAnyIssue = fileResults.some((r) => !r.ok || r.meta?.truncated || (r.meta?.failedChunks ?? 0) > 0);
   // เตือนถ้าไฟล์ที่เลือกรอบนี้ชื่อซ้ำกับไฟล์ที่อ่านสำเร็จไปแล้วในรอบก่อน (ดูคอมเมนต์เดียวกันใน StatementAnalyzer.tsx)
@@ -238,6 +267,11 @@ export default function PlatformReportAnalyzer({
         {fileResults.length > 0 ? (
           <button type="button" className="btn btn-ghost" onClick={clearAll} disabled={pending}>
             ล้างรายการทั้งหมด
+          </button>
+        ) : null}
+        {lines.length > 0 ? (
+          <button type="button" className="btn btn-ghost" onClick={exportCsv}>
+            ดาวน์โหลด CSV
           </button>
         ) : null}
       </div>
