@@ -20,10 +20,19 @@ const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 /** โมเดลอ่านสเตทเมนต์ (PDF/ตารางยาว) — ใช้ตัวเดียวกับอ่านไฟล์บิลอัปเอง */
 const EXTRACT_MODEL = process.env.OPENAI_EXTRACT_MODEL || "gpt-5-mini";
 
-/** timeout — reasoning model + สเตทเมนต์หลายหน้า/หลายรายการ ช้ากว่าปกติ */
+/** timeout — เรียกครั้งเดียวจบ (PDF/รูป, ไม่ chunk) — reasoning model + เอกสารหลายหน้า ช้ากว่าปกติ */
 const EXTRACT_TIMEOUT_MS = 110_000;
 
-/** cap จำนวนรายการต่อไฟล์ (กัน output ระเบิด/ค่าใช้จ่ายพุ่ง) */
+/**
+ * ★ 2026-08-12 — timeout ต่อ "ชุด" (chunk) เมื่อยิง AI หลายชุดพร้อมกัน — ชุดละ ~700 แถวเล็กกว่าสเตทเมนต์
+ *   เต็มไฟล์มาก ไม่จำเป็นต้องรอนานเท่า EXTRACT_TIMEOUT_MS · ตั้งให้สั้นลงเพื่อคุม wall-clock รวมของไฟล์ใหญ่
+ *   ที่ต้องยิงหลายรอบ (MAX_CHUNKS÷MAX_CONCURRENT_CHUNKS รอบ) ให้อยู่ใน maxDuration ของ route ได้จริง
+ *   (พบจาก independent review — เดิมใช้ EXTRACT_TIMEOUT_MS 110s ต่อรอบ × สูงสุด 6 รอบ เสี่ยงเกิน maxDuration)
+ */
+const CHUNK_EXTRACT_TIMEOUT_MS = 45_000;
+
+/** cap จำนวนรายการต่อการเรียก AI 1 ครั้ง (กัน output ระเบิด/ค่าใช้จ่ายพุ่ง) — ทำงานต่อ "ชุด" ไม่ใช่ต่อไฟล์
+ *   ทั้งไฟล์เมื่อใช้ผ่าน extractStatementFromTextChunks (ชุดละ ~700 แถวไม่มีทางแตะเพดานนี้อยู่แล้ว) */
 const MAX_TXNS = 2000;
 
 /** โมเดลตระกูล reasoning (gpt-5 หรือ o-series) — ใช้ max_completion_tokens + ห้ามส่ง temperature */
@@ -38,7 +47,9 @@ type ChatCompletionResponse = {
 
 const SYSTEM_PROMPT =
   "คุณเป็นผู้ช่วยบัญชีที่อ่าน 'สเตทเมนต์ธนาคาร' (bank statement / รายการเดินบัญชี) แล้วสกัดทุกธุรกรรมออกมาเป็น JSON. " +
-  "ตอบเป็น JSON เท่านั้น รูปแบบ {\"transactions\":[ {date, description, counterparty_name, direction, amount}, ... ]}. " +
+  "ตอบเป็น JSON เท่านั้น รูปแบบ {\"transactions\":[ {date, description, counterparty_name, counterparty_account_no, direction, amount}, ... ]}. " +
+  "counterparty_account_no = เลขบัญชี/เลขที่บัตรของคู่ค้าฝั่งตรงข้าม ถ้าสเตทเมนต์แสดงไว้ (อาจเป็นเลขเต็มหรือเลขที่ปิดบัง " +
+  "บางส่วนเช่น 'x-xxxx-x1234-x') เก็บตามที่เห็นเป๊ะ (รวมเครื่องหมาย x ถ้ามี ไม่ต้องถอดรหัส) อ่านไม่ได้/ไม่มี → null. " +
   "กฎการอ่าน 'ทิศทางเงิน' (direction) สำคัญที่สุด: " +
   "direction='in' = เงินเข้า/ฝาก/รับโอน/เครดิต (อยู่คอลัมน์ 'ฝาก'/'เงินเข้า'/'Deposit'/'Credit' หรือเครื่องหมาย +). " +
   "direction='out' = เงินออก/ถอน/จ่ายโอน/เดบิต (อยู่คอลัมน์ 'ถอน'/'เงินออก'/'Withdrawal'/'Debit' หรือเครื่องหมาย −). " +
@@ -173,22 +184,30 @@ export function normalizeStatementExtraction(raw: Record<string, unknown> | unkn
     const date = fixBuddhistYear(toText(o.date));
     const description = toText(o.description ?? o.memo ?? o.detail);
     const counterparty = toText(o.counterparty_name ?? o.counterparty ?? o.name);
+    const accountNo = toText(
+      o.counterparty_account_no ?? o.account_no ?? o.account_number ?? o.accountNo
+    );
     const amount = toAmount(o.amount);
     const direction = toDirection(o.direction, Number.isFinite(rawAmountNum) ? rawAmountNum : undefined);
 
-    // ข้ามแถวว่างจริง (ไม่มีวันที่ ไม่มียอด ไม่มีชื่อ) — น่าจะเป็นหัว/สรุป
-    if (!date && amount === null && !counterparty) continue;
+    // ข้ามแถวว่างจริง (ไม่มีวันที่ ไม่มียอด ไม่มีชื่อ ไม่มีเลขบัญชี) — น่าจะเป็นหัว/สรุป
+    if (!date && amount === null && !counterparty && !accountNo) continue;
 
-    out.push({ date, description, counterparty_name: counterparty, direction, amount });
+    out.push({ date, description, counterparty_name: counterparty, counterparty_account_no: accountNo, direction, amount });
     if (out.length >= MAX_TXNS) break;
   }
   return out;
 }
 
-/** เรียก OpenAI ด้วย message content ที่ประกอบไว้แล้ว → คืน StatementTxn[] */
-async function callExtract(userContent: unknown): Promise<StatementTxn[]> {
+/** ผลจาก callExtract — แยก "อ่านแล้วไม่มีธุรกรรม" ออกจาก "เรียก AI ไม่สำเร็จ" (แก้บั๊ก D) */
+type ExtractCallResult = { txns: StatementTxn[]; failed: boolean };
+
+/** เรียก OpenAI ด้วย message content ที่ประกอบไว้แล้ว → คืน { txns, failed }
+ *   @param timeoutMs default = EXTRACT_TIMEOUT_MS (เรียกครั้งเดียวจบ) — ทางเรียกแบบ chunk ส่ง
+ *   CHUNK_EXTRACT_TIMEOUT_MS สั้นกว่าเข้ามาแทน (ดูคอมเมนต์เหนือ const ทั้งสองตัว) */
+async function callExtract(userContent: unknown, timeoutMs: number = EXTRACT_TIMEOUT_MS): Promise<ExtractCallResult> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return [];
+  if (!apiKey) return { txns: [], failed: true };
 
   const model = EXTRACT_MODEL;
   const reasoning = isReasoningModel(model);
@@ -207,7 +226,7 @@ async function callExtract(userContent: unknown): Promise<StatementTxn[]> {
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), EXTRACT_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(OPENAI_API_URL, {
       method: "POST",
@@ -217,22 +236,29 @@ async function callExtract(userContent: unknown): Promise<StatementTxn[]> {
     });
     if (!res.ok) {
       console.warn(`[statement-extract] openai http ${res.status}`);
-      return [];
+      return { txns: [], failed: true };
     }
     const body = (await res.json()) as ChatCompletionResponse;
     const content = body.choices?.[0]?.message?.content;
-    if (!content) return [];
-    return normalizeStatementExtraction(extractJson(content));
+    if (!content) return { txns: [], failed: true };
+    const parsed = extractJson(content);
+    // ★ แก้บั๊ก D — parse ไม่ได้ (เช่น output ถูกตัดกลางคันเพราะ token หมด) ต้องถือเป็น "ล้มเหลว" ไม่ใช่
+    //   "อ่านแล้วไม่มีธุรกรรม" (เดิมทั้งสองกรณีคืน [] เหมือนกันหมด แยกไม่ออกจากภายนอกเลย)
+    if (parsed === null) {
+      console.warn("[statement-extract] json parse failed");
+      return { txns: [], failed: true };
+    }
+    return { txns: normalizeStatementExtraction(parsed), failed: false };
   } catch {
     console.warn("[statement-extract] extract error");
-    return [];
+    return { txns: [], failed: true };
   } finally {
     clearTimeout(timer);
   }
 }
 
 /**
- * สกัดธุรกรรมจากไฟล์ PDF/รูป (ส่งตรงเข้า OpenAI file/image input)
+ * สกัดธุรกรรมจากไฟล์ PDF/รูป (ส่งตรงเข้า OpenAI file/image input) — เรียกครั้งเดียวจบ (ไม่ chunk)
  *   @returns StatementTxn[] · [] เมื่อ error/timeout/ไม่มี key
  */
 export async function extractStatementFromFile(fileData: Buffer, mime: string): Promise<StatementTxn[]> {
@@ -241,15 +267,69 @@ export async function extractStatementFromFile(fileData: Buffer, mime: string): 
   const filePart = isPdf
     ? { type: "file", file: { filename: "statement.pdf", file_data: dataUrl } }
     : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };
-  return callExtract([{ type: "text", text: FILE_USER_PROMPT }, filePart]);
+  const { txns } = await callExtract([{ type: "text", text: FILE_USER_PROMPT }, filePart]);
+  return txns;
 }
 
 /**
- * สกัดธุรกรรมจากข้อความ (แปลงมาจาก Excel/CSV แล้ว)
+ * สกัดธุรกรรมจากข้อความก้อนเดียว (แปลงมาจาก Excel/CSV แล้ว) — เรียกครั้งเดียวจบ (ไม่ chunk)
  *   @returns StatementTxn[] · [] เมื่อ error/timeout/ไม่มี key/ข้อความว่าง
  */
 export async function extractStatementFromText(text: string): Promise<StatementTxn[]> {
   const t = (text ?? "").trim();
   if (!t) return [];
-  return callExtract(TEXT_USER_PROMPT + t);
+  const { txns } = await callExtract(TEXT_USER_PROMPT + t);
+  return txns;
+}
+
+/**
+ * จำนวนชุดที่ยิง AI พร้อมกันสูงสุด (กัน rate limit ฝั่ง OpenAI + คุม wall-clock รวมให้อยู่ใน maxDuration)
+ *   ★ 2026-08-12 (พบจาก independent review) — ที่ 4 เดิม + MAX_CHUNKS=24 ต้องรอ 6 รอบ ซึ่งเสี่ยงเกิน
+ *   maxDuration ของ route ถ้าแต่ละรอบใช้เวลานาน ปรับเป็น 8 (24÷8 = 3 รอบ) ร่วมกับลด timeout ต่อชุดลง
+ *   (CHUNK_EXTRACT_TIMEOUT_MS) — worst case = 3 รอบ × 45s = 135s ยังมี headroom เหลือจาก maxDuration
+ */
+const MAX_CONCURRENT_CHUNKS = 8;
+
+/** รันงานแบบ concurrency-bounded (worker pool ง่าย ๆ) — คืนผลลัพธ์เรียงตามลำดับ input เดิม */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+/** ผลรวมจากการสกัดหลายชุด (แก้บั๊ก A — ไฟล์ใหญ่แบ่งเป็นชุดแทนที่จะยิง AI ครั้งเดียวจบ) */
+export type ChunkedExtractionResult = {
+  txns: StatementTxn[];
+  /** จำนวนชุดทั้งหมดที่พยายามอ่าน */
+  chunkCount: number;
+  /** จำนวนชุดที่อ่านไม่สำเร็จ (error/timeout/parse ไม่ได้ — ไม่ใช่ "ชุดนี้ไม่มีธุรกรรมจริง ๆ") */
+  failedChunks: number;
+};
+
+/**
+ * สกัดธุรกรรมจากข้อความที่แบ่งเป็นหลายชุดแล้ว (ดู `statement-parse.ts::excelBufferToRows/csvBufferToRows`)
+ *   — ยิง AI พร้อมกันสูงสุด MAX_CONCURRENT_CHUNKS ชุด (ไม่ทำทีละชุดเรียงลำดับ กันรวมเวลาเกิน maxDuration
+ *   ของ serverless function) แล้วรวมผลลัพธ์ + นับจำนวนชุดที่ล้มเหลวไว้รายงานผู้ใช้ (แก้บั๊ก D)
+ */
+export async function extractStatementFromTextChunks(chunks: string[]): Promise<ChunkedExtractionResult> {
+  if (chunks.length === 0) return { txns: [], chunkCount: 0, failedChunks: 0 };
+  const perChunk = await mapWithConcurrency(chunks, MAX_CONCURRENT_CHUNKS, async (chunkText) => {
+    return callExtract(TEXT_USER_PROMPT + chunkText, CHUNK_EXTRACT_TIMEOUT_MS);
+  });
+  const txns = perChunk.flatMap((r) => r.txns);
+  const failedChunks = perChunk.filter((r) => r.failed).length;
+  return { txns, chunkCount: chunks.length, failedChunks };
 }
