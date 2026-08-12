@@ -1276,6 +1276,12 @@ export default async function AccountingPage({
         recurringJournalHref={
           g.customerId ? `/chat-audit/accounting/recurring-journal?customerId=${g.customerId}` : undefined
         }
+        recurringInvoiceHref={
+          g.customerId ? `/chat-audit/accounting/recurring-invoice?customerId=${g.customerId}` : undefined
+        }
+        pettyCashHref={
+          g.customerId ? `/chat-audit/accounting/petty-cash?customerId=${g.customerId}` : undefined
+        }
         budgetHref={g.customerId ? `/chat-audit/accounting/budget?customerId=${g.customerId}` : undefined}
         bankReconciliationHref={
           g.customerId ? `/chat-audit/accounting/bank-reconciliation?customerId=${g.customerId}` : undefined

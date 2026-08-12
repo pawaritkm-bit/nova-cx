@@ -43,6 +43,8 @@ export default function CustomerTabs({
   statementHref,
   flowaccountMapHref,
   recurringJournalHref,
+  recurringInvoiceHref,
+  pettyCashHref,
   budgetHref,
   bankReconciliationHref,
   fixedAssetsHref,
@@ -77,6 +79,10 @@ export default function CustomerTabs({
   fxRevaluationHref?: string;
   /** รายการบันทึกซ้ำ (Recurring JE — เฟส 6 ส่วน R) */
   recurringJournalHref?: string;
+  /** ใบแจ้งหนี้ลูกค้าแบบวนซ้ำ (wishlist ข้อ 4) — ตั้งเทมเพลตให้สร้างใบแจ้งหนี้ (ดราฟต์) อัตโนมัติทุกรอบ */
+  recurringInvoiceHref?: string;
+  /** เงินสดย่อย (wishlist ข้อ 3) — กองทุน imprest + ใบเบิก + เคลียร์เป็นดราฟต์ JE */
+  pettyCashHref?: string;
   /** บันทึกรับ/จ่ายเงินแยกจากบิล (เฟส 2 ส่วน F) */
   paymentsHref?: string;
   /** รายงานลูกหนี้/เจ้าหนี้ค้างชำระตามอายุหนี้ (เฟส 2 ส่วน G) */
@@ -206,6 +212,14 @@ export default function CustomerTabs({
             {/* รายการบันทึกซ้ำ (เฟส 6 ส่วน R) — ตั้ง JV/PV/RV ให้สร้างซ้ำอัตโนมัติทุกเดือน/ไตรมาส/ปี */}
             {recurringJournalHref ? (
               <a href={recurringJournalHref} className="btn btn-ghost">รายการบันทึกซ้ำ</a>
+            ) : null}
+            {/* ใบแจ้งหนี้ลูกค้าแบบวนซ้ำ (wishlist ข้อ 4) */}
+            {recurringInvoiceHref ? (
+              <a href={recurringInvoiceHref} className="btn btn-ghost">ใบแจ้งหนี้วนซ้ำ</a>
+            ) : null}
+            {/* เงินสดย่อย (wishlist ข้อ 3) */}
+            {pettyCashHref ? (
+              <a href={pettyCashHref} className="btn btn-ghost">เงินสดย่อย</a>
             ) : null}
             {/* บันทึกรับ/จ่ายเงินแยกจากบิล (เฟส 2 ส่วน F) */}
             {paymentsHref ? (
