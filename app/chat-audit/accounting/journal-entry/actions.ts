@@ -32,6 +32,7 @@ import {
   type ManualEntryInput,
 } from "@/lib/accounting/manual-journal";
 import { isRevaluationOrReversingJeId, isFxCycleConfirmedForJe } from "@/lib/accounting/fx-revaluation";
+import { isJeReferencedBySettledVoucher } from "@/lib/accounting/petty-cash";
 
 /** ข้อความปฏิเสธเมื่อ id เป็น revaluation_je_id/reversing_je_id ของ fx_period_revaluations ที่ยังไม่จบ cycle */
 const FX_LOCKED_MESSAGE =
@@ -40,6 +41,10 @@ const FX_LOCKED_MESSAGE =
 /** ข้อความปฏิเสธเมื่อพยายามลบ JE ที่ revaluation JE ของ cycle เดียวกันยัง confirmed อยู่จริง (เฟส 10b QC fix) */
 const FX_LOCKED_DELETE_MESSAGE =
   "รายการนี้ผูกกับ 'ปรับปรุงอัตราแลกเปลี่ยนปลายงวด' ที่ยืนยันแล้ว — ต้องยกเลิกยืนยันที่หน้าปรับปรุงอัตราแลกเปลี่ยนก่อน ไม่สามารถลบ JV นี้ตรงๆได้";
+
+/** ข้อความปฏิเสธเมื่อพยายามลบ JE ที่ใบเบิกเงินสดย่อย settled อ้างอิงอยู่จริง (petty-cash QC fix) */
+const PETTY_CASH_LOCKED_DELETE_MESSAGE =
+  "รายการนี้ผูกกับใบเบิกเงินสดย่อยที่เคลียร์แล้ว — ห้ามลบตรงนี้ ไม่งั้นใบเบิกจะค้างสถานะ 'เคลียร์แล้ว' โดยไม่มี JE หนุนอยู่";
 
 const PATH = "/chat-audit/accounting/journal-entry";
 
@@ -211,6 +216,16 @@ export async function deleteManualEntryAction(id: string, customerId: string): P
     try {
       if (await isFxCycleConfirmedForJe(service, ctx.tenantId, id)) {
         return { ok: false, message: FX_LOCKED_DELETE_MESSAGE };
+      }
+    } catch {
+      // query ล้ม — ปล่อยผ่าน (best-effort)
+    }
+
+    // ⚠️ QC fix เฟส petty-cash — defense-in-depth เดียวกับข้างบน: ปฏิเสธการลบถ้าใบเบิกเงินสดย่อยที่
+    //   'settled' ยัง reference JE นี้อยู่จริง (settled_je_id) กันใบเบิกค้างสถานะ settled โดยไม่มี JE หนุน
+    try {
+      if (await isJeReferencedBySettledVoucher(service, ctx.tenantId, id)) {
+        return { ok: false, message: PETTY_CASH_LOCKED_DELETE_MESSAGE };
       }
     } catch {
       // query ล้ม — ปล่อยผ่าน (best-effort)
