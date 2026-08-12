@@ -614,12 +614,10 @@ describe("recalcRunLines — เฟส 9b กลุ่ม BE (0.2 gate, T154)", 
       // expense=min(350,000,100,000)=100,000 (ชน cap) → allowance=60,000+10,000=70,000
       // taxable=700,000-100,000-70,000=530,000 → tax=7,500+20,000+4,500(500k-530k@15%)=32,000 → pit=32,000/12=2,666.67
       expect(line.pit_withheld).toBe(2666.67);
-      // ★ ต้องต่างจากวิธีเดิม (เอา PVD ทั้งก้อน 30,000 เป็น allowance หลังหักค่าใช้จ่ายอย่างเดียว ไม่แยก exempt):
-      //   allowance เดิม=60,000+30,000=90,000, taxable เดิม=720,000-100,000-90,000=530,000 → บังเอิญเท่ากัน
-      //   ที่ taxable นี้เพราะ 20,000(exempt)+10,000(allowance)=30,000(PVD เดิมทั้งก้อน) พอดี — เคสนี้พิสูจน์ความ
-      //   self-consistent ของสูตรใหม่ แต่ไม่พิสูจน์ว่าต่างจากสูตรเดิม (ดู golden test แยกที่พิสูจน์ความต่างจริง
-      //   ใน payroll-tax.test.ts/payroll-deductions.test.ts ที่ expense เดิมยังไม่ชน cap — ตัวอย่าง 180k/27k)
-      expect(3041.67 - 2666.67).toBe(375);
+      // ★ เคสนี้ taxable บังเอิญเท่ากับวิธีเดิมพอดี (expense ชน cap 100,000 ทั้งสองวิธี ทำให้
+      //   exempt+allowance ใหม่ = allowance เดิมทั้งก้อนเสมอ) — พิสูจน์ความ self-consistent ของสูตรใหม่/
+      //   การ wiring ผ่าน recalcRunLines เท่านั้น ไม่พิสูจน์ว่าต่างจากสูตรเดิม (ดู golden test แยกที่พิสูจน์
+      //   ความต่างจริงใน payroll-tax.test.ts/payroll-deductions.test.ts ที่ expense ยังไม่ชน cap — 180k/27k)
     } finally {
       spy.mockRestore();
     }
