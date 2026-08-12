@@ -143,6 +143,7 @@
 }
 .nova-dash .st-draft { background: var(--amber-bg); color: #b45309; }
 .nova-dash .st-confirmed { background: var(--green-bg); color: #15803d; }
+.nova-dash .st-warn { background: #fee2e2; color: var(--red); }
 
 /* ปุ่มจัดการต่อแถว */
 .nova-dash .acc-rowactions { display: flex; flex-direction: column; gap: 4px; align-items: center; }

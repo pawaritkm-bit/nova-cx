@@ -382,6 +382,15 @@ export default function PayrollRunPanel({
                             ม.118: ควรจ่ายอย่างน้อย {l.statutorySeveranceDaysHelper} วัน
                           </span>
                         ) : null}
+                        {l.severanceAmount > 0 && !l.severanceEligibleForSeparateCalc ? (
+                          <span
+                            className="st-badge st-warn"
+                            style={{ marginLeft: 6 }}
+                            title="สิทธิ์แยกคำนวณภาษีตามมาตรา 48(5) ต้องมีอายุงานตั้งแต่ 5 ปีขึ้นไป (ยืนยันจากคำแนะนำการยื่น ภ.ง.ด.90/91 ของกรมสรรพากร) — พนักงานคนนี้อายุงานไม่ถึง 5 ปี ต้องนำเงินส่วนที่ไม่ได้รับยกเว้นไปรวมคำนวณกับเงินได้อื่นตามวิธีปกติ ไม่ควรใช้ยอด preview นี้"
+                          >
+                            ⚠️ อายุงานไม่ถึง 5 ปี — ห้ามใช้สูตรแยกคำนวณ ม.48(5)
+                          </span>
+                        ) : null}
                       </td>
                       <td className="num">
                         <input

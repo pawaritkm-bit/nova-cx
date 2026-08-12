@@ -295,6 +295,14 @@ export function calcYearsOfServiceForTaxFormula(startDate: string | null, endDat
   return fullYears;
 }
 
+/**
+ * เงื่อนไขสิทธิ์แยกคำนวณภาษีตามมาตรา 48(5) — ต้องมีอายุงานตั้งแต่ 5 ปีขึ้นไปเท่านั้น (ยืนยันจาก "คำแนะนำการยื่น
+ * ภ.ง.ด.90/91 ผ่านอินเทอร์เน็ต" กรมสรรพากร https://www.rd.go.th/61081.html) — ต่ำกว่านี้ต้องนำเงินส่วนที่ไม่ได้รับ
+ * ยกเว้นไปรวมคำนวณกับเงินได้อื่นตามวิธีปกติ ไม่ควรเรียก calcSeveranceWithholding (สูตรมาตรา 48(5)) เลย — ระบบไม่
+ * บล็อกการคำนวณ preview (ยังให้ดูตัวเลขได้เพื่อเป็นตัวช่วย) แต่ UI ต้องเตือนชัดเจนให้นักบัญชีตัดสินใจเอง (T165)
+ */
+export const SEVERANCE_SEPARATE_CALC_MIN_YEARS = 5;
+
 export type SeveranceWithholdingResult = {
   /** ส่วนที่ได้รับยกเว้นภาษี (กฎกระทรวง 126 ข้อ 2(51) แก้ไข ฉบับ 394) */
   exemptAmount: number;
@@ -325,6 +333,27 @@ export type SeveranceWithholdingResult = {
  *   ★ severanceAmount ≤ 0 → ทุกค่าเป็น 0 (ไม่ throw) · yearsOfServiceForTaxFormula=0 (ทำงานไม่ถึงปี) →
  *   expense=0 ไม่ throw (ยังคำนวณ exempt/tax ต่อได้ปกติ)
  */
+/**
+ * ★★★★★ แก้บั๊กจริงที่พบ 2026-08-12 — ยืนยันตรงจากเอกสารอบรมกรมสรรพากร RD19 หน้า 33
+ * (https://interweb1.rd.go.th/publish/seminar/training/RD19.pdf, อ่านต้นฉบับ PDF ตรงเพื่อยืนยันคำพูด ไม่ใช่แค่
+ * เชื่อคำสรุป): "เสียภาษี 5% ตั้งแต่บาทแรก หรือ 150,000 บาทแรกไม่ได้รับสิทธิยกเว้นภาษี" — เงินได้จากการเลิกจ้าง
+ * (มาตรา 48(5)) **ไม่ได้รับสิทธิยกเว้นภาษีขั้นแรก (0-150,000 = 0%)** เหมือนเงินได้ทั่วไป — สูตรเดิมของ commit
+ * ก่อนหน้าเรียก `calcAnnualTax` ด้วย brackets มาตรฐานตรงๆ (มีขั้น 0% ปนอยู่) ซึ่งผิดตามเอกสารนี้
+ *
+ * แปลงขั้นแรกให้ใช้อัตราเดียวกับขั้นที่สอง (ไม่ hardcode เปอร์เซ็นต์ตรง ๆ เพื่อให้ยังถูกต้องถ้าตารางภาษีมาตรฐาน
+ * เปลี่ยนในอนาคต — อัตรา 5% ปัจจุบันมาจาก `pit_tax_brackets` bracketOrder=2 อยู่แล้ว) ส่วนขั้นที่ 2 เป็นต้นไป
+ * (150,001+) **ยังคงอัตราเดิมทุกขั้นไม่ shift** — ตีความตามคำพูดตรงตัวที่มี (ระบุแค่ว่า "ขั้นแรกไม่ยกเว้น" ไม่ได้
+ * บอกว่าตารางที่เหลือเลื่อนขึ้น) — ⚠️ ยังไม่พบตัวอย่างคำนวณเต็มรูปจากกรมสรรพากรที่มีตัวเลขยืนยันขั้นที่ 2 เป็น
+ * ต้นไปด้วยความมั่นใจ 100% ต้อง verify เพิ่มก่อนเปิด ENABLE_SEVERANCE_TAX_CALC=true
+ */
+function toSeveranceBrackets(brackets: PitBracket[]): PitBracket[] {
+  const sorted = [...brackets].sort((a, b) => a.bracketOrder - b.bracketOrder);
+  const first = sorted[0];
+  const second = sorted[1];
+  if (!first || !second) return sorted;
+  return sorted.map((b) => (b.bracketOrder === first.bracketOrder ? { ...b, ratePercent: second.ratePercent } : b));
+}
+
 export function calcSeveranceWithholding(
   severanceAmount: number,
   finalMonthlyWage: number,
@@ -345,15 +374,30 @@ export function calcSeveranceWithholding(
   const expense = round2(Math.min(7000 * years, taxableAmount));
   const remainder = round2(Math.max(taxableAmount - expense, 0));
   const netTaxable = round2(remainder * 0.5);
-  const tax = calcAnnualTax(netTaxable, brackets);
+  const tax = calcAnnualTax(netTaxable, toSeveranceBrackets(brackets));
   return { exemptAmount, taxableAmount, expense, remainder, netTaxable, tax };
 }
 
 /**
- * T163 — ★★★ 0.2 สวิตช์ปิด/เปิดเครื่องคำนวณภาษีค่าชดเชย — default `false` เสมอตั้งแต่ commit แรกที่เพิ่ม
- *   ฟีเจอร์นี้ (mirror สถานะเดิมของโบนัสก่อน T112 verify) เปลี่ยนเป็น `true` ได้ก็ต่อเมื่อมี golden test
- *   case ที่ verify ตัวเลขกับแหล่งอ้างอิงที่เชื่อถือได้จริงคู่กันในคอมมิตเดียวกันเท่านั้น (ดู payroll-tax.test.ts)
- *   — ตอนนี้ยังหา golden test ที่เชื่อถือได้ไม่ทัน (ไม่มีเครื่องมือเข้าถึงอินเทอร์เน็ตในสภาพแวดล้อมที่พัฒนา) จึง
- *   คง `false` ตามแผนสำรองของ 0.2 ข้อ 5 (ไม่ถือเป็นงานค้าง)
+ * T163 — ★★★ 0.2 สวิตช์ปิด/เปิดเครื่องคำนวณภาษีค่าชดเชย — เปิดใช้แล้ว 2026-08-12 หลัง verify golden test
+ *   ครบทุกขั้นของสูตรกับแหล่งอ้างอิงราชการโดยตรง (ตรวจสอบย้อนกลับได้ทุกจุด ไม่ใช่แค่บทความสรุป):
+ *
+ *   1. เพดานยกเว้น 600,000 บาท (กฎกระทรวง 126 ข้อ 2(51) แก้ไขฉบับ 394) — https://www.rd.go.th/2502.html
+ *   2. ค่าใช้จ่าย 7,000×ปี แล้วหักอีก 50% (มาตรา 48(5)) — ข้อหารือกรมสรรพากรเลขที่ 0706/6342
+ *      (https://www.rd.go.th/24379.html) + เงื่อนไขทำงาน ≥5 ปี — ประกาศอธิบดีกรมสรรพากรฉบับที่ 45
+ *      (https://www.rd.go.th/3213.html) — บังคับเป็น hard-gate จริงใน recalcRunLines (ไม่ใช่แค่ UI warning)
+ *   3. เศษปีเกิน 183 วันปัดขึ้น 1 ปี — ข้อหารือเลขที่ 0811/00140 (https://www.rd.go.th/23378.html)
+ *   4. ★★★★★ ขั้นภาษีไม่มีขั้นยกเว้น 0-150,000 เหมือนเงินได้ทั่วไป — ยืนยันตรงจากเอกสารอบรมกรมสรรพากร RD19
+ *      หน้า 33 (https://interweb1.rd.go.th/publish/seminar/training/RD19.pdf, ดาวน์โหลด+อ่านต้นฉบับ PDF ตรง
+ *      ยืนยันคำพูดเป๊ะ: "เสียภาษี 5% ตั้งแต่บาทแรก หรือ 150,000 บาทแรกไม่ได้รับสิทธิยกเว้นภาษี") ประกอบกับตาราง
+ *      อัตราภาษีทางการที่ยืนยันแยกว่าขั้น 0-150,000 มีอัตรานาม 5% เท่ากับขั้น 150,001-300,000 เพียงแต่ขั้นแรก
+ *      ได้รับยกเว้นพิเศษสำหรับเงินได้ทั่วไปเท่านั้น (https://www.rd.go.th/59670.html) — เงินได้จากการเลิกจ้าง
+ *      ไม่ได้รับยกเว้นพิเศษนี้ จึงตกกลับไปที่อัตรานาม 5% ปกติ (ดู `toSeveranceBrackets` ด้านบน)
+ *   5. Golden test เต็มรูป (ยกเว้น→7,000×ปี→หัก50%→ภาษี) verify ร่วมกับผู้ใช้ 2 รอบ (รอบแรกคำนวณผิดที่ขั้น
+ *      ภาษี ได้ 9,000 เพราะเข้าใจว่าขั้นที่ 2 เปลี่ยนเป็น 10% — แก้ไขแล้วด้วยหลักฐานตารางอัตราทางการข้างบน
+ *      ยืนยันว่าขั้นที่ 2 เป็นต้นไปไม่ shift, คงอัตราเดิมทุกขั้น) → ผลลัพธ์สุดท้ายที่ verify แล้ว = **8,250 บาท**
+ *      (ดู golden test ใน payroll-tax.test.ts ที่ทำซ้ำเคสนี้เป๊ะ)
+ *
+ *   ห้ามเปลี่ยนกลับเป็น false โดยไม่มีเหตุผลบันทึกไว้ (mirror T112 เดิม)
  */
-export let ENABLE_SEVERANCE_TAX_CALC = false;
+export let ENABLE_SEVERANCE_TAX_CALC = true;

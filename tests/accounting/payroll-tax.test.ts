@@ -369,14 +369,15 @@ describe("calcSeveranceWithholding (T162, มาตรา 48(5) — ★★★ se
   it("yearsOfServiceForTaxFormula=0 (ทำงานไม่ถึงปี) → expense=0 ไม่ throw ยังคำนวณภาษีต่อได้ปกติ", () => {
     // finalMonthlyWage=30000 → dailyWage=1000 → ×400=400,000 (cap ที่ 400,000 เพราะน้อยกว่า 600,000)
     // severance=450,000 → exempt=min(450000,400000,600000)=400000 → taxable=50000 → expense=min(0,50000)=0
-    // remainder=50000 → netTaxable=25000 → ต่ำกว่าขั้นแรก(150000) → tax=0
+    // remainder=50000 → netTaxable=25000 → มาตรา 48(5) ไม่มีขั้นยกเว้น 0-150,000 (ยืนยัน 2026-08-12, ดูคอมเมนต์
+    // เต็มเหนือ ENABLE_SEVERANCE_TAX_CALC) → ขั้นแรกใช้อัตรา 5% → tax = 25,000×5% = 1,250
     const r = calcSeveranceWithholding(450000, 30000, 0, BRACKETS);
     expect(r.exemptAmount).toBe(400000);
     expect(r.taxableAmount).toBe(50000);
     expect(r.expense).toBe(0);
     expect(r.remainder).toBe(50000);
     expect(r.netTaxable).toBe(25000);
-    expect(r.tax).toBe(0);
+    expect(r.tax).toBe(1250);
   });
 
   it("exemptAmount ชนเพดาน 600,000 (dailyWage×400 สูงกว่า 600,000) → ใช้ 600,000 เป็นตัวคุม", () => {
@@ -387,22 +388,23 @@ describe("calcSeveranceWithholding (T162, มาตรา 48(5) — ★★★ se
     expect(r.expense).toBe(35000); // min(7000*5=35000, 100000)
     expect(r.remainder).toBe(65000);
     expect(r.netTaxable).toBe(32500);
-    expect(r.tax).toBe(0); // ต่ำกว่าขั้นแรก (150,000)
+    expect(r.tax).toBe(1625); // 32,500×5% (มาตรา 48(5) ไม่มีขั้นยกเว้น — ยืนยัน 2026-08-12)
   });
 
   it("severanceAmount สูงเกิน exempt cap มาก → ส่วนเกินเข้าสูตรภาษี 6 ขั้นถูกต้องตามลำดับ (self-consistent เทียบมือ)", () => {
     // finalMonthlyWage=30000 → dailyWage=1000 → ×400=400,000 (cap ที่ 400,000)
     // severance=2,000,000 → exempt=400,000 → taxable=1,600,000
     // years=10 → expense=min(70,000,1,600,000)=70,000 → remainder=1,530,000 → netTaxable=765,000
-    // tax(765,000) = 0(0-150k) + 7,500(150k-300k@5%) + 20,000(300k-500k@10%) + 37,500(500k-750k@15%)
-    //   + 3,000(750k-765k@20%, 15,000*20%) = 68,000
+    // มาตรา 48(5) ไม่มีขั้นยกเว้น 0-150,000 (ยืนยัน 2026-08-12) — ขั้นแรกใช้อัตรา 5% เหมือนขั้นที่สอง:
+    // tax(765,000) = 7,500(0-150k@5%) + 7,500(150k-300k@5%) + 20,000(300k-500k@10%) + 37,500(500k-750k@15%)
+    //   + 3,000(750k-765k@20%, 15,000*20%) = 75,500
     const r = calcSeveranceWithholding(2000000, 30000, 10, BRACKETS);
     expect(r.exemptAmount).toBe(400000);
     expect(r.taxableAmount).toBe(1600000);
     expect(r.expense).toBe(70000);
     expect(r.remainder).toBe(1530000);
     expect(r.netTaxable).toBe(765000);
-    expect(r.tax).toBe(68000);
+    expect(r.tax).toBe(75500);
   });
 
   it("finalMonthlyWage ≤ 0/ผิดปกติ → dailyWage=0 → exemptAmount cap ที่ 0 (ไม่ throw, ยกเว้นได้แค่ 0)", () => {
@@ -412,8 +414,36 @@ describe("calcSeveranceWithholding (T162, มาตรา 48(5) — ★★★ se
   });
 });
 
-describe("ENABLE_SEVERANCE_TAX_CALC (T163, ★★★ 0.2 gate)", () => {
-  it("ต้องเป็น false เสมอ จนกว่าจะมี golden test ที่ verify กับแหล่งอ้างอิงที่เชื่อถือได้จริงคู่กัน (ยังไม่มีในคอมมิตนี้)", () => {
-    expect(ENABLE_SEVERANCE_TAX_CALC).toBe(false);
+describe("ENABLE_SEVERANCE_TAX_CALC (T163, ★★★ 0.2 gate) — เปิดใช้แล้ว 2026-08-12 หลัง verify golden test", () => {
+  it("ต้องเป็น true หลังจาก golden test ครบทุกขั้นของสูตร verify กับแหล่งอ้างอิงราชการโดยตรงแล้ว (ดูคอมเมนต์เต็มใน payroll-tax.ts)", () => {
+    expect(ENABLE_SEVERANCE_TAX_CALC).toBe(true);
+  });
+});
+
+describe("★★★★★ Golden test — เงินได้จากการเลิกจ้าง (มาตรา 48(5)) verify 2026-08-12", () => {
+  it("ยืนยันด้วยกันกับผู้ใช้ 2 รอบ — ค่าชดเชย 1,000,000 บาท ทำงาน 10 ปี เงินเดือนสุดท้าย ≥20,000/เดือน → ภาษี 8,250 บาท เป๊ะ", () => {
+    // อ้างอิง: กฎกระทรวง 126 ข้อ 2(51) แก้ไขฉบับ 394 (เพดานยกเว้น 600,000), ข้อหารือ 0706/6342 (7,000×ปี, หัก50%),
+    // เอกสารอบรม RD19 หน้า 33 (ไม่มีขั้นยกเว้น 0-150,000) + ตารางอัตราภาษี rd.go.th/59670.html (ยืนยันขั้น 2
+    // เป็นต้นไปไม่ shift, คงอัตราเดิม) — ทั้งสองแหล่งยืนยันตรงจาก PDF/เพจจริง ไม่ใช่แค่บทความสรุป
+    const brackets: PitBracket[] = [
+      { bracketOrder: 1, incomeFrom: 0, incomeTo: 150000, ratePercent: 0 },
+      { bracketOrder: 2, incomeFrom: 150001, incomeTo: 300000, ratePercent: 5 },
+      { bracketOrder: 3, incomeFrom: 300001, incomeTo: 500000, ratePercent: 10 },
+      { bracketOrder: 4, incomeFrom: 500001, incomeTo: 750000, ratePercent: 15 },
+      { bracketOrder: 5, incomeFrom: 750001, incomeTo: 1000000, ratePercent: 20 },
+      { bracketOrder: 6, incomeFrom: 1000001, incomeTo: 2000000, ratePercent: 25 },
+      { bracketOrder: 7, incomeFrom: 2000001, incomeTo: 5000000, ratePercent: 30 },
+      { bracketOrder: 8, incomeFrom: 5000001, incomeTo: null, ratePercent: 35 },
+    ];
+    const severanceAmount = 1000000;
+    const finalMonthlyWage = 45000; // dailyWage×400 = 1500×400 = 600,000 ≥ severanceAmount ส่วนเกิน → exempt เต็มเพดาน 600,000
+    const years = 10;
+    const r = calcSeveranceWithholding(severanceAmount, finalMonthlyWage, years, brackets);
+    expect(r.exemptAmount).toBe(600000);
+    expect(r.taxableAmount).toBe(400000);
+    expect(r.expense).toBe(70000); // 7,000×10
+    expect(r.remainder).toBe(330000);
+    expect(r.netTaxable).toBe(165000); // 330,000×50%
+    expect(r.tax).toBe(8250); // 150,000×5% + 15,000×5% = 8,250 (ไม่ใช่ 9,000 ที่คำนวณผิดรอบแรกโดยเข้าใจว่าขั้น 2 เป็น 10%)
   });
 });

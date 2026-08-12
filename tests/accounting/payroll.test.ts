@@ -452,8 +452,8 @@ describe("recalcRunLines (T114) — idempotent", () => {
   });
 
   // ★★★ เฟส 9b กลุ่ม BF (T164, ★★★ 0.2 gate) — ค่าตอบแทนเลิกจ้าง/ชดเชย
-  describe("★★★ BF: severance_amount/severance_pit_withheld (0.2 gate — ENABLE_SEVERANCE_TAX_CALC=false เสมอในคอมมิตนี้)", () => {
-    it("กรอก severance_amount > 0 ขณะ flag=false → severance_pit_withheld ต้องเป็น 0 เสมอ", async () => {
+  describe("★★★ BF: severance_amount/severance_pit_withheld (0.2 gate — ENABLE_SEVERANCE_TAX_CALC=true ตั้งแต่ 2026-08-12, แต่พนักงานกลุ่มนี้ไม่มี start_date → years=0<5 → hard-gated เป็น 0 เสมอไม่ว่า flag จะเป็นอะไร)", () => {
+    it("กรอก severance_amount > 0 แต่พนักงานไม่มี start_date (years=0<5) → severance_pit_withheld ต้องเป็น 0 เสมอ (hard-gate ไม่ใช่แค่ flag)", async () => {
       const { db } = makeInMemoryDb(tables);
       const lineId = tables.payroll_run_lines[0].id as string;
       const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
@@ -505,7 +505,24 @@ describe("recalcRunLines (T114) — idempotent", () => {
       const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
       expect(line.pit_withheld).toBe(baselinePit);
       expect(line.severance_amount).toBe(500000);
-      expect(line.severance_pit_withheld).toBe(0); // flag=false
+      expect(line.severance_pit_withheld).toBe(0); // years=0<5 (ไม่มี start_date) → hard-gated เสมอ ไม่เกี่ยวกับ flag
+    });
+
+    it("★★★★★ 2026-08-12 — flag=true จริง + อายุงาน ≥5 ปี → severance_pit_withheld คำนวณจริงตามสูตร golden test (verify ร่วมกับผู้ใช้)", async () => {
+      const { db } = makeInMemoryDb(tables);
+      const empId = tables.payroll_run_lines[0].payroll_employee_id as string;
+      tables.payroll_employees.find((r) => r.id === empId)!.start_date = "2016-08-10"; // เข้างาน 2016-08-10 → ถึง resign 2026-08-10 = 10 ปีพอดี
+      tables.payroll_employees.find((r) => r.id === empId)!.resign_date = "2026-08-10";
+      const lineId = tables.payroll_run_lines[0].id as string;
+      const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 45000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0, severanceAmount: 1000000 },
+      ]);
+      expect(res.ok).toBe(true);
+      const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+      // ตรงกับ golden test เดียวกันใน payroll-tax.test.ts เป๊ะ: exempt 600,000 → taxable 400,000 → expense 7,000×10=70,000
+      // → remainder 330,000 → netTaxable 165,000 → tax 8,250 (ไม่มีขั้นยกเว้น 0-150,000 สำหรับมาตรา 48(5))
+      expect(line.severance_pit_withheld).toBe(8250);
+      expect(line.severance_amount).toBe(1000000);
     });
   });
 });
@@ -659,6 +676,39 @@ describe("getRunWithLines — เฟส 9b กลุ่ม BE (0.2 gate, T154/T1
     expect(line.extraDeductionsPreviewTotal).toBe(60000);
     expect(line.personalAllowancePreview).toBe(120000);
     expect(line.deductionWarnings.length).toBe(1);
+  });
+});
+
+describe("getRunWithLines — เฟส 9b กลุ่ม BF follow-up (2026-08-12) — severanceEligibleForSeparateCalc", () => {
+  let tables: Tables;
+  let runId: string;
+  let empId: string;
+  let lineId: string;
+
+  beforeEach(async () => {
+    tables = baseTables();
+    const { db } = makeInMemoryDb(tables);
+    seedEmployees(tables, 1);
+    const res = await createDraftRun(db, TENANT, CUSTOMER_A, { payPeriodYear: 2569, payPeriodMonth: 8, payDate: "2026-08-10" });
+    runId = (res as { id: string }).id;
+    lineId = tables.payroll_run_lines[0].id as string;
+    empId = tables.payroll_run_lines[0].payroll_employee_id as string;
+  });
+
+  it("★★★ ยืนยันแล้ว (rd.go.th/61081.html) — อายุงาน <5 ปี → severanceEligibleForSeparateCalc=false ไม่ว่ามี severance_amount หรือไม่", async () => {
+    tables.payroll_employees.find((r) => r.id === empId)!.start_date = "2023-01-01"; // เข้างาน 2023 → ถึง pay_date 2026-08-10 = 3 ปีเศษ (<5 ปี)
+    const { db } = makeInMemoryDb(tables);
+    const detail = await getRunWithLines(db, TENANT, CUSTOMER_A, runId);
+    const line = detail!.lines.find((l) => l.id === lineId)!;
+    expect(line.severanceEligibleForSeparateCalc).toBe(false);
+  });
+
+  it("★★★ อายุงาน ≥5 ปีพอดี → severanceEligibleForSeparateCalc=true", async () => {
+    tables.payroll_employees.find((r) => r.id === empId)!.start_date = "2021-08-10"; // เข้างาน 2021-08-10 → ถึง pay_date 2026-08-10 = 5 ปีพอดี
+    const { db } = makeInMemoryDb(tables);
+    const detail = await getRunWithLines(db, TENANT, CUSTOMER_A, runId);
+    const line = detail!.lines.find((l) => l.id === lineId)!;
+    expect(line.severanceEligibleForSeparateCalc).toBe(true);
   });
 });
 

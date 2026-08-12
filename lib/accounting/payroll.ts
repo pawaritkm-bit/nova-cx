@@ -55,6 +55,7 @@ import {
   calcYearsOfServiceForTaxFormula,
   calcSeveranceWithholding,
   ENABLE_SEVERANCE_TAX_CALC,
+  SEVERANCE_SEPARATE_CALC_MIN_YEARS,
 } from "@/lib/accounting/payroll-tax";
 import { calcProratedGrossSalary } from "@/lib/accounting/payroll-prorate";
 import { listEmployees } from "@/lib/accounting/payroll-employees";
@@ -170,6 +171,10 @@ export type PayrollRunLine = {
    *   ตอนแสดงผลเสมอ (ไม่ว่า flag เปิด/ปิด) เพื่อให้นักบัญชีเห็นประโยชน์ของสูตรที่เขียนเสร็จแล้ว — ★ ไม่ใช่ยอดที่
    *   หักจริง (ดู severancePitWithheld ที่บันทึกจริงข้างบน) — UI ต้องระบุชัดว่าเป็น preview เท่านั้นตอน flag=false */
   severancePitWithheldPreview: number;
+  /** ★★★ ยืนยันแล้ว 2026-08-12 ("คำแนะนำการยื่น ภ.ง.ด.90/91 ผ่านอินเทอร์เน็ต" rd.go.th/61081.html) — สิทธิ์แยก
+   *   คำนวณภาษีตามมาตรา 48(5) ต้องมีอายุงาน ≥5 ปี (SEVERANCE_SEPARATE_CALC_MIN_YEARS) ต่ำกว่านี้ต้องรวมกับ
+   *   เงินได้อื่นตามวิธีปกติ — ไม่ block การคำนวณ preview แต่ UI ต้องเตือนชัดเจนถ้า false และมี severance_amount>0 */
+  severanceEligibleForSeparateCalc: boolean;
 };
 
 /** ผลลัพธ์ที่ server action ใช้แสดง toast/inline */
@@ -594,7 +599,8 @@ type LineAmountFields =
   | "personalAllowancePreview"
   | "deductionWarnings"
   | "statutorySeveranceDaysHelper"
-  | "severancePitWithheldPreview";
+  | "severancePitWithheldPreview"
+  | "severanceEligibleForSeparateCalc";
 
 function mapLineAmounts(r: RawLineRow): Omit<PayrollRunLine, LineAmountFields> {
   return {
@@ -689,6 +695,10 @@ export async function getRunWithLines(
       const severancePitWithheldPreview = brackets
         ? calcSeveranceWithholding(amounts.severanceAmount, amounts.grossSalary, yearsForTaxFormula, brackets).tax
         : 0;
+      // ★★★ กติกาใหม่ที่ยืนยันแล้ว (2026-08-12, "คำแนะนำการยื่น ภ.ง.ด.90/91 ผ่านอินเทอร์เน็ต" rd.go.th/61081.html)
+      //   — สิทธิ์แยกคำนวณภาษีตามมาตรา 48(5) ต้องมีอายุงาน ≥5 ปี ต่ำกว่านี้ต้องรวมกับเงินได้อื่นตามวิธีปกติ
+      //   ไม่ควรใช้สูตรนี้เลย — ไม่ block การคำนวณ preview (ยังให้ดูตัวเลขได้) แค่เตือนที่ UI (T165 follow-up)
+      const severanceEligibleForSeparateCalc = yearsForTaxFormula >= SEVERANCE_SEPARATE_CALC_MIN_YEARS;
       return {
         ...amounts,
         employeeFullName: emp?.fullName ?? "(ไม่พบพนักงาน)",
@@ -701,6 +711,7 @@ export async function getRunWithLines(
         deductionWarnings: capped.warnings,
         statutorySeveranceDaysHelper,
         severancePitWithheldPreview,
+        severanceEligibleForSeparateCalc,
       };
     })
     .sort((a, b) => a.employeeFullName.localeCompare(b.employeeFullName, "th"));
@@ -916,13 +927,18 @@ export async function recalcRunLines(
     //   ENABLE_SEVERANCE_TAX_CALC=false ไม่ว่า severanceAmount จะกรอกมากเท่าไหร่ก็ตาม (นักบัญชีกรอกภาษีเอง
     //   ผ่าน other_deductions เดิมได้ถ้าต้องการ จนกว่าจะ verify สูตร) — คำนวณ years เฉพาะตอน flag=true เท่านั้น
     //   (กัน side-effect จากการเรียก calcYearsOfServiceForTaxFormula/calcSeveranceWithholding เมื่อไม่จำเป็น)
+    // ★★★★★ 2026-08-12 — เพิ่ม hard-gate อายุงาน ≥5 ปี (SEVERANCE_SEPARATE_CALC_MIN_YEARS) ก่อนใช้สูตรมาตรา
+    //   48(5) จริง (ยืนยันจาก "คำแนะนำการยื่น ภ.ง.ด.90/91 ผ่านอินเทอร์เน็ต" + ประกาศอธิบดีฉบับที่45) — ต่ำกว่า
+    //   5 ปี **ต้อง**คงเป็น 0 เหมือน flag=false เสมอ (ไม่ใช่แค่เตือนที่ UI เพราะตอนนี้ flag=true จริงแล้ว
+    //   ปล่อยให้คำนวณผิดจะกระทบยอดหักจริงของพนักงานส่วนใหญ่ที่อายุงานไม่ถึง 5 ปี) — นักบัญชีกรอกภาษีเอง
+    //   ผ่าน other_deductions ถ้าต้องการสำหรับกรณีนี้ เหมือน flag=false เดิม
     let severancePitWithheld = 0;
     if (ENABLE_SEVERANCE_TAX_CALC && amounts.severanceAmount > 0) {
       const yearsForTaxFormula = calcYearsOfServiceForTaxFormula(
         startDateByEmp.get(raw.payroll_employee_id) ?? null,
         resignDateByEmp.get(raw.payroll_employee_id) ?? run.payDate
       );
-      severancePitWithheld = calcSeveranceWithholding(
+      severancePitWithheld = yearsForTaxFormula < SEVERANCE_SEPARATE_CALC_MIN_YEARS ? 0 : calcSeveranceWithholding(
         amounts.severanceAmount,
         amounts.grossSalary,
         yearsForTaxFormula,
