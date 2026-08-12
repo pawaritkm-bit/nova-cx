@@ -560,7 +560,7 @@ describe("recalcRunLines — เฟส 9b กลุ่ม BE (0.2 gate, T154)", 
     });
   }
 
-  it("★★★ flag=false (ค่า default ปิด) → pit_withheld เท่ากับก่อนเฟสนี้เป๊ะแม้มีข้อมูล deductions อยู่ในตาราง (regression-safe 100%)", async () => {
+  it("★★★ flag=false (บังคับปิดผ่าน spy — ค่า default จริงเปิดแล้วตั้งแต่ 2026-08-12) → pit_withheld เท่ากับก่อนเฟสนี้เป๊ะแม้มีข้อมูล deductions อยู่ในตาราง (regression-safe 100%)", async () => {
     const spy = vi.spyOn(payrollTax, "ENABLE_EXTRA_DEDUCTIONS_IN_PIT", "get").mockReturnValue(false);
     try {
       // gross=60,000 (เหมือนเทสต์โบนัสด้านบน) → pit ไม่มี deductions = 3,041.67 ตามสูตรเดิม
@@ -578,7 +578,7 @@ describe("recalcRunLines — เฟส 9b กลุ่ม BE (0.2 gate, T154)", 
     }
   });
 
-  it("★★★ flag=true (จำลองในเทสต์เท่านั้น) → pit_withheld ลดลงตามค่าลดหย่อนที่เพิ่มถูกต้องตามสูตร T152", async () => {
+  it("★★★ flag=true (ค่า default จริงตั้งแต่ 2026-08-12) → pit_withheld ลดลงตามค่าลดหย่อนที่เพิ่มถูกต้องตามสูตร T152", async () => {
     const spy = vi.spyOn(payrollTax, "ENABLE_EXTRA_DEDUCTIONS_IN_PIT", "get").mockReturnValue(true);
     try {
       const { db } = makeInMemoryDb(tables);
@@ -633,6 +633,38 @@ describe("recalcRunLines — เฟส 9b กลุ่ม BE (0.2 gate, T154)", 
       expect(res.ok).toBe(true);
       const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
       expect(line.pit_withheld).toBe(3041.67);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  /**
+   * ★★★★★ 2026-08-12 combined golden test (ก่อนเปิด ENABLE_EXTRA_DEDUCTIONS_IN_PIT เป็น default จริง) — ทุก
+   * ประเภทค่าลดหย่อนพร้อมกันของพนักงานคนเดียว end-to-end ผ่าน recalcRunLines จริง (ไม่ใช่แค่ทดสอบ
+   * sumAndCapDeductions โดดๆ) — ยอดแต่ละประเภทตรงกับ combined golden test คู่กันใน
+   * payroll-deductions.test.ts (totalOtherAllowance=370,000, pvdExemptPortion=17,000):
+   *   annual=720,000, exemptIncome=17,000 → incomeAfterExemption=703,000
+   *   expense=min(351,500,100,000)=100,000 (ชน cap) → allowance=60,000(standard)+370,000=430,000
+   *   taxable=703,000-100,000-430,000=173,000 → tax=(173,000-150,000)×5%=1,150 → pit=1,150/12=95.83
+   */
+  it("★★★★★ combined golden test — 6 ประเภทค่าลดหย่อนพร้อมกัน end-to-end ผ่าน recalcRunLines จริง", async () => {
+    const spy = vi.spyOn(payrollTax, "ENABLE_EXTRA_DEDUCTIONS_IN_PIT", "get").mockReturnValue(true);
+    try {
+      const { db } = makeInMemoryDb(tables);
+      seedDeduction(2569, "spouse_no_income", 60000);
+      seedDeduction(2569, "child", 30000);
+      seedDeduction(2569, "child", 60000);
+      seedDeduction(2569, "life_insurance_self", 100000);
+      seedDeduction(2569, "life_insurance_spouse", 10000);
+      seedDeduction(2569, "provident_fund", 27000);
+      seedDeduction(2569, "mortgage_interest", 100000);
+      const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 60000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0 },
+      ]);
+      expect(res.ok).toBe(true);
+      const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+      expect(line.pit_withheld).toBe(95.83);
+      expect(3041.67 - 95.83).toBeGreaterThan(0); // ลดลงจริงเทียบกับไม่มีค่าลดหย่อนเลย (sanity)
     } finally {
       spy.mockRestore();
     }
