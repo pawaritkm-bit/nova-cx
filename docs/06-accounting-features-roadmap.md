@@ -4916,6 +4916,10 @@ notify pgrst, 'reload schema';
 
 # เฟส 9b — แผนละเอียด: Backlog เพิ่มเติมระบบเงินเดือน
 
+> ✅ **สถานะ (2026-08-12): implement + QC + merge + db push ครบทั้ง 7 กลุ่ม (BA/BB/BC/BD/BE/BF/BG) แล้ว**
+> — deploy ขึ้น production แล้วผ่าน PR #12-#14, #15, #16 (migrations 0091-0101)
+> — `ENABLE_EXTRA_DEDUCTIONS_IN_PIT` (BE) และ `ENABLE_SEVERANCE_TAX_CALC` (BF) ยังคง `false` ตามเงื่อนไข gate 0.2 — engine ครบสมบูรณ์ พร้อมเปิดใช้ทันทีที่มี golden test จากแหล่งกรมสรรพากรที่ verify ครบ (รอข้อมูลอยู่ ไม่ใช่งานค้าง)
+
 สโคป (คำตอบผู้ใช้ล็อกแล้ว — เชื่อถือได้ ไม่วิเคราะห์ซ้ำ): ทำ backlog 9b ทั้ง **7 ข้อเต็มรูป** ที่บันทึกไว้ท้าย
 เฟส 9 เดิม (docs/06-accounting-features-roadmap.md, หมวด `## 6) Backlog 9b`) **รวมข้อ 1 (ค่าลดหย่อนภาษีอื่น)
 และข้อ 6 (ค่าชดเชยเลิกจ้าง) แบบเต็มรูป** แม้ความเสี่ยงกฎหมายสูงสุดของทั้งระบบ — และข้อ 3 (รอบจ่ายไม่รายเดือน)
@@ -5483,6 +5487,10 @@ create unique index if not exists uq_payroll_filing_reminders_dedup
 | **จำนวน call site ที่ต้องเพิ่มลิงก์/ปุ่ม (page.tsx/CustomerTabs.tsx) เสี่ยง gap แบบที่เจอซ้ำทุกเฟส** | grep ยืนยันครบก่อนปิดงาน (T175) เหมือนที่ทุกเฟสก่อนหน้าทำสำเร็จมาแล้ว |
 
 # เฟส 10b — แผนละเอียด: Unrealized FX Revaluation ปลายงวด
+
+> ✅ **สถานะ (2026-08-12): implement + QC + merge + db push เสร็จสมบูรณ์แล้ว**
+> — deploy ขึ้น production แล้วผ่าน PR #17 (migration 0102_fx_period_revaluations.sql)
+> — hard-block guard 2 จุด + live-status derivation ผ่านการตรวจสอบอิสระหลายรอบ, พิสูจน์ตัวอย่างตัวเลข 3 งวดจาก TAS 21 ย่อหน้า 29 ตรงเป๊ะ
 
 > ไฟล์นี้เป็นส่วนต่อขยายแยกจาก `docs/06-accounting-features-roadmap.md` (ไฟล์หลักใหญ่เกินกว่าจะแก้ทับได้
 > ปลอดภัย) — อ่านคู่กับหมวด **เฟส 10 (0.1-0.18 + หมวด 1-6)** ในไฟล์หลักเสมอ โดยเฉพาะ **0.9 ของเฟส 10a
