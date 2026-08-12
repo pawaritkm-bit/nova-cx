@@ -14,8 +14,9 @@ import {
 /** bucket เดียวกับบิล (ต้องตรงกับ STATEMENT actions / route) */
 const BILLS_BUCKET = "bills";
 
-/** ★ 2026-08-12 — จำนวนไฟล์สูงสุดต่อครั้ง (กันยิง AI พร้อมกันมากเกินจนค่าใช้จ่าย/เวลาควบคุมไม่ได้) */
-const MAX_FILES = 10;
+/** ★ 2026-08-12 — จำนวนไฟล์สูงสุดต่อ "รอบอัปโหลด" (กันยิง AI พร้อมกันมากเกินจนค่าใช้จ่าย/เวลาควบคุมไม่ได้)
+ *  อัปได้หลายรอบต่อกัน — ผลลัพธ์แต่ละรอบจะถูกรวมเข้ากับรอบก่อนหน้า (ดู submit()) */
+const MAX_FILES = 20;
 /** จำนวนไฟล์ที่ประมวลผลพร้อมกันสูงสุด (แต่ละไฟล์ก็ยิง AI หลายชุดพร้อมกันอยู่แล้วฝั่ง server —
  *  คุมจำนวนไฟล์ที่ทำพร้อมกันด้วยเพื่อไม่ให้ยอดรวม concurrent request ไป OpenAI พุ่งเกินควร) */
 const FILE_CONCURRENCY = 3;
@@ -160,7 +161,7 @@ export default function StatementAnalyzer({
       return;
     }
     if (files.length > MAX_FILES) {
-      setErr(`อัปโหลดได้ไม่เกิน ${MAX_FILES} ไฟล์ต่อครั้ง (เลือกไว้ ${files.length} ไฟล์)`);
+      setErr(`อัปโหลดได้ไม่เกิน ${MAX_FILES} ไฟล์ต่อรอบ (เลือกไว้ ${files.length} ไฟล์) — แบ่งอัปหลายรอบได้ ระบบจะรวมผลให้`);
       return;
     }
     for (const f of files) {
@@ -171,21 +172,36 @@ export default function StatementAnalyzer({
       }
     }
     setErr(null);
-    setDone(false);
-    setFileResults([]);
 
     startTransition(async () => {
       setPhase("reading");
       const results = await mapWithConcurrency(files, FILE_CONCURRENCY, (f) => processOneFile(f));
-      setFileResults(results);
-      setTxns(results.filter((r) => r.ok).flatMap((r) => r.transactions));
+      // ★ 2026-08-12 — รวมผลรอบนี้เข้ากับรอบก่อนหน้า (ไม่ทับ) เพื่อรองรับอัปโหลดหลายรอบต่อกัน
+      //   (เช่นมี 30+ ไฟล์ อัปทีละ 20 ได้ 2 รอบ — ผลรวมจะครบทุกไฟล์)
+      setFileResults((prev) => [...prev, ...results]);
+      setTxns((prev) => [...prev, ...results.filter((r) => r.ok).flatMap((r) => r.transactions)]);
+      setSelectedNames([]);
+      if (fileRef.current) fileRef.current.value = "";
       setDone(true);
       setPhase("");
     });
   }
 
+  function clearAll() {
+    setFileResults([]);
+    setTxns([]);
+    setSelectedNames([]);
+    setDone(false);
+    setErr(null);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
   const successCount = fileResults.filter((r) => r.ok).length;
   const hasAnyIssue = fileResults.some((r) => !r.ok || r.meta?.truncated || (r.meta?.failedChunks ?? 0) > 0);
+  // ★ 2026-08-12 (พบจาก independent review) — เตือนถ้าไฟล์ที่เลือกรอบนี้ชื่อซ้ำกับไฟล์ที่อ่านสำเร็จไปแล้วในรอบก่อน
+  //   (อัปหลายรอบแล้วรวมผลกัน — เลือกไฟล์เดิมซ้ำโดยไม่ตั้งใจจะทำให้ธุรกรรมถูกนับซ้ำสองรอบแบบไม่มีสัญญาณเตือน)
+  //   ไม่ block — แค่เตือนให้ตรวจก่อนกด "อัปสเตทเมนต์"
+  const duplicateNames = selectedNames.filter((n) => fileResults.some((r) => r.ok && r.fileName === n));
 
   return (
     <div className="stmt-panel">
@@ -208,7 +224,7 @@ export default function StatementAnalyzer({
               return;
             }
             if (files.length > MAX_FILES) {
-              setErr(`อัปโหลดได้ไม่เกิน ${MAX_FILES} ไฟล์ต่อครั้ง (เลือกไว้ ${files.length} ไฟล์)`);
+              setErr(`อัปโหลดได้ไม่เกิน ${MAX_FILES} ไฟล์ต่อรอบ (เลือกไว้ ${files.length} ไฟล์) — แบ่งอัปหลายรอบได้ ระบบจะรวมผลให้`);
             }
             setSelectedNames(files.map((f) => f.name));
           }}
@@ -216,10 +232,20 @@ export default function StatementAnalyzer({
         <button type="button" className="btn" onClick={submit} disabled={pending}>
           {phase === "reading" ? "กำลังอัปโหลด + AI กำลังอ่าน…" : "อัปสเตทเมนต์ + แยกรายการ"}
         </button>
+        {fileResults.length > 0 ? (
+          <button type="button" className="btn btn-ghost" onClick={clearAll} disabled={pending}>
+            ล้างรายการทั้งหมด
+          </button>
+        ) : null}
       </div>
       {selectedNames.length > 0 ? (
         <div className="stmt-fname">
           เลือกไว้ {selectedNames.length} ไฟล์: {selectedNames.join(", ")}
+        </div>
+      ) : null}
+      {duplicateNames.length > 0 ? (
+        <div className="action-msg warn">
+          ⚠ ชื่อไฟล์นี้เคยอ่านสำเร็จไปแล้ว: {duplicateNames.join(", ")} — ถ้าอัปซ้ำ ธุรกรรมจะถูกนับซ้ำสองรอบ
         </div>
       ) : null}
       {err ? <div className="action-msg err">{err}</div> : null}
