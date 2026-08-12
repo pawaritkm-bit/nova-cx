@@ -237,7 +237,7 @@ export default function CustomerTabs({
               <a href={financialStatementsHref} className="btn btn-ghost">งบการเงินฉบับทางการ</a>
             ) : null}
             {statementHref ? (
-              <a href={statementHref} className="btn btn-ghost">แยกสเตทเมนต์</a>
+              <a href={statementHref} className="btn btn-ghost">แยกสเตทเมนต์/รายงานแพลตฟอร์ม</a>
             ) : null}
             {/* mapping ผังบัญชี/สินค้า nova-cx ↔ FlowAccount ต่อลูกค้า (เฟส 5 ส่วน Q) */}
             {flowaccountMapHref ? (

@@ -10,12 +10,14 @@ import {
   type StatementTxn,
   type TxnDirection,
 } from "@/lib/accounting/statement-analyze";
+import { toCsv } from "@/lib/accounting/csv-export";
 
 /** bucket เดียวกับบิล (ต้องตรงกับ STATEMENT actions / route) */
 const BILLS_BUCKET = "bills";
 
-/** ★ 2026-08-12 — จำนวนไฟล์สูงสุดต่อครั้ง (กันยิง AI พร้อมกันมากเกินจนค่าใช้จ่าย/เวลาควบคุมไม่ได้) */
-const MAX_FILES = 10;
+/** ★ 2026-08-12 — จำนวนไฟล์สูงสุดต่อ "รอบอัปโหลด" (กันยิง AI พร้อมกันมากเกินจนค่าใช้จ่าย/เวลาควบคุมไม่ได้)
+ *  อัปได้หลายรอบต่อกัน — ผลลัพธ์แต่ละรอบจะถูกรวมเข้ากับรอบก่อนหน้า (ดู submit()) */
+const MAX_FILES = 20;
 /** จำนวนไฟล์ที่ประมวลผลพร้อมกันสูงสุด (แต่ละไฟล์ก็ยิง AI หลายชุดพร้อมกันอยู่แล้วฝั่ง server —
  *  คุมจำนวนไฟล์ที่ทำพร้อมกันด้วยเพื่อไม่ให้ยอดรวม concurrent request ไป OpenAI พุ่งเกินควร) */
 const FILE_CONCURRENCY = 3;
@@ -48,6 +50,17 @@ function monthLabel(m: string): string {
   const mm = /^(\d{4})-(\d{2})$/.exec(m);
   if (!mm) return "ไม่ระบุเดือน";
   return `${TH_MONTHS[Number(mm[2]) - 1] ?? mm[2]} ${Number(mm[1]) + 543}`;
+}
+
+/** สร้างไฟล์ CSV แล้วสั่งเบราว์เซอร์ดาวน์โหลดทันที (client-only — ไม่มี server round trip) */
+function downloadCsv(filename: string, content: string): void {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /** รันงานแบบ concurrency-bounded (worker pool ง่าย ๆ) — คืนผลลัพธ์เรียงตามลำดับ input เดิม */
@@ -160,7 +173,7 @@ export default function StatementAnalyzer({
       return;
     }
     if (files.length > MAX_FILES) {
-      setErr(`อัปโหลดได้ไม่เกิน ${MAX_FILES} ไฟล์ต่อครั้ง (เลือกไว้ ${files.length} ไฟล์)`);
+      setErr(`อัปโหลดได้ไม่เกิน ${MAX_FILES} ไฟล์ต่อรอบ (เลือกไว้ ${files.length} ไฟล์) — แบ่งอัปหลายรอบได้ ระบบจะรวมผลให้`);
       return;
     }
     for (const f of files) {
@@ -171,21 +184,53 @@ export default function StatementAnalyzer({
       }
     }
     setErr(null);
-    setDone(false);
-    setFileResults([]);
 
     startTransition(async () => {
       setPhase("reading");
       const results = await mapWithConcurrency(files, FILE_CONCURRENCY, (f) => processOneFile(f));
-      setFileResults(results);
-      setTxns(results.filter((r) => r.ok).flatMap((r) => r.transactions));
+      // ★ 2026-08-12 — รวมผลรอบนี้เข้ากับรอบก่อนหน้า (ไม่ทับ) เพื่อรองรับอัปโหลดหลายรอบต่อกัน
+      //   (เช่นมี 30+ ไฟล์ อัปทีละ 20 ได้ 2 รอบ — ผลรวมจะครบทุกไฟล์)
+      setFileResults((prev) => [...prev, ...results]);
+      setTxns((prev) => [...prev, ...results.filter((r) => r.ok).flatMap((r) => r.transactions)]);
+      setSelectedNames([]);
+      if (fileRef.current) fileRef.current.value = "";
       setDone(true);
       setPhase("");
     });
   }
 
+  function clearAll() {
+    setFileResults([]);
+    setTxns([]);
+    setSelectedNames([]);
+    setDone(false);
+    setErr(null);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  /** ดาวน์โหลดตารางธุรกรรมที่แสดงอยู่ (รวมส่วนที่แก้ไขเองแล้ว) เป็น CSV — Phase 1 ไม่ persist ลง DB
+   *  จึงต้อง export จากสิ่งที่แสดงบนจอตรง ๆ */
+  function exportCsv() {
+    const csv = toCsv(
+      ["วันที่", "รายละเอียด", "คู่ค้า", "เลขบัญชี", "ทิศทาง", "ยอดเงิน"],
+      txns.map((t) => [
+        t.date,
+        t.description,
+        t.counterparty_name,
+        t.counterparty_account_no,
+        t.direction === "in" ? "เข้า" : t.direction === "out" ? "ออก" : "",
+        t.amount,
+      ])
+    );
+    downloadCsv(`statement-${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  }
+
   const successCount = fileResults.filter((r) => r.ok).length;
   const hasAnyIssue = fileResults.some((r) => !r.ok || r.meta?.truncated || (r.meta?.failedChunks ?? 0) > 0);
+  // ★ 2026-08-12 (พบจาก independent review) — เตือนถ้าไฟล์ที่เลือกรอบนี้ชื่อซ้ำกับไฟล์ที่อ่านสำเร็จไปแล้วในรอบก่อน
+  //   (อัปหลายรอบแล้วรวมผลกัน — เลือกไฟล์เดิมซ้ำโดยไม่ตั้งใจจะทำให้ธุรกรรมถูกนับซ้ำสองรอบแบบไม่มีสัญญาณเตือน)
+  //   ไม่ block — แค่เตือนให้ตรวจก่อนกด "อัปสเตทเมนต์"
+  const duplicateNames = selectedNames.filter((n) => fileResults.some((r) => r.ok && r.fileName === n));
 
   return (
     <div className="stmt-panel">
@@ -208,7 +253,7 @@ export default function StatementAnalyzer({
               return;
             }
             if (files.length > MAX_FILES) {
-              setErr(`อัปโหลดได้ไม่เกิน ${MAX_FILES} ไฟล์ต่อครั้ง (เลือกไว้ ${files.length} ไฟล์)`);
+              setErr(`อัปโหลดได้ไม่เกิน ${MAX_FILES} ไฟล์ต่อรอบ (เลือกไว้ ${files.length} ไฟล์) — แบ่งอัปหลายรอบได้ ระบบจะรวมผลให้`);
             }
             setSelectedNames(files.map((f) => f.name));
           }}
@@ -216,10 +261,25 @@ export default function StatementAnalyzer({
         <button type="button" className="btn" onClick={submit} disabled={pending}>
           {phase === "reading" ? "กำลังอัปโหลด + AI กำลังอ่าน…" : "อัปสเตทเมนต์ + แยกรายการ"}
         </button>
+        {fileResults.length > 0 ? (
+          <button type="button" className="btn btn-ghost" onClick={clearAll} disabled={pending}>
+            ล้างรายการทั้งหมด
+          </button>
+        ) : null}
+        {txns.length > 0 ? (
+          <button type="button" className="btn btn-ghost" onClick={exportCsv}>
+            ดาวน์โหลด CSV
+          </button>
+        ) : null}
       </div>
       {selectedNames.length > 0 ? (
         <div className="stmt-fname">
           เลือกไว้ {selectedNames.length} ไฟล์: {selectedNames.join(", ")}
+        </div>
+      ) : null}
+      {duplicateNames.length > 0 ? (
+        <div className="action-msg warn">
+          ⚠ ชื่อไฟล์นี้เคยอ่านสำเร็จไปแล้ว: {duplicateNames.join(", ")} — ถ้าอัปซ้ำ ธุรกรรมจะถูกนับซ้ำสองรอบ
         </div>
       ) : null}
       {err ? <div className="action-msg err">{err}</div> : null}

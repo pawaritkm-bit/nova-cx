@@ -4,7 +4,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, type AccountingAccess } from "@/lib/accounting/access";
-import StatementAnalyzer from "../StatementAnalyzer";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
+import AccountingUploadTabs from "../AccountingUploadTabs";
 import ChatAuditFrame from "../../_Frame";
 import "../../chat-admin.css";
 import "../../bills/bills.css";
@@ -83,14 +84,17 @@ export default async function StatementPage({
     UUID_RE.test(rawCustomer) && customers.some((c) => c.id === rawCustomer) ? rawCustomer : "";
   const selectedLabel = customers.find((c) => c.id === validCustomerId)?.label ?? "";
 
+  // ผังบัญชี (ใช้เลือกบัญชีตอนตั้งค่า mapping ของโหมด "รายงานแพลตฟอร์ม" → auto-สร้างสมุดรายวัน)
+  const chart = validCustomerId ? await listChartOfAccounts(service, access.tenantId) : [];
+
   return (
     <ChatAuditFrame
       active="chat-accounting"
       role={navRole}
       authed
       staffOnly={staffOnly}
-      title="AI แยกสเตทเมนต์ ขาเข้า-ขาออก"
-      subtitle="อัปสเตทเมนต์ธนาคาร → แยกเงินเข้า/ออก + สรุปรายเดือน + คนโอนซ้ำ"
+      title="AI แยกสเตทเมนต์ + รายงานแพลตฟอร์ม"
+      subtitle="สเตทเมนต์ธนาคาร: แยกเงินเข้า/ออก + คนโอนซ้ำ · รายงานแพลตฟอร์ม: แยกยอดขาย/ค่าธรรมเนียม ให้เหลือกำไรจริง"
     >
       <div className="dash-views">
         <div className="card acc-review-head">
@@ -119,11 +123,11 @@ export default async function StatementPage({
           </div>
         ) : !validCustomerId ? (
           <div className="card">
-            <p className="empty">เลือกลูกค้าด้านบนเพื่ออัปสเตทเมนต์และแยกรายการ</p>
+            <p className="empty">เลือกลูกค้าด้านบนเพื่ออัปสเตทเมนต์/รายงานแพลตฟอร์มและแยกรายการ</p>
           </div>
         ) : (
           <div className="card">
-            <StatementAnalyzer customerId={validCustomerId} customerLabel={selectedLabel} />
+            <AccountingUploadTabs customerId={validCustomerId} customerLabel={selectedLabel} chart={chart} />
           </div>
         )}
       </div>
