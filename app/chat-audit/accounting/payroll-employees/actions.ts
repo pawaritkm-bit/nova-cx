@@ -35,6 +35,13 @@ import {
   type PayrollEmployeeDeduction,
   type PayrollEmployeeDeductionInput,
 } from "@/lib/accounting/payroll-deductions";
+import { classifyUpload, extOf } from "@/lib/accounting/upload";
+import {
+  excelBufferToEmployeeRows,
+  csvBufferToEmployeeRows,
+  rawRowToEmployeeInput,
+  buildEmployeeImportTemplate,
+} from "@/lib/accounting/payroll-employee-import";
 
 const PATH = "/chat-audit/accounting/payroll-employees";
 
@@ -342,5 +349,120 @@ export async function deleteDeductionAction(id: string, employeeId: string, cust
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+// ---------------------------------------------------------------------
+// นำเข้าทะเบียนพนักงานเป็นชุด (wishlist ข้อ 2)
+// ---------------------------------------------------------------------
+
+/** เพดานขนาดไฟล์นำเข้า — เล็กกว่าอัปโหลดสเตทเมนต์มาก (ไฟล์รายชื่อพนักงานเป็น KB ไม่ใช่ MB) */
+const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
+
+export type BulkImportRowResult = {
+  /** เลขแถวในสเปรดชีต (นับรวมหัวคอลัมน์แถวที่ 1 — แถวข้อมูลแถวแรกคือแถวที่ 2) */
+  rowNumber: number;
+  fullName: string;
+  ok: boolean;
+  message: string;
+};
+
+export type BulkImportResult =
+  | { ok: true; results: BulkImportRowResult[]; successCount: number; totalRows: number; truncated: boolean }
+  | { ok: false; message: string };
+
+/** รันงานแบบ concurrency-bounded — คืนผลลัพธ์เรียงตามลำดับ input เดิม */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      results[i] = await fn(items[i]);
+    }
+  }
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+/**
+ * นำเข้าทะเบียนพนักงานเป็นชุดจากไฟล์ Excel/CSV (สร้างใหม่เท่านั้น — ไม่แก้ทะเบียนเดิม)
+ *   วนสร้างพนักงานทีละแถวผ่าน upsertEmployee เดิม (validate ซ้ำเหมือนสร้างทีละคนทุกจุด — ไม่มี fast-path
+ *   ข้าม validate) แถวไหนพลาด (เช่นเลขบัตรซ้ำ/รูปแบบผิด) ไม่กระทบแถวอื่น — คืนผลลัพธ์ต่อแถวให้ตรวจสอบ
+ */
+export async function bulkImportEmployeesAction(customerId: string, formData: FormData): Promise<BulkImportResult> {
+  if (!isUuid(customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    assertCustomerInScope(ctx, customerId);
+
+    const file = formData.get("file");
+    if (!(file instanceof File)) return { ok: false, message: "ไม่พบไฟล์ที่อัปโหลด" };
+    if (file.size <= 0) return { ok: false, message: "ไฟล์ว่างเปล่า" };
+    if (file.size > MAX_IMPORT_FILE_BYTES) return { ok: false, message: "ไฟล์ใหญ่เกิน 5MB" };
+
+    const kind = classifyUpload(file.type, file.name);
+    if (kind !== "excel" && kind !== "csv") {
+      return { ok: false, message: "รองรับเฉพาะไฟล์ Excel (.xlsx) หรือ CSV" };
+    }
+    // ★ 2026-08-12 (พบจาก independent review) — classifyUpload map .xls (Excel รุ่นเก่า, binary/BIFF) เป็น
+    //   kind "excel" เดียวกับ .xlsx แต่ ExcelJS's xlsx.load อ่านได้เฉพาะ OOXML (.xlsx) เท่านั้น — ถ้าปล่อยผ่าน
+    //   จะ throw ตอน parse แล้วผู้ใช้เห็นข้อความทั่วไป "นำเข้าไม่สำเร็จ" ทำให้เข้าใจผิดว่าข้อมูลในไฟล์ผิด
+    //   ทั้งที่จริงคือฟอร์แมตไฟล์ที่ไม่รองรับเลย — ปฏิเสธไว้ตรงนี้ก่อนด้วยข้อความที่เจาะจงชัดเจน
+    if (kind === "excel" && extOf(file.name) === "xls") {
+      return { ok: false, message: "ไม่รองรับไฟล์ .xls รุ่นเก่า — กรุณาเปิดแล้วบันทึกเป็น .xlsx ก่อนอัปโหลด" };
+    }
+
+    const buf = Buffer.from(await file.arrayBuffer());
+    const parsed = kind === "excel" ? await excelBufferToEmployeeRows(buf) : csvBufferToEmployeeRows(buf);
+    if (parsed.rows.length === 0) {
+      return { ok: false, message: "ไม่พบแถวข้อมูลพนักงานในไฟล์ — ตรวจหัวคอลัมน์ให้ตรงกับเทมเพลต" };
+    }
+
+    // ★ concurrency 10 (เดิม 5) + MAX_IMPORT_ROWS ลดเป็น 1000 (ดูคอมเมนต์ที่นั่น) — คุม worst-case
+    //   wall-clock ให้อยู่ในเพดาน maxDuration=60s ของ page.tsx แน่นอน (พบจาก independent review)
+    const results = await mapWithConcurrency(parsed.rows, 10, async (row) => {
+      const input = rawRowToEmployeeInput(row);
+      const res = await upsertEmployee(service, ctx.tenantId, customerId, input);
+      return { fullName: row.fullName || "(ไม่มีชื่อ)", ok: res.ok, message: res.ok ? "สำเร็จ" : res.message };
+    });
+    // ★ ใช้ sourceRowNumbers (เลขแถวจริงในไฟล์ ก่อนกรองแถวว่างทิ้ง) ไม่ใช่ index+2 ตรง ๆ — กันเลขแถวเลื่อนผิด
+    //   ถ้าไฟล์มีแถวว่างคั่นระหว่างข้อมูล (พบจาก independent review)
+    const withRowNumbers: BulkImportRowResult[] = results.map((r, i) => ({
+      ...r,
+      rowNumber: parsed.sourceRowNumbers[i] ?? i + 2,
+    }));
+
+    revalidatePath(PATH);
+    return {
+      ok: true,
+      results: withRowNumbers,
+      successCount: withRowNumbers.filter((r) => r.ok).length,
+      totalRows: parsed.totalRows,
+      truncated: parsed.truncated,
+    };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "นำเข้าไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/** ดาวน์โหลดเทมเพลตนำเข้าพนักงาน (.xlsx) — คืน base64 ให้ client แปลงเป็น Blob ดาวน์โหลด (ไม่มีไฟล์จริง persist) */
+export async function downloadEmployeeImportTemplateAction(): Promise<
+  { ok: true; base64: string } | { ok: false; message: string }
+> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    await requireAccountingAccess(authed, service);
+    const buf = await buildEmployeeImportTemplate();
+    return { ok: true, base64: buf.toString("base64") };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "สร้างเทมเพลตไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
