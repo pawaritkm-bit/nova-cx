@@ -4,10 +4,8 @@
  *
  * บริบท: เฟส 9b กลุ่ม BE (docs/06-accounting-features-roadmap.md, หมวด 0.2 ★★★ gate) — ตารางนี้เก็บ
  *   "ข้อมูลดิบ" ที่นักบัญชีกรอกเท่านั้น cap/สูตรทั้งหมดอยู่ใน `sumAndCapDeductions` ล้วน (pure, ไม่แตะ DB)
- *   — ผลลัพธ์จากไฟล์นี้**ไม่กระทบยอดภาษีหัก ณ ที่จ่ายจริง**ของลูกค้าจนกว่า
- *   `ENABLE_EXTRA_DEDUCTIONS_IN_PIT` (payroll-tax.ts) จะเปิดเป็น true พร้อม golden test ที่ verify แล้ว
- *   เท่านั้น (0.2 ★★★ ข้อบังคับ, mirror T112) — ก่อนหน้านั้นเป็นแค่ "preview" ที่ payroll.ts คำนวณแสดง
- *   ในหน้าจอ ไม่ถูกใช้จริงในการคำนวณ pit_withheld
+ *   — ★★★ เปิดใช้แล้ว 2026-08-12 (`ENABLE_EXTRA_DEDUCTIONS_IN_PIT` = true, payroll-tax.ts, ดูคอมเมนต์เต็ม
+ *   ที่นั่น) ผลลัพธ์จากไฟล์นี้**มีผลจริงต่อยอดภาษีหัก ณ ที่จ่าย**ของลูกค้าแล้ว ไม่ใช่แค่ preview อีกต่อไป
  *
  * ★ scope tenant + payroll_employee_id เสมอ (IDOR-safe, 0.15) — ตารางนี้ไม่มีคอลัมน์ customer_id ของตัวเอง
  *   (denormalized ตั้งใจ mirror payroll_run_lines ที่ไม่มี customer_id เช่นกัน) — ทุก CRUD ต้อง derive
@@ -345,8 +343,8 @@ export type SumAndCapDeductionsResult = {
 export const PROVIDENT_FUND_POST_EXPENSE_CAP = 10000;
 
 /**
- * รวม+ตัดเพดานค่าลดหย่อนภาษีอื่นตามประเภท (★★★ 0.2 gate — ผลลัพธ์จากฟังก์ชันนี้ยังเป็นแค่ "preview" จนกว่า
- *   ENABLE_EXTRA_DEDUCTIONS_IN_PIT จะเปิด, ดูคอมเมนต์หัวไฟล์) — กติกาต่อประเภท (T152):
+ * รวม+ตัดเพดานค่าลดหย่อนภาษีอื่นตามประเภท (★★★ 0.2 gate — ผลลัพธ์จากฟังก์ชันนี้มีผลจริงต่อ pit_withheld แล้ว
+ *   ตั้งแต่ ENABLE_EXTRA_DEDUCTIONS_IN_PIT เปิดเป็น true 2026-08-12, ดูคอมเมนต์หัวไฟล์) — กติกาต่อประเภท (T152):
  *
  *   - `spouse_no_income`: รวมทุกแถว แล้ว cap ที่ 60,000 บาท (เผื่อกรอกซ้ำ/ผิดพลาดหลายแถว)
  *   - `child`: รวมทุกแถวตรง ๆ **ไม่มี cap อัตโนมัติ** (นักบัญชี/หน้าจอเลือก 30,000 หรือ 60,000 ต่อคนเอง
@@ -408,8 +406,8 @@ export const PROVIDENT_FUND_POST_EXPENSE_CAP = 10000;
  *        ได้จ่ายเป็นดอกเบี้ยเงินกู้ยืม...เพื่อซื้อ เช่าซื้อ หรือสร้างอาคารที่อยู่อาศัย โดยจำนองอาคาร...เป็น
  *        ประกันการกู้ยืมนั้น ตามจำนวนที่จ่ายจริงแต่ไม่เกิน 100,000 บาท" — ยืนยัน MORTGAGE_INTEREST_CAP =
  *        100,000 (กฎกระทรวง ฉบับที่ 126 ข้อ 2(53) ตามที่แก้ไข)
- *   → ยังไม่เปิด ENABLE_EXTRA_DEDUCTIONS_IN_PIT (payroll-tax.ts) — engine/cap ครบสมบูรณ์แล้ว แต่รอ verify
- *   เพิ่ม/ทดสอบกับนักบัญชีจริงอีกรอบก่อนเปิดใช้จริง (ดูคอมเมนต์เต็มใน payroll-tax.ts)
+ *   → เปิดใช้แล้ว ENABLE_EXTRA_DEDUCTIONS_IN_PIT (payroll-tax.ts) = true ตั้งแต่ 2026-08-12 — ดูคอมเมนต์เต็ม
+ *   เหตุผล/หลักฐานที่ทำให้เปิดได้ใน payroll-tax.ts
  */
 export function sumAndCapDeductions(rows: DeductionRowForCalc[], annualIncomeEstimate: number): SumAndCapDeductionsResult {
   const warnings: string[] = [];

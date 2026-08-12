@@ -878,9 +878,10 @@ export async function recalcRunLines(
 
   // ★★ เฟส 9b กลุ่ม BE (0.2 ★★★ gate, T154) — ค่าลดหย่อนภาษีอื่นของปีภาษีนี้ (pay_period_year) ต่อพนักงาน
   //   ใช้คำนวณ personalAllowancePreview เสมอ (แสดงในหน้าจอ) — ยอดที่ใช้จริงในการคำนวณ pit_withheld ขึ้นกับ
-  //   ENABLE_EXTRA_DEDUCTIONS_IN_PIT เท่านั้น (payroll-tax.ts) — ตราบใด flag=false ยอด pit_withheld ที่
-  //   บันทึกจริงจะเท่ากับก่อนเฟสนี้เป๊ะไม่ว่าตาราง payroll_employee_deductions จะมีข้อมูลอยู่หรือไม่ก็ตาม
-  //   (regression-safe 100%)
+  //   ENABLE_EXTRA_DEDUCTIONS_IN_PIT เท่านั้น (payroll-tax.ts) — ★★★ เปิดใช้แล้ว 2026-08-12 (true) พนักงานที่มี
+  //   แถวใน payroll_employee_deductions จะได้ personalAllowance/exemptIncome ที่มีผลจริงต่อ pit_withheld
+  //   ตั้งแต่รอบ recalc ถัดไป (flag=false เดิมทำให้ pit_withheld เท่ากับก่อนเฟสนี้เป๊ะเสมอ ไม่ว่าตารางจะมี
+  //   ข้อมูลหรือไม่ — ยัง cover ด้วยเทสต์ vi.spyOn บังคับ false ใน payroll.test.ts เพื่อกันไม่ให้ path นี้พัง)
   const deductionsByEmployee = await listDeductionsForEmployees(db, tenantId, [...new Set(empIds)], run.payPeriodYear);
 
   // ★★ ชั้น 1: คำนวณทุกบรรทัดก่อน (ยังไม่เขียน DB) — ให้ตรวจ net_pay ติดลบได้ทั้งชุดก่อนบันทึกจริงบรรทัดใดเลย

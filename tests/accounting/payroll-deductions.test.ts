@@ -425,4 +425,73 @@ describe("sumAndCapDeductions (T152) — self-consistent", () => {
     expect(lifeInsuranceOnly).toBe(40000); // = min(30000,100000) + min(100000,10000)
     expect(lifeInsuranceOnly).not.toBe(110000); // สูตรเดิมที่ผิดจะให้ค่านี้ (ยืนยันว่าบั๊กถูกแก้จริง)
   });
+
+  /**
+   * ★★★★★ Combined golden test (2026-08-12, ก่อนเปิด ENABLE_EXTRA_DEDUCTIONS_IN_PIT) — ทุกประเภทค่าลดหย่อน
+   *   พร้อมกันในเทสต์เดียว (T157 เดิมยืนยันได้แค่ 1 ประเภทต่อครั้ง — นี่คือ gap ที่ QC ระบุไว้ก่อนเปิด flag)
+   *   ทุกยอดในเทสต์นี้อ้างอิงเพดานที่ verify แล้วจากเอกสารกรมสรรพากรตัวจริง (ดูคอมเมนต์เหนือ sumAndCapDeductions):
+   *     spouse_no_income = 60,000 (= SPOUSE_NO_INCOME_CAP เป๊ะ, ไม่ตัด)
+   *     child = 30,000+60,000 = 90,000 (บุตรคนแรก+บุตรคนที่สองเป็นต้นไป ตามข้อ 3 ของ Ins90_241268.pdf)
+   *     life_insurance_self = 100,000 (= LIFE_INSURANCE_CAP เป๊ะ), life_insurance_spouse = 10,000
+   *       (= LIFE_INSURANCE_SPOUSE_CAP เป๊ะ, มีผลเพราะมี spouse_no_income>0 ในชุดเดียวกัน)
+   *     provident_fund = 27,000 (ไม่ชนเพดานรวม 500,000/30%) → แยก 2 ขั้นตาม ภ.ง.ด.91: 10,000 แรกเป็น
+   *       allowance, ส่วนเกิน 17,000 เป็น pvdExemptPortion (ไม่รวมใน totalOtherAllowance)
+   *     mortgage_interest = 100,000 (= MORTGAGE_INTEREST_CAP เป๊ะ)
+   *   ทุกยอดตั้งใจให้ "พอดี" กับเพดานของตัวเอง (ไม่ใช่ต่ำกว่าเยอะ) เพื่อพิสูจน์ว่าแต่ละประเภทไม่ไปกิน cap ของ
+   *   ประเภทอื่น — เพราะ `sumAndCapDeductions` เก็บผลลัพธ์แต่ละประเภทไว้ในตัวแปร local คนละตัวเด็ดขาด (อ่านโค้ด
+   *   แล้วยืนยัน ไม่มี state ที่ใช้ร่วมกันข้ามประเภทเลย) จึงบวกกันได้ตรง ๆ ไม่มีทาง cross-contaminate
+   *   totalOtherAllowance = 60,000+90,000+100,000+10,000+10,000(PVD allowance)+100,000 = 370,000
+   */
+  it("★★★★★ combined golden test — 6 ประเภทค่าลดหย่อนพร้อมกัน (สมมติทุกยอดพอดี cap ของตัวเอง) → รวมถูกต้องไม่ cross-contaminate", () => {
+    const res = sumAndCapDeductions(
+      [
+        { deductionType: "spouse_no_income", amount: 60000 },
+        { deductionType: "child", amount: 30000 },
+        { deductionType: "child", amount: 60000 },
+        { deductionType: "life_insurance_self", amount: 100000 },
+        { deductionType: "life_insurance_spouse", amount: 10000 },
+        { deductionType: "provident_fund", amount: 27000 },
+        { deductionType: "mortgage_interest", amount: 100000 },
+      ],
+      1000000
+    );
+    expect(res.totalOtherAllowance).toBe(370000);
+    expect(res.pvdExemptPortion).toBe(17000);
+    // ไม่มีประเภทไหนเกินเพดานตัวเอง (ทุกยอดตั้งใจให้พอดี) → warning เดียวคือ PVD exempt-portion notice เท่านั้น
+    expect(res.warnings.length).toBe(1);
+    expect(res.warnings[0]).toContain("เงินได้ยกเว้นก่อนหักค่าใช้จ่าย");
+  });
+
+  /**
+   * ★★★★★ Combined golden test #2 (2026-08-12, ปิด gap ที่ independent reviewer ระบุไว้ตอน verify ก่อนเปิด
+   *   flag) — เทสต์ข้างบนตั้งใจให้ทุกยอด "พอดี" กับเพดานตัวเอง พิสูจน์ว่าไม่ cross-contaminate แต่ยังไม่พิสูจน์
+   *   กรณีที่**หลายประเภทเกินเพดานของตัวเองพร้อมกันจริง**ในเทสต์เดียว (รวม PVD ที่เพดานผูกกับ 30% ของเงินได้
+   *   จริง ไม่ใช่เพดานสัมบูรณ์ 500,000) — เทสต์นี้ปิด gap นั้น: ทุกประเภทกรอกเกินเพดานตัวเองทั้งหมด
+   *     spouse_no_income=70,000 (เกิน 60,000) → cap ที่ 60,000
+   *     life_insurance_self=150,000 (เกิน 100,000) → cap ที่ 100,000
+   *     life_insurance_spouse=15,000 (เกิน 10,000, มีผลเพราะ spouse_no_income>0) → cap ที่ 10,000
+   *     provident_fund=80,000, annualIncomeEstimate=200,000 → 30%=60,000 (<500,000 → ใช้ 60,000 เป็นเพดาน
+   *       แทน ไม่ใช่เพดานสัมบูรณ์) → cap ที่ 60,000 → allowance 10,000 แรก + exempt ส่วนเกิน 50,000
+   *     mortgage_interest=120,000 (เกิน 100,000) → cap ที่ 100,000
+   *     child=45,000 (ไม่มี cap เลย ตรงตามกติกา T152) → รวมตรง ๆ
+   *   totalOtherAllowance = 60,000+45,000+100,000+10,000+10,000(PVD allowance)+100,000 = 325,000
+   *   pvdExemptPortion = 60,000-10,000 = 50,000
+   *   warnings ครบ 6 ข้อ (เกินเพดานทั้ง 5 ประเภทที่มี cap + PVD exempt-portion notice)
+   */
+  it("★★★★★ combined golden test #2 — ทุกประเภทเกินเพดานตัวเองพร้อมกัน (รวม PVD cap แบบ 30%-ของเงินได้ที่ผูกพัน) → ตัดยอดถูกต้องแยกอิสระไม่ cross-contaminate", () => {
+    const res = sumAndCapDeductions(
+      [
+        { deductionType: "spouse_no_income", amount: 70000 },
+        { deductionType: "child", amount: 45000 },
+        { deductionType: "life_insurance_self", amount: 150000 },
+        { deductionType: "life_insurance_spouse", amount: 15000 },
+        { deductionType: "provident_fund", amount: 80000 },
+        { deductionType: "mortgage_interest", amount: 120000 },
+      ],
+      200000
+    );
+    expect(res.totalOtherAllowance).toBe(325000);
+    expect(res.pvdExemptPortion).toBe(50000);
+    expect(res.warnings.length).toBe(6);
+  });
 });

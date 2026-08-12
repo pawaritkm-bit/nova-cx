@@ -33,21 +33,26 @@ export const PERSONAL_ALLOWANCE_STANDARD = 60000;
  *   `payroll-deductions.ts::sumAndCapDeductions`) เข้าสูตรคำนวณภาษีหัก ณ ที่จ่ายจริงใน
  *   `payroll.ts::recalcRunLines`
  *
- *   `false` = ยังไม่เปิดใช้จริง (คงค่าเดิมตาม DoD, docs/06-accounting-features-roadmap.md:5416-5417 —
- *   engine ครบสมบูรณ์พร้อม flag=false ถือว่าปิดงานได้ตามปกติ ไม่ใช่ความล้มเหลว) — เหตุผลที่ยังไม่เปิด
- *   (พบโดย independent code reviewer รอบ QC, ยืนยันเป็นบั๊กจริง):
- *   1) golden test เดิมที่อ้างว่า "verify แล้ว" ยืนยันได้จริงแค่ 1 ใน 5 ประเภทค่าลดหย่อน (ไม่ใช่ตัวอย่างรวม
- *      หลายประเภทพร้อมกันตามที่ T157 ต้องการจริง ๆ)
- *   2) ที่สำคัญกว่านั้น พบ**บั๊กคำนวณจริง**ในสูตร life_insurance เดิม (เก็บเบี้ยประกันของผู้มีเงินได้เอง+
- *      คู่สมรสเป็นก้อนเดียวแล้วเดา cap จากยอดรวม — ผิดกฎหมายจริงเมื่อยอดไม่ได้แบ่งสัดส่วนตรงกับที่โค้ดสมมติ)
- *      ซึ่งบังเอิญ golden test เดิมจับไม่ได้เพราะใช้ตัวเลขที่สมมาตรเป๊ะ (100,000+100,000) — แก้แล้วใน
- *      `payroll-deductions.ts::sumAndCapDeductions` (แยก `life_insurance_self`/`life_insurance_spouse`
- *      cap อิสระคนละก้อน) แต่ยังต้อง verify เพิ่ม/ทดสอบกับนักบัญชีจริงอีกรอบก่อนเปิด flag นี้เป็น true
- *   ★ เมื่อ flag=false: personalAllowance ที่ใช้จริงยังเท่ากับ PERSONAL_ALLOWANCE_STANDARD เสมอ ไม่ว่า
- *   นักบัญชีจะกรอกข้อมูลใน `payroll_employee_deductions` ไว้เท่าไหร่ก็ตาม (แสดงเป็นแค่ "preview" ในหน้าจอ)
- *   — ไม่กระทบยอดภาษีของลูกค้าเดิมเลย (regression-safe)
+ *   ★★★★★ เปิดใช้แล้ว 2026-08-12 (`true`) — ก่อนหน้านี้ปิดไว้เพราะ QC พบ 2 ช่องว่างที่ต้องแก้ก่อน ทั้งสองแก้แล้ว:
+ *   1) golden test เดิมยืนยันได้จริงแค่ 1 ใน 5 ประเภทค่าลดหย่อน (ไม่ใช่ตัวอย่างรวมหลายประเภทพร้อมกันตามที่
+ *      T157 ต้องการจริง ๆ) — แก้แล้วด้วย combined golden test ใหม่ (สมมติ 6 ประเภทพร้อมกันในเทสต์เดียว —
+ *      spouse=60,000+child=90,000+life_self=100,000+life_spouse=10,000+PVD=27,000(→allowance
+ *      10,000+exempt 17,000)+mortgage=100,000 → totalOtherAllowance=370,000) ยืนยันว่าแต่ละประเภทคำนวณ
+ *      เป็นอิสระจากตัวแปร local คนละตัว ไม่มีทาง cross-contaminate กันได้ (อ่านโค้ด `sumAndCapDeductions`
+ *      แล้ว — sum แต่ละประเภทจากตัวแปรแยกกันเด็ดขาด บวกกันแค่ตอนท้ายฟังก์ชัน)
+ *   2) บั๊กคำนวณจริงในสูตร life_insurance เดิม (เก็บเบี้ยประกันของผู้มีเงินได้เอง+คู่สมรสเป็นก้อนเดียวแล้วเดา
+ *      cap จากยอดรวม) — แก้แล้วใน `payroll-deductions.ts::sumAndCapDeductions` (แยก
+ *      `life_insurance_self`/`life_insurance_spouse` cap อิสระคนละก้อน) ยืนยันด้วย golden test คู่กรณี
+ *      ไม่สมมาตร (own=30,000+spouse=100,000 → 40,000 ไม่ใช่ 110,000) ใน `payroll-deductions.test.ts`
+ *   ★★★ ก่อนเปิด flag นี้ ผู้ใช้ยืนยันชัดเจนให้ข้ามขั้นตอนตรวจกับนักบัญชีจริง (2026-08-12: "ไม่ต้องรอนักบัญชี
+ *   ทำเลย") — แทนที่ด้วยการ verify เชิงเทคนิคเต็มรูป (combined golden test + independent code review +
+ *   full test suite 3281+ tests) ตามมาตรฐานเดียวกับที่ใช้เปิด ENABLE_SEVERANCE_TAX_CALC ก่อนหน้านี้
+ *   ★ เมื่อ flag=true: personalAllowance ที่ใช้จริงในการคำนวณ pit_withheld = PERSONAL_ALLOWANCE_STANDARD +
+ *   sumAndCapDeductions(...).totalOtherAllowance และ exemptIncome = sumAndCapDeductions(...).pvdExemptPortion
+ *   (ดู recalcRunLines ใน payroll.ts) — พนักงานที่มีข้อมูลในตาราง payroll_employee_deductions จะได้ยอด
+ *   pit_withheld ที่ลดลงจริงตั้งแต่รอบเงินเดือนถัดไปที่ recalc
  */
-export let ENABLE_EXTRA_DEDUCTIONS_IN_PIT = false;
+export let ENABLE_EXTRA_DEDUCTIONS_IN_PIT = true;
 
 // ---------------------------------------------------------------------
 // PIT (มาตรา 50) — annualize ต่องวด
