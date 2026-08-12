@@ -910,13 +910,22 @@ export async function recalcRunLines(
       deductionType: d.deductionType,
       amount: d.amount,
     }));
-    const personalAllowancePreview = round2(
-      PERSONAL_ALLOWANCE_STANDARD + sumAndCapDeductions(deductionRows, annualIncomeEstimate).totalOtherAllowance
-    );
+    const capped = sumAndCapDeductions(deductionRows, annualIncomeEstimate);
+    const personalAllowancePreview = round2(PERSONAL_ALLOWANCE_STANDARD + capped.totalOtherAllowance);
     // ★★★ 0.2 gate — ยอดที่ใช้จริงตรง ๆ ตาม flag เท่านั้น (ห้ามลืมเผื่อกรณีอื่นแบบ implicit ใด ๆ)
     const personalAllowance = ENABLE_EXTRA_DEDUCTIONS_IN_PIT ? personalAllowancePreview : PERSONAL_ALLOWANCE_STANDARD;
+    // ★★★ แก้บั๊กสถาปัตยกรรม PVD 2026-08-12 (ดูคอมเมนต์เต็มเหนือ sumAndCapDeductions ใน payroll-deductions.ts)
+    //   — ส่วน PVD/RMF/กบข ที่เกิน 10,000 ต้องหักออกจากเงินได้ก่อนคำนวณค่าใช้จ่ายมาตรา 42 ทวิ ไม่ใช่หลัง
+    const exemptIncome = ENABLE_EXTRA_DEDUCTIONS_IN_PIT ? capped.pvdExemptPortion : 0;
 
-    const pit = calcMonthlyPitWithBonus(grossThisPeriod, amounts.bonusAmount, periodsPerYear, personalAllowance, brackets).totalPit;
+    const pit = calcMonthlyPitWithBonus(
+      grossThisPeriod,
+      amounts.bonusAmount,
+      periodsPerYear,
+      personalAllowance,
+      brackets,
+      exemptIncome
+    ).totalPit;
     // ★★ เฟส 9b กลุ่ม BA (0.3) — ข้าม calcSsoContribution เมื่อ sso_exempt=true (employee/employer=0 เสมอ
     //   ไม่ว่าค่าจ้างเท่าไหร่) — เงื่อนไขก่อนเรียกเท่านั้น ไม่แก้ calcSsoContribution เอง
     const isSsoExempt = ssoExemptByEmp.get(raw.payroll_employee_id) ?? false;

@@ -599,6 +599,30 @@ describe("recalcRunLines — เฟส 9b กลุ่ม BE (0.2 gate, T154)", 
     }
   });
 
+  it("★★★ 2026-08-12 golden test — flag=true จริง + provident_fund เกิน 10,000 → ส่วนเกินหักเป็น exemptIncome ก่อนค่าใช้จ่ายจริง (แก้บั๊กสถาปัตยกรรม PVD)", async () => {
+    const spy = vi.spyOn(payrollTax, "ENABLE_EXTRA_DEDUCTIONS_IN_PIT", "get").mockReturnValue(true);
+    try {
+      const { db } = makeInMemoryDb(tables);
+      seedDeduction(2569, "provident_fund", 30000);
+      const res = await recalcRunLines(db, TENANT, CUSTOMER_A, runId, [
+        { id: lineId, grossSalary: 60000, otherAdditions: 0, bonusAmount: 0, otherDeductions: 0 },
+      ]);
+      expect(res.ok).toBe(true);
+      const line = tables.payroll_run_lines.find((l) => l.id === lineId)!;
+      // เทียบมือ: annual=720,000 (30%=216,000 > pvdSum 30,000 → ไม่ชนเพดานรวม), pvdPostExpense=10,000
+      // (allowance), pvdExempt=20,000 (หักก่อนค่าใช้จ่าย) → incomeAfterExemption=700,000
+      // expense=min(350,000,100,000)=100,000 (ชน cap) → allowance=60,000+10,000=70,000
+      // taxable=700,000-100,000-70,000=530,000 → tax=7,500+20,000+4,500(500k-530k@15%)=32,000 → pit=32,000/12=2,666.67
+      expect(line.pit_withheld).toBe(2666.67);
+      // ★ เคสนี้ taxable บังเอิญเท่ากับวิธีเดิมพอดี (expense ชน cap 100,000 ทั้งสองวิธี ทำให้
+      //   exempt+allowance ใหม่ = allowance เดิมทั้งก้อนเสมอ) — พิสูจน์ความ self-consistent ของสูตรใหม่/
+      //   การ wiring ผ่าน recalcRunLines เท่านั้น ไม่พิสูจน์ว่าต่างจากสูตรเดิม (ดู golden test แยกที่พิสูจน์
+      //   ความต่างจริงใน payroll-tax.test.ts/payroll-deductions.test.ts ที่ expense ยังไม่ชน cap — 180k/27k)
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("flag=true แต่ไม่มีแถว payroll_employee_deductions ของปีภาษีนี้เลย → personalAllowance ยังเท่ากับ PERSONAL_ALLOWANCE_STANDARD เป๊ะ (ค่า default ของลูกค้าทุกรายก่อนกรอกข้อมูลเพิ่ม)", async () => {
     const spy = vi.spyOn(payrollTax, "ENABLE_EXTRA_DEDUCTIONS_IN_PIT", "get").mockReturnValue(true);
     try {
