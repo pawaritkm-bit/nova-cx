@@ -47,6 +47,14 @@ export default function StatementAnalyzer({
   const [fileName, setFileName] = useState<string>("");
   const [done, setDone] = useState(false);
   const [txns, setTxns] = useState<StatementTxn[]>([]);
+  // ★ 2026-08-12 (แก้บั๊ก D) — meta ของการอ่านไฟล์ (ตัดข้อมูล/ชุดล้มเหลวบางส่วน) ไม่มีสำหรับไฟล์รูป/PDF
+  const [meta, setMeta] = useState<{
+    totalRows: number;
+    includedRows: number;
+    truncated: boolean;
+    chunkCount: number;
+    failedChunks: number;
+  } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // สรุปรายเดือน + คนโอนซ้ำ คำนวณใหม่ทุกครั้งที่ตารางเปลี่ยน (helper เดียวกับ server)
@@ -72,6 +80,7 @@ export default function StatementAnalyzer({
     }
     setErr(null);
     setDone(false);
+    setMeta(null);
 
     startTransition(async () => {
       setPhase("uploading");
@@ -114,13 +123,24 @@ export default function StatementAnalyzer({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: prep.path, customerId, fileName: file.name }),
         });
-        const data = (await res.json().catch(() => null)) as { ok?: boolean; transactions?: StatementTxn[] } | null;
+        const data = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          transactions?: StatementTxn[];
+          meta?: {
+            totalRows: number;
+            includedRows: number;
+            truncated: boolean;
+            chunkCount: number;
+            failedChunks: number;
+          } | null;
+        } | null;
         if (!res.ok || !data?.ok) {
           setErr("อ่านสเตทเมนต์ไม่สำเร็จ กรุณาลองใหม่");
           setPhase("");
           return;
         }
         setTxns(Array.isArray(data.transactions) ? data.transactions : []);
+        setMeta(data.meta ?? null);
         setDone(true);
       } catch {
         setErr("อ่านสเตทเมนต์ไม่สำเร็จ กรุณาลองใหม่");
@@ -163,7 +183,20 @@ export default function StatementAnalyzer({
         <div className="stmt-reading">AI กำลังอ่านสเตทเมนต์และแยกรายการเข้า/ออก… (ไฟล์ยาวอาจใช้เวลาสักครู่)</div>
       ) : null}
 
-      {done && txns.length === 0 ? (
+      {/* ★ 2026-08-12 (แก้บั๊ก D) — แยกสาเหตุให้ชัดแทนข้อความเดียวคลุมทุกกรณี */}
+      {done && meta?.truncated ? (
+        <div className="action-msg err">
+          ไฟล์มีข้อมูลมากเกินจะประมวลผลได้ในครั้งเดียว — อ่านไป {meta.includedRows.toLocaleString("th-TH")} จาก{" "}
+          {meta.totalRows.toLocaleString("th-TH")} แถว ลองแบ่งไฟล์เป็นช่วงเวลาสั้นลงแล้วอัปทีละส่วน
+        </div>
+      ) : null}
+      {done && meta && meta.failedChunks > 0 ? (
+        <div className="action-msg err">
+          อ่านได้บางส่วน ({meta.chunkCount - meta.failedChunks}/{meta.chunkCount} ชุดสำเร็จ) — ระบบ AI
+          ขัดข้อง/ตอบช้าในบางช่วง ลองอัปโหลดไฟล์เดิมอีกครั้งเพื่ออ่านส่วนที่ขาดหาย
+        </div>
+      ) : null}
+      {done && txns.length === 0 && !meta?.truncated && !(meta && meta.failedChunks > 0) ? (
         <div className="card"><p className="empty">อ่านไม่พบรายการธุรกรรม ลองไฟล์อื่น หรือตรวจว่าเป็นสเตทเมนต์จริง</p></div>
       ) : null}
 
@@ -214,6 +247,7 @@ export default function StatementAnalyzer({
                     <th>วันที่</th>
                     <th>รายละเอียด</th>
                     <th>คู่ค้า</th>
+                    <th>เลขบัญชี</th>
                     <th>ทิศทาง</th>
                     <th className="num">ยอดเงิน</th>
                   </tr>
@@ -241,6 +275,13 @@ export default function StatementAnalyzer({
                           type="text"
                           value={t.counterparty_name ?? ""}
                           onChange={(e) => updateTxn(i, { counterparty_name: e.target.value || null })}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="text"
+                          value={t.counterparty_account_no ?? ""}
+                          onChange={(e) => updateTxn(i, { counterparty_account_no: e.target.value || null })}
                         />
                       </td>
                       <td>
@@ -286,7 +327,7 @@ function RepeatTable({
   tone,
 }: {
   title: string;
-  rows: { name: string; count: number; total: number }[];
+  rows: { name: string; accountNo: string | null; count: number; total: number }[];
   tone: "in" | "out";
 }) {
   if (rows.length === 0) {
@@ -304,6 +345,7 @@ function RepeatTable({
         <thead>
           <tr>
             <th>ชื่อ</th>
+            <th>เลขบัญชี</th>
             <th className="num">ครั้ง</th>
             <th className="num">ยอดรวม</th>
           </tr>
@@ -312,6 +354,7 @@ function RepeatTable({
           {rows.map((r, i) => (
             <tr key={i}>
               <td>{r.name}</td>
+              <td>{r.accountNo ?? "—"}</td>
               <td className="num">{r.count}</td>
               <td className="num">{money(r.total)}</td>
             </tr>

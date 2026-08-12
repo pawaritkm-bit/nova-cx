@@ -4,9 +4,9 @@ import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/acces
 import { classifyUpload } from "@/lib/accounting/upload";
 import {
   extractStatementFromFile,
-  extractStatementFromText,
+  extractStatementFromTextChunks,
 } from "@/lib/accounting/statement-extract";
-import { excelBufferToText, csvBufferToText } from "@/lib/accounting/statement-parse";
+import { excelBufferToRows, csvBufferToRows } from "@/lib/accounting/statement-parse";
 import { mimeFromPath } from "@/lib/line/bill-extract-worker";
 import {
   summarizeByMonth,
@@ -16,8 +16,10 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// ★ AI อ่านสเตทเมนต์ (gpt-5-mini reasoning + หลายร้อยรายการ) ช้า — ให้ headroom 120s
-export const maxDuration = 120;
+// ★★★ 2026-08-12 (แก้บั๊ก A) — ไฟล์ Excel/CSV ใหญ่ตอนนี้แบ่งเป็นหลายชุดยิง AI พร้อมกัน (concurrency 8,
+//   ดู MAX_CONCURRENT_CHUNKS ใน statement-extract.ts) แทนที่จะเรียกครั้งเดียวจบ — เพิ่ม headroom จาก 120s
+//   เป็น 240s (worst case ไฟล์ใหญ่สุด 24 ชุด÷8 = 3 รอบ × timeout ต่อชุด 45s = 135s ยังมี margin เหลือมาก)
+export const maxDuration = 240;
 
 const BILLS_BUCKET = "bills";
 const STATEMENT_PREFIX = "statement";
@@ -67,15 +69,29 @@ export async function POST(request: NextRequest) {
     const mime = mimeFromPath(path);
     const kind = classifyUpload(mime, fileName || path);
 
-    // แยกด้วยชนิดไฟล์: รูป/PDF → ส่งตรงเข้า OpenAI · Excel/CSV → แปลงเป็นข้อความก่อน
+    // แยกด้วยชนิดไฟล์: รูป/PDF → ส่งตรงเข้า OpenAI ครั้งเดียว · Excel/CSV → แบ่งเป็นชุดแล้วยิง AI หลายชุด (แก้บั๊ก A)
     let txns: StatementTxn[] = [];
+    let meta: {
+      totalRows: number;
+      includedRows: number;
+      truncated: boolean;
+      chunkCount: number;
+      failedChunks: number;
+    } | null = null;
+
     if (kind === "image" || kind === "pdf") {
       txns = await extractStatementFromFile(buf, mime);
-    } else if (kind === "excel") {
-      const text = await excelBufferToText(buf);
-      txns = await extractStatementFromText(text);
-    } else if (kind === "csv") {
-      txns = await extractStatementFromText(csvBufferToText(buf));
+    } else if (kind === "excel" || kind === "csv") {
+      const parsed = kind === "excel" ? await excelBufferToRows(buf) : csvBufferToRows(buf);
+      const extracted = await extractStatementFromTextChunks(parsed.chunks);
+      txns = extracted.txns;
+      meta = {
+        totalRows: parsed.totalRows,
+        includedRows: parsed.includedRows,
+        truncated: parsed.truncated,
+        chunkCount: extracted.chunkCount,
+        failedChunks: extracted.failedChunks,
+      };
     } else {
       return NextResponse.json({ ok: false, error: "unsupported" }, { status: 415 });
     }
@@ -89,9 +105,10 @@ export async function POST(request: NextRequest) {
       transactions: txns,
       monthly,
       repeats,
+      meta,
     });
   } catch {
     // ไม่ให้ล้ม flow — คืน 200 ว่าง (ผู้ใช้ลองใหม่ได้)
-    return NextResponse.json({ ok: true, count: 0, transactions: [], monthly: [], repeats: [] }, { status: 200 });
+    return NextResponse.json({ ok: true, count: 0, transactions: [], monthly: [], repeats: [], meta: null }, { status: 200 });
   }
 }
