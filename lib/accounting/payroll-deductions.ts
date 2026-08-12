@@ -327,12 +327,22 @@ export const MORTGAGE_INTEREST_CAP = 100000;
 export type DeductionRowForCalc = { deductionType: DeductionType; amount: number };
 
 export type SumAndCapDeductionsResult = {
-  /** ผลรวมค่าลดหย่อนอื่นทั้งหมดหลัง cap ทุกประเภทแล้ว (บวกเข้า PERSONAL_ALLOWANCE_STANDARD เพื่อได้
-   *  personalAllowancePreview ใน payroll.ts) */
+  /** ผลรวมค่าลดหย่อนอื่นทั้งหมดหลัง cap ทุกประเภทแล้ว **ที่หักหลังหักค่าใช้จ่ายเหมา** (บวกเข้า
+   *  PERSONAL_ALLOWANCE_STANDARD เพื่อได้ personalAllowancePreview ใน payroll.ts) — ★★★ 2026-08-12: ไม่รวม
+   *  PVD ส่วนที่เกิน 10,000 อีกต่อไป (ย้ายไป `pvdExemptPortion` เพราะเป็นเงินได้ยกเว้นที่หัก**ก่อน**ค่าใช้จ่าย) */
   totalOtherAllowance: number;
+  /** ★★★ เพิ่ม 2026-08-12 — PVD/RMF/กบข ส่วนที่เกิน 10,000 บาท (จนถึงเพดานรวม) ตามเอกสาร ภ.ง.ด.91 ต้องหักออก
+   *  จากเงินได้เป็น "เงินได้ที่ได้รับยกเว้น" **ก่อน**คำนวณค่าใช้จ่ายเหมา 50%/เพดาน 100,000 — ไม่ใช่ค่าลดหย่อน
+   *  ธรรมดา ห้ามรวมเข้า totalOtherAllowance/personalAllowance เด็ดขาด (ผู้เรียกต้องส่งต่อเป็น exemptIncome
+   *  พารามิเตอร์ใหม่ของ calcMonthlyPitForRegularIncome/calcMonthlyPitWithBonus ใน payroll-tax.ts) */
+  pvdExemptPortion: number;
   /** ข้อความเตือนทุกจุดที่ถูกตัดยอดเพราะชนเพดาน (แสดงในหน้าจอให้นักบัญชีเห็น ไม่ใช่ error) */
   warnings: string[];
 };
+
+/** ★★★ 2026-08-12 — ส่วน PVD/RMF/กบข ที่ยังหักเป็นค่าลดหย่อนปกติหลังค่าใช้จ่ายได้ (10,000 บาทแรกเท่านั้น ตาม
+ *  ภ.ง.ด.91) ส่วนที่เกินนี้ (จนถึงเพดานรวม 500,000/30%) เป็นเงินได้ยกเว้นก่อนค่าใช้จ่ายแทน (ดู pvdExemptPortion) */
+export const PROVIDENT_FUND_POST_EXPENSE_CAP = 10000;
 
 /**
  * รวม+ตัดเพดานค่าลดหย่อนภาษีอื่นตามประเภท (★★★ 0.2 gate — ผลลัพธ์จากฟังก์ชันนี้ยังเป็นแค่ "preview" จนกว่า
@@ -356,18 +366,17 @@ export type SumAndCapDeductionsResult = {
  *   - `provident_fund` (ครอบคลุม PVD + RMF + กบข รวมเป็นก้อนเดียวตามที่ระบบออกแบบไว้ ดู T152/migration 0099):
  *     รวมทุกแถว แล้ว cap ที่ `min(500,000, 30% ของ annualIncomeEstimate)` — annualIncomeEstimate ≤0/ไม่ใช่
  *     ตัวเลข → ถือเป็น 0 (cap เป็น 0 ทันที ไม่ throw)
- *     ⚠️⚠️⚠️ [ช่องว่างสถาปัตยกรรมที่พบ 2026-08-12 — ต้องแก้ก่อนพิจารณาเปิด ENABLE_EXTRA_DEDUCTIONS_IN_PIT เท่านั้น
- *     ไม่ใช่แค่เพิ่ม test]: ตามเอกสาร "วิธีกรอกแบบ ภ.ง.ด.91" ของกรมสรรพากร เงินสะสม PVD/RMF/กบข ต้องแยกเป็น 2
- *     ขั้นทางภาษี ไม่ใช่ก้อนเดียวที่หักหลังหักค่าใช้จ่ายเหมือนค่าลดหย่อนอื่นทั้งหมด:
- *       (1) ส่วนที่เกิน 10,000 บาท (จนถึง cap ข้างบน) → เป็น "เงินได้ที่ได้รับยกเว้น" ต้องหักออกจากเงินได้
- *           **ก่อน**คำนวณค่าใช้จ่ายมาตรา 42 ทวิ (เพดาน 100,000) — ไม่ใช่หลัง
- *       (2) ส่วน 10,000 บาทแรก → เป็นค่าลดหย่อนปกติที่หักหลังค่าใช้จ่าย (เข้าก้อนเดียวกับ personalAllowance)
- *     ปัจจุบันฟังก์ชันนี้ (`sumAndCapDeductions`) และผู้เรียก (`recalcRunLines`/`getRunWithLines` ใน `payroll.ts`)
- *     เอา `pvdCapped` ทั้งก้อนไปรวมเข้า `totalOtherAllowance` เป็นค่าลดหย่อนหลังหักค่าใช้จ่ายอย่างเดียว — ผลคือ
- *     ถูกต้องเฉพาะกรณีที่เงินได้สูงมากจนค่าใช้จ่าย 50%×เงินได้ ชนเพดาน 100,000 อยู่แล้วไม่ว่าจะหัก PVD ก่อนหรือหลัง
- *     (เคสทดสอบที่มีอยู่ตอนนี้เป็นแบบนี้ทั้งหมด) — **ผิดสำหรับพนักงานเงินได้ระดับกลาง/ต่ำที่มี PVD เกิน 10,000
- *     บาท** ซึ่งลำดับการหักมีผลต่อยอดค่าใช้จ่ายที่คำนวณได้จริง ต้อง refactor ให้แยกฐานคำนวณเป็น 2 ขั้นตามกฎหมาย
- *     ก่อนจะเปิด flag ได้ (ยังไม่ทำในคอมมิตนี้ เพราะเปลี่ยนโครง `recalcRunLines` มาก เกินสโคปของการแก้บั๊กเล็ก ๆ)
+ *     ★★★ แก้บั๊กสถาปัตยกรรมแล้ว 2026-08-12 (พบระหว่าง verify BF, ผู้ใช้ยืนยันด้วยหลักฐาน ภ.ง.ด.91 ปีภาษี 2567
+ *     + spec API รูปแบบข้อมูล ภ.ง.ด.91 ที่แยก field `TaxpayerPvfRdAmount`(≤10,000, ค่าลดหย่อน) กับ
+ *     `TaxpayerPvfAmount`(ส่วนเกิน 10,000 ถึง 490,000, เงินได้ยกเว้น) ชัดเจน): แยกเป็น 2 ขั้นทางภาษีจริงแล้ว
+ *       (1) ส่วนที่เกิน 10,000 บาท (จนถึง cap ข้างบน) → `pvdExemptPortion` ในผลลัพธ์ — เป็นเงินได้ที่ได้รับ
+ *           ยกเว้น ผู้เรียก (`recalcRunLines`) ต้องส่งเป็น `exemptIncome` เข้า
+ *           `calcMonthlyPitForRegularIncome`/`calcMonthlyPitWithBonus` (หักออกจากเงินได้**ก่อน**คำนวณ
+ *           ค่าใช้จ่ายมาตรา 42 ทวิ เพดาน 100,000)
+ *       (2) ส่วน 10,000 บาทแรก (`PROVIDENT_FUND_POST_EXPENSE_CAP`) → รวมอยู่ใน `totalOtherAllowance` ตามปกติ
+ *           (ค่าลดหย่อนหลังหักค่าใช้จ่าย เข้าก้อนเดียวกับ personalAllowance เหมือนประเภทอื่น)
+ *     ยืนยันด้วยตัวอย่างที่ผู้ใช้คำนวณ (เงินเดือน 180,000 + PVD 27,000 → เหลือ 71,500 ตามลำดับ ภ.ง.ด.91 เป๊ะ
+ *     ต่างจากวิธีเดิมที่ได้ 63,000 ผิดไป 8,500 บาท) — ดู golden test ใน payroll-deductions.test.ts
  *   - `mortgage_interest`: รวมทุกแถว แล้ว cap ที่ 100,000 บาท
  *
  *   ★★★ แหล่งอ้างอิงที่ verify ตัวเลข cap ทุกประเภทข้างต้น (T157 — เอกสารทางการของกรมสรรพากรเอง ไม่ใช่
@@ -452,6 +461,14 @@ export function sumAndCapDeductions(rows: DeductionRowForCalc[], annualIncomeEst
     warnings.push(`ดอกเบี้ยเงินกู้ยืมที่อยู่อาศัยเกินเพดาน ${MORTGAGE_INTEREST_CAP.toLocaleString("th-TH")} บาท — ตัดยอดส่วนเกินออก`);
   }
 
-  const totalOtherAllowance = round2(spouseCapped + childSum + lifeSelfCapped + lifeSpouseCapped + pvdCapped + mortgageCapped);
-  return { totalOtherAllowance, warnings };
+  // ★★★ 2026-08-12 — แยก PVD เป็น 2 ขั้นตาม ภ.ง.ด.91: 10,000 บาทแรกหักหลังค่าใช้จ่าย (ปกติ), ส่วนเกิน (จนถึง
+  //   pvdCap ข้างบน) เป็นเงินได้ยกเว้นก่อนค่าใช้จ่าย (pvdExemptPortion) — ไม่รวมเข้า totalOtherAllowance
+  const pvdPostExpenseDeduction = Math.min(pvdCapped, PROVIDENT_FUND_POST_EXPENSE_CAP);
+  const pvdExemptPortion = round2(pvdCapped - pvdPostExpenseDeduction);
+
+  const totalOtherAllowance = round2(spouseCapped + childSum + lifeSelfCapped + lifeSpouseCapped + pvdPostExpenseDeduction + mortgageCapped);
+  if (pvdExemptPortion > 0) {
+    warnings.push(`เงินสะสม PVD/RMF/กบข ส่วนเกิน ${PROVIDENT_FUND_POST_EXPENSE_CAP.toLocaleString("th-TH")} บาท (${pvdExemptPortion.toLocaleString("th-TH")} บาท) เป็นเงินได้ยกเว้นก่อนหักค่าใช้จ่าย — ไม่รวมอยู่ในค่าลดหย่อนด้านบน (ดู pvdExemptPortion)`);
+  }
+  return { totalOtherAllowance, pvdExemptPortion, warnings };
 }

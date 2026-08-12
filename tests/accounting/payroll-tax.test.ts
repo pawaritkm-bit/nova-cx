@@ -152,6 +152,31 @@ describe("calcMonthlyPitForRegularIncome — golden test (T111)", () => {
     expect(calcMonthlyPitForRegularIncome(0, 12, PERSONAL_ALLOWANCE_STANDARD, BRACKETS)).toBe(0);
     expect(calcMonthlyPitForRegularIncome(-100, 12, PERSONAL_ALLOWANCE_STANDARD, BRACKETS)).toBe(0);
   });
+
+  /**
+   * ★★★ Golden test (2026-08-12, แก้บั๊กสถาปัตยกรรม PVD 2 ขั้นตาม ภ.ง.ด.91 — ดูคอมเมนต์เต็มเหนือ
+   * sumAndCapDeductions ใน payroll-deductions.ts) — พารามิเตอร์ exemptIncome ใหม่ต้องหักออกจากเงินได้
+   * **ก่อน**คำนวณค่าใช้จ่ายมาตรา 42 ทวิ (ไม่ใช่หลัง) ยืนยันด้วย cross-check ทางคณิตศาสตร์ที่ไม่พึ่งพาสูตร
+   * เดียวกันตรง ๆ: เงินได้ 180,000 + PVD 27,000 (ส่วนเกิน 10,000 = 17,000 เป็น exemptIncome, ส่วน 10,000
+   * แรกเป็น allowance) ต้องได้ taxableIncome ก่อนหักส่วนบุคคล = 71,500 บาทเป๊ะ ตรงกับที่คำนวณตาม ภ.ง.ด.91:
+   *   incomeAfterExemption = 180,000-17,000 = 163,000; expense = 163,000×50% = 81,500 (ไม่ชน cap 100,000)
+   *   remainder = 163,000-81,500-10,000(allowance) = 71,500
+   * เทียบเท่ากับเงินได้ 143,000 ไม่มี exemption/allowance เลย (0.5×143,000=71,500 พอดี เพราะ expense
+   * เป็นเชิงเส้น 50% ตราบเท่าที่ยังไม่ชน cap 100,000/200,000): ทั้งสองทางต้องให้ annualTax เท่ากันเป๊ะ
+   * (ผิดจากวิธีเดิมที่เอา PVD ทั้งก้อนไปเป็น allowance หลังหักค่าใช้จ่าย → ได้ remainder 63,000 ผิดไป 8,500)
+   */
+  it("★★★ golden test — exemptIncome หักก่อนค่าใช้จ่าย: เงินได้ 180,000+PVD ส่วนเกิน 17,000 ≡ เงินได้ 143,000 ไม่มี exempt/allowance เลย", () => {
+    const withExemption = calcMonthlyPitForRegularIncome(180000, 1, 10000, BRACKETS, 17000);
+    const equivalentDirect = calcMonthlyPitForRegularIncome(143000, 1, 0, BRACKETS, 0);
+    expect(withExemption).toBe(equivalentDirect);
+  });
+
+  it("exemptIncome default=0 (ไม่ส่งพารามิเตอร์) → ผลลัพธ์เหมือนเดิมทุกประการ (backward compatible)", () => {
+    const withoutParam = calcMonthlyPitForRegularIncome(50000, 12, PERSONAL_ALLOWANCE_STANDARD, BRACKETS);
+    const withExplicitZero = calcMonthlyPitForRegularIncome(50000, 12, PERSONAL_ALLOWANCE_STANDARD, BRACKETS, 0);
+    expect(withoutParam).toBe(withExplicitZero);
+    expect(withoutParam).toBe(1791.67);
+  });
 });
 
 describe("calcMonthlyPitWithBonus — golden test (T112, 0.5, verify แล้ว)", () => {
@@ -229,6 +254,18 @@ describe("calcMonthlyPitWithBonus — golden test (T112, 0.5, verify แล้�
     // bonusPit = 0-0 = 0
     expect(r.bonusPit).toBe(0);
     expect(r.totalPit).toBe(0);
+  });
+
+  /**
+   * ★★★ Golden test (2026-08-12, แก้บั๊กสถาปัตยกรรม PVD) — exemptIncome ต้องหักออกจาก annualEstimate ของ
+   * ทั้งฐาน A และ B ก่อนคำนวณค่าใช้จ่ายเสมอ (periods=1 → เทียบเท่าการหัก exemptIncome ออกจาก
+   * grossThisPeriod ตรง ๆ ก่อนเรียกฟังก์ชันโดยไม่ส่ง exemptIncome เลย) — ยืนยันด้วย identity ทางพีชคณิต
+   * ไม่ใช่แค่เลขที่จำลองไว้ตายตัว
+   */
+  it("★ exemptIncome หักจาก annualEstimate ก่อนเสมอ (ทั้ง A และ B) ≡ shift grossThisPeriod ลงตรง ๆ เมื่อ periods=1", () => {
+    const withExemption = calcMonthlyPitWithBonus(180000, 15000, 1, 10000, BRACKETS, 17000);
+    const equivalentDirect = calcMonthlyPitWithBonus(163000, 15000, 1, 10000, BRACKETS, 0);
+    expect(withExemption).toEqual(equivalentDirect);
   });
 });
 

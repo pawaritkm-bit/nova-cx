@@ -121,16 +121,22 @@ export function calcMonthlyPitForRegularIncome(
   grossThisPeriod: number,
   periodsPerYear: number,
   personalAllowance: number,
-  brackets: PitBracket[]
+  brackets: PitBracket[],
+  /** ★★★ 2026-08-12 (เฟส 9b BE follow-up) — เงินได้ที่ได้รับยกเว้นก่อนหักค่าใช้จ่าย (เช่น PVD ส่วนเกิน
+   *   10,000 ตาม ภ.ง.ด.91) ต่างจาก personalAllowance ที่หักหลังค่าใช้จ่าย — default 0 (backward compatible
+   *   กับผู้เรียกเดิมทั้งหมดที่ไม่มีแนวคิดนี้) ดูคอมเมนต์เต็มใน payroll-deductions.ts::sumAndCapDeductions */
+  exemptIncome: number = 0
 ): number {
   const gross = Number.isFinite(grossThisPeriod) && grossThisPeriod > 0 ? grossThisPeriod : 0;
   const periods = Number.isFinite(periodsPerYear) && periodsPerYear > 0 ? periodsPerYear : 12;
   if (gross <= 0) return 0;
 
   const annualEstimate = round2(gross * periods);
-  const expense = expenseDeduction(annualEstimate);
+  const exempt = Number.isFinite(exemptIncome) && exemptIncome > 0 ? Math.min(exemptIncome, annualEstimate) : 0;
+  const incomeAfterExemption = round2(annualEstimate - exempt);
+  const expense = expenseDeduction(incomeAfterExemption);
   const allowance = Number.isFinite(personalAllowance) && personalAllowance >= 0 ? personalAllowance : 0;
-  const taxableIncome = Math.max(round2(annualEstimate - expense - allowance), 0);
+  const taxableIncome = Math.max(round2(incomeAfterExemption - expense - allowance), 0);
   const annualTax = calcAnnualTax(taxableIncome, brackets);
   return round2(annualTax / periods);
 }
@@ -165,25 +171,31 @@ export function calcMonthlyPitWithBonus(
   bonusAmount: number,
   periodsPerYear: number,
   personalAllowance: number,
-  brackets: PitBracket[]
+  brackets: PitBracket[],
+  /** ★★★ 2026-08-12 — ดูคอมเมนต์เต็มที่ calcMonthlyPitForRegularIncome (เงินได้ยกเว้นก่อนหักค่าใช้จ่าย
+   *   เช่น PVD ส่วนเกิน 10,000) — เป็นยอดต่อปีคงที่ ไม่เปลี่ยนตามโบนัส จึงหักออกจากฐานทั้ง A และ B เท่ากัน */
+  exemptIncome: number = 0
 ): MonthlyPitWithBonusResult {
   const gross = Number.isFinite(grossThisPeriod) && grossThisPeriod > 0 ? grossThisPeriod : 0;
   const bonus = Number.isFinite(bonusAmount) && bonusAmount > 0 ? bonusAmount : 0;
   const periods = Number.isFinite(periodsPerYear) && periodsPerYear > 0 ? periodsPerYear : 12;
   const allowance = Number.isFinite(personalAllowance) && personalAllowance >= 0 ? personalAllowance : 0;
 
-  const regularPit = calcMonthlyPitForRegularIncome(gross, periods, allowance, brackets);
+  const regularPit = calcMonthlyPitForRegularIncome(gross, periods, allowance, brackets, exemptIncome);
   if (bonus <= 0) return { regularPit, bonusPit: 0, totalPit: regularPit };
 
   // A: ภาษีทั้งปีไม่รวมโบนัส (คำนวณตรง ๆ อีกครั้งเพื่อหาผลต่าง B−A ที่แม่นยำ — ไม่ derive จาก regularPit*periods
   //   ที่ปัดเศษไปแล้ว กัน error สะสมจากการปัดเศษซ้อน)
   const annualEstimateA = round2(gross * periods);
-  const taxableA = Math.max(round2(annualEstimateA - expenseDeduction(annualEstimateA) - allowance), 0);
+  const exempt = Number.isFinite(exemptIncome) && exemptIncome > 0 ? Math.min(exemptIncome, annualEstimateA) : 0;
+  const incomeAfterExemptionA = round2(annualEstimateA - exempt);
+  const taxableA = Math.max(round2(incomeAfterExemptionA - expenseDeduction(incomeAfterExemptionA) - allowance), 0);
   const annualTaxA = calcAnnualTax(taxableA, brackets);
 
-  // B: รวมโบนัสเข้า annualEstimate ก่อนหักค่าใช้จ่าย/ลดหย่อน (ชุดลดหย่อนเดียวกัน)
+  // B: รวมโบนัสเข้า annualEstimate ก่อนหักค่าใช้จ่าย/ลดหย่อน (ชุดลดหย่อนเดียวกัน) — exempt เดิม (ไม่เปลี่ยนตามโบนัส)
   const annualEstimateB = round2(annualEstimateA + bonus);
-  const taxableB = Math.max(round2(annualEstimateB - expenseDeduction(annualEstimateB) - allowance), 0);
+  const incomeAfterExemptionB = round2(annualEstimateB - exempt);
+  const taxableB = Math.max(round2(incomeAfterExemptionB - expenseDeduction(incomeAfterExemptionB) - allowance), 0);
   const annualTaxB = calcAnnualTax(taxableB, brackets);
 
   const bonusPit = round2(annualTaxB - annualTaxA);

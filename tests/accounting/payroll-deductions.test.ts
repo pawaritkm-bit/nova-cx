@@ -12,6 +12,7 @@ import {
   LIFE_INSURANCE_SPOUSE_CAP,
   PROVIDENT_FUND_ABS_CAP,
   PROVIDENT_FUND_INCOME_RATIO,
+  PROVIDENT_FUND_POST_EXPENSE_CAP,
   MORTGAGE_INTEREST_CAP,
   type PayrollEmployeeDeductionInput,
 } from "@/lib/accounting/payroll-deductions";
@@ -269,34 +270,58 @@ describe("sumAndCapDeductions (T152) — self-consistent", () => {
     expect(res.warnings.some((w) => w.includes("เบี้ยประกันชีวิตของคู่สมรสเกินเพดาน"))).toBe(true);
   });
 
-  it("provident_fund เกิน 500,000 แต่ยังไม่ถึง 30% ของเงินได้ → cap ที่ 500,000", () => {
+  it("provident_fund เกิน 500,000 แต่ยังไม่ถึง 30% ของเงินได้ → cap ที่ 500,000 (แต่ totalOtherAllowance ได้แค่ 10,000 แรก ส่วนเกินไป pvdExemptPortion)", () => {
     // เงินได้ 3,000,000 → 30% = 900,000 (มากกว่า 500,000) → ใช้ 500,000 เป็นเพดาน
     const res = sumAndCapDeductions([{ deductionType: "provident_fund", amount: 600000 }], 3000000);
-    expect(res.totalOtherAllowance).toBe(PROVIDENT_FUND_ABS_CAP);
-    expect(res.warnings.length).toBe(1);
+    expect(res.totalOtherAllowance).toBe(PROVIDENT_FUND_POST_EXPENSE_CAP);
+    expect(res.pvdExemptPortion).toBe(PROVIDENT_FUND_ABS_CAP - PROVIDENT_FUND_POST_EXPENSE_CAP);
+    expect(res.warnings.length).toBe(2); // เกินเพดานรวม + ส่วนเกิน 10,000 เป็นเงินได้ยกเว้น
   });
 
-  it("provident_fund — เงินได้ต่อปีต่ำจน 30% ของเงินได้ < 500,000 → cap ที่ 30% ของเงินได้แทน", () => {
+  it("provident_fund — เงินได้ต่อปีต่ำจน 30% ของเงินได้ < 500,000 → cap ที่ 30% ของเงินได้แทน (totalOtherAllowance ยังจำกัดที่ 10,000)", () => {
     // เงินได้ 600,000 → 30% = 180,000 (น้อยกว่า 500,000) → ใช้ 180,000 เป็นเพดาน
     const income = 600000;
     const expectedCap = income * PROVIDENT_FUND_INCOME_RATIO;
     const res = sumAndCapDeductions([{ deductionType: "provident_fund", amount: 300000 }], income);
-    expect(res.totalOtherAllowance).toBe(expectedCap);
+    expect(res.totalOtherAllowance).toBe(PROVIDENT_FUND_POST_EXPENSE_CAP);
+    expect(res.pvdExemptPortion).toBe(expectedCap - PROVIDENT_FUND_POST_EXPENSE_CAP);
+    expect(res.warnings.length).toBe(2);
+  });
+
+  it("provident_fund ไม่เกิน cap ทั้งสองเกณฑ์ แต่เกิน 10,000 → totalOtherAllowance=10,000 ส่วนเกินไป pvdExemptPortion (ไม่มี warning เกินเพดานรวม แต่มี warning ส่วนเกิน 10,000)", () => {
+    const res = sumAndCapDeductions([{ deductionType: "provident_fund", amount: 50000 }], 3000000);
+    expect(res.totalOtherAllowance).toBe(PROVIDENT_FUND_POST_EXPENSE_CAP);
+    expect(res.pvdExemptPortion).toBe(50000 - PROVIDENT_FUND_POST_EXPENSE_CAP);
     expect(res.warnings.length).toBe(1);
   });
 
-  it("provident_fund ไม่เกิน cap ทั้งสองเกณฑ์ → ไม่มี warning ยอดผ่านตรง ๆ", () => {
-    const res = sumAndCapDeductions([{ deductionType: "provident_fund", amount: 50000 }], 3000000);
-    expect(res.totalOtherAllowance).toBe(50000);
+  it("provident_fund ไม่เกิน 10,000 เลย → totalOtherAllowance=ยอดจริง, pvdExemptPortion=0, ไม่มี warning", () => {
+    const res = sumAndCapDeductions([{ deductionType: "provident_fund", amount: 8000 }], 3000000);
+    expect(res.totalOtherAllowance).toBe(8000);
+    expect(res.pvdExemptPortion).toBe(0);
     expect(res.warnings.length).toBe(0);
   });
 
   it("annualIncomeEstimate ≤0/ไม่ใช่ตัวเลข → provident_fund cap เป็น 0 ทันที (ไม่ throw)", () => {
     const res = sumAndCapDeductions([{ deductionType: "provident_fund", amount: 10000 }], 0);
     expect(res.totalOtherAllowance).toBe(0);
+    expect(res.pvdExemptPortion).toBe(0);
     expect(res.warnings.length).toBe(1);
     const resNeg = sumAndCapDeductions([{ deductionType: "provident_fund", amount: 10000 }], -500);
     expect(resNeg.totalOtherAllowance).toBe(0);
+    expect(resNeg.pvdExemptPortion).toBe(0);
+  });
+
+  /**
+   * ★★★ Golden test (2026-08-12) — ยืนยันตามตัวอย่างที่ผู้ใช้คำนวณจาก ภ.ง.ด.91 จริง: เงินเดือนรวมทั้งปี
+   * 180,000 บาท + สะสม PVD 27,000 บาท → ส่วนเกิน 10,000 (=17,000) ต้องเป็นเงินได้ยกเว้นก่อนหักค่าใช้จ่าย
+   * ส่วน 10,000 แรกเป็นค่าลดหย่อนปกติ (ดู golden test คู่กันใน payroll-tax.test.ts ที่ยืนยัน taxableIncome
+   * ที่ได้จริง = 71,500 ตรงกับที่ผู้ใช้คำนวณ ต่างจากวิธีเดิมที่ได้ 63,000 ผิดไป 8,500 บาท)
+   */
+  it("★★★ golden test — เงินได้ 180,000 + PVD 27,000 → pvdExemptPortion=17,000, totalOtherAllowance(PVD)=10,000", () => {
+    const res = sumAndCapDeductions([{ deductionType: "provident_fund", amount: 27000 }], 180000);
+    expect(res.totalOtherAllowance).toBe(PROVIDENT_FUND_POST_EXPENSE_CAP);
+    expect(res.pvdExemptPortion).toBe(17000);
   });
 
   it("mortgage_interest เกิน 100,000 → cap ที่ 100,000 เป๊ะ", () => {
