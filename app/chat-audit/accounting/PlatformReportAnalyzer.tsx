@@ -1,7 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
-import { createPlatformReportUploadUrlAction } from "./platform-report-actions";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  createPlatformReportUploadUrlAction,
+  getPlatformReportSettingsAction,
+  savePlatformReportSettingsAction,
+  createPlatformReportDraftJournalEntryAction,
+} from "./platform-report-actions";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { UPLOAD_ACCEPT, MAX_UPLOAD_BYTES, validateUpload } from "@/lib/accounting/upload";
 import {
@@ -13,6 +18,9 @@ import {
   type PlatformLineDirection,
 } from "@/lib/accounting/platform-report-analyze";
 import { toCsv } from "@/lib/accounting/csv-export";
+import type { ChartAccount } from "@/lib/accounting/chart-of-accounts";
+import type { PlatformReportSettings } from "@/lib/accounting/platform-report-settings";
+import AccountCombobox from "./AccountCombobox";
 
 /** bucket เดียวกับบิล/สเตทเมนต์ (ต้องตรงกับ PLATFORM_REPORT actions / route) */
 const BILLS_BUCKET = "bills";
@@ -63,6 +71,63 @@ function monthLabel(m: string): string {
   return `${TH_MONTHS[Number(mm[2]) - 1] ?? mm[2]} ${Number(mm[1]) + 543}`;
 }
 
+/** ★ 2026-08-12 — ตั้งค่าบัญชี (ประเภทรายงานแพลตฟอร์ม → รหัสบัญชี) สำหรับ auto-สร้างสมุดรายวันดราฟต์
+ *   เก็บทั้ง code+name เพื่อแสดงผลใน AccountCombobox (mirror pattern payroll-employees settings form) */
+type SettingsForm = {
+  salesAccountCode: string;
+  salesAccountName: string;
+  commissionFeeAccountCode: string;
+  commissionFeeAccountName: string;
+  paymentFeeAccountCode: string;
+  paymentFeeAccountName: string;
+  shippingFeeAccountCode: string;
+  shippingFeeAccountName: string;
+  adsFeeAccountCode: string;
+  adsFeeAccountName: string;
+  penaltyAccountCode: string;
+  penaltyAccountName: string;
+  refundAccountCode: string;
+  refundAccountName: string;
+  otherAccountCode: string;
+  otherAccountName: string;
+  clearingAccountCode: string;
+  clearingAccountName: string;
+};
+
+function accountNameFor(code: string, chart: ChartAccount[]): string {
+  return chart.find((a) => a.code === code)?.name ?? "";
+}
+
+function settingsToForm(s: PlatformReportSettings, chart: ChartAccount[]): SettingsForm {
+  return {
+    salesAccountCode: s.salesAccountCode,
+    salesAccountName: accountNameFor(s.salesAccountCode, chart),
+    commissionFeeAccountCode: s.commissionFeeAccountCode,
+    commissionFeeAccountName: accountNameFor(s.commissionFeeAccountCode, chart),
+    paymentFeeAccountCode: s.paymentFeeAccountCode,
+    paymentFeeAccountName: accountNameFor(s.paymentFeeAccountCode, chart),
+    shippingFeeAccountCode: s.shippingFeeAccountCode,
+    shippingFeeAccountName: accountNameFor(s.shippingFeeAccountCode, chart),
+    adsFeeAccountCode: s.adsFeeAccountCode,
+    adsFeeAccountName: accountNameFor(s.adsFeeAccountCode, chart),
+    penaltyAccountCode: s.penaltyAccountCode,
+    penaltyAccountName: accountNameFor(s.penaltyAccountCode, chart),
+    refundAccountCode: s.refundAccountCode,
+    refundAccountName: accountNameFor(s.refundAccountCode, chart),
+    otherAccountCode: s.otherAccountCode,
+    otherAccountName: accountNameFor(s.otherAccountCode, chart),
+    clearingAccountCode: s.clearingAccountCode,
+    clearingAccountName: accountNameFor(s.clearingAccountCode, chart),
+  };
+}
+
+/** วันที่ล่าสุดจากรายการ (YYYY-MM-DD) — fallback วันนี้ถ้าไม่มีวันที่เลย · ใช้เป็น docDate ของ JE ที่สร้าง */
+function latestDateOrToday(lines: PlatformReportLine[]): string {
+  const dates = lines.map((l) => l.date).filter((d): d is string => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d));
+  if (dates.length === 0) return new Date().toISOString().slice(0, 10);
+  return dates.reduce((a, b) => (a > b ? a : b));
+}
+
 /** สร้างไฟล์ CSV แล้วสั่งเบราว์เซอร์ดาวน์โหลดทันที (client-only — ไม่มี server round trip) */
 function downloadCsv(filename: string, content: string): void {
   const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
@@ -98,9 +163,11 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 export default function PlatformReportAnalyzer({
   customerId,
   customerLabel,
+  chart,
 }: {
   customerId: string;
   customerLabel: string;
+  chart: ChartAccount[];
 }) {
   const [pending, startTransition] = useTransition();
   const [phase, setPhase] = useState<"" | "reading">("");
@@ -110,6 +177,52 @@ export default function PlatformReportAnalyzer({
   const [lines, setLines] = useState<PlatformReportLine[]>([]);
   const [fileResults, setFileResults] = useState<FileResult[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // ★ ตั้งค่าบัญชี (ประเภท → รหัสบัญชี) + auto-สร้างสมุดรายวันดราฟต์ — โหลดตอน mount (เฉพาะลูกค้านี้)
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsForm, setSettingsForm] = useState<SettingsForm | null>(null);
+  const [settingsMsg, setSettingsMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [jeMsg, setJeMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [savingSettings, startSettingsTransition] = useTransition();
+  const [creatingJe, startJeTransition] = useTransition();
+
+  useEffect(() => {
+    let cancelled = false;
+    getPlatformReportSettingsAction(customerId).then((res) => {
+      if (cancelled) return;
+      if (res.ok) setSettingsForm(settingsToForm(res.settings, chart));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customerId]);
+
+  function saveSettings() {
+    if (!settingsForm) return;
+    setSettingsMsg(null);
+    startSettingsTransition(async () => {
+      const res = await savePlatformReportSettingsAction({ customerId, ...settingsForm });
+      setSettingsMsg({ ok: res.ok, text: res.ok ? res.message : res.message });
+    });
+  }
+
+  function createDraftJournalEntry() {
+    setJeMsg(null);
+    startJeTransition(async () => {
+      const res = await createPlatformReportDraftJournalEntryAction({
+        customerId,
+        docDate: latestDateOrToday(lines),
+        summary,
+      });
+      setJeMsg({
+        ok: res.ok,
+        text: res.ok
+          ? "สร้างสมุดรายวัน (ดราฟต์) แล้ว — ไปตรวจสอบ/ยืนยันที่หน้า \"ลงบันทึกบัญชีเอง\""
+          : res.message,
+      });
+    });
+  }
 
   // สรุปกำไรสุทธิ + รายเดือน คำนวณใหม่ทุกครั้งที่ตารางเปลี่ยน (helper เดียวกับ server) — รวมทุกไฟล์แล้ว
   const summary = useMemo(() => summarizePlatformReport(lines), [lines]);
@@ -274,7 +387,61 @@ export default function PlatformReportAnalyzer({
             ดาวน์โหลด CSV
           </button>
         ) : null}
+        <button type="button" className="btn btn-ghost" onClick={() => setShowSettings((v) => !v)}>
+          {showSettings ? "ปิดตั้งค่าบัญชี" : "⚙ ตั้งค่าบัญชี"}
+        </button>
       </div>
+
+      {/* ตั้งค่าบัญชี (ประเภทรายงานแพลตฟอร์ม → รหัสบัญชี) — ใช้ตอน auto-สร้างสมุดรายวันดราฟต์ */}
+      {showSettings ? (
+        <section className="stmt-section">
+          <h3 className="stmt-h">ตั้งค่าบัญชี (ผูกครั้งเดียว ใช้ทุกครั้งที่สร้างสมุดรายวัน)</h3>
+          {!settingsForm ? (
+            <p className="empty">กำลังโหลด…</p>
+          ) : (
+            <>
+              <div className="acc-field-grid">
+                {(
+                  [
+                    ["salesAccountCode", "salesAccountName", "ยอดขาย (รายได้)"],
+                    ["commissionFeeAccountCode", "commissionFeeAccountName", "ค่าคอมมิชชั่นแพลตฟอร์ม (ค่าใช้จ่าย)"],
+                    ["paymentFeeAccountCode", "paymentFeeAccountName", "ค่าธรรมเนียมการรับเงิน (ค่าใช้จ่าย)"],
+                    ["shippingFeeAccountCode", "shippingFeeAccountName", "ค่าส่ง/ค่าขนส่ง (ค่าใช้จ่าย)"],
+                    ["adsFeeAccountCode", "adsFeeAccountName", "ค่าโฆษณา/โปรโมท (ค่าใช้จ่าย)"],
+                    ["penaltyAccountCode", "penaltyAccountName", "ค่าปรับ (ค่าใช้จ่าย)"],
+                    ["refundAccountCode", "refundAccountName", "เงินคืน/ยกเลิกออเดอร์ (หักจากยอดขาย)"],
+                    ["otherAccountCode", "otherAccountName", "อื่นๆ (ค่าใช้จ่าย)"],
+                    ["clearingAccountCode", "clearingAccountName", "เงินที่ได้รับจริง (เงินสด/ธนาคาร)"],
+                  ] as [keyof SettingsForm, keyof SettingsForm, string][]
+                ).map(([codeKey, nameKey, label]) => (
+                  <label className="acc-field" key={codeKey}>
+                    <span>{label}</span>
+                    <AccountCombobox
+                      accountCode={settingsForm[codeKey]}
+                      accountName={settingsForm[nameKey]}
+                      chart={chart}
+                      readOnly={false}
+                      onSelect={(code, name) =>
+                        setSettingsForm((f) => (f ? { ...f, [codeKey]: code, [nameKey]: name } : f))
+                      }
+                      onNameChange={(name) => setSettingsForm((f) => (f ? { ...f, [nameKey]: name } : f))}
+                      onClear={() =>
+                        setSettingsForm((f) => (f ? { ...f, [codeKey]: "", [nameKey]: "" } : f))
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+              <button type="button" className="btn" onClick={saveSettings} disabled={savingSettings} style={{ marginTop: 10 }}>
+                {savingSettings ? "กำลังบันทึก…" : "บันทึกตั้งค่า"}
+              </button>
+              {settingsMsg ? (
+                <div className={`action-msg ${settingsMsg.ok ? "ok" : "err"}`}>{settingsMsg.text}</div>
+              ) : null}
+            </>
+          )}
+        </section>
+      ) : null}
       {selectedNames.length > 0 ? (
         <div className="stmt-fname">
           เลือกไว้ {selectedNames.length} ไฟล์: {selectedNames.join(", ")}
@@ -375,6 +542,15 @@ export default function PlatformReportAnalyzer({
                   <b>{money(summary.netAmount)}</b>
                 </div>
               </div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <button type="button" className="btn" onClick={createDraftJournalEntry} disabled={creatingJe}>
+                {creatingJe ? "กำลังสร้าง…" : "สร้างสมุดรายวัน (ดราฟต์)"}
+              </button>
+              <p className="stmt-note" style={{ marginTop: 4 }}>
+                สร้างเป็น &quot;ดราฟต์&quot; เสมอ — ไม่ auto-ยืนยัน ต้องไปตรวจสอบ/ยืนยันเองที่หน้า &quot;ลงบันทึกบัญชีเอง&quot; ก่อนจึงจะมีผลกับยอดบัญชีจริง
+              </p>
+              {jeMsg ? <div className={`action-msg ${jeMsg.ok ? "ok" : "err"}`}>{jeMsg.text}</div> : null}
             </div>
           </section>
 

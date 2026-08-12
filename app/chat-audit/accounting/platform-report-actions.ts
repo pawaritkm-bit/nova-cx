@@ -9,13 +9,26 @@
  * ★ ไม่ persist ผล — อัปไฟล์ขึ้น Storage ชั่วคราว, AI อ่าน on-the-fly, คืนผลให้หน้าแสดง
  * ★ PDPA: path ใช้ customer_code (ASCII) ไม่ใช่ชื่อ · ไม่ log ชื่อไฟล์/ลูกค้า/ยอด
  */
+import { revalidatePath } from "next/cache";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import {
   requireAccountingAccess,
   customerInScope,
+  assertCustomerInScope,
   AccountingAuthError,
 } from "@/lib/accounting/access";
 import { validateUpload, sanitizeUploadName, extOf } from "@/lib/accounting/upload";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
+import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
+import {
+  getOrCreateDefaultSettings,
+  upsertSettings,
+  type PlatformReportSettings,
+  type PlatformReportSettingsInput,
+} from "@/lib/accounting/platform-report-settings";
+import { buildPlatformReportJournalEntryInput } from "@/lib/accounting/platform-report-je";
+import { upsertManualEntry } from "@/lib/accounting/manual-journal";
+import type { PlatformReportSummary } from "@/lib/accounting/platform-report-analyze";
 
 const BILLS_BUCKET = "bills";
 /** prefix โฟลเดอร์รายงานแพลตฟอร์ม — route สกัดจะตรวจว่า path ขึ้นต้นด้วย `{tenant}/platform-report/` */
@@ -102,5 +115,87 @@ export async function createPlatformReportUploadUrlAction(input: {
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "เตรียมอัปโหลดไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * โหลดตั้งค่าบัญชี (ผูกประเภทรายงานแพลตฟอร์ม → รหัสบัญชี) ของลูกค้า 1 ราย — สร้างค่าเริ่มต้นให้อัตโนมัติ
+ *   ถ้ายังไม่มี (getOrCreateDefaultSettings) — ใช้ตอนสร้างสมุดรายวังดราฟต์ (createPlatformReportDraftJournalEntryAction)
+ */
+export async function getPlatformReportSettingsAction(
+  customerId: string
+): Promise<{ ok: true; settings: PlatformReportSettings } | { ok: false; message: string }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    assertCustomerInScope(ctx, customerId);
+
+    const settings = await getOrCreateDefaultSettings(service, ctx.tenantId, customerId);
+    return { ok: true, settings };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "โหลดตั้งค่าไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+export type SavePlatformReportSettingsInput = PlatformReportSettingsInput & { customerId: string };
+
+/** บันทึกตั้งค่าบัญชี (upsert) — validate ซ้ำฝั่ง server เสมอ (ต้องอยู่ในผังบัญชี + หมวดที่ถูกต้อง) */
+export async function savePlatformReportSettingsAction(
+  input: SavePlatformReportSettingsInput
+): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(input.customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    assertCustomerInScope(ctx, input.customerId);
+
+    const chart = await listChartOfAccounts(service, ctx.tenantId);
+    const chartByCode = buildChartByCode(chart);
+
+    const res = await upsertSettings(service, ctx.tenantId, input.customerId, input, chartByCode);
+    if (!res.ok) return { ok: false, message: res.message };
+    return { ok: true, message: "บันทึกตั้งค่าแล้ว" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "บันทึกตั้งค่าไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * สร้างสมุดรายวัน (manual JE) แบบดราฟต์จากสรุปรายงานแพลตฟอร์มที่แสดงอยู่บนจอ — ★ ดราฟต์เสมอ ไม่เคย
+ *   auto-confirm (ผู้ใช้ยืนยันเองผ่านหน้า "ลงบันทึกบัญชีเอง" ตามปกติ — เหมือน suggestFxGainLossNoteAction)
+ *   ต้องตั้งค่าบัญชีให้ครบก่อน (getPlatformReportSettingsAction) — รหัสบัญชีไม่ครบ/ไม่อยู่ในผัง → ปฏิเสธ
+ */
+export async function createPlatformReportDraftJournalEntryAction(input: {
+  customerId: string;
+  docDate: string;
+  summary: PlatformReportSummary;
+}): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(input.customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    assertCustomerInScope(ctx, input.customerId);
+
+    const settings = await getOrCreateDefaultSettings(service, ctx.tenantId, input.customerId);
+    const built = buildPlatformReportJournalEntryInput(input.summary, settings, input.docDate);
+    if (!built.ok) return { ok: false, message: built.message };
+
+    const chart = await listChartOfAccounts(service, ctx.tenantId);
+    const chartByCode = buildChartByCode(chart);
+
+    const res = await upsertManualEntry(service, ctx.tenantId, input.customerId, built.value, chartByCode);
+    if (!res.ok) return { ok: false, message: res.message };
+
+    revalidatePath("/chat-audit/accounting/journal-entry");
+    return { ok: true, id: res.id };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "สร้างสมุดรายวันไม่สำเร็จ กรุณาลองใหม่" };
   }
 }

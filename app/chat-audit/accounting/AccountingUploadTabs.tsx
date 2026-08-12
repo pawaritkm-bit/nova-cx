@@ -3,17 +3,22 @@
 import { useState } from "react";
 import StatementAnalyzer from "./StatementAnalyzer";
 import PlatformReportAnalyzer from "./PlatformReportAnalyzer";
+import type { ChartAccount } from "@/lib/accounting/chart-of-accounts";
 
 /**
  * แท็บสวิตช์ระหว่าง "สเตทเมนต์ธนาคาร" กับ "รายงานแพลตฟอร์ม" (ข้อ C) — ใช้ลูกค้าที่เลือกไว้ร่วมกัน
  *   (ทั้งสองฟีเจอร์อ่านไฟล์แล้วแสดงผล on-the-fly เท่านั้น ไม่มี state ที่ต้องแชร์ข้ามแท็บ)
+ *   ★ chart (ผังบัญชี) โหลดจาก page.tsx (server) — ใช้เฉพาะแท็บรายงานแพลตฟอร์ม (ตั้งค่า mapping บัญชี
+ *   → auto-สร้างสมุดรายวันดราฟต์)
  */
 export default function AccountingUploadTabs({
   customerId,
   customerLabel,
+  chart,
 }: {
   customerId: string;
   customerLabel: string;
+  chart: ChartAccount[];
 }) {
   const [tab, setTab] = useState<"statement" | "platform">("statement");
 
@@ -34,7 +39,7 @@ export default function AccountingUploadTabs({
         <StatementAnalyzer customerId={customerId} customerLabel={customerLabel} />
       </div>
       <div style={{ display: tab === "platform" ? undefined : "none" }}>
-        <PlatformReportAnalyzer customerId={customerId} customerLabel={customerLabel} />
+        <PlatformReportAnalyzer customerId={customerId} customerLabel={customerLabel} chart={chart} />
       </div>
     </div>
   );

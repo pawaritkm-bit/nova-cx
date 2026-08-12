@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, type AccountingAccess } from "@/lib/accounting/access";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import AccountingUploadTabs from "../AccountingUploadTabs";
 import ChatAuditFrame from "../../_Frame";
 import "../../chat-admin.css";
@@ -83,6 +84,9 @@ export default async function StatementPage({
     UUID_RE.test(rawCustomer) && customers.some((c) => c.id === rawCustomer) ? rawCustomer : "";
   const selectedLabel = customers.find((c) => c.id === validCustomerId)?.label ?? "";
 
+  // ผังบัญชี (ใช้เลือกบัญชีตอนตั้งค่า mapping ของโหมด "รายงานแพลตฟอร์ม" → auto-สร้างสมุดรายวัน)
+  const chart = validCustomerId ? await listChartOfAccounts(service, access.tenantId) : [];
+
   return (
     <ChatAuditFrame
       active="chat-accounting"
@@ -123,7 +127,7 @@ export default async function StatementPage({
           </div>
         ) : (
           <div className="card">
-            <AccountingUploadTabs customerId={validCustomerId} customerLabel={selectedLabel} />
+            <AccountingUploadTabs customerId={validCustomerId} customerLabel={selectedLabel} chart={chart} />
           </div>
         )}
       </div>
