@@ -14,6 +14,11 @@ import "../../bills/bills.css";
 import "../accounting.css";
 
 export const dynamic = "force-dynamic";
+// ★ 2026-08-12 (wishlist ข้อ 2, พบจาก independent review) — Server Action ของหน้านี้ (bulkImportEmployeesAction)
+//   วนสร้างพนักงานได้สูงสุด MAX_IMPORT_ROWS แถวก่อน return ผลลัพธ์เดียว ค่า default ของ maxDuration บน
+//   Vercel (10-15s) ไม่พอสำหรับไฟล์ที่มีหลายร้อยแถว — ต้องขยายให้ตรงกับ pattern เดียวกับ route ที่หนักอื่น ๆ
+//   (ดู vercel.json — app/api/**/route.ts ตั้งไว้ 60s) เพราะ Server Action ผูกกับ maxDuration ของ page ที่เรียก
+export const maxDuration = 60;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

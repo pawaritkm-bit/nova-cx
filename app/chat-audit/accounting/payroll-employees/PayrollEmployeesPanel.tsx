@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   upsertEmployeeAction,
@@ -10,6 +10,9 @@ import {
   listDeductionsAction,
   upsertDeductionAction,
   deleteDeductionAction,
+  bulkImportEmployeesAction,
+  downloadEmployeeImportTemplateAction,
+  type BulkImportRowResult,
 } from "./actions";
 import type { PayrollEmployee } from "@/lib/accounting/payroll-employees";
 import type { PayrollSettings } from "@/lib/accounting/payroll-settings";
@@ -144,6 +147,58 @@ export default function PayrollEmployeesPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(() => blankForm());
   const [revealed, setRevealed] = useState<Record<string, { idCardNo: string | null; passportNo: string | null }>>({});
+
+  // ★ นำเข้าพนักงานเป็นชุด (wishlist ข้อ 2) — pending แยกจาก pending ของฟอร์มทีละคน กันปุ่มติดกัน
+  const [importPending, startImportTransition] = useTransition();
+  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [importResults, setImportResults] = useState<BulkImportRowResult[] | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
+
+  async function downloadImportTemplate() {
+    const res = await downloadEmployeeImportTemplateAction();
+    if (!res.ok) {
+      setImportMsg({ ok: false, text: res.message });
+      return;
+    }
+    const bin = atob(res.base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "เทมเพลตนำเข้าพนักงาน.xlsx";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function submitImport() {
+    const file = importFileRef.current?.files?.[0];
+    if (!file) {
+      setImportMsg({ ok: false, text: "กรุณาเลือกไฟล์ Excel (.xlsx) หรือ CSV" });
+      return;
+    }
+    setImportMsg(null);
+    setImportResults(null);
+    startImportTransition(async () => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await bulkImportEmployeesAction(customerId, fd);
+      if (!res.ok) {
+        setImportMsg({ ok: false, text: res.message });
+        return;
+      }
+      setImportResults(res.results);
+      setImportMsg({
+        ok: res.successCount === res.results.length,
+        text:
+          `นำเข้าสำเร็จ ${res.successCount}/${res.results.length} รายการ` +
+          (res.truncated ? ` (ไฟล์มี ${res.totalRows} แถว — ตัดเหลือ ${res.results.length} แถวแรกตามเพดาน)` : ""),
+      });
+      if (importFileRef.current) importFileRef.current.value = "";
+      router.refresh();
+    });
+  }
 
   const activeEmployees = useMemo(() => employees.filter((e) => e.isActive), [employees]);
   const inactiveEmployees = useMemo(() => employees.filter((e) => !e.isActive), [employees]);
@@ -287,6 +342,45 @@ export default function PayrollEmployeesPanel({
 
       {tab === "employees" ? (
         <>
+          <div className="card" style={{ marginBottom: 12 }}>
+            <div className="section-title"><span>นำเข้าพนักงานเป็นชุด (Excel/CSV)</span></div>
+            <p className="empty" style={{ marginBottom: 8 }}>
+              ดาวน์โหลดเทมเพลตก่อน กรอกรายชื่อพนักงาน แล้วอัปโหลดกลับมา — เพิ่มพนักงานใหม่เท่านั้น (ไม่แก้ทะเบียนเดิม)
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <button type="button" className="btn btn-ghost" onClick={downloadImportTemplate}>
+                ดาวน์โหลดเทมเพลต
+              </button>
+              <input ref={importFileRef} type="file" accept=".xlsx,.csv" disabled={importPending} />
+              <button type="button" className="btn" onClick={submitImport} disabled={importPending}>
+                {importPending ? "กำลังนำเข้า…" : "นำเข้าพนักงาน"}
+              </button>
+            </div>
+            {importMsg ? <div className={`action-msg ${importMsg.ok ? "ok" : "err"}`}>{importMsg.text}</div> : null}
+            {importResults && importResults.length > 0 ? (
+              <div className="table-wrap" style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
+                <table className="dlv-table acc-table">
+                  <thead>
+                    <tr>
+                      <th>แถวที่</th>
+                      <th>ชื่อ</th>
+                      <th>ผลลัพธ์</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importResults.map((r) => (
+                      <tr key={r.rowNumber}>
+                        <td>{r.rowNumber}</td>
+                        <td>{r.fullName}</td>
+                        <td style={{ color: r.ok ? "#157347" : "#b02a37" }}>{r.ok ? "✓ สำเร็จ" : `✕ ${r.message}`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+
           <div className="card" style={{ marginBottom: 12 }}>
             <div className="section-title"><span>{editingId ? "แก้ไขพนักงาน" : "เพิ่มพนักงานใหม่"}</span></div>
             <div className="acc-field-grid">
