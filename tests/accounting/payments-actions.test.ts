@@ -29,7 +29,12 @@ vi.mock("@/lib/accounting/access", async (importActual) => {
   };
 });
 
-import { recordBillPaymentAction, voidBillPaymentAction } from "@/app/chat-audit/accounting/payments/actions";
+import {
+  recordBillPaymentAction,
+  voidBillPaymentAction,
+  setInstallmentPlanAction,
+  clearInstallmentPlanAction,
+} from "@/app/chat-audit/accounting/payments/actions";
 
 const CUSTOMER_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const CUSTOMER_OTHER = "dddddddd-dddd-dddd-dddd-dddddddddddd";
@@ -65,6 +70,7 @@ function makeResolver(
     lineAmounts?: { amount: number; vat_amount: number; wht_amount: number }[];
     existingPayments?: { id: string; amount: number }[];
     paymentExists?: PaymentExistsRow | null;
+    installmentInsertError?: boolean;
   } = {}
 ): Resolver {
   return ({ table, op, terminal }) => {
@@ -75,6 +81,12 @@ function makeResolver(
     }
     if (table === "bill_entry_lines" && terminal === "await") {
       return { data: opts.lineAmounts ?? [{ amount: 1000, vat_amount: 70, wht_amount: 0 }], error: null };
+    }
+    if (table === "rpc:set_bill_installment_plan") {
+      return opts.installmentInsertError ? { data: null, error: { message: "insert failed" } } : { data: null, error: null };
+    }
+    if (table === "bill_installments" && op === "delete" && terminal === "await") {
+      return { data: null, error: null };
     }
     if (table === "bill_payments") {
       if (op === "select" && terminal === "await") {
@@ -265,4 +277,107 @@ describe("voidBillPaymentAction", () => {
       expect(currentCapture.updates.find((u) => u.table === "bill_payments")).toBeUndefined();
     }
   );
+});
+
+// ★ wishlist ข้อ 7 — แผนงวดผ่อนชำระบนบิลเชื่อ AR/AP
+describe("setInstallmentPlanAction", () => {
+  it("แผนถูกต้อง (ยอดรวมเท่ายอดเต็มบิล net=1000) → บันทึกสำเร็จผ่าน RPC เดียว (atomic ลบของเก่า+insert ชุดใหม่)", async () => {
+    setupDb({ lineAmounts: [{ amount: 1000, vat_amount: 0, wht_amount: 0 }] });
+    const res = await setInstallmentPlanAction(ENTRY_ID, [
+      { dueDate: "2026-09-01", amount: 500 },
+      { dueDate: "2026-10-01", amount: 500 },
+    ]);
+    expect(res.ok).toBe(true);
+    const rpcCall = currentCapture.rpcs?.find((r) => r.fn === "set_bill_installment_plan");
+    expect(rpcCall).toBeTruthy();
+    expect((rpcCall!.params as { p_entry_id: string }).p_entry_id).toBe(ENTRY_ID);
+  });
+
+  it("★ ยอดรวมไม่เท่ายอดเต็มบิล → ปฏิเสธ ไม่แตะ DB", async () => {
+    setupDb({ lineAmounts: [{ amount: 1000, vat_amount: 0, wht_amount: 0 }] });
+    const res = await setInstallmentPlanAction(ENTRY_ID, [
+      { dueDate: "2026-09-01", amount: 500 },
+      { dueDate: "2026-10-01", amount: 400 },
+    ]);
+    expect(res.ok).toBe(false);
+    expect(currentCapture.rpcs?.find((r) => r.fn === "set_bill_installment_plan")).toBeUndefined();
+  });
+
+  it("★ บิลไม่ eligible (payment_method ไม่ใช่ credit) → ปฏิเสธ", async () => {
+    setupDb({
+      scope: { customer_id: CUSTOMER_ID, entry_type: "sale", payment_method: "cash", status: "confirmed" },
+      lineAmounts: [{ amount: 1000, vat_amount: 0, wht_amount: 0 }],
+    });
+    const res = await setInstallmentPlanAction(ENTRY_ID, [
+      { dueDate: "2026-09-01", amount: 500 },
+      { dueDate: "2026-10-01", amount: 500 },
+    ]);
+    expect(res.ok).toBe(false);
+  });
+
+  it("ไม่พบบิล (ถูกลบไปแล้ว) → ปฏิเสธ", async () => {
+    setupDb({ scope: null });
+    const res = await setInstallmentPlanAction(ENTRY_ID, [
+      { dueDate: "2026-09-01", amount: 500 },
+      { dueDate: "2026-10-01", amount: 500 },
+    ]);
+    expect(res.ok).toBe(false);
+  });
+
+  it("ลูกค้าไม่อยู่ในสโคปของนักบัญชี → ปฏิเสธ (ไม่แตะ DB)", async () => {
+    requireAccountingAccessMock.mockResolvedValue(accountantCtx([CUSTOMER_OTHER]));
+    setupDb({ lineAmounts: [{ amount: 1000, vat_amount: 0, wht_amount: 0 }] });
+    const res = await setInstallmentPlanAction(ENTRY_ID, [
+      { dueDate: "2026-09-01", amount: 500 },
+      { dueDate: "2026-10-01", amount: 500 },
+    ]);
+    expect(res.ok).toBe(false);
+    expect(currentCapture.rpcs?.find((r) => r.fn === "set_bill_installment_plan")).toBeUndefined();
+  });
+
+  it("entryId ไม่ใช่ uuid → ปฏิเสธทันที (ไม่แตะ DB)", async () => {
+    const res = await setInstallmentPlanAction("not-a-uuid", [
+      { dueDate: "2026-09-01", amount: 500 },
+      { dueDate: "2026-10-01", amount: 500 },
+    ]);
+    expect(res.ok).toBe(false);
+    expect(currentCapture.rpcs ?? []).toHaveLength(0);
+  });
+
+  it("DB insert ล้มเหลว → คืนข้อความปฏิเสธ", async () => {
+    setupDb({ lineAmounts: [{ amount: 1000, vat_amount: 0, wht_amount: 0 }], installmentInsertError: true });
+    const res = await setInstallmentPlanAction(ENTRY_ID, [
+      { dueDate: "2026-09-01", amount: 500 },
+      { dueDate: "2026-10-01", amount: 500 },
+    ]);
+    expect(res.ok).toBe(false);
+  });
+});
+
+describe("clearInstallmentPlanAction", () => {
+  it("ลบแผนสำเร็จ", async () => {
+    setupDb();
+    const res = await clearInstallmentPlanAction(ENTRY_ID);
+    expect(res.ok).toBe(true);
+    expect(currentCapture.deletes?.find((d) => d.table === "bill_installments")).toBeTruthy();
+  });
+
+  it("ไม่พบบิล (ถูกลบไปแล้ว) → ปฏิเสธ", async () => {
+    setupDb({ scope: null });
+    const res = await clearInstallmentPlanAction(ENTRY_ID);
+    expect(res.ok).toBe(false);
+  });
+
+  it("ลูกค้าไม่อยู่ในสโคปของนักบัญชี → ปฏิเสธ (ไม่แตะ DB)", async () => {
+    requireAccountingAccessMock.mockResolvedValue(accountantCtx([CUSTOMER_OTHER]));
+    setupDb();
+    const res = await clearInstallmentPlanAction(ENTRY_ID);
+    expect(res.ok).toBe(false);
+    expect(currentCapture.deletes?.find((d) => d.table === "bill_installments")).toBeUndefined();
+  });
+
+  it("entryId ไม่ใช่ uuid → ปฏิเสธทันที", async () => {
+    const res = await clearInstallmentPlanAction("not-a-uuid");
+    expect(res.ok).toBe(false);
+  });
 });
