@@ -119,7 +119,14 @@ export default function FilingPeriodPanel({
                   title={!hasFinalizedRun && detail.period.pitFilingStatus !== "filed" ? "ต้องมีอย่างน้อย 1 รอบสร้างรายการบัญชี (JE) แล้วก่อน" : undefined}
                 >
                   {detail.period.pitFilingStatus === "filed" ? "ยกเลิกสถานะ" : "บันทึกว่ายื่นแล้ว"}
-                </button>
+                </button>{" "}
+                {/* เอกสารสรุปยอดยื่น ภ.ง.ด.1 (Excel) — ไม่ใช่ e-filing จริง แค่เอกสารให้เอาไปกรอกเว็บสรรพากรเอง (wishlist ข้อ 5) */}
+                <a
+                  href={`/chat-audit/accounting/payroll/filing/pnd1-export?customerId=${customerId}&periodId=${detail.period.id}`}
+                  className="btn btn-ghost btn-sm"
+                >
+                  ดาวน์โหลดสรุปยื่น ภ.ง.ด.1 (Excel)
+                </a>
               </div>
               <div>
                 สปส.1-10: {detail.period.ssoFilingStatus === "filed" ? `ยื่นแล้ว (${detail.period.ssoFiledAt ?? ""})` : "ยังไม่ยื่น"}{" "}
