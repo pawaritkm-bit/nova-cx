@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { saveEntryAction, deleteEntryAction, fetchBotRateAction, type SaveEntryInput } from "./actions";
 import { buildChartByCode, type ChartAccount } from "@/lib/accounting/chart-of-accounts";
 import { searchProducts, type Product } from "@/lib/accounting/products";
+import type { ProductUnit } from "@/lib/accounting/product-units";
 import AccountCombobox from "./AccountCombobox";
 import CurrencyCombobox from "./CurrencyCombobox";
 import { lineBadge } from "@/lib/accounting/line-status";
@@ -53,6 +54,11 @@ type LineRow = {
    *   โชว์เฉพาะบรรทัดที่เลือกสินค้าไว้แล้ว (mirror เงื่อนไข ProductCell) — ปล่อยว่างได้ตามปกติ
    */
   quantity: string;
+  /**
+   * หน่วยนับที่กรอก quantity นี้ (wishlist backlog ข้อ 2) — null = หน่วยหลักของสินค้า (products.unit)
+   *   โชว์ dropdown เฉพาะสินค้าที่มีหน่วยอื่นตั้งไว้ (mirror เงื่อนไข ProductCell) — ไม่มี = ไม่โชว์เลย
+   */
+  unitId: string | null;
   /** เฟส 10 ส่วน Z — ยอดต้นฉบับสกุลต่างประเทศ (มีความหมายเฉพาะเมื่อหัวบิลตั้ง currency ไว้) */
   fxAmount: string;
   amount: string;
@@ -100,7 +106,7 @@ function thaiToIso(s: string): string {
 function initLines(entry: BillEntry): LineRow[] {
   if (entry.lines.length === 0) {
     return [
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, quantity: "", fxAmount: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, quantity: "", unitId: null, fxAmount: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ];
   }
   return entry.lines.map((l) => ({
@@ -113,6 +119,8 @@ function initLines(entry: BillEntry): LineRow[] {
     productId: l.productId ?? null,
     // จำนวนสต็อก (เฟส 8 ส่วน Y) — reuse numToInput เหมือนช่องตัวเลขอื่น (null/0 → ว่าง)
     quantity: numToInput(l.quantity ?? 0),
+    // หน่วยนับ (wishlist ข้อ 2) — null = หน่วยหลักของสินค้า
+    unitId: l.unitId ?? null,
     // ยอดต้นฉบับสกุลต่างประเทศ (เฟส 10 ส่วน Z)
     fxAmount: numToInput(l.fxAmount ?? 0),
     amount: numToInput(l.amount),
@@ -135,6 +143,7 @@ export default function EntryEditor({
   onNavigate,
   chart,
   products,
+  productUnits,
   fxLocked = false,
 }: {
   entry: BillEntry;
@@ -159,6 +168,11 @@ export default function EntryEditor({
    *   ต่อบรรทัด (เลือกแล้ว prefill description+account_code/name ให้ — ไม่ auto-fill amount)
    */
   products: Product[];
+  /**
+   * หน่วยนับเพิ่มเติมต่อสินค้า (wishlist backlog ข้อ 2, โหลดจาก DB ครั้งเดียวโดย page.tsx) — key = productId
+   *   ★ ไม่มี entry ของสินค้านั้น = สินค้านั้นไม่มีหน่วยอื่น → ไม่โชว์ dropdown เลย (mirror ProductCell)
+   */
+  productUnits?: Map<string, ProductUnit[]>;
   /**
    * เฟส 10 ส่วน Z (0.9) — บิลนี้มีการรับ/จ่ายเงินไปแล้ว ≥1 รายการ → ล็อกช่อง currency/fx_rate เท่านั้น
    *   (คำนวณจาก DB โดย page.tsx ครั้งเดียว — แค่ hint ของ UI, guard จริงอยู่ที่ actions-lib.ts::upsertEntry)
@@ -332,7 +346,7 @@ export default function EntryEditor({
   const addLine = () => {
     setLines((prev) => [
       ...prev,
-      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, quantity: "", fxAmount: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
+      { key: newKey(), vatType: "vat", description: "", accountCode: "", accountName: "", productId: null, quantity: "", unitId: null, fxAmount: "", amount: "", vatAmount: "", whtRate: "", whtAmount: "", aiFilled: false, aiLowConfidence: false },
     ]);
   };
 
@@ -395,6 +409,8 @@ export default function EntryEditor({
         productId: l.productId,
         // จำนวนสต็อก (เฟส 8 ส่วน Y) — reuse parseAmountInput เหมือน amount/vatAmount (server จะเช็ค ≤0 → null)
         quantity: parseAmountInput(l.quantity),
+        // หน่วยนับ (wishlist ข้อ 2) — server validate ซ้ำว่าเป็นหน่วยของ productId เดียวกันเท่านั้น
+        unitId: l.unitId,
         // ยอดต้นฉบับสกุลต่างประเทศ (เฟส 10 ส่วน Z) — server derive amount (THB) จากค่านี้เมื่อ currency ตั้งไว้
         fxAmount: currency ? parseAmountInput(l.fxAmount) : null,
         amount: parseAmountInput(l.amount),
@@ -782,9 +798,11 @@ export default function EntryEditor({
                               description: p.name,
                               accountCode: p.defaultAccountCode || l.accountCode,
                               accountName: acct ? acct.name : l.accountName,
+                              // ★ เปลี่ยนสินค้า → หน่วยนับเดิมอาจไม่มีความหมาย (คนละสินค้า) รีเซ็ตเป็นหน่วยหลัก
+                              unitId: null,
                             });
                           }}
-                          onClear={() => patchLine(l.key, { productId: null })}
+                          onClear={() => patchLine(l.key, { productId: null, unitId: null })}
                         />
                       ) : null}
                       {/* จำนวนสต็อก (เฟส 8 ส่วน Y) — โชว์เฉพาะบรรทัดที่เลือกสินค้าไว้แล้ว (mirror เงื่อนไข ProductCell ด้านบน) */}
@@ -799,6 +817,23 @@ export default function EntryEditor({
                           aria-label="จำนวนสต็อก"
                           title="จำนวนที่รับ/จ่ายสต็อกจากบรรทัดนี้ (ไม่บังคับ)"
                         />
+                      ) : null}
+                      {/* หน่วยนับ (wishlist backlog ข้อ 2) — โชว์เฉพาะสินค้าที่มีหน่วยอื่นตั้งไว้ */}
+                      {!locked && l.productId && (productUnits?.get(l.productId)?.length ?? 0) > 0 ? (
+                        <select
+                          className="acc-vat-sel"
+                          value={l.unitId ?? ""}
+                          onChange={(e) => patchLine(l.key, { unitId: e.target.value || null })}
+                          aria-label="หน่วยนับ"
+                          title="หน่วยนับของจำนวนที่กรอก — ระบบแปลงเป็นหน่วยหลักให้อัตโนมัติตอนบันทึกสต็อก"
+                        >
+                          <option value="">{products.find((p) => p.id === l.productId)?.unit || "หน่วยหลัก"}</option>
+                          {(productUnits?.get(l.productId) ?? []).map((u) => (
+                            <option key={u.id} value={u.id}>
+                              {u.unitName}
+                            </option>
+                          ))}
+                        </select>
                       ) : null}
                       {/* ยอดต้นฉบับสกุลต่างประเทศ (เฟส 10 ส่วน Z) — โชว์เฉพาะบิลที่ตั้ง currency ไว้ */}
                       {!locked && currency ? (

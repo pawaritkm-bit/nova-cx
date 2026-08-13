@@ -45,6 +45,7 @@ import { validateBankAccountInput } from "@/lib/accounting/bank-accounts";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import { isValidCurrencyCode, validateFxRate, deriveThbAmount } from "@/lib/accounting/currency";
 import { fetchBotReferenceRate } from "@/lib/integrations/bot-exchange-rate";
+import { getProductUnitsByIds } from "@/lib/accounting/product-units";
 
 const PATH = "/chat-audit/accounting";
 /** bucket รูปบิล (private) — ตรงกับหน้า bills / lib/storage/bill-storage.ts */
@@ -178,6 +179,12 @@ export type EditableLineInput = {
    *   ไม่ใช่ตัวเลข/≤0 = ไม่ผูกจำนวน (เก็บ null) — ไม่ block การบันทึกบิล
    */
   quantity?: number | null;
+  /**
+   * หน่วยนับที่กรอก quantity นี้ (wishlist backlog ข้อ 2) — null/undefined = หน่วยหลักของสินค้า
+   *   ★ ต้องเป็นหน่วยของ productId เดียวกันในบรรทัดนี้เท่านั้น (validate ที่ saveEntryAction — กัน client
+   *     ส่ง unit_id ของสินค้าอื่นมาให้ตัวคูณแปลงหน่วยผิด) ไม่ผ่าน → เก็บ null (หน่วยหลัก) เงียบ ๆ
+   */
+  unitId?: string | null;
   /**
    * ยอดต้นฉบับสกุลต่างประเทศ ก่อน VAT (เฟส 10 ส่วน Z) — มีความหมายเฉพาะเมื่อหัวบิล (SaveEntryInput.currency)
    *   ตั้งไว้เท่านั้น · server derive `amount` (THB) จาก fxAmount×fxRate ให้เอง ไม่รับ `amount` ที่ client
@@ -354,9 +361,20 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
     ];
     const validProductIds = await validProductIdsOfTenant(service, ctx.tenantId, requestedProductIds);
 
+    // ★ wishlist ข้อ 2 — หน่วยนับที่บรรทัดอ้างถึง ต้องเป็นของ tenant นี้ "และ" ของ productId เดียวกัน
+    //   ในบรรทัดนั้นเท่านั้น (กัน client ส่ง unit_id ของสินค้าอื่นมาให้ตัวคูณแปลงหน่วยผิด)
+    const requestedUnitIds = [
+      ...new Set(input.lines.map((l) => (isUuid(l.unitId) ? l.unitId : null)).filter((x): x is string => !!x)),
+    ];
+    const unitById = await getProductUnitsByIds(service, ctx.tenantId, requestedUnitIds);
+
     // 3) add/update แต่ละ line (เรียงลำดับ line_no ตามที่ส่งมา)
     let lineNo = 1;
     for (const l of input.lines) {
+      // ★ สินค้า/บริการที่เลือก (เฟส 1 ส่วน B) — แค่ tag อ้างอิง ไม่กระทบการคำนวณ · ต้องอยู่ใน tenant นี้
+      const productId = isUuid(l.productId) && validProductIds.has(l.productId) ? l.productId : null;
+      const unitId =
+        isUuid(l.unitId) && productId && unitById.get(l.unitId)?.productId === productId ? l.unitId : null;
       const payload = {
         lineNo: lineNo++,
         vatType: asVatType(l.vatType),
@@ -364,10 +382,11 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
         // ★ account_code = รหัสจากผังบัญชี (ตัดสั้น กันค่าปลอม) · account_name = ชื่อที่แก้ได้
         accountCode: clampText(l.accountCode, 20),
         accountName: clampText(l.accountName, 200),
-        // ★ สินค้า/บริการที่เลือก (เฟส 1 ส่วน B) — แค่ tag อ้างอิง ไม่กระทบการคำนวณ · ต้องอยู่ใน tenant นี้
-        productId: isUuid(l.productId) && validProductIds.has(l.productId) ? l.productId : null,
+        productId,
         // ★ จำนวนสต็อก (เฟส 8 ส่วน Y) — optional field เสริม ไม่ใช่ field บังคับของบิล
         quantity: asQuantity(l.quantity),
+        // ★ หน่วยนับที่กรอก quantity นี้ (wishlist ข้อ 2) — null = หน่วยหลักของสินค้า
+        unitId,
         // ★ เฟส 10 ส่วน Z (0.6) — บิล FX (currency ตั้งไว้): เก็บ fxAmount ต้นฉบับ + derive `amount` (THB)
         //   จาก fxAmount×fxRate เอง (ไม่รับ amount ที่ client ส่งมาตรง ๆ อีกต่อไป) · บิล THB ปกติ
         //   (currency=null): amount ยังกรอกตรงเหมือนเดิมทุกประการ (backward-compat, ไม่แตะ fxAmount)

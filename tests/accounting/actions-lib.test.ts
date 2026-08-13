@@ -208,6 +208,21 @@ describe("addLine — auto-calc WHT", () => {
     const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
     expect(ins.payload!.quantity).toBeNull();
   });
+
+  it("ส่ง unitId (wishlist ข้อ 2) → เก็บ unit_id ตรง ๆ (caller/actions.ts เป็นคน validate ก่อนส่งมา)", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    const res = await addLine(db, "t1", "e1", { amount: 100, productId: "prod-1", quantity: 2, unitId: "unit-1" });
+    expect(res.ok).toBe(true);
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
+    expect(ins.payload!.unit_id).toBe("unit-1");
+  });
+
+  it("ไม่ส่ง unitId → unit_id เป็น null (หน่วยหลัก)", async () => {
+    const { db, ops } = makeDb({ bill_entries: { status: "draft" } });
+    await addLine(db, "t1", "e1", { amount: 100 });
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "bill_entry_lines")!;
+    expect(ins.payload!.unit_id).toBeNull();
+  });
 });
 
 describe("updateLine", () => {
@@ -300,6 +315,23 @@ describe("updateLine", () => {
     await updateLine(db, "t1", "l1", { amount: 500 });
     const upd = ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!;
     expect("quantity" in (upd.payload ?? {})).toBe(false);
+  });
+
+  it("ส่ง unitId (wishlist ข้อ 2) → แก้ unit_id ด้วย · ส่ง null → ล้างเป็นหน่วยหลัก · ไม่ส่ง → ไม่แตะค่าเดิม", async () => {
+    const { db, ops } = makeDb({
+      bill_entry_lines: { entry_id: "e1" },
+      bill_entries: { status: "draft" },
+    });
+    await updateLine(db, "t1", "l1", { unitId: "unit-2" });
+    expect(ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!.payload!.unit_id).toBe("unit-2");
+
+    ops.length = 0;
+    await updateLine(db, "t1", "l1", { unitId: null });
+    expect(ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!.payload!.unit_id).toBeNull();
+
+    ops.length = 0;
+    await updateLine(db, "t1", "l1", { amount: 500 });
+    expect("unit_id" in (ops.find((o) => o.kind === "update" && o.table === "bill_entry_lines")!.payload ?? {})).toBe(false);
   });
 });
 

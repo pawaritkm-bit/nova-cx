@@ -62,6 +62,12 @@ export type LineInput = {
   /** จำนวนสต็อกของบรรทัดนี้ (เฟส 8 ส่วน Y) — undefined = ไม่แตะ (update) · null = ล้าง */
   quantity?: number | null;
   /**
+   * หน่วยนับที่กรอก quantity นี้ (wishlist ข้อ 2) — undefined = ไม่แตะ (update) · null = หน่วยหลัก
+   *   ★ caller (actions.ts) validate แล้วว่าเป็นหน่วยของ productId เดียวกันในบรรทัดนี้เท่านั้น — ไฟล์นี้
+   *   แค่เก็บค่าที่ผ่าน validate มาแล้ว ไม่ validate ซ้ำ
+   */
+  unitId?: string | null;
+  /**
    * ยอดต้นฉบับสกุลต่างประเทศ ก่อน VAT (เฟส 10 ส่วน Z) — undefined = ไม่แตะ (update) · null = ล้าง
    *   ★ caller (actions.ts) เป็นคน derive `amount` จาก fxAmount×fxRate ก่อนส่งเข้ามาที่นี่แล้ว (0.6) —
    *   ไฟล์นี้แค่เก็บค่า fxAmount ไว้เป็น metadata อ้างอิงเฉย ๆ ไม่คำนวณซ้ำ
@@ -257,6 +263,7 @@ export async function addLine(
       account_name: input.accountName ?? null,
       product_id: input.productId ?? null,
       quantity: input.quantity ?? null,
+      unit_id: input.unitId ?? null,
       fx_amount: input.fxAmount ?? null,
       amount,
       vat_amount: safeAmount(input.vatAmount),
@@ -296,6 +303,7 @@ export async function updateLine(
   if (input.accountName !== undefined) patch.account_name = input.accountName;
   if (input.productId !== undefined) patch.product_id = input.productId;
   if (input.quantity !== undefined) patch.quantity = input.quantity;
+  if (input.unitId !== undefined) patch.unit_id = input.unitId;
   if (input.fxAmount !== undefined) patch.fx_amount = input.fxAmount;
   if (input.lineNo !== undefined) patch.line_no = input.lineNo;
   if (input.amount !== undefined) patch.amount = safeAmount(input.amount);

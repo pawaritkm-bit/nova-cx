@@ -4,6 +4,7 @@ import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAdminContext } from "@/lib/admin/guard";
 import { listProductsAdmin } from "@/lib/accounting/products";
+import { listProductUnitsForProducts } from "@/lib/accounting/product-units";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import ChatAuditFrame from "../../_Frame";
 import ProductsPanel from "./ProductsPanel";
@@ -44,6 +45,8 @@ export default async function ProductsAdminPage() {
       listProductsAdmin(service, ctx.tenantId),
       listChartOfAccounts(service, ctx.tenantId),
     ]);
+    // หน่วยนับเพิ่มเติมต่อสินค้า (wishlist backlog ข้อ 2) — โหลดครั้งเดียวต่อ request
+    const productUnits = await listProductUnitsForProducts(service, ctx.tenantId, products.map((p) => p.id));
 
     return (
       <ChatAuditFrame
@@ -55,7 +58,7 @@ export default async function ProductsAdminPage() {
       >
         <div className="dash-views">
           <p><Link href="/chat-audit/admin" className="underline">← กลับหน้าตั้งค่า</Link></p>
-          <ProductsPanel products={products} chart={chart} />
+          <ProductsPanel products={products} chart={chart} productUnits={productUnits} />
         </div>
       </ChatAuditFrame>
     );
