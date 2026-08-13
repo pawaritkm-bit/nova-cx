@@ -55,15 +55,18 @@ type Tables = {
   bill_entry_lines: Row[];
   product_stock_movements: Row[];
   product_opening_balances: Row[];
+  warehouses: Row[];
 };
 
-/** fake DB เดียวรองรับทั้ง 4 ตาราง — ให้เรียก createMovementsFromBill + data layer อื่นทั้งหมดใน flow เดียวกันได้จริง */
+/** fake DB เดียวรองรับทั้ง 5 ตาราง — ให้เรียก createMovementsFromBill + data layer อื่นทั้งหมดใน flow เดียวกันได้จริง
+ *  (★ wishlist ข้อ 8 — createMovementsFromBill เรียก getOrCreateDefaultWarehouse ผูกคลังหลักให้ทุกรายการจากบิล) */
 function makeFullFakeDb(): { db: SupabaseClient; tables: Tables } {
   const tables: Tables = {
     bill_entries: [],
     bill_entry_lines: [],
     product_stock_movements: [],
     product_opening_balances: [],
+    warehouses: [],
   };
   let seq = 1;
   const nextId = (prefix: string) => `${prefix}-${seq++}`;
@@ -77,8 +80,9 @@ function makeFullFakeDb(): { db: SupabaseClient; tables: Tables } {
   const ROW_DEFAULTS: Partial<Record<keyof Tables, Row>> = {
     bill_entries: { deleted_at: null, stock_synced_at: null },
     bill_entry_lines: {},
-    product_stock_movements: { deleted_at: null, memo: null, source_bill_entry_line_id: null, unit_cost: null },
+    product_stock_movements: { deleted_at: null, memo: null, source_bill_entry_line_id: null, unit_cost: null, warehouse_id: null },
     product_opening_balances: { deleted_at: null, note: null },
+    warehouses: { deleted_at: null, is_default: false, is_active: true },
   };
 
   function qb(table: keyof Tables) {
@@ -402,6 +406,7 @@ describe("E2E เฟส 8 — ปรับปรุงสต็อกมือ +
       quantity: 3,
       movementDate: "2026-01-06",
       memo: "สินค้าเสียหายจากการขนส่ง",
+      warehouseId: "w1",
     });
     expect(adjRes.ok).toBe(true);
 

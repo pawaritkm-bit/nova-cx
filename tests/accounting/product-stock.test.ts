@@ -47,6 +47,7 @@ function mv(partial: Partial<StockMovement> & { movementType: StockMovementType;
     movementType: partial.movementType,
     quantity: partial.quantity,
     unitCost: partial.unitCost ?? null,
+    warehouseId: partial.warehouseId ?? null,
     sourceBillEntryLineId: partial.sourceBillEntryLineId ?? null,
     memo: partial.memo ?? null,
     movementDate: partial.movementDate ?? "2026-01-01",
@@ -558,6 +559,7 @@ describe("createManualAdjustment / listMovements / softDeleteMovement", () => {
       unitCost: 20,
       movementDate: "2026-01-05",
       memo: "นับสต็อกจริงเกิน",
+      warehouseId: "w1",
     });
     expect(res.ok).toBe(true);
 
@@ -573,6 +575,7 @@ describe("createManualAdjustment / listMovements / softDeleteMovement", () => {
       quantity: 5,
       unitCost: 20,
       movementDate: "2026-01-05",
+      warehouseId: "w1",
     });
     expect(res.ok).toBe(false);
     expect(tables.product_stock_movements).toHaveLength(0);
@@ -584,6 +587,7 @@ describe("createManualAdjustment / listMovements / softDeleteMovement", () => {
       movementType: "adjustment_out",
       quantity: -1,
       movementDate: "2026-01-05",
+      warehouseId: "w1",
     });
     expect(res.ok).toBe(false);
     expect(tables.product_stock_movements).toHaveLength(0);
@@ -596,6 +600,7 @@ describe("createManualAdjustment / listMovements / softDeleteMovement", () => {
       quantity: 2,
       movementDate: "2026-01-06",
       memo: "สินค้าเสียหาย",
+      warehouseId: "w1",
     });
     if (!created.ok) throw new Error("setup failed");
 
@@ -613,12 +618,14 @@ describe("createManualAdjustment / listMovements / softDeleteMovement", () => {
       quantity: 1,
       unitCost: 1,
       movementDate: "2026-03-01",
+      warehouseId: "w1",
     });
     await createManualAdjustment(db, TENANT, CUSTOMER, PRODUCT, {
       movementType: "adjustment_in",
       quantity: 2,
       unitCost: 2,
       movementDate: "2026-01-01",
+      warehouseId: "w1",
     });
     const list = await listMovements(db, TENANT, CUSTOMER, PRODUCT);
     expect(list.map((m) => m.movementDate)).toEqual(["2026-01-01", "2026-03-01"]);
@@ -633,6 +640,7 @@ describe("getMovementScope", () => {
       quantity: 1,
       unitCost: 1,
       movementDate: "2026-01-01",
+      warehouseId: "w1",
     });
     if (!created.ok) throw new Error("setup failed");
     const scope = await getMovementScope(db, TENANT, created.id);
@@ -646,6 +654,7 @@ describe("getMovementScope", () => {
       quantity: 1,
       unitCost: 1,
       movementDate: "2026-01-01",
+      warehouseId: "w1",
     });
     if (!created.ok) throw new Error("setup failed");
     await softDeleteMovement(db, TENANT, created.id);
@@ -703,17 +712,19 @@ type BillSyncTables = {
   bill_entries: Row[];
   bill_entry_lines: Row[];
   product_stock_movements: Row[];
+  warehouses: Row[];
 };
 
 function makeBillSyncFakeDb(): { db: SupabaseClient; tables: BillSyncTables } {
-  const tables: BillSyncTables = { bill_entries: [], bill_entry_lines: [], product_stock_movements: [] };
+  const tables: BillSyncTables = { bill_entries: [], bill_entry_lines: [], product_stock_movements: [], warehouses: [] };
   let seq = 1;
   const nextId = (prefix: string) => `${prefix}-${seq++}`;
 
   const ROW_DEFAULTS: Partial<Record<keyof BillSyncTables, Row>> = {
     bill_entries: { deleted_at: null, stock_synced_at: null },
     bill_entry_lines: {},
-    product_stock_movements: { deleted_at: null, memo: null, source_bill_entry_line_id: null, unit_cost: null },
+    product_stock_movements: { deleted_at: null, memo: null, source_bill_entry_line_id: null, unit_cost: null, warehouse_id: null },
+    warehouses: { deleted_at: null, is_default: false, is_active: true },
   };
 
   function qb(table: keyof BillSyncTables) {
