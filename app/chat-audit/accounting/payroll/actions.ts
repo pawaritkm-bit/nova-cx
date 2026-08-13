@@ -27,6 +27,7 @@ import {
   type CreateRunInput,
   type LineAmountEdit,
 } from "@/lib/accounting/payroll";
+import { sendPayslipEmails, type PayslipEmailResult } from "@/lib/accounting/payroll-payslip-email";
 
 const PATH = "/chat-audit/accounting/payroll";
 
@@ -134,6 +135,46 @@ export async function deleteRunAction(runId: string, customerId: string): Promis
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/** ผลลัพธ์ส่งสลิปเงินเดือนเป็นชุด — client ใช้แสดงตารางผลรายพนักงาน (wishlist ข้อ 6) */
+export type SendPayslipEmailsActionResult =
+  | { ok: true; message: string; results: PayslipEmailResult[] }
+  | { ok: false; message: string };
+
+/**
+ * ส่งสลิปเงินเดือน (PDF) ทางอีเมลให้พนักงานทุกคนในรอบนี้ — เฉพาะรอบที่ finalized เท่านั้น (0.7 กันส่งเลขที่
+ *   ยังไม่ยืนยัน/ยังแก้ได้อยู่) — per-employee try/catch ในชั้น lib (คนหนึ่งพังไม่บล็อกคนอื่น)
+ */
+export async function sendPayslipEmailsAction(runId: string, customerId: string): Promise<SendPayslipEmailsActionResult> {
+  if (!isUuid(runId) || !isUuid(customerId)) return { ok: false, message: "ไม่พบรอบเงินเดือนที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    assertCustomerInScope(ctx, customerId);
+
+    const scope = await getRunScope(service, ctx.tenantId, runId);
+    if (!scope) return { ok: false, message: "ไม่พบรอบเงินเดือน (อาจถูกลบไปแล้ว)" };
+    assertCustomerInScope(ctx, scope.customerId);
+    if (scope.customerId !== customerId) return { ok: false, message: "ลูกค้าไม่ตรงกับรอบเงินเดือนนี้" };
+    if (scope.status !== "finalized") return { ok: false, message: "ส่งสลิปได้เฉพาะรอบที่สร้างรายการบัญชี (JE) แล้วเท่านั้น" };
+
+    const res = await sendPayslipEmails(service, ctx.tenantId, customerId, runId);
+    if (!res.ok) return { ok: false, message: res.message };
+
+    const sent = res.results.filter((r) => r.status === "sent").length;
+    const skipped = res.results.filter((r) => r.status === "skipped_no_email").length;
+    const failed = res.results.filter((r) => r.status === "failed").length;
+    return {
+      ok: true,
+      message: `ส่งแล้ว ${sent} คน${skipped ? ` · ไม่มีอีเมล ${skipped} คน` : ""}${failed ? ` · ส่งไม่สำเร็จ ${failed} คน` : ""}`,
+      results: res.results,
+    };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ส่งสลิปทางอีเมลไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
 
