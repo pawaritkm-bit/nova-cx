@@ -37,6 +37,10 @@ import {
   createAdjustmentAction,
   deleteMovementAction,
   upsertOpeningBalanceAction,
+  createWarehouseAction,
+  renameWarehouseAction,
+  setWarehouseActiveAction,
+  createTransferAction,
 } from "@/app/chat-audit/accounting/inventory/actions";
 
 const TENANT = "tenant-1";
@@ -83,11 +87,13 @@ type Tables = {
   products: Row[];
   product_stock_movements: Row[];
   product_opening_balances: Row[];
+  warehouses: Row[];
 };
 
 const ROW_DEFAULTS: Partial<Record<keyof Tables, Row>> = {
-  product_stock_movements: { deleted_at: null, memo: null, source_bill_entry_line_id: null, unit_cost: null },
+  product_stock_movements: { deleted_at: null, memo: null, source_bill_entry_line_id: null, unit_cost: null, warehouse_id: null },
   product_opening_balances: { deleted_at: null, note: null },
+  warehouses: { deleted_at: null, is_default: false, is_active: true },
 };
 
 function makeFakeDb(): { db: SupabaseClient; tables: Tables } {
@@ -98,6 +104,7 @@ function makeFakeDb(): { db: SupabaseClient; tables: Tables } {
     ],
     product_stock_movements: [],
     product_opening_balances: [],
+    warehouses: [],
   };
   let seq = 1;
   const nextId = () => `00000000-0000-0000-0000-${String(seq++).padStart(12, "0")}`;
@@ -159,7 +166,29 @@ function makeFakeDb(): { db: SupabaseClient; tables: Tables } {
     return api;
   }
 
-  return { db: { from: (name: string) => qb(name as keyof Tables) } as unknown as SupabaseClient, tables: t };
+  const db = {
+    from: (name: string) => qb(name as keyof Tables),
+    // ★ mirror RPC create_stock_transfer (migration 0108) — insert 2 แถว (out+in) ในทรานแซกชันเดียว
+    rpc: (fn: string, params: Row) => {
+      if (fn !== "create_stock_transfer") return Promise.resolve({ data: null, error: { message: "unknown rpc" } });
+      const base = { deleted_at: null, source_bill_entry_line_id: null, memo: params.p_memo };
+      t.product_stock_movements.push({
+        id: nextId(), created_at: new Date().toISOString(), ...base,
+        tenant_id: params.p_tenant_id, customer_id: params.p_customer_id, product_id: params.p_product_id,
+        warehouse_id: params.p_from_warehouse_id, movement_type: "transfer_out", quantity: params.p_quantity,
+        unit_cost: null, movement_date: params.p_movement_date,
+      });
+      t.product_stock_movements.push({
+        id: nextId(), created_at: new Date().toISOString(), ...base,
+        tenant_id: params.p_tenant_id, customer_id: params.p_customer_id, product_id: params.p_product_id,
+        warehouse_id: params.p_to_warehouse_id, movement_type: "transfer_in", quantity: params.p_quantity,
+        unit_cost: params.p_unit_cost, movement_date: params.p_movement_date,
+      });
+      return Promise.resolve({ data: null, error: null });
+    },
+  } as unknown as SupabaseClient;
+
+  return { db, tables: t };
 }
 
 beforeEach(() => {
@@ -251,6 +280,28 @@ describe("createAdjustmentAction", () => {
     });
     expect(res.ok).toBe(false);
     expect(tables.product_stock_movements).toHaveLength(0);
+  });
+
+  it("★ warehouseId ที่ส่งมาเป็นคลังของลูกค้าอื่น (สวมรอย) → ไม่เชื่อ ใช้คลังหลักของลูกค้าจริงแทนแบบเงียบ ๆ (IDOR-safe, 0.13)", async () => {
+    const created = await createWarehouseAction(CUSTOMER_OTHER, "คลังของลูกค้าอื่น");
+    if (!created.ok || !created.id) throw new Error("setup failed");
+
+    const res = await createAdjustmentAction({
+      customerId: CUSTOMER_ID,
+      productId: PRODUCT_ID,
+      movementType: "adjustment_in",
+      quantity: 5,
+      unitCost: 10,
+      movementDate: "2026-01-01",
+      warehouseId: created.id, // คลังของ CUSTOMER_OTHER ไม่ใช่ CUSTOMER_ID
+    });
+    expect(res.ok).toBe(true);
+    expect(tables.product_stock_movements).toHaveLength(1);
+    // ★ ต้องไม่ใช้คลังของลูกค้าอื่นที่ส่งมา — fallback ไปคลังหลักของ CUSTOMER_ID เอง (คนละแถวกับที่สร้างไว้ข้างบน)
+    const usedWarehouseId = tables.product_stock_movements[0].warehouse_id as string;
+    expect(usedWarehouseId).not.toBe(created.id);
+    const usedWarehouse = tables.warehouses.find((w) => w.id === usedWarehouseId);
+    expect(usedWarehouse).toMatchObject({ customer_id: CUSTOMER_ID, is_default: true });
   });
 });
 
@@ -387,5 +438,135 @@ describe("upsertOpeningBalanceAction", () => {
       unitCost: 65,
     });
     expect(res.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------
+// คลังสินค้า (Warehouses) — wishlist ข้อ 8
+// ---------------------------------------------------------------------
+describe("createWarehouseAction", () => {
+  it("สร้างคลังใหม่สำเร็จ", async () => {
+    const res = await createWarehouseAction(CUSTOMER_ID, "คลังสาขา 2");
+    expect(res.ok).toBe(true);
+    expect(tables.warehouses).toHaveLength(1);
+    expect(tables.warehouses[0]).toMatchObject({ customer_id: CUSTOMER_ID, name: "คลังสาขา 2" });
+  });
+
+  it("★ ลูกค้าไม่อยู่ในสโคปของนักบัญชี → ปฏิเสธ ไม่แตะ DB", async () => {
+    requireAccountingAccessMock.mockResolvedValue(accountantCtx([CUSTOMER_OTHER]));
+    const res = await createWarehouseAction(CUSTOMER_ID, "คลังสาขา 2");
+    expect(res.ok).toBe(false);
+    expect(tables.warehouses).toHaveLength(0);
+  });
+
+  it("customerId ไม่ใช่ uuid → ปฏิเสธทันที", async () => {
+    const res = await createWarehouseAction("not-a-uuid", "คลังสาขา 2");
+    expect(res.ok).toBe(false);
+  });
+});
+
+describe("renameWarehouseAction / setWarehouseActiveAction — ★ derive scope จาก warehouse id จริงเสมอ (0.13)", () => {
+  it("เปลี่ยนชื่อคลังสำเร็จ", async () => {
+    const created = await createWarehouseAction(CUSTOMER_ID, "คลัง A");
+    if (!created.ok || !created.id) throw new Error("setup failed");
+    const res = await renameWarehouseAction(created.id, CUSTOMER_ID, "คลัง A ใหม่");
+    expect(res.ok).toBe(true);
+    expect(tables.warehouses[0].name).toBe("คลัง A ใหม่");
+  });
+
+  it("★★ สวมรอย: ส่ง customerId ที่ตัวเองมีสิทธิ์ แต่คลังจริงเป็นของลูกค้าอื่น → ปฏิเสธ (IDOR-safe)", async () => {
+    const created = await createWarehouseAction(CUSTOMER_OTHER, "คลัง A");
+    if (!created.ok || !created.id) throw new Error("setup failed");
+
+    requireAccountingAccessMock.mockResolvedValue(accountantCtx([CUSTOMER_ID]));
+    const res = await renameWarehouseAction(created.id, CUSTOMER_ID, "คลัง A สวมรอย");
+    expect(res.ok).toBe(false);
+    expect(tables.warehouses[0].name).toBe("คลัง A");
+  });
+
+  it("เปิด/ปิดใช้งานคลังธรรมดาสำเร็จ", async () => {
+    const created = await createWarehouseAction(CUSTOMER_ID, "คลัง A");
+    if (!created.ok || !created.id) throw new Error("setup failed");
+    const res = await setWarehouseActiveAction(created.id, CUSTOMER_ID, false);
+    expect(res.ok).toBe(true);
+    expect(tables.warehouses[0].is_active).toBe(false);
+  });
+
+  it("ห้ามปิดใช้งานคลังหลัก", async () => {
+    const adj = await createAdjustmentAction({
+      customerId: CUSTOMER_ID,
+      productId: PRODUCT_ID,
+      movementType: "adjustment_in",
+      quantity: 5,
+      unitCost: 10,
+      movementDate: "2026-01-01",
+    });
+    expect(adj.ok).toBe(true); // ★ ทำให้คลังหลักถูกสร้างแบบ lazy ตอนบันทึกปรับปรุงครั้งแรก
+    const defaultWh = tables.warehouses.find((w) => w.is_default)!;
+    const res = await setWarehouseActiveAction(defaultWh.id as string, CUSTOMER_ID, false);
+    expect(res.ok).toBe(false);
+  });
+
+  it("warehouseId ไม่ใช่ uuid → ปฏิเสธทันที", async () => {
+    const res = await renameWarehouseAction("not-a-uuid", CUSTOMER_ID, "ชื่อใหม่");
+    expect(res.ok).toBe(false);
+  });
+});
+
+describe("createTransferAction", () => {
+  it("โอนสินค้าระหว่างคลังสำเร็จ", async () => {
+    const whA = await createWarehouseAction(CUSTOMER_ID, "คลัง A");
+    const whB = await createWarehouseAction(CUSTOMER_ID, "คลัง B");
+    if (!whA.ok || !whA.id || !whB.ok || !whB.id) throw new Error("setup failed");
+    tables.product_stock_movements.push({
+      id: "seed-mv", tenant_id: TENANT, customer_id: CUSTOMER_ID, product_id: PRODUCT_ID, movement_type: "purchase",
+      quantity: 100, unit_cost: 10, warehouse_id: whA.id, movement_date: "2026-01-01", created_at: "2026-01-01T00:00:00Z",
+      deleted_at: null, memo: null, source_bill_entry_line_id: null,
+    });
+
+    const res = await createTransferAction({
+      customerId: CUSTOMER_ID,
+      productId: PRODUCT_ID,
+      fromWarehouseId: whA.id,
+      toWarehouseId: whB.id,
+      quantity: 30,
+      movementDate: "2026-01-02",
+    });
+    expect(res.ok).toBe(true);
+    expect(tables.product_stock_movements.filter((m) => m.movement_date === "2026-01-02")).toHaveLength(2);
+  });
+
+  it("★ คลังต้นทางเป็นของลูกค้าอื่น (สวมรอย) → ปฏิเสธ ไม่โอน", async () => {
+    const whOther = await createWarehouseAction(CUSTOMER_OTHER, "คลังของลูกค้าอื่น");
+    const whB = await createWarehouseAction(CUSTOMER_ID, "คลัง B");
+    if (!whOther.ok || !whOther.id || !whB.ok || !whB.id) throw new Error("setup failed");
+
+    const res = await createTransferAction({
+      customerId: CUSTOMER_ID,
+      productId: PRODUCT_ID,
+      fromWarehouseId: whOther.id,
+      toWarehouseId: whB.id,
+      quantity: 30,
+      movementDate: "2026-01-02",
+    });
+    expect(res.ok).toBe(false);
+    expect(tables.product_stock_movements).toHaveLength(0);
+  });
+
+  it("★ productId เป็นสินค้าของ tenant อื่น (IDOR ข้าม tenant) → ปฏิเสธ", async () => {
+    const whA = await createWarehouseAction(CUSTOMER_ID, "คลัง A");
+    const whB = await createWarehouseAction(CUSTOMER_ID, "คลัง B");
+    if (!whA.ok || !whA.id || !whB.ok || !whB.id) throw new Error("setup failed");
+
+    const res = await createTransferAction({
+      customerId: CUSTOMER_ID,
+      productId: PRODUCT_OTHER_TENANT,
+      fromWarehouseId: whA.id,
+      toWarehouseId: whB.id,
+      quantity: 30,
+      movementDate: "2026-01-02",
+    });
+    expect(res.ok).toBe(false);
+    expect(tables.product_stock_movements).toHaveLength(0);
   });
 });

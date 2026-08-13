@@ -46,10 +46,16 @@ export function round3(n: number): number {
 // A) ชนิดข้อมูล
 // =========================================================================
 
-export type StockMovementType = "purchase" | "sale" | "adjustment_in" | "adjustment_out";
+export type StockMovementType =
+  | "purchase"
+  | "sale"
+  | "adjustment_in"
+  | "adjustment_out"
+  | "transfer_in"
+  | "transfer_out";
 
-const IN_MOVEMENT_TYPES: ReadonlySet<StockMovementType> = new Set(["purchase", "adjustment_in"]);
-const OUT_MOVEMENT_TYPES: ReadonlySet<StockMovementType> = new Set(["sale", "adjustment_out"]);
+const IN_MOVEMENT_TYPES: ReadonlySet<StockMovementType> = new Set(["purchase", "adjustment_in", "transfer_in"]);
+const OUT_MOVEMENT_TYPES: ReadonlySet<StockMovementType> = new Set(["sale", "adjustment_out", "transfer_out"]);
 
 /** true = รับเข้า (คำนวณต้นทุนเฉลี่ยใหม่) · false = จ่ายออก (ตัดที่ต้นทุนเฉลี่ย ณ ขณะนั้น ไม่เปลี่ยนเฉลี่ย) */
 export function isInMovementType(t: StockMovementType): boolean {
@@ -70,6 +76,9 @@ export type StockMovement = {
   quantity: number;
   /** ราคาต่อหน่วยตอนรับเข้า · null สำหรับรายการจ่ายออก (ใช้ต้นทุนเฉลี่ย ณ ขณะนั้นแทน) */
   unitCost: number | null;
+  /** คลังที่รายการนี้ผูกอยู่ (wishlist ข้อ 8) — null สำหรับรายการเก่าก่อน migration ที่ไม่มีคลัง (fallback
+   *  ไปคลังหลักของลูกค้าตอนสรุปยอดต่อคลัง — ดู computeWarehouseQuantities) */
+  warehouseId: string | null;
   sourceBillEntryLineId: string | null;
   memo: string | null;
   /** YYYY-MM-DD */
@@ -102,6 +111,8 @@ export type StockLedgerRow = {
   /** '' สำหรับแถวยอดยกมา (ไม่มีวันที่จริง — 0.11) */
   date: string;
   memo: string | null;
+  /** คลังของรายการนี้ (wishlist ข้อ 8) — null สำหรับแถวยอดยกมา (ไม่ผูกคลังจริง — ดูหมายเหตุ migration 0108) */
+  warehouseId: string | null;
   sourceBillEntryLineId: string | null;
   inQuantity: number | null;
   inUnitCost: number | null;
@@ -167,6 +178,8 @@ export function validateMovementInput(input: {
   ) {
     return { ok: false, message: "ประเภทรายการไม่ถูกต้อง" };
   }
+  // ★ transfer_in/transfer_out ไม่ผ่าน validator นี้ — สร้างได้เฉพาะทาง createStockTransfer (มี unit_cost
+  //   ที่ระบบคำนวณเองจากต้นทุนเฉลี่ย ณ ขณะโอน ไม่รับค่าจากผู้ใช้ตรง ๆ)
 
   const quantity = toFiniteNumber(input.quantity);
   if (quantity === null || quantity <= 0) return { ok: false, message: "จำนวนต้องมากกว่า 0" };
@@ -255,6 +268,7 @@ export function computeStockLedger(
       movementType: null,
       date: "",
       memo: opening.note,
+      warehouseId: null,
       sourceBillEntryLineId: null,
       inQuantity: null,
       inUnitCost: null,
@@ -287,6 +301,7 @@ export function computeStockLedger(
         movementType: m.movementType,
         date: m.movementDate,
         memo: m.memo,
+        warehouseId: m.warehouseId,
         sourceBillEntryLineId: m.sourceBillEntryLineId,
         inQuantity: round2(m.quantity),
         inUnitCost: round3(unitCost),
@@ -310,6 +325,7 @@ export function computeStockLedger(
         movementType: m.movementType,
         date: m.movementDate,
         memo: m.memo,
+        warehouseId: m.warehouseId,
         sourceBillEntryLineId: m.sourceBillEntryLineId,
         inQuantity: null,
         inUnitCost: null,
@@ -341,6 +357,8 @@ export type StockCardRow = {
   date: string;
   docLabel: string;
   reference: string | null;
+  /** คลังของรายการนี้ (wishlist ข้อ 8) — null สำหรับแถวยอดยกมา */
+  warehouseId: string | null;
   inQuantity: number | null;
   inUnitCost: number | null;
   inValue: number | null;
@@ -358,6 +376,8 @@ const MOVEMENT_LABELS: Record<StockMovementType, string> = {
   sale: "ขาย",
   adjustment_in: "ปรับปรุงเพิ่ม",
   adjustment_out: "ปรับปรุงลด",
+  transfer_in: "โอนเข้าคลัง",
+  transfer_out: "โอนออกจากคลัง",
 };
 
 /** แปลงผล computeStockLedger เป็นแถวบัตรสต็อก (คอลัมน์ วันที่/รายการรับ/รายการจ่าย/คงเหลือ/เอกสารอ้างอิง) */
@@ -368,6 +388,7 @@ export function buildStockCard(ledgerRows: StockLedgerRow[]): StockCardRow[] {
     date: r.date,
     docLabel: r.kind === "opening" ? "ยอดยกมา" : MOVEMENT_LABELS[r.movementType as StockMovementType],
     reference: r.memo,
+    warehouseId: r.warehouseId,
     inQuantity: r.inQuantity,
     inUnitCost: r.inUnitCost,
     inValue: r.inValue,
@@ -466,6 +487,7 @@ type RawMovement = {
   movement_type: StockMovementType;
   quantity: number | string;
   unit_cost: number | string | null;
+  warehouse_id: string | null;
   source_bill_entry_line_id: string | null;
   memo: string | null;
   movement_date: string;
@@ -481,6 +503,7 @@ function mapMovement(r: RawMovement): StockMovement {
     movementType: r.movement_type,
     quantity: toNum(r.quantity),
     unitCost: r.unit_cost === null ? null : toNum(r.unit_cost),
+    warehouseId: r.warehouse_id,
     sourceBillEntryLineId: r.source_bill_entry_line_id,
     memo: r.memo,
     movementDate: r.movement_date,
@@ -489,7 +512,7 @@ function mapMovement(r: RawMovement): StockMovement {
 }
 
 const MOVEMENT_SELECT =
-  "id, tenant_id, customer_id, product_id, movement_type, quantity, unit_cost, source_bill_entry_line_id, memo, movement_date, created_at";
+  "id, tenant_id, customer_id, product_id, movement_type, quantity, unit_cost, warehouse_id, source_bill_entry_line_id, memo, movement_date, created_at";
 
 /** รายการเคลื่อนไหวทั้งหมดของสินค้า 1 ตัว (ยังไม่ลบ) — เรียงวันที่/created_at (0.5) ไม่ cache */
 export async function listMovements(
@@ -545,6 +568,8 @@ export async function createManualAdjustment(
     unitCost?: unknown;
     movementDate: unknown;
     memo?: unknown;
+    /** คลังที่ปรับปรุง (wishlist ข้อ 8) — บังคับระบุเสมอ (actions.ts ชั้นบน default เป็นคลังหลักถ้าผู้ใช้ไม่เลือก) */
+    warehouseId: string;
   }
 ): Promise<StockActionResult> {
   if (input.movementType !== "adjustment_in" && input.movementType !== "adjustment_out") {
@@ -568,6 +593,7 @@ export async function createManualAdjustment(
       movement_type: v.value.movementType,
       quantity: v.value.quantity,
       unit_cost: v.value.unitCost,
+      warehouse_id: input.warehouseId,
       source_bill_entry_line_id: null,
       memo: v.value.memo,
       movement_date: v.value.movementDate,
@@ -757,6 +783,14 @@ export async function createMovementsFromBill(
     return { ok: false, message: "บิลนี้ไม่มีบรรทัดที่ผูกสินค้า+จำนวนครบ ไม่สามารถบันทึกสต็อกได้" };
   }
 
+  // ★ wishlist ข้อ 8 — รายการจากบิลผูก "คลังหลัก" ของลูกค้าเสมอ (ไม่แตะ bill_entry_lines/EntryEditor.tsx
+  //   ให้เลือกคลังเอง — ไฟล์เสี่ยงสูงสุด/ใช้บ่อยที่สุด, mirror หลักการเดิมของเฟส 8) — resolve/สร้างก่อน claim
+  //   เสมอ กันเสีย claim ไปเปล่า ๆ ถ้าสร้างคลังหลักไม่สำเร็จ
+  const warehouseId = await getOrCreateDefaultWarehouse(db, tenantId, customerId);
+  if (!warehouseId) {
+    return { ok: false, message: "สร้างคลังหลักของลูกค้าไม่สำเร็จ กรุณาลองใหม่" };
+  }
+
   // ★ 0.8 — atomic claim (1 UPDATE...WHERE...RETURNING) กันกดซ้ำสร้างซ้ำสอง
   const { data: claimed, error: claimErr } = await db
     .from("bill_entries")
@@ -783,6 +817,7 @@ export async function createMovementsFromBill(
     movement_type: movementType,
     quantity: round2(l.quantity),
     unit_cost: movementType === "purchase" ? round3(l.amount / l.quantity) : null,
+    warehouse_id: warehouseId,
     source_bill_entry_line_id: l.lineId,
     memo,
     movement_date: movementDate,
@@ -851,4 +886,305 @@ export async function upsertProductOpeningBalance(
     .maybeSingle();
   if (error || !data) return { ok: false, message: "เพิ่มยอดยกมาไม่สำเร็จ กรุณาลองใหม่" };
   return { ok: true, id: (data as { id: string }).id };
+}
+
+// =========================================================================
+// H) คลังสินค้า (Warehouses) — wishlist ข้อ 8: คลังสินค้าหลายที่
+//   ★ คลังเป็นแค่ "มิติ tracking" บน product_stock_movements — ต้นทุนถ่วงเฉลี่ยเคลื่อนที่ยัง global ต่อ
+//     สินค้าเหมือนเดิมทุกประการ (computeStockLedger ไม่แก้เลย) — computeWarehouseQuantities ด้านล่าง
+//     เป็นแค่ผลรวมจำนวนแยกคลังเพิ่มเติม (ไม่มีต้นทุนต่อคลัง)
+// =========================================================================
+
+export const WAREHOUSE_NAME_MAX = 200;
+
+export type Warehouse = {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  name: string;
+  isDefault: boolean;
+  isActive: boolean;
+};
+
+type RawWarehouse = {
+  id: string;
+  tenant_id: string;
+  customer_id: string;
+  name: string;
+  is_default: boolean;
+  is_active: boolean;
+};
+
+function mapWarehouse(r: RawWarehouse): Warehouse {
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    customerId: r.customer_id,
+    name: r.name,
+    isDefault: r.is_default,
+    isActive: r.is_active,
+  };
+}
+
+const WAREHOUSE_SELECT = "id, tenant_id, customer_id, name, is_default, is_active";
+
+export function validateWarehouseNameInput(input: { name: unknown }): ValidationResult<{ name: string }> {
+  const name = clampText(input.name, WAREHOUSE_NAME_MAX);
+  if (!name) return { ok: false, message: "กรุณากรอกชื่อคลัง" };
+  return { ok: true, value: { name } };
+}
+
+/** รายชื่อคลังของลูกค้า 1 ราย (คลังหลักก่อนเสมอ แล้วเรียงชื่อ) — default ไม่รวมคลังที่ปิดใช้งาน เว้น includeInactive */
+export async function listWarehouses(
+  db: DB,
+  tenantId: string,
+  customerId: string,
+  opts?: { includeInactive?: boolean }
+): Promise<Warehouse[]> {
+  let q = db
+    .from("warehouses")
+    .select(WAREHOUSE_SELECT)
+    .eq("tenant_id", tenantId)
+    .eq("customer_id", customerId)
+    .is("deleted_at", null);
+  if (!opts?.includeInactive) q = q.eq("is_active", true);
+  const { data, error } = await q
+    .order("is_default", { ascending: false })
+    .order("name", { ascending: true })
+    .limit(LIST_LIMIT);
+  if (error || !data) return [];
+  return (data as unknown as RawWarehouse[]).map(mapWarehouse);
+}
+
+/** scope (customer_id) ของคลัง 1 แถว — ใช้ตรวจสโคปก่อนแก้/ปิดใช้งานที่ actions.ts ชั้นบน (0.13) */
+export async function getWarehouseScope(
+  db: DB,
+  tenantId: string,
+  warehouseId: string
+): Promise<{ customerId: string; isDefault: boolean } | null> {
+  const { data } = await db
+    .from("warehouses")
+    .select("customer_id, is_default")
+    .eq("id", warehouseId)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!data) return null;
+  const r = data as { customer_id: string; is_default: boolean };
+  return { customerId: r.customer_id, isDefault: r.is_default };
+}
+
+/**
+ * ดึงคลังหลัก ("คลังหลัก") ของลูกค้า — ถ้ายังไม่มีให้สร้างใหม่ทันที (lazy provisioning, mirror
+ *   getOrCreateFilingPeriod::payroll-monthly-filing.ts) — ใช้เมื่อรายการจากบิล (purchase/sale) ต้องผูก
+ *   คลังเสมอ โดยไม่บังคับให้ทุกลูกค้าต้องมีคลังตั้งแต่แรก
+ */
+export async function getOrCreateDefaultWarehouse(
+  db: DB,
+  tenantId: string,
+  customerId: string
+): Promise<string | null> {
+  const { data: existing } = await db
+    .from("warehouses")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("customer_id", customerId)
+    .eq("is_default", true)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (existing) return (existing as { id: string }).id;
+
+  const { data, error } = await db
+    .from("warehouses")
+    .insert({ tenant_id: tenantId, customer_id: customerId, name: "คลังหลัก", is_default: true, is_active: true })
+    .select("id")
+    .maybeSingle();
+  if (error || !data) {
+    // ★ race เผื่อมีคนอื่นสร้างพร้อมกันพอดี (unique index uq_warehouses_customer_default) — โหลดของจริงกลับมาแทนล้มเหลว
+    const { data: retry } = await db
+      .from("warehouses")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("customer_id", customerId)
+      .eq("is_default", true)
+      .is("deleted_at", null)
+      .maybeSingle();
+    return retry ? (retry as { id: string }).id : null;
+  }
+  return (data as { id: string }).id;
+}
+
+/** สร้างคลังใหม่ (ไม่ default) — ชื่อต้องไม่ซ้ำในลูกค้าเดียวกัน (unique index uq_warehouses_customer_name) */
+export async function createWarehouse(
+  db: DB,
+  tenantId: string,
+  customerId: string,
+  input: { name: unknown }
+): Promise<StockActionResult> {
+  const v = validateWarehouseNameInput(input);
+  if (!v.ok) return { ok: false, message: v.message };
+
+  const { data, error } = await db
+    .from("warehouses")
+    .insert({ tenant_id: tenantId, customer_id: customerId, name: v.value.name, is_default: false, is_active: true })
+    .select("id")
+    .maybeSingle();
+  if (error || !data) {
+    if (error?.code === "23505") return { ok: false, message: "มีชื่อคลังนี้อยู่แล้ว" };
+    return { ok: false, message: "เพิ่มคลังไม่สำเร็จ กรุณาลองใหม่" };
+  }
+  return { ok: true, id: (data as { id: string }).id };
+}
+
+/** เปลี่ยนชื่อคลัง */
+export async function renameWarehouse(
+  db: DB,
+  tenantId: string,
+  warehouseId: string,
+  input: { name: unknown }
+): Promise<StockActionResult> {
+  const v = validateWarehouseNameInput(input);
+  if (!v.ok) return { ok: false, message: v.message };
+
+  const { error } = await db
+    .from("warehouses")
+    .update({ name: v.value.name })
+    .eq("id", warehouseId)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null);
+  if (error) {
+    if ((error as { code?: string }).code === "23505") return { ok: false, message: "มีชื่อคลังนี้อยู่แล้ว" };
+    return { ok: false, message: "เปลี่ยนชื่อคลังไม่สำเร็จ กรุณาลองใหม่" };
+  }
+  return { ok: true, id: warehouseId };
+}
+
+/** เปิด/ปิดใช้งานคลัง — ★ ห้ามปิดใช้งานคลังหลัก (ทุกรายการจากบิลผูกคลังนี้เสมอ) */
+export async function setWarehouseActive(
+  db: DB,
+  tenantId: string,
+  warehouseId: string,
+  isActive: boolean
+): Promise<StockActionResult> {
+  const { data: cur } = await db
+    .from("warehouses")
+    .select("is_default")
+    .eq("id", warehouseId)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!cur) return { ok: false, message: "ไม่พบคลังนี้ (อาจถูกลบไปแล้ว)" };
+  if (!isActive && (cur as { is_default: boolean }).is_default) {
+    return { ok: false, message: "ปิดใช้งานคลังหลักไม่ได้ (รายการจากบิลผูกคลังนี้เสมอ)" };
+  }
+
+  const { error } = await db
+    .from("warehouses")
+    .update({ is_active: isActive })
+    .eq("id", warehouseId)
+    .eq("tenant_id", tenantId);
+  if (error) return { ok: false, message: "บันทึกไม่สำเร็จ กรุณาลองใหม่" };
+  return { ok: true, id: warehouseId };
+}
+
+/**
+ * สรุปจำนวนคงเหลือแยกตามคลัง (pure) — ★ ไม่ใช้ computeStockLedger ซ้ำ เพราะต้นทุนเฉลี่ยต้องคำนวณจาก
+ *   รายการเคลื่อนไหว "ทั้งหมด" ของสินค้าเท่านั้น (global) การ filter เป็นรายคลังก่อนจะคำนวณต้นทุนผิด —
+ *   ฟังก์ชันนี้จึงสรุปแค่ "จำนวน" (ไม่มีต้นทุน/มูลค่าต่อคลัง) โดยพับยอดยกมาทั้งหมดไปที่ defaultWarehouseId
+ *   (0.11 ไม่มีคอลัมน์คลังจริง) แล้วไล่บวก/ลบทีละ movement ตาม isInMovementType/isOutMovementType เดิม
+ *   (transfer_in/out ก็เป็น IN/OUT ตามปกติ — ยอดรวมทุกคลังของสินค้านี้เท่ากับ balanceQuantity ของ
+ *   computeStockLedger เสมอ)
+ *   ★ ไม่ round ในนี้ (สะสม float เต็มความละเอียดก่อน — ปัดตอนแสดงผลที่ชั้น UI เท่านั้น mirror totalValue)
+ *   ★ ไม่ block/เตือนคงเหลือติดลบต่อคลัง (เหมือนภาพรวม 0.12 — ปล่อยให้ UI เช็ค quantity<0 เองถ้าต้องการ)
+ */
+export function computeWarehouseQuantities(
+  defaultWarehouseId: string | null,
+  opening: OpeningBalance | null,
+  movements: StockMovement[]
+): { warehouseId: string; quantity: number }[] {
+  const qtyByWarehouse = new Map<string, number>();
+  const addQty = (id: string | null, delta: number) => {
+    if (!id) return;
+    qtyByWarehouse.set(id, (qtyByWarehouse.get(id) ?? 0) + delta);
+  };
+
+  if (opening) addQty(defaultWarehouseId, opening.quantity);
+  for (const m of movements) {
+    const id = m.warehouseId ?? defaultWarehouseId;
+    const delta = isInMovementType(m.movementType) ? m.quantity : -m.quantity;
+    addQty(id, delta);
+  }
+
+  return [...qtyByWarehouse.entries()].map(([warehouseId, quantity]) => ({ warehouseId, quantity: round2(quantity) }));
+}
+
+/** ต้นทุนถ่วงเฉลี่ยปัจจุบัน (แถวสุดท้ายของ replay) — ใช้กำหนด unit_cost ฝั่ง transfer_in ตอนโอนคลัง */
+async function currentAvgUnitCost(
+  db: DB,
+  tenantId: string,
+  customerId: string,
+  productId: string
+): Promise<number> {
+  const [opening, movements] = await Promise.all([
+    getProductOpeningBalance(db, tenantId, customerId, productId),
+    listMovements(db, tenantId, customerId, productId),
+  ]);
+  const rows = computeStockLedger(opening, movements);
+  return rows.length > 0 ? rows[rows.length - 1].balanceUnitCost : 0;
+}
+
+export type CreateStockTransferInput = {
+  fromWarehouseId: string;
+  toWarehouseId: string;
+  quantity: unknown;
+  movementDate: unknown;
+  memo?: unknown;
+};
+
+/**
+ * โอนสินค้าระหว่างคลัง 1 สินค้า (transfer_out จากคลังต้นทาง + transfer_in เข้าคลังปลายทาง วันเดียวกัน
+ *   จำนวนเท่ากัน) — unit_cost ฝั่ง in = ต้นทุนเฉลี่ยปัจจุบัน (currentAvgUnitCost) ทำให้ยอดรวม/มูลค่ารวมของ
+ *   สินค้านี้ไม่เปลี่ยนหลังโอน (ดูหมายเหตุพิสูจน์ที่ migration 0108) — insert 2 แถวแบบ atomic ผ่าน RPC
+ *   create_stock_transfer (mirror set_bill_installment_plan — กันเคส insert สำเร็จแค่แถวเดียวค้างอยู่)
+ *   ★ คำนวณ currentAvgUnitCost "ตอนนี้" ไม่ใช่ ณ movement_date ที่เลือก — ถูกต้องเมื่อโอนวันปัจจุบัน (การ
+ *     ใช้งานหลัก) ถ้าเลือกวันที่ย้อนหลังโดยมี movement คั่นอยู่หลังจากนั้น ต้นทุนที่ใช้จะเป็นค่าปัจจุบันไม่ใช่
+ *     ค่า ณ วันนั้น — ยอมรับความคลาดเคลื่อนนี้เหมือนกับ adjustment_in ที่ก็รับ unit_cost จากผู้ใช้ตรง ๆ
+ *     เช่นกัน (ไม่มี point-in-time cost lock ที่ไหนในระบบนี้)
+ */
+export async function createStockTransfer(
+  db: DB,
+  tenantId: string,
+  customerId: string,
+  productId: string,
+  input: CreateStockTransferInput
+): Promise<StockActionResult> {
+  if (input.fromWarehouseId === input.toWarehouseId) {
+    return { ok: false, message: "คลังต้นทางและปลายทางต้องไม่ใช่คลังเดียวกัน" };
+  }
+
+  const quantity = toFiniteNumber(input.quantity);
+  if (quantity === null || quantity <= 0) return { ok: false, message: "จำนวนต้องมากกว่า 0" };
+  if (quantity > QTY_MAX) return { ok: false, message: `จำนวนต้องไม่เกิน ${QTY_MAX.toLocaleString("th-TH")}` };
+
+  const movementDate = typeof input.movementDate === "string" ? input.movementDate.trim() : "";
+  if (!isValidCalendarDate(movementDate)) {
+    return { ok: false, message: "วันที่ไม่ถูกต้อง (ต้องเป็น YYYY-MM-DD)" };
+  }
+
+  const memo = clampText(input.memo, MEMO_MAX);
+  const avgUnitCost = await currentAvgUnitCost(db, tenantId, customerId, productId);
+
+  const { error } = await db.rpc("create_stock_transfer", {
+    p_tenant_id: tenantId,
+    p_customer_id: customerId,
+    p_product_id: productId,
+    p_from_warehouse_id: input.fromWarehouseId,
+    p_to_warehouse_id: input.toWarehouseId,
+    p_quantity: round2(quantity),
+    p_unit_cost: round3(avgUnitCost),
+    p_movement_date: movementDate,
+    p_memo: memo,
+  });
+  if (error) return { ok: false, message: "โอนสินค้าไม่สำเร็จ กรุณาลองใหม่" };
+  return { ok: true, id: input.fromWarehouseId };
 }

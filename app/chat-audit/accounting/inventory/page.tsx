@@ -11,10 +11,14 @@ import {
   computeStockLedger,
   buildStockCard,
   buildInventoryValuationReport,
+  listWarehouses,
+  getOrCreateDefaultWarehouse,
+  computeWarehouseQuantities,
   type StockCardRow,
   type ProductLedgerInput,
   type OpeningBalance,
   type InventoryValuationReport,
+  type Warehouse,
 } from "@/lib/accounting/product-stock";
 import InventoryPanel from "./InventoryPanel";
 import ChatAuditFrame from "../../_Frame";
@@ -106,10 +110,17 @@ export default async function InventoryPage({
   let stockCardsByProduct: Record<string, StockCardRow[]> = {};
   let openingByProduct: Record<string, OpeningBalance> = {};
   let valuationReport: InventoryValuationReport = { groups: [], grandTotalValue: 0 };
+  let warehouses: Warehouse[] = [];
+  let warehouseQtyByProduct: Record<string, { warehouseId: string; quantity: number }[]> = {};
   let loadError = false;
 
   if (customerId) {
     try {
+      // ★ wishlist ข้อ 8 — โหลดคลังของลูกค้ารายนี้ (อ่านอย่างเดียว ไม่สร้างคลังหลักที่นี่ — สร้างแบบ lazy
+      //   ตอนเขียนจริงเท่านั้น ผ่าน getOrCreateDefaultWarehouse ที่ actions.ts/product-stock.ts)
+      warehouses = await listWarehouses(service, access.tenantId, customerId, { includeInactive: true });
+      const defaultWarehouseId = warehouses.find((w) => w.isDefault)?.id ?? null;
+
       const ledgerInputs: ProductLedgerInput[] = [];
       for (const p of products.slice(0, PRODUCT_LEDGER_LIMIT)) {
         const [opening, movements] = await Promise.all([
@@ -121,6 +132,7 @@ export default async function InventoryPage({
         stockCardsByProduct[p.id] = buildStockCard(ledgerRows);
         if (opening || movements.length > 0) {
           ledgerInputs.push({ productId: p.id, productName: p.name, category: p.category, ledgerRows });
+          warehouseQtyByProduct[p.id] = computeWarehouseQuantities(defaultWarehouseId, opening, movements);
         }
       }
       valuationReport = buildInventoryValuationReport(ledgerInputs);
@@ -176,6 +188,8 @@ export default async function InventoryPage({
               stockCardsByProduct={stockCardsByProduct}
               openingByProduct={openingByProduct}
               valuationReport={valuationReport}
+              warehouses={warehouses}
+              warehouseQtyByProduct={warehouseQtyByProduct}
             />
           </div>
         )}
