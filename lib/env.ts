@@ -297,6 +297,49 @@ export function hasGoogleDriveConfig(): boolean {
   return getGoogleDriveConfig() !== null;
 }
 
+export type SmtpConfig = {
+  host: string;
+  port: number;
+  /** true = TLS ตั้งแต่ต้น (port 465 ทั่วไป), false = STARTTLS/plain (port 587/25 ทั่วไป) */
+  secure: boolean;
+  user: string;
+  password: string;
+  /** ที่อยู่ผู้ส่งที่โชว์ใน From: — ไม่ตั้ง = ใช้ SMTP_USER แทน */
+  from: string;
+};
+
+/**
+ * config SMTP ของบริษัทเอง (wishlist ข้อ 6 — ส่งสลิปเงินเดือนทางอีเมล) — คืน null ถ้าตั้งไม่ครบ (= ปิดฟีเจอร์)
+ *   อ่าน: SMTP_HOST, SMTP_PORT, SMTP_SECURE ("true"/"false", default "false"), SMTP_USER, SMTP_PASSWORD,
+ *   SMTP_FROM (optional, fallback = SMTP_USER)
+ *   ★ inert-by-default: ตัวใดตัวหนึ่งขาด/PORT ไม่ใช่ตัวเลข → null ทำให้ปุ่มส่งอีเมลเป็น no-op ที่ปลอดภัย
+ *     ไม่กระทบระบบเดิม (มิเรอร์ getGoogleDriveConfig)
+ */
+export function getSmtpConfig(): SmtpConfig | null {
+  const host = process.env.SMTP_HOST;
+  const rawPort = process.env.SMTP_PORT;
+  const user = process.env.SMTP_USER;
+  const password = process.env.SMTP_PASSWORD;
+  if (!host || !rawPort || !user || !password) return null;
+
+  const port = Number(rawPort);
+  if (!Number.isFinite(port) || !Number.isInteger(port) || port <= 0) return null;
+
+  return {
+    host,
+    port,
+    secure: process.env.SMTP_SECURE === "true",
+    user,
+    password,
+    from: process.env.SMTP_FROM || user,
+  };
+}
+
+/** true เมื่อตั้ง env SMTP ครบ (พร้อมส่งอีเมลได้จริง) */
+export function hasSmtpConfig(): boolean {
+  return getSmtpConfig() !== null;
+}
+
 /**
  * base URL ของแอป (ใช้ประกอบ survey_url ลิงก์เว็บที่เปิดในเบราว์เซอร์ไหนก็ได้)
  *   ลำดับ: NEXT_PUBLIC_APP_URL → https://${VERCEL_URL} → fallback prod

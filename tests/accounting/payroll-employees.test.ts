@@ -147,6 +147,25 @@ describe("validatePayrollEmployeeInput (0.12)", () => {
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.value.annualIncomeEstimateOverride).toBeNull();
   });
+
+  // ★★ wishlist ข้อ 6 (ส่งสลิปเงินเดือนทางอีเมล) — email
+  it("★ wishlist 6: ไม่กรอกอีเมลเลย → ผ่าน (nullable)", () => {
+    const res = validatePayrollEmployeeInput(baseInput());
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.email).toBeNull();
+  });
+
+  it("★ wishlist 6: อีเมลรูปแบบผิด → ปฏิเสธ", () => {
+    expect(validatePayrollEmployeeInput(baseInput({ email: "not-an-email" })).ok).toBe(false);
+    expect(validatePayrollEmployeeInput(baseInput({ email: "missing-at.com" })).ok).toBe(false);
+    expect(validatePayrollEmployeeInput(baseInput({ email: "no-domain@" })).ok).toBe(false);
+  });
+
+  it("★ wishlist 6: อีเมลถูกต้อง → ผ่าน แปลงเป็นตัวพิมพ์เล็ก", () => {
+    const res = validatePayrollEmployeeInput(baseInput({ email: "Somchai@Example.COM" }));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.email).toBe("somchai@example.com");
+  });
 });
 
 describe("maskIdCardNo (0.12 PDPA)", () => {
@@ -295,5 +314,31 @@ describe("data layer (mock DB in-memory)", () => {
     await upsertEmployee(db, TENANT, CUSTOMER_A, baseInput({ priorEmployerYtdGross: undefined }), id);
     const full = await getEmployeeById(db, TENANT, id);
     expect(full?.priorEmployerYtdGross).toBeNull();
+  });
+
+  // ★★★ wishlist ข้อ 6 (ส่งสลิปเงินเดือนทางอีเมล) — email
+  it("★ wishlist 6: upsertEmployee บันทึก/โหลดอีเมลถูกต้อง", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const created = await upsertEmployee(db, TENANT, CUSTOMER_A, baseInput({ email: "somchai@example.com" }));
+    const id = (created as { id: string }).id;
+    const full = await getEmployeeById(db, TENANT, id);
+    expect(full?.email).toBe("somchai@example.com");
+  });
+
+  it("★ wishlist 6: ไม่กรอกอีเมล → email เป็น null ใน DB", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const created = await upsertEmployee(db, TENANT, CUSTOMER_A, baseInput());
+    const id = (created as { id: string }).id;
+    const full = await getEmployeeById(db, TENANT, id);
+    expect(full?.email).toBeNull();
+  });
+
+  it("★ wishlist 6: แก้ไขล้างอีเมลกลับเป็น null ได้ (ปล่อยช่องว่าง)", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const created = await upsertEmployee(db, TENANT, CUSTOMER_A, baseInput({ email: "somchai@example.com" }));
+    const id = (created as { id: string }).id;
+    await upsertEmployee(db, TENANT, CUSTOMER_A, baseInput({ email: undefined }), id);
+    const full = await getEmployeeById(db, TENANT, id);
+    expect(full?.email).toBeNull();
   });
 });

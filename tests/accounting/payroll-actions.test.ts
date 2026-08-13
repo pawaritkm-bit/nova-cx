@@ -14,8 +14,9 @@ import { TEST_CHART } from "./fixtures/chart";
  *   tests/accounting/payroll-filing-actions.test.ts (mirror app/chat-audit/accounting/payroll/filing/actions.ts)
  */
 
-const { requireAccountingAccessMock } = vi.hoisted(() => ({
+const { requireAccountingAccessMock, sendPayslipEmailsMock } = vi.hoisted(() => ({
   requireAccountingAccessMock: vi.fn(),
+  sendPayslipEmailsMock: vi.fn(),
 }));
 
 let currentDb: SupabaseClient;
@@ -27,6 +28,12 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+
+// ★ wishlist ข้อ 6 — mock ทั้งชั้น orchestration (pdf+email จริงมีเทสต์แยกที่ payroll-payslip-email.test.ts
+//   แล้ว) ที่นี่โฟกัสแค่ guard ของ action เอง (สโคป/IDOR/finalized-only)
+vi.mock("@/lib/accounting/payroll-payslip-email", () => ({
+  sendPayslipEmails: (...args: unknown[]) => sendPayslipEmailsMock(...args),
+}));
 
 vi.mock("@/lib/accounting/access", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/accounting/access")>();
@@ -41,6 +48,7 @@ import {
   recalcRunAction,
   generateJournalEntryAction,
   deleteRunAction,
+  sendPayslipEmailsAction,
 } from "@/app/chat-audit/accounting/payroll/actions";
 
 const TENANT = "tenant-1";
@@ -238,6 +246,7 @@ function setupTables(): Tables {
 beforeEach(() => {
   vi.clearAllMocks();
   requireAccountingAccessMock.mockResolvedValue(adminCtx);
+  sendPayslipEmailsMock.mockResolvedValue({ ok: true, results: [] });
   tables = setupTables();
   currentDb = makeInMemoryDb(tables).db;
 });
@@ -344,6 +353,55 @@ describe("deleteRunAction (0.14)", () => {
     requireAccountingAccessMock.mockResolvedValue(accountantCtx([CUSTOMER_B]));
     const res = await deleteRunAction(RUN_DRAFT, CUSTOMER_A);
     expect(res.ok).toBe(false);
+  });
+});
+
+describe("sendPayslipEmailsAction (wishlist ข้อ 6)", () => {
+  it("รอบ finalized → ส่งสำเร็จ ส่งต่อผลลัพธ์จาก sendPayslipEmails พร้อมสรุปข้อความ", async () => {
+    sendPayslipEmailsMock.mockResolvedValue({
+      ok: true,
+      results: [
+        { payrollEmployeeId: EMP_1, employeeFullName: "สมชาย ใจดี", status: "sent" },
+      ],
+    });
+    const res = await sendPayslipEmailsAction(RUN_FINALIZED, CUSTOMER_A);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.message).toContain("1 คน");
+      expect(res.results).toHaveLength(1);
+    }
+    expect(sendPayslipEmailsMock).toHaveBeenCalledWith(currentDb, TENANT, CUSTOMER_A, RUN_FINALIZED);
+  });
+
+  it("★ รอบยัง draft → ปฏิเสธ ไม่เรียก sendPayslipEmails เลย", async () => {
+    const res = await sendPayslipEmailsAction(RUN_DRAFT, CUSTOMER_A);
+    expect(res.ok).toBe(false);
+    expect(sendPayslipEmailsMock).not.toHaveBeenCalled();
+  });
+
+  it("★ ลูกค้านอกสโคป → ปฏิเสธ ไม่เรียก sendPayslipEmails", async () => {
+    requireAccountingAccessMock.mockResolvedValue(accountantCtx([CUSTOMER_B]));
+    const res = await sendPayslipEmailsAction(RUN_FINALIZED, CUSTOMER_A);
+    expect(res.ok).toBe(false);
+    expect(sendPayslipEmailsMock).not.toHaveBeenCalled();
+  });
+
+  it("★★★ IDOR — ส่ง customerId ที่อยู่ในสโคปแต่ไม่ตรงกับรอบจริง → ปฏิเสธ (scope derive จาก run id จริง)", async () => {
+    requireAccountingAccessMock.mockResolvedValue(accountantCtx([CUSTOMER_B]));
+    const res = await sendPayslipEmailsAction(RUN_FINALIZED, CUSTOMER_B); // รอบจริงเป็นของ CUSTOMER_A
+    expect(res.ok).toBe(false);
+    expect(sendPayslipEmailsMock).not.toHaveBeenCalled();
+  });
+
+  it("รอบไม่มีอยู่จริง → ปฏิเสธ", async () => {
+    const res = await sendPayslipEmailsAction("99999999-9999-9999-9999-999999999999", CUSTOMER_A);
+    expect(res.ok).toBe(false);
+  });
+
+  it("runId ไม่ใช่ uuid → ปฏิเสธทันที", async () => {
+    const res = await sendPayslipEmailsAction("not-a-uuid", CUSTOMER_A);
+    expect(res.ok).toBe(false);
+    expect(sendPayslipEmailsMock).not.toHaveBeenCalled();
   });
 });
 

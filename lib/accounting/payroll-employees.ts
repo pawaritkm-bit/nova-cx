@@ -28,6 +28,9 @@ export const POSITION_MAX = 100;
 const LIST_LIMIT = 5000;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** ★ wishlist ข้อ 6 — รูปแบบอีเมลอย่างง่าย (มิเรอร์ EMAIL_RE ของ lib/auth/login.ts) */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_MAX = 200;
 
 function clampText(v: unknown, max: number): string | null {
   if (typeof v !== "string") return null;
@@ -76,6 +79,8 @@ export type PayrollEmployee = {
   startDate: string | null;
   resignDate: string | null;
   isActive: boolean;
+  /** ★ wishlist ข้อ 6 — อีเมลพนักงาน (nullable) ใช้เป็นปลายทางส่ง PDF สลิปเงินเดือนเป็นชุด ไม่กรอก = ข้ามคนนี้ตอนส่ง */
+  email: string | null;
   /** ★ เฟส 9b กลุ่ม BA (0.3) — ยกเว้นเงินสมทบประกันสังคมรายพนักงาน นักบัญชีพิจารณาเงื่อนไขเอง ไม่ผูก
    *   เหตุผลทางกฎหมายในระบบ (reframe จาก "ม.39/40" เดิมที่เข้าใจผิดข้อเท็จจริง) */
   ssoExempt: boolean;
@@ -104,6 +109,8 @@ export type PayrollEmployeeInput = {
   startDate?: unknown;
   resignDate?: unknown;
   isActive?: unknown;
+  /** ★ wishlist ข้อ 6 — nullable ไม่กรอก = ไม่มีอีเมล (ข้ามคนนี้ตอนส่งสลิปเป็นชุด) */
+  email?: unknown;
   /** ★ BA (0.3) — undefined จาก input เก่า/ฟอร์มที่ยังไม่มีช่องนี้ → default false (ไม่ throw) */
   ssoExempt?: unknown;
   /** ★ BD (0.4) — nullable ทั้งหมด ไม่กรอก = ไม่มี YTD นายจ้างเดิม */
@@ -125,6 +132,7 @@ type ValidatedPayrollEmployee = {
   startDate: string | null;
   resignDate: string | null;
   isActive: boolean;
+  email: string | null;
   ssoExempt: boolean;
   priorEmployerYtdGross: number | null;
   priorEmployerYtdPitWithheld: number | null;
@@ -181,6 +189,14 @@ export function validatePayrollEmployeeInput(input: PayrollEmployeeInput): Payro
 
   const isActive = input.isActive === undefined ? true : !!input.isActive;
 
+  // ★ wishlist ข้อ 6 — nullable, format ถูกต้องถ้ากรอก (ไม่กรอก = ไม่มีอีเมล ไม่ throw)
+  let email: string | null = null;
+  const rawEmail = clampText(input.email, EMAIL_MAX);
+  if (rawEmail) {
+    if (!EMAIL_RE.test(rawEmail)) return { ok: false, message: "รูปแบบอีเมลไม่ถูกต้อง" };
+    email = rawEmail.toLowerCase();
+  }
+
   // ★ BA (0.3) — undefined (input เก่า/ฟอร์มที่ยังไม่มีช่องนี้) → default false เสมอ ไม่ throw
   const ssoExempt = input.ssoExempt === undefined ? false : !!input.ssoExempt;
 
@@ -209,6 +225,7 @@ export function validatePayrollEmployeeInput(input: PayrollEmployeeInput): Payro
       startDate: startRes.value,
       resignDate: resignRes.value,
       isActive,
+      email,
       ssoExempt,
       priorEmployerYtdGross: ytdGrossRes.value,
       priorEmployerYtdPitWithheld: ytdPitRes.value,
@@ -236,6 +253,8 @@ type RawRow = {
   start_date: string | null;
   resign_date: string | null;
   is_active: boolean;
+  /** ★ wishlist ข้อ 6 — undefined ถ้า migration 0106 ยังไม่ apply บน DB นี้ (defensive) */
+  email?: string | null;
   /** ★ BA — undefined ถ้า migration 0091 ยังไม่ apply บน DB นี้ (defensive, ไม่ควรเกิดในโปรดักชัน) */
   sso_exempt?: boolean | null;
   prior_employer_ytd_gross?: number | string | null;
@@ -249,7 +268,7 @@ type RawRow = {
 };
 
 const COLUMNS =
-  "id, tenant_id, customer_id, employee_code, full_name, id_card_no, passport_no, position, base_salary, start_date, resign_date, is_active, sso_exempt, prior_employer_ytd_gross, prior_employer_ytd_pit_withheld, prior_employer_ytd_sso_employee, prior_employer_note, annual_income_estimate_override, created_at, updated_at";
+  "id, tenant_id, customer_id, employee_code, full_name, id_card_no, passport_no, position, base_salary, start_date, resign_date, is_active, email, sso_exempt, prior_employer_ytd_gross, prior_employer_ytd_pit_withheld, prior_employer_ytd_sso_employee, prior_employer_note, annual_income_estimate_override, created_at, updated_at";
 
 /** ตัวเลข nullable จาก DB (numeric อาจมาเป็น string) → number | null */
 function numOrNull(v: number | string | null | undefined): number | null {
@@ -272,6 +291,7 @@ function mapRow(r: RawRow): PayrollEmployee {
     startDate: r.start_date,
     resignDate: r.resign_date,
     isActive: r.is_active,
+    email: r.email ?? null,
     ssoExempt: !!r.sso_exempt,
     priorEmployerYtdGross: numOrNull(r.prior_employer_ytd_gross),
     priorEmployerYtdPitWithheld: numOrNull(r.prior_employer_ytd_pit_withheld),
@@ -365,6 +385,7 @@ export async function upsertEmployee(
     start_date: v.value.startDate,
     resign_date: v.value.resignDate,
     is_active: v.value.isActive,
+    email: v.value.email,
     sso_exempt: v.value.ssoExempt,
     prior_employer_ytd_gross: v.value.priorEmployerYtdGross,
     prior_employer_ytd_pit_withheld: v.value.priorEmployerYtdPitWithheld,

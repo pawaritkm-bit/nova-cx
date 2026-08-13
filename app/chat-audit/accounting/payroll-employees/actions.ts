@@ -68,6 +68,8 @@ export type SaveEmployeeInput = {
   startDate: unknown;
   resignDate: unknown;
   isActive: unknown;
+  /** ★ wishlist ข้อ 6 — ปลายทางส่งสลิปเงินเดือน PDF (nullable, ไม่กรอก = ข้ามคนนี้ตอนส่งเป็นชุด) */
+  email?: unknown;
   /** ★ เฟส 9b กลุ่ม BA (0.3) */
   ssoExempt?: unknown;
   /** ★ เฟส 9b กลุ่ม BD (0.4) — อ้างอิงเพื่อพิมพ์ 50 ทวิเท่านั้น ไม่กระทบการคำนวณภาษีรายเดือน */
@@ -122,6 +124,7 @@ export async function upsertEmployeeAction(input: SaveEmployeeInput): Promise<Pa
       startDate: input.startDate,
       resignDate: input.resignDate,
       isActive: input.isActive,
+      email: input.email,
       ssoExempt: input.ssoExempt,
       priorEmployerYtdGross: input.priorEmployerYtdGross,
       priorEmployerYtdPitWithheld: input.priorEmployerYtdPitWithheld,

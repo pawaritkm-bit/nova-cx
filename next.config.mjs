@@ -24,6 +24,24 @@ const nextConfig = {
   eslint: {
     dirs: ["app", "lib"],
   },
+  // ★ wishlist ข้อ 6 (สลิปเงินเดือน PDF) — lib/pdf/thai-text.ts หา path ไฟล์ฟอนต์ .woff จาก @fontsource/sarabun
+  //   ตอน runtime ผ่าน require.resolve("@fontsource/sarabun/package.json") + path.join (ดูคอมเมนต์เต็มในไฟล์
+  //   นั้น) — 2 ปัญหาที่ต้องแก้คู่กัน:
+  //   1) ถ้าปล่อยให้ webpack bundle โค้ดนี้ตามปกติ (ไม่ external) — require.resolve() ที่ webpack แปลงให้เป็น
+  //      __webpack_require__.resolve() จะไม่คืน path ไฟล์จริงในระบบ (คืน module id ภายในของ webpack แทน) ทำให้
+  //      fs.readFileSync ของ pdfkit หาไฟล์ไม่พบตอน runtime (ยืนยันจริงตอน browser QA — build/dev ผ่านเงียบ ๆ
+  //      แต่กดส่งจริงพัง "สร้าง/ส่งสลิปไม่สำเร็จ" เพราะ path ผิด) — serverExternalPackages ด้านล่างบอก Next ให้
+  //      ปล่อยให้ require()/require.resolve() ของแพ็กเกจนี้เป็น native Node require ตรง ๆ ไม่ผ่าน webpack เลย
+  //   2) แม้ external แล้ว ก็ต้องประกาศไฟล์ .woff ไว้ใน outputFileTracingIncludes ด้วย เพื่อให้ Vercel
+  //      serverless bundler (@vercel/nft) copy ไฟล์ไปลง deployment จริง (local `next dev`/`next build` ไม่ผ่าน
+  //      @vercel/nft จึงไม่เจอไฟล์หายตอน build เอง — ต้อง verify อีกรอบหลัง deploy จริงบน Vercel)
+  serverExternalPackages: ["@fontsource/sarabun"],
+  outputFileTracingIncludes: {
+    "/**": [
+      "./node_modules/@fontsource/sarabun/files/sarabun-thai-400-normal.woff",
+      "./node_modules/@fontsource/sarabun/files/sarabun-latin-400-normal.woff",
+    ],
+  },
   // ★ Server Action body cap: ดีฟอลต์ Next = 1MB → อัปไฟล์เอง (PDF/รูป/Excel) ที่เกิน 1MB
   //   จะโดนตัดก่อนถึงโค้ด (client validate ผ่านเพราะเช็คแค่ 15MB). ตั้งให้ครอบเพดานอัป 15MB
   //   + เผื่อ overhead ของ multipart form (ชื่อฟิลด์/boundary) = 20mb

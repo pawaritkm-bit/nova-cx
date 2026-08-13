@@ -73,6 +73,8 @@ type FormState = {
   startDate: string;
   resignDate: string;
   isActive: boolean;
+  /** ★ wishlist ข้อ 6 — ปลายทางส่งสลิปเงินเดือน PDF */
+  email: string;
   /** ★ เฟส 9b กลุ่ม BA (0.3) — นักบัญชีพิจารณาเงื่อนไขเอง ไม่ผูกเหตุผลทางกฎหมายในระบบ */
   ssoExempt: boolean;
   /** ★ เฟส 9b กลุ่ม BD (0.4) — อ้างอิงเพื่อพิมพ์ 50 ทวิเท่านั้น ไม่กระทบการคำนวณภาษีหัก ณ ที่จ่ายรายเดือน */
@@ -95,6 +97,7 @@ function blankForm(): FormState {
     startDate: todayIso(),
     resignDate: "",
     isActive: true,
+    email: "",
     ssoExempt: false,
     priorEmployerYtdGross: "",
     priorEmployerYtdPitWithheld: "",
@@ -223,6 +226,7 @@ export default function PayrollEmployeesPanel({
       startDate: e.startDate ?? "",
       resignDate: e.resignDate ?? "",
       isActive: e.isActive,
+      email: e.email ?? "",
       ssoExempt: e.ssoExempt,
       priorEmployerYtdGross: e.priorEmployerYtdGross !== null ? String(e.priorEmployerYtdGross) : "",
       priorEmployerYtdPitWithheld: e.priorEmployerYtdPitWithheld !== null ? String(e.priorEmployerYtdPitWithheld) : "",
@@ -247,6 +251,7 @@ export default function PayrollEmployeesPanel({
         startDate: form.startDate || null,
         resignDate: form.resignDate || null,
         isActive: form.isActive,
+        email: form.email || null,
         ssoExempt: form.ssoExempt,
         priorEmployerYtdGross: form.priorEmployerYtdGross.trim() === "" ? null : parseAmountInput(form.priorEmployerYtdGross),
         priorEmployerYtdPitWithheld:
@@ -411,6 +416,15 @@ export default function PayrollEmployeesPanel({
               <label className="acc-field">
                 <span>ตำแหน่ง</span>
                 <input value={form.position} onChange={(e) => setForm((f) => ({ ...f, position: e.target.value }))} />
+              </label>
+              <label className="acc-field">
+                <span>อีเมล (สำหรับส่งสลิปเงินเดือน)</span>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                  placeholder="เช่น somchai@example.com"
+                />
               </label>
               <label className="acc-field">
                 <span>เงินเดือนฐาน (บาท) *</span>

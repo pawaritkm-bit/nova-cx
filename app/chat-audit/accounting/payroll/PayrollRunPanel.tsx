@@ -7,7 +7,9 @@ import {
   recalcRunAction,
   generateJournalEntryAction,
   deleteRunAction,
+  sendPayslipEmailsAction,
 } from "./actions";
+import type { PayslipEmailResult } from "@/lib/accounting/payroll-payslip-email";
 import type { PayrollRun, PayrollRunLine } from "@/lib/accounting/payroll";
 import { ENABLE_EXTRA_DEDUCTIONS_IN_PIT } from "@/lib/accounting/payroll-tax";
 import { parseAmountInput, formatMoney } from "@/lib/accounting/calc";
@@ -94,6 +96,9 @@ export default function PayrollRunPanel({
 
   const [edits, setEdits] = useState<Record<string, LineEditState>>({});
   const [slipLine, setSlipLine] = useState<PayrollRunLine | null>(null);
+  const [emailPending, setEmailPending] = useState(false);
+  const [emailMsg, setEmailMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [emailResults, setEmailResults] = useState<PayslipEmailResult[] | null>(null);
 
   const isDraft = detail?.run.status === "draft";
   const isFinalized = detail?.run.status === "finalized";
@@ -176,6 +181,20 @@ export default function PayrollRunPanel({
       setMsg({ ok: res.ok, text: res.message });
       if (res.ok || res.existingManualEntryId) router.refresh();
     });
+  };
+
+  const sendPayslipEmails = () => {
+    if (!detail) return;
+    if (!confirm("ยืนยันส่งสลิปเงินเดือน (PDF) ทางอีเมลให้พนักงานทุกคนที่มีอีเมลในรอบนี้?")) return;
+    setEmailMsg(null);
+    setEmailResults(null);
+    setEmailPending(true);
+    (async () => {
+      const res = await sendPayslipEmailsAction(detail.run.id, customerId);
+      setEmailMsg({ ok: res.ok, text: res.message });
+      if (res.ok) setEmailResults(res.results);
+      setEmailPending(false);
+    })();
   };
 
   const deleteRun = () => {
@@ -301,6 +320,41 @@ export default function PayrollRunPanel({
                   ไปหน้าบันทึกสถานะยื่น →
                 </a>
               </div>
+            </div>
+          ) : null}
+
+          {isFinalized ? (
+            <div className="card" style={{ marginBottom: 10 }}>
+              <div className="section-title"><span>ส่งสลิปเงินเดือนทางอีเมล (ทั้งหมด)</span></div>
+              <p className="muted" style={{ marginBottom: 8 }}>
+                ส่งสลิปเงินเดือนเป็นไฟล์ PDF ทางอีเมลให้พนักงานทุกคนในรอบนี้ (เฉพาะคนที่มีอีเมลในทะเบียนพนักงาน — คนที่ยังไม่มีอีเมลจะถูกข้าม)
+              </p>
+              <button type="button" className="btn" disabled={emailPending} onClick={sendPayslipEmails}>
+                {emailPending ? "กำลังส่ง…" : "ส่งสลิปทางอีเมล (ทั้งหมด)"}
+              </button>
+              {emailMsg ? <div className={`action-msg ${emailMsg.ok ? "ok" : "err"}`} style={{ marginTop: 8 }}>{emailMsg.text}</div> : null}
+              {emailResults && emailResults.length > 0 ? (
+                <div className="table-wrap" style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
+                  <table className="dlv-table acc-table">
+                    <thead>
+                      <tr>
+                        <th>พนักงาน</th>
+                        <th>ผลลัพธ์</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {emailResults.map((r) => (
+                        <tr key={r.payrollEmployeeId}>
+                          <td>{r.employeeFullName}</td>
+                          <td style={{ color: r.status === "sent" ? "#157347" : r.status === "skipped_no_email" ? "#6c757d" : "#b02a37" }}>
+                            {r.status === "sent" ? "✓ ส่งแล้ว" : r.status === "skipped_no_email" ? "— ไม่มีอีเมล" : `✕ ${r.message ?? "ส่งไม่สำเร็จ"}`}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
