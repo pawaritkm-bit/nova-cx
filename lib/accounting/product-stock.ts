@@ -1118,18 +1118,27 @@ export function computeWarehouseQuantities(
   return [...qtyByWarehouse.entries()].map(([warehouseId, quantity]) => ({ warehouseId, quantity: round2(quantity) }));
 }
 
-/** ต้นทุนถ่วงเฉลี่ยปัจจุบัน (แถวสุดท้ายของ replay) — ใช้กำหนด unit_cost ฝั่ง transfer_in ตอนโอนคลัง */
+/**
+ * ต้นทุนถ่วงเฉลี่ย ณ วันที่โอน (asOfDate) — ใช้กำหนด unit_cost ฝั่ง transfer_in ตอนโอนคลัง
+ *   ★ กรอง movements เฉพาะ movementDate <= asOfDate ก่อน replay (ไม่ใช้ทุก movement ทั้งหมด/ล่าสุด) —
+ *     ถูกต้องทั้งกรณีโอนวันนี้ (การใช้งานหลัก, asOfDate = movements ล่าสุดทั้งหมดพอดี) และกรณีเลือกวันที่
+ *     ย้อนหลังที่มี movement คั่นอยู่หลังจากนั้น (movement ที่คั่นจะไม่ถูกนำมาคิดเฉลี่ยของ transfer นี้)
+ *   ★ ยังมีความเสี่ยงเหลือเล็กน้อยจากการเป็น check-then-insert ไม่มี DB lock (มีคนบันทึกรายการวันเดียวกัน
+ *     แทรกพอดีระหว่างคำนวณกับตอน RPC insert จริง) — ยอมรับไว้เหมือนความเสี่ยงเดียวกันที่มีอยู่ทั่วระบบนี้
+ */
 async function currentAvgUnitCost(
   db: DB,
   tenantId: string,
   customerId: string,
-  productId: string
+  productId: string,
+  asOfDate: string
 ): Promise<number> {
   const [opening, movements] = await Promise.all([
     getProductOpeningBalance(db, tenantId, customerId, productId),
     listMovements(db, tenantId, customerId, productId),
   ]);
-  const rows = computeStockLedger(opening, movements);
+  const upToDate = movements.filter((m) => m.movementDate <= asOfDate);
+  const rows = computeStockLedger(opening, upToDate);
   return rows.length > 0 ? rows[rows.length - 1].balanceUnitCost : 0;
 }
 
@@ -1143,13 +1152,10 @@ export type CreateStockTransferInput = {
 
 /**
  * โอนสินค้าระหว่างคลัง 1 สินค้า (transfer_out จากคลังต้นทาง + transfer_in เข้าคลังปลายทาง วันเดียวกัน
- *   จำนวนเท่ากัน) — unit_cost ฝั่ง in = ต้นทุนเฉลี่ยปัจจุบัน (currentAvgUnitCost) ทำให้ยอดรวม/มูลค่ารวมของ
- *   สินค้านี้ไม่เปลี่ยนหลังโอน (ดูหมายเหตุพิสูจน์ที่ migration 0108) — insert 2 แถวแบบ atomic ผ่าน RPC
- *   create_stock_transfer (mirror set_bill_installment_plan — กันเคส insert สำเร็จแค่แถวเดียวค้างอยู่)
- *   ★ คำนวณ currentAvgUnitCost "ตอนนี้" ไม่ใช่ ณ movement_date ที่เลือก — ถูกต้องเมื่อโอนวันปัจจุบัน (การ
- *     ใช้งานหลัก) ถ้าเลือกวันที่ย้อนหลังโดยมี movement คั่นอยู่หลังจากนั้น ต้นทุนที่ใช้จะเป็นค่าปัจจุบันไม่ใช่
- *     ค่า ณ วันนั้น — ยอมรับความคลาดเคลื่อนนี้เหมือนกับ adjustment_in ที่ก็รับ unit_cost จากผู้ใช้ตรง ๆ
- *     เช่นกัน (ไม่มี point-in-time cost lock ที่ไหนในระบบนี้)
+ *   จำนวนเท่ากัน) — unit_cost ฝั่ง in = ต้นทุนเฉลี่ย ณ วันที่โอน (currentAvgUnitCost คิดเฉพาะ movement ที่
+ *   movementDate <= วันที่เลือกโอน) ทำให้ยอดรวม/มูลค่ารวมของสินค้านี้ไม่เปลี่ยนหลังโอน (ดูหมายเหตุพิสูจน์ที่
+ *   migration 0108) — insert 2 แถวแบบ atomic ผ่าน RPC create_stock_transfer (คืน id แถว transfer_in ที่
+ *   สร้าง — mirror set_bill_installment_plan — กันเคส insert สำเร็จแค่แถวเดียวค้างอยู่)
  */
 export async function createStockTransfer(
   db: DB,
@@ -1172,9 +1178,9 @@ export async function createStockTransfer(
   }
 
   const memo = clampText(input.memo, MEMO_MAX);
-  const avgUnitCost = await currentAvgUnitCost(db, tenantId, customerId, productId);
+  const avgUnitCost = await currentAvgUnitCost(db, tenantId, customerId, productId, movementDate);
 
-  const { error } = await db.rpc("create_stock_transfer", {
+  const { data, error } = await db.rpc("create_stock_transfer", {
     p_tenant_id: tenantId,
     p_customer_id: customerId,
     p_product_id: productId,
@@ -1185,6 +1191,6 @@ export async function createStockTransfer(
     p_movement_date: movementDate,
     p_memo: memo,
   });
-  if (error) return { ok: false, message: "โอนสินค้าไม่สำเร็จ กรุณาลองใหม่" };
-  return { ok: true, id: input.fromWarehouseId };
+  if (error || !data) return { ok: false, message: "โอนสินค้าไม่สำเร็จ กรุณาลองใหม่" };
+  return { ok: true, id: data as string };
 }

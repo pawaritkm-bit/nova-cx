@@ -178,13 +178,14 @@ function makeFakeDb(): { db: SupabaseClient; tables: Tables } {
         warehouse_id: params.p_from_warehouse_id, movement_type: "transfer_out", quantity: params.p_quantity,
         unit_cost: null, movement_date: params.p_movement_date,
       });
+      const inId = nextId();
       t.product_stock_movements.push({
-        id: nextId(), created_at: new Date().toISOString(), ...base,
+        id: inId, created_at: new Date().toISOString(), ...base,
         tenant_id: params.p_tenant_id, customer_id: params.p_customer_id, product_id: params.p_product_id,
         warehouse_id: params.p_to_warehouse_id, movement_type: "transfer_in", quantity: params.p_quantity,
         unit_cost: params.p_unit_cost, movement_date: params.p_movement_date,
       });
-      return Promise.resolve({ data: null, error: null });
+      return Promise.resolve({ data: inId, error: null });
     },
   } as unknown as SupabaseClient;
 

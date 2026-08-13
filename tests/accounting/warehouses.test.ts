@@ -272,8 +272,9 @@ function makeFakeDb(): { db: SupabaseClient; tables: Tables } {
         unit_cost: null,
         movement_date: params.p_movement_date,
       });
+      const inId = nextId("m");
       tables.product_stock_movements.push({
-        id: nextId("m"),
+        id: inId,
         created_at: nextCreatedAt(),
         ...base,
         tenant_id: params.p_tenant_id,
@@ -285,7 +286,7 @@ function makeFakeDb(): { db: SupabaseClient; tables: Tables } {
         unit_cost: params.p_unit_cost,
         movement_date: params.p_movement_date,
       });
-      return Promise.resolve({ data: null, error: null });
+      return Promise.resolve({ data: inId, error: null });
     },
   } as unknown as SupabaseClient;
 
@@ -430,7 +431,7 @@ describe("setWarehouseActive", () => {
 });
 
 describe("createStockTransfer", () => {
-  it("โอนสำเร็จ → สร้าง transfer_out+transfer_in คู่กัน unit_cost ฝั่ง in = ต้นทุนเฉลี่ยปัจจุบัน", async () => {
+  it("โอนสำเร็จ → สร้าง transfer_out+transfer_in คู่กัน unit_cost ฝั่ง in = ต้นทุนเฉลี่ย ณ วันที่โอน + คืน id แถว transfer_in จริง", async () => {
     const { db, tables } = makeFakeDb();
     const whA = await getOrCreateDefaultWarehouse(db, TENANT, CUSTOMER);
     const whB = await createWarehouse(db, TENANT, CUSTOMER, { name: "คลัง B" });
@@ -460,6 +461,42 @@ describe("createStockTransfer", () => {
     const inn = created.find((m) => m.movement_type === "transfer_in")!;
     expect(out).toMatchObject({ warehouse_id: whA, quantity: 40, unit_cost: null });
     expect(inn).toMatchObject({ warehouse_id: whB.id, quantity: 40, unit_cost: 68.333 });
+    if (res.ok) expect(res.id).toBe(inn.id); // ★ id ที่คืนต้องเป็น id แถว transfer_in จริง ไม่ใช่ echo input
+  });
+
+  it("โอนย้อนหลัง (มี movement รับเข้าคั่นอยู่หลังวันที่โอน) → ใช้ต้นทุนเฉลี่ย ณ วันที่โอนจริง ไม่ใช่ค่าล่าสุด", async () => {
+    const { db, tables } = makeFakeDb();
+    const whA = await getOrCreateDefaultWarehouse(db, TENANT, CUSTOMER);
+    const whB = await createWarehouse(db, TENANT, CUSTOMER, { name: "คลัง B" });
+    if (!whA || !whB.ok) throw new Error("setup failed");
+
+    // ยอดยกมา 100@65.000 → รับ 200@70.000 วันที่ 2026-01-05 (เฉลี่ย ณ วันนั้น 68.333)
+    tables.product_opening_balances.push({
+      id: "ob1", tenant_id: TENANT, customer_id: CUSTOMER, product_id: PRODUCT, quantity: 100, unit_cost: 65, note: null,
+    });
+    tables.product_stock_movements.push({
+      id: "mv1", tenant_id: TENANT, customer_id: CUSTOMER, product_id: PRODUCT, movement_type: "purchase",
+      quantity: 200, unit_cost: 70, warehouse_id: whA, movement_date: "2026-01-05", created_at: "2026-01-05T00:00:00Z",
+    });
+    // รับเข้าอีกครั้ง "หลัง" วันที่จะโอน (2026-01-10) — ไม่ควรถูกนำมาคิดเฉลี่ยของการโอนที่ backdate ไปวันที่ 06
+    tables.product_stock_movements.push({
+      id: "mv2", tenant_id: TENANT, customer_id: CUSTOMER, product_id: PRODUCT, movement_type: "purchase",
+      quantity: 100, unit_cost: 100, warehouse_id: whA, movement_date: "2026-01-10", created_at: "2026-01-10T00:00:00Z",
+    });
+
+    const res = await createStockTransfer(db, TENANT, CUSTOMER, PRODUCT, {
+      fromWarehouseId: whA,
+      toWarehouseId: whB.id,
+      quantity: 40,
+      movementDate: "2026-01-06", // ย้อนหลังกว่า mv2 (2026-01-10)
+    });
+    expect(res.ok).toBe(true);
+
+    const inn = tables.product_stock_movements.find(
+      (m) => m.movement_date === "2026-01-06" && m.movement_type === "transfer_in"
+    )!;
+    // ต้องเป็น 68.333 (เฉลี่ย ณ 2026-01-06) ไม่ใช่ 76.25 (เฉลี่ยถ้ารวม mv2 ที่มาหลัง)
+    expect(inn.unit_cost).toBe(68.333);
   });
 
   it("คลังต้นทาง/ปลายทางเดียวกัน → ปฏิเสธ ไม่เรียก RPC", async () => {

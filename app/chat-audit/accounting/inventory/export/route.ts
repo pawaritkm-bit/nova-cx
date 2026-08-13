@@ -10,6 +10,7 @@ import {
   computeStockLedger,
   buildStockCard,
   buildInventoryValuationReport,
+  listWarehouses,
   type StockCardRow,
   type ProductLedgerInput,
 } from "@/lib/accounting/product-stock";
@@ -29,8 +30,15 @@ function formatDateThai(iso: string): string {
   return m ? `${m[3]}/${m[2]}/${Number(m[1]) + 543}` : iso;
 }
 
-/** ชีต 1: บัตรสต็อกของสินค้า 1 ตัว (mirror ตัวอย่างที่ผู้ใช้แนบ — วันที่/รายการรับ/รายการจ่าย/คงเหลือ/เอกสารอ้างอิง) */
-function addStockCardSheet(wb: ExcelJS.Workbook, productName: string, entityLabel: string, rows: StockCardRow[]): void {
+/** ชีต 1: บัตรสต็อกของสินค้า 1 ตัว (mirror ตัวอย่างที่ผู้ใช้แนบ — วันที่/รายการรับ/รายการจ่าย/คงเหลือ/เอกสารอ้างอิง)
+ *   ★ wishlist ข้อ 8 — เพิ่มคอลัมน์ "คลัง" mirror หน้าจอ (InventoryPanel.tsx::StockCardTable) */
+function addStockCardSheet(
+  wb: ExcelJS.Workbook,
+  productName: string,
+  entityLabel: string,
+  rows: StockCardRow[],
+  warehouseNameById: Record<string, string>
+): void {
   const ws = wb.addWorksheet("บัตรสต็อก");
   ws.addRow([`บัตรสต็อก — ${productName}`]).font = { bold: true, size: 14 };
   ws.addRow([entityLabel]);
@@ -39,6 +47,7 @@ function addStockCardSheet(wb: ExcelJS.Workbook, productName: string, entityLabe
     "วันที่",
     "รายการ",
     "อ้างอิง",
+    "คลัง",
     "รับ (จำนวน)",
     "รับ (ราคา/หน่วย)",
     "รับ (มูลค่า)",
@@ -58,6 +67,7 @@ function addStockCardSheet(wb: ExcelJS.Workbook, productName: string, entityLabe
       formatDateThai(r.date),
       r.docLabel,
       r.reference ?? "—",
+      r.warehouseId ? warehouseNameById[r.warehouseId] ?? "—" : "—",
       r.inQuantity ?? "",
       r.inUnitCost ?? "",
       r.inValue ?? "",
@@ -71,8 +81,8 @@ function addStockCardSheet(wb: ExcelJS.Workbook, productName: string, entityLabe
     ]);
   }
 
-  ws.columns.forEach((c, i) => (c.width = [14, 14, 20, 12, 14, 14, 12, 14, 14, 14, 14, 14, 16][i] ?? 14));
-  [4, 5, 6, 7, 8, 9, 10, 11, 12].forEach((col) => (ws.getColumn(col).numFmt = NUMBER_FMT));
+  ws.columns.forEach((c, i) => (c.width = [14, 14, 20, 14, 12, 14, 14, 12, 14, 14, 14, 14, 14, 16][i] ?? 14));
+  [5, 6, 7, 8, 9, 10, 11, 12, 13].forEach((col) => (ws.getColumn(col).numFmt = NUMBER_FMT));
 }
 
 /** ชีต 2: สินค้าคงเหลือแยกหมวด ณ วันนี้ (0.10) */
@@ -155,12 +165,17 @@ export async function GET(req: Request) {
     // ชีต 1 — บัตรสต็อกของสินค้าที่เลือก (ไม่บังคับ — ไม่ระบุ/ไม่พบ → ข้ามชีตนี้)
     const selectedProduct = UUID_RE.test(rawProductId) ? products.find((p) => p.id === rawProductId) : undefined;
     if (selectedProduct) {
-      const [opening, movements] = await Promise.all([
+      // ★ wishlist ข้อ 8 — ชื่อคลังสำหรับคอลัมน์ "คลัง" (includeInactive: คลังที่ปิดใช้งานไปแล้วยังต้อง
+      //   แสดงชื่อได้ถูกต้องสำหรับรายการเก่าที่ผูกคลังนั้นอยู่) — โหลดเฉพาะตอนมีชีตบัตรสต็อกจริงเท่านั้น
+      const [opening, movements, warehouses] = await Promise.all([
         getProductOpeningBalance(service, access.tenantId, customerId, selectedProduct.id),
         listMovements(service, access.tenantId, customerId, selectedProduct.id),
+        listWarehouses(service, access.tenantId, customerId, { includeInactive: true }),
       ]);
+      const warehouseNameById: Record<string, string> = {};
+      for (const w of warehouses) warehouseNameById[w.id] = w.name;
       const ledgerRows = computeStockLedger(opening, movements);
-      addStockCardSheet(wb, selectedProduct.name, entityLabel, buildStockCard(ledgerRows));
+      addStockCardSheet(wb, selectedProduct.name, entityLabel, buildStockCard(ledgerRows), warehouseNameById);
     }
 
     // ชีต 2 — สินค้าคงเหลือแยกหมวดของลูกค้ารายนี้ทั้งหมด (เฉพาะสินค้าที่มียอดยกมา/รายการเคลื่อนไหวจริง)
