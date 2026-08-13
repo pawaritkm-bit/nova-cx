@@ -251,6 +251,118 @@ export async function getFilingPeriodDetail(
 }
 
 // ---------------------------------------------------------------------
+// getFilingPeriodEmployeeTotals — ยอดรวมต่อพนักงาน สำหรับออกเอกสารสรุปยื่น ภ.ง.ด.1 (wishlist ข้อ 5)
+// ---------------------------------------------------------------------
+
+export type Pnd1EmployeeTotal = {
+  employeeId: string;
+  employeeCode: string | null;
+  fullName: string;
+  idCardNo: string | null;
+  passportNo: string | null;
+  /** เงินได้ก่อนหัก = gross_salary + other_additions + bonus_amount รวมทุกรอบจ่ายในเดือนนี้ */
+  grossIncome: number;
+  pitWithheld: number;
+};
+
+/**
+ * ยอดรวมต่อพนักงาน (ข้ามทุกรอบจ่ายที่รวมอยู่ในหน่วยยื่นเดือนนี้) — ใช้ออกเอกสารสรุปยื่น ภ.ง.ด.1
+ *   ★ PDPA: คืน id_card_no/passport_no แบบเต็มไม่มาสก์ — ผู้เรียก (route) ต้อง gate สิทธิ์เองก่อนเสมอ
+ *   (เอกสารยื่นสรรพากรจำเป็นต้องใช้เลขเต็ม มิเรอร์ rd-export.ts ที่อ่าน counterparty_tax_id แบบเต็มเช่นกัน)
+ *   คืน [] ถ้าไม่พบหน่วยยื่น/ลูกค้าไม่ตรง/ยังไม่มีรอบจ่ายเลยในเดือนนี้
+ */
+export async function getFilingPeriodEmployeeTotals(
+  db: DB,
+  tenantId: string,
+  customerId: string,
+  filingPeriodId: string
+): Promise<Pnd1EmployeeTotal[]> {
+  const period = await getFilingPeriodById(db, tenantId, filingPeriodId);
+  if (!period || period.customerId !== customerId) return [];
+
+  const { data: runRows } = await db
+    .from("payroll_runs")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("customer_id", customerId)
+    .eq("filing_period_id", filingPeriodId)
+    .is("deleted_at", null);
+  const runIds = ((runRows ?? []) as { id: string }[]).map((r) => r.id);
+  if (runIds.length === 0) return [];
+
+  const lineChunks = await Promise.all(
+    chunkIds(runIds).map((chunk) =>
+      db
+        .from("payroll_run_lines")
+        .select("payroll_employee_id, gross_salary, other_additions, bonus_amount, pit_withheld")
+        .eq("tenant_id", tenantId)
+        .in("run_id", chunk)
+    )
+  );
+  const totalsByEmployee = new Map<string, { gross: number; pit: number }>();
+  for (const { data } of lineChunks) {
+    for (const l of (data ?? []) as {
+      payroll_employee_id: string;
+      gross_salary: number | string;
+      other_additions: number | string;
+      bonus_amount: number | string;
+      pit_withheld: number | string;
+    }[]) {
+      const acc = totalsByEmployee.get(l.payroll_employee_id) ?? { gross: 0, pit: 0 };
+      acc.gross += Number(l.gross_salary) + Number(l.other_additions) + Number(l.bonus_amount);
+      acc.pit += Number(l.pit_withheld);
+      totalsByEmployee.set(l.payroll_employee_id, acc);
+    }
+  }
+  if (totalsByEmployee.size === 0) return [];
+
+  const employeeIds = [...totalsByEmployee.keys()];
+  const empChunks = await Promise.all(
+    chunkIds(employeeIds).map((chunk) =>
+      db
+        .from("payroll_employees")
+        .select("id, employee_code, full_name, id_card_no, passport_no")
+        .eq("tenant_id", tenantId)
+        .in("id", chunk)
+    )
+  );
+  const employeeById = new Map<
+    string,
+    { employee_code: string | null; full_name: string; id_card_no: string | null; passport_no: string | null }
+  >();
+  for (const { data } of empChunks) {
+    for (const e of (data ?? []) as {
+      id: string;
+      employee_code: string | null;
+      full_name: string;
+      id_card_no: string | null;
+      passport_no: string | null;
+    }[]) {
+      employeeById.set(e.id, e);
+    }
+  }
+
+  const results: Pnd1EmployeeTotal[] = [];
+  for (const [employeeId, t] of totalsByEmployee) {
+    const emp = employeeById.get(employeeId);
+    results.push({
+      employeeId,
+      employeeCode: emp?.employee_code ?? null,
+      fullName: emp?.full_name ?? "",
+      idCardNo: emp?.id_card_no ?? null,
+      passportNo: emp?.passport_no ?? null,
+      grossIncome: round2(t.gross),
+      pitWithheld: round2(t.pit),
+    });
+  }
+  // เรียงตามรหัสพนักงาน/ชื่อ ให้ผลลัพธ์เสถียรทำซ้ำได้ (ไม่ใช่ลำดับ insert ของ DB ที่ไม่รับประกัน)
+  results.sort(
+    (a, b) => (a.employeeCode ?? "").localeCompare(b.employeeCode ?? "") || a.fullName.localeCompare(b.fullName)
+  );
+  return results;
+}
+
+// ---------------------------------------------------------------------
 // markPitFiled/unmarkPitFiled/markSsoFiled/unmarkSsoFiled (ย้ายมาจาก payroll.ts, T137)
 // ---------------------------------------------------------------------
 

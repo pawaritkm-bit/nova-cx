@@ -6,6 +6,7 @@ import {
   getFilingPeriodByYearMonth,
   listFilingPeriods,
   getFilingPeriodDetail,
+  getFilingPeriodEmployeeTotals,
   markPitFiled,
   unmarkPitFiled,
   markSsoFiled,
@@ -27,6 +28,7 @@ function baseTables(): Tables {
     payroll_monthly_filings: [],
     payroll_runs: [],
     payroll_run_lines: [],
+    payroll_employees: [],
   };
 }
 
@@ -237,5 +239,81 @@ describe("markPitFiled/unmarkPitFiled/markSsoFiled/unmarkSsoFiled (T137)", () =>
     const { db } = makeInMemoryDb(tables);
     const found = await getFilingPeriodById(db, "other-tenant", periodId);
     expect(found).toBeNull();
+  });
+});
+
+describe("getFilingPeriodEmployeeTotals (wishlist ข้อ 5 — ยื่น ภ.ง.ด.1)", () => {
+  let tables: Tables;
+  beforeEach(() => {
+    tables = baseTables();
+  });
+
+  it("ไม่พบหน่วยยื่น/ลูกค้าไม่ตรง → คืน []", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const period = await getOrCreateFilingPeriod(db, TENANT, CUSTOMER_A, 2569, 8);
+    const wrongCustomer = await getFilingPeriodEmployeeTotals(db, TENANT, CUSTOMER_B, period!.id);
+    expect(wrongCustomer).toEqual([]);
+    const notFound = await getFilingPeriodEmployeeTotals(db, TENANT, CUSTOMER_A, "not-exist");
+    expect(notFound).toEqual([]);
+  });
+
+  it("ยังไม่มีรอบจ่ายเลยในเดือนนี้ → คืน []", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const period = await getOrCreateFilingPeriod(db, TENANT, CUSTOMER_A, 2569, 8);
+    const totals = await getFilingPeriodEmployeeTotals(db, TENANT, CUSTOMER_A, period!.id);
+    expect(totals).toEqual([]);
+  });
+
+  it("★★★ รวมยอดต่อพนักงานข้ามหลายรอบจ่ายในเดือนเดียวกัน (non_monthly) ถูกต้อง + join ข้อมูลพนักงาน", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const period = await getOrCreateFilingPeriod(db, TENANT, CUSTOMER_A, 2569, 8);
+    tables.payroll_employees.push(
+      { id: "emp-1", tenant_id: TENANT, customer_id: CUSTOMER_A, employee_code: "E001", full_name: "สมชาย ใจดี", id_card_no: "1111111111111", passport_no: null },
+      { id: "emp-2", tenant_id: TENANT, customer_id: CUSTOMER_A, employee_code: "E002", full_name: "สมหญิง มีสุข", id_card_no: "2222222222222", passport_no: null }
+    );
+    tables.payroll_runs.push(
+      { id: "run-1", tenant_id: TENANT, customer_id: CUSTOMER_A, pay_date: "2026-08-07", status: "finalized", filing_period_id: period!.id, deleted_at: null },
+      { id: "run-2", tenant_id: TENANT, customer_id: CUSTOMER_A, pay_date: "2026-08-14", status: "finalized", filing_period_id: period!.id, deleted_at: null }
+    );
+    tables.payroll_run_lines.push(
+      { id: "l1", tenant_id: TENANT, run_id: "run-1", payroll_employee_id: "emp-1", gross_salary: 20000, other_additions: 0, bonus_amount: 0, pit_withheld: 100 },
+      { id: "l2", tenant_id: TENANT, run_id: "run-2", payroll_employee_id: "emp-1", gross_salary: 5000, other_additions: 500, bonus_amount: 0, pit_withheld: 20 },
+      { id: "l3", tenant_id: TENANT, run_id: "run-1", payroll_employee_id: "emp-2", gross_salary: 15000, other_additions: 0, bonus_amount: 3000, pit_withheld: 80 }
+    );
+
+    const totals = await getFilingPeriodEmployeeTotals(db, TENANT, CUSTOMER_A, period!.id);
+    expect(totals).toHaveLength(2);
+
+    const emp1 = totals.find((t) => t.employeeId === "emp-1")!;
+    expect(emp1.grossIncome).toBe(25500); // 20000 + 5000 + 500
+    expect(emp1.pitWithheld).toBe(120); // 100 + 20
+    expect(emp1.fullName).toBe("สมชาย ใจดี");
+    expect(emp1.idCardNo).toBe("1111111111111"); // ★ เต็ม ไม่มาสก์ (เอกสารยื่นต้องใช้เลขเต็ม)
+
+    const emp2 = totals.find((t) => t.employeeId === "emp-2")!;
+    expect(emp2.grossIncome).toBe(18000); // 15000 + 3000
+    expect(emp2.pitWithheld).toBe(80);
+
+    // เรียงตามรหัสพนักงาน (E001 ก่อน E002)
+    expect(totals[0].employeeCode).toBe("E001");
+    expect(totals[1].employeeCode).toBe("E002");
+  });
+
+  it("รอบจ่ายของลูกค้าอื่น/เดือนอื่น ไม่ปนเข้ามา", async () => {
+    const { db } = makeInMemoryDb(tables);
+    const periodA = await getOrCreateFilingPeriod(db, TENANT, CUSTOMER_A, 2569, 8);
+    const periodOtherMonth = await getOrCreateFilingPeriod(db, TENANT, CUSTOMER_A, 2569, 9);
+    tables.payroll_employees.push({ id: "emp-1", tenant_id: TENANT, customer_id: CUSTOMER_A, employee_code: "E001", full_name: "สมชาย", id_card_no: "111", passport_no: null });
+    tables.payroll_runs.push(
+      { id: "run-aug", tenant_id: TENANT, customer_id: CUSTOMER_A, pay_date: "2026-08-07", status: "finalized", filing_period_id: periodA!.id, deleted_at: null },
+      { id: "run-sep", tenant_id: TENANT, customer_id: CUSTOMER_A, pay_date: "2026-09-07", status: "finalized", filing_period_id: periodOtherMonth!.id, deleted_at: null }
+    );
+    tables.payroll_run_lines.push(
+      { id: "l1", tenant_id: TENANT, run_id: "run-aug", payroll_employee_id: "emp-1", gross_salary: 10000, other_additions: 0, bonus_amount: 0, pit_withheld: 50 },
+      { id: "l2", tenant_id: TENANT, run_id: "run-sep", payroll_employee_id: "emp-1", gross_salary: 99999, other_additions: 0, bonus_amount: 0, pit_withheld: 999 }
+    );
+    const totals = await getFilingPeriodEmployeeTotals(db, TENANT, CUSTOMER_A, periodA!.id);
+    expect(totals).toHaveLength(1);
+    expect(totals[0].grossIncome).toBe(10000); // ไม่รวมของเดือนกันยา
   });
 });
