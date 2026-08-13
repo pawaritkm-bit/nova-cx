@@ -40,6 +40,7 @@ export default function CustomerTabs({
   agingHref,
   creditDebitNotesHref,
   salesDocumentsHref,
+  taxInvoicesHref,
   statementHref,
   flowaccountMapHref,
   recurringJournalHref,
@@ -91,6 +92,8 @@ export default function CustomerTabs({
   creditDebitNotesHref?: string;
   /** ใบเสนอราคา/ใบสั่งซื้อ/ใบวางบิล (เฟส 3 ส่วน K) */
   salesDocumentsHref?: string;
+  /** ใบกำกับภาษี เต็มรูป/อย่างย่อ (wishlist backlog) — ออกจากบิลขายที่ยืนยันแล้ว */
+  taxInvoicesHref?: string;
   /** AI แยกสเตทเมนต์ เข้า-ออก */
   statementHref?: string;
   /** mapping ผังบัญชี/สินค้า nova-cx ↔ FlowAccount ต่อลูกค้า (เฟส 5 ส่วน Q) */
@@ -241,6 +244,12 @@ export default function CustomerTabs({
             {salesDocumentsHref ? (
               <a href={salesDocumentsHref} className="btn btn-ghost">
                 ใบเสนอราคา/PO/วางบิล
+              </a>
+            ) : null}
+            {/* ใบกำกับภาษี เต็มรูป/อย่างย่อ (wishlist backlog) */}
+            {taxInvoicesHref ? (
+              <a href={taxInvoicesHref} className="btn btn-ghost">
+                ใบกำกับภาษี
               </a>
             ) : null}
             {reportsHref ? (

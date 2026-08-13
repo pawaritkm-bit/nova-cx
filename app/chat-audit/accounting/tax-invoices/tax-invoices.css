@@ -1,0 +1,176 @@
+/* ============================================================
+   ใบกำกับภาษี (เต็มรูป/อย่างย่อ) — wishlist backlog
+   ★ prefix ti- กันชนสไตล์เดิม (sd- / whtc- / rcv- / acc- / bills / dashboard)
+   เอกสารพิมพ์ (จำลอง A4) — mirror sales-documents.css
+   ============================================================ */
+.ti-shell {
+  min-height: 100vh;
+  background: #eef1f5;
+  padding: 20px 12px 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: "Sarabun", "TH Sarabun New", system-ui, -apple-system, sans-serif;
+  color: #1a1a1a;
+}
+
+.ti-toolbar {
+  width: 100%;
+  max-width: 800px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.ti-toolbar-hint { color: #667; font-size: 14px; flex: 1; }
+
+.ti-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #cbd2dc;
+  background: #fff;
+  color: #1a1a1a;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.ti-btn:hover { background: #f4f6f9; }
+.ti-btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.ti-btn-primary:hover { background: #195ecb; }
+.ti-btn-ghost { background: transparent; }
+
+.ti-page {
+  width: 100%;
+  max-width: 800px;
+  background: #fff;
+  padding: 44px 56px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  box-sizing: border-box;
+  font-size: 15px;
+}
+
+.ti-topmeta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 18px;
+  margin-bottom: 6px;
+}
+.ti-meta-item { display: flex; align-items: baseline; gap: 6px; }
+.ti-label { color: #445; font-weight: 600; font-size: 15px; }
+.ti-value { font-size: 15px; }
+.ti-docno { font-weight: 700; }
+
+.ti-title {
+  text-align: center;
+  font-size: 22px;
+  font-weight: 700;
+  margin: 6px 0 18px;
+  text-decoration: underline;
+  text-underline-offset: 6px;
+}
+
+.ti-parties {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 10px 0;
+  border-top: 1px dashed #cbd2dc;
+  border-bottom: 1px dashed #cbd2dc;
+}
+.ti-party-title { font-weight: 700; font-size: 13px; color: #667; margin-bottom: 4px; }
+.ti-party-name { font-weight: 700; font-size: 16px; margin-bottom: 2px; }
+.ti-party-sub { font-size: 14px; color: #333; }
+
+.ti-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+.ti-table th,
+.ti-table td {
+  border: 1px solid #333;
+  padding: 5px 8px;
+  font-size: 14px;
+}
+.ti-table th { background: #f0f3f7; font-weight: 700; text-align: center; }
+.ti-col-no { width: 46px; text-align: center; }
+.ti-col-qty { width: 70px; text-align: right; }
+.ti-col-unit { width: 70px; text-align: center; }
+.ti-col-amt { width: 110px; text-align: right; }
+
+/* ---- สรุป VAT ท้ายเอกสาร (ต่างจาก sales-documents ที่ไม่มี ต้องแยกฐานภาษี/ยกเว้นภาษี) ---- */
+.ti-vat-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 320px;
+  margin: 0 0 12px auto;
+  font-size: 14px;
+}
+.ti-vat-row { display: flex; justify-content: space-between; gap: 16px; }
+.ti-vat-row .num { font-variant-numeric: tabular-nums; }
+.ti-vat-total {
+  border-top: 1px solid #333;
+  padding-top: 4px;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.ti-amount-text {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 16px;
+  margin: 4px 0 20px;
+  flex-wrap: wrap;
+}
+.ti-amount-words { font-weight: 700; }
+
+.ti-void-note { font-size: 14px; color: #b42318; font-weight: 700; margin: 8px 0 20px; }
+
+.ti-sign { display: flex; justify-content: center; gap: 24px; margin-top: 28px; flex-wrap: wrap; }
+.ti-sign-box { text-align: center; width: 45%; max-width: 280px; }
+.ti-sign-line { border-bottom: 1px dotted #333; height: 40px; margin-bottom: 6px; }
+.ti-sign-label { font-size: 15px; color: #333; }
+
+.ti-error {
+  background: #fff;
+  padding: 32px 40px;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  text-align: center;
+  max-width: 520px;
+  margin-top: 40px;
+}
+.ti-error p { font-size: 16px; margin-bottom: 20px; color: #333; }
+
+/* ============================================================
+   PRINT — เอกสารสะอาด (ซ่อนแถบเครื่องมือ, เต็มหน้า A4)
+   ============================================================ */
+@media print {
+  .no-print { display: none !important; }
+  .nav-progress { display: none !important; }
+
+  .ti-shell { background: #fff; padding: 0; display: block; }
+  .ti-page {
+    max-width: none;
+    width: 100%;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 24px 28px;
+  }
+
+  .ti-table th { background: transparent !important; }
+  .ti-table th,
+  .ti-table td { border-color: #000 !important; }
+
+  @page { size: A4; margin: 14mm; }
+}
