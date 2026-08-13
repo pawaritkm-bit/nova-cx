@@ -12,6 +12,7 @@ import {
   billOutstanding,
   listBillPaymentsForEntries,
 } from "@/lib/accounting/bill-payments";
+import { listInstallmentsForEntries } from "@/lib/accounting/bill-installments";
 import { listNotesForEntries, netAdjustmentByEntry } from "@/lib/accounting/credit-debit-notes";
 import { ageBucket, type AgingBucketKey } from "@/lib/accounting/aging";
 import { EPSILON } from "@/lib/accounting/statement-config";
@@ -128,6 +129,12 @@ export default async function PaymentsPage({
       );
       const netAdjByEntry = netAdjustmentByEntry(notesByEntry);
       const asOfDate = todayThai();
+      // ★ wishlist ข้อ 7 — แผนงวดผ่อนชำระ (schedule อ้างอิงเท่านั้น ไม่กระทบ outstanding/AR-AP)
+      const installmentsByEntry = await listInstallmentsForEntries(
+        service,
+        access.tenantId,
+        eligible.map((e) => e.id)
+      );
       bills = eligible
         .map((e) => {
           const payments = paymentsByEntry.get(e.id) ?? [];
@@ -142,6 +149,11 @@ export default async function PaymentsPage({
             outstanding: billOutstanding(e, payments, netAdjByEntry.get(e.id) ?? 0),
             bucket: ageBucket(e.dueDate, asOfDate) as AgingBucketKey,
             payments,
+            installments: installmentsByEntry.get(e.id) ?? [],
+            // ★ wishlist ข้อ 7 — บิลนี้มี CN/DN ที่ confirmed แล้วปรับยอดอยู่ไหม (ใช้เตือนใน UI เท่านั้น —
+            //   แผนงวดชำระคำนวณจาก billNetTotal เดิมตอนตั้งแผน ไม่รู้จัก CN/DN ที่มาทีหลัง สถานะต่องวดอาจ
+            //   ไม่ตรงกับยอดคงค้างจริงถ้ามีการปรับยอดหลังตั้งแผน — ดู PaymentsPanel.tsx)
+            hasNoteAdjustment: Math.abs(netAdjByEntry.get(e.id) ?? 0) > EPSILON,
             // เฟส 10 ส่วน AA — สกุลเงิน/อัตราแลกเปลี่ยนตอนออกบิล (null = บิล THB ปกติ, ไม่โชว์ช่อง fx เลย)
             currency: e.currency ?? null,
             fxRate: e.fxRate ?? null,

@@ -2,9 +2,16 @@
 
 import { Fragment, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { recordBillPaymentAction, voidBillPaymentAction, suggestFxGainLossNoteAction } from "./actions";
+import {
+  recordBillPaymentAction,
+  voidBillPaymentAction,
+  suggestFxGainLossNoteAction,
+  setInstallmentPlanAction,
+  clearInstallmentPlanAction,
+} from "./actions";
 import { AGING_BUCKET_LABELS, type AgingBucketKey } from "@/lib/accounting/aging";
 import type { BillPayment, BillPaymentMethod } from "@/lib/accounting/bill-payments";
+import { computeInstallmentStatuses, type BillInstallment, type InstallmentStatus } from "@/lib/accounting/bill-installments";
 import type { CustomerBankAccount } from "@/lib/accounting/bank-accounts";
 import { parseAmountInput, formatMoney } from "@/lib/accounting/calc";
 
@@ -29,6 +36,10 @@ export type PaymentBillRow = {
   outstanding: number;
   bucket: AgingBucketKey;
   payments: BillPayment[];
+  /** wishlist ข้อ 7 — แผนงวดผ่อนชำระ (array ว่าง = ยังไม่มีแผน) */
+  installments: BillInstallment[];
+  /** wishlist ข้อ 7 — มี CN/DN ที่ confirmed แล้วปรับยอดบิลนี้อยู่ไหม (เตือนใน UI เท่านั้น — ดูคอมเมนต์ page.tsx) */
+  hasNoteAdjustment: boolean;
   /** เฟส 10 ส่วน AA — สกุลเงินของบิลต้นทาง (null = บิล THB ปกติ — ไม่โชว์ช่อง fx/ปุ่มแนะนำ FX เลย) */
   currency: string | null;
   /** เฟส 10 ส่วน AA — อัตราแลกเปลี่ยนตอนออกบิล (ใช้แสดงอ้างอิงเท่านั้น — ยอด THB คำนวณที่ server เสมอ) */
@@ -55,6 +66,27 @@ const METHOD_LABELS: Record<BillPaymentMethod, string> = {
   cheque: "เช็ค",
   transfer: "เงินโอน",
 };
+
+const INSTALLMENT_STATUS_LABELS: Record<InstallmentStatus, string> = {
+  paid: "ชำระแล้ว",
+  overdue: "เกินกำหนด",
+  upcoming: "ยังไม่ครบกำหนด",
+};
+const INSTALLMENT_STATUS_CLASS: Record<InstallmentStatus, string> = {
+  paid: "st-confirmed",
+  overdue: "st-warn",
+  upcoming: "st-draft",
+};
+
+type InstallmentFormRow = { dueDate: string; amount: string };
+
+/** แถวเริ่มต้นของฟอร์มแผนผ่อนชำระ — มีแผนอยู่แล้ว = prefill จากแผนเดิม, ไม่มี = 2 แถวเปล่า */
+function defaultInstallmentRows(bill: PaymentBillRow): InstallmentFormRow[] {
+  if (bill.installments.length > 0) {
+    return bill.installments.map((i) => ({ dueDate: i.dueDate, amount: String(i.plannedAmount) }));
+  }
+  return [{ dueDate: "", amount: "" }, { dueDate: "", amount: "" }];
+}
 
 type FormState = {
   payDate: string;
@@ -97,10 +129,66 @@ export default function PaymentsPanel({
   const [forms, setForms] = useState<Record<string, FormState>>({});
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // wishlist ข้อ 7 — ฟอร์มแก้ไขแผนผ่อนชำระ (แยก state จากฟอร์มบันทึกรับ/จ่ายเงินด้านบน)
+  const [installmentForms, setInstallmentForms] = useState<Record<string, InstallmentFormRow[]>>({});
+
   const formOf = (bill: PaymentBillRow): FormState => forms[bill.entryId] ?? blankForm(bill.outstanding);
   const patchForm = (entryId: string, patch: Partial<FormState>) => {
     setForms((prev) => ({ ...prev, [entryId]: { ...(prev[entryId] ?? blankForm(0)), ...patch } }));
   };
+
+  function openInstallmentEdit(bill: PaymentBillRow) {
+    setMsg(null);
+    setInstallmentForms((prev) => ({ ...prev, [bill.entryId]: prev[bill.entryId] ?? defaultInstallmentRows(bill) }));
+  }
+  function closeInstallmentEdit(entryId: string) {
+    setInstallmentForms((prev) => {
+      const next = { ...prev };
+      delete next[entryId];
+      return next;
+    });
+  }
+  function addInstallmentRow(entryId: string) {
+    setInstallmentForms((prev) => ({ ...prev, [entryId]: [...(prev[entryId] ?? []), { dueDate: "", amount: "" }] }));
+  }
+  function removeInstallmentRow(entryId: string, idx: number) {
+    setInstallmentForms((prev) => ({ ...prev, [entryId]: (prev[entryId] ?? []).filter((_, i) => i !== idx) }));
+  }
+  function patchInstallmentRow(entryId: string, idx: number, patch: Partial<InstallmentFormRow>) {
+    setInstallmentForms((prev) => ({
+      ...prev,
+      [entryId]: (prev[entryId] ?? []).map((r, i) => (i === idx ? { ...r, ...patch } : r)),
+    }));
+  }
+  function installmentRowsTotal(entryId: string): number {
+    return (installmentForms[entryId] ?? []).reduce((s, r) => s + parseAmountInput(r.amount), 0);
+  }
+
+  function submitInstallmentPlan(bill: PaymentBillRow) {
+    const rows = installmentForms[bill.entryId] ?? [];
+    setMsg(null);
+    startTransition(async () => {
+      const res = await setInstallmentPlanAction(
+        bill.entryId,
+        rows.map((r) => ({ dueDate: r.dueDate, amount: parseAmountInput(r.amount) }))
+      );
+      setMsg({ ok: res.ok, text: res.message });
+      if (res.ok) {
+        closeInstallmentEdit(bill.entryId);
+        router.refresh();
+      }
+    });
+  }
+
+  function onClearInstallmentPlan(entryId: string) {
+    if (!window.confirm("ลบแผนผ่อนชำระนี้? (ไม่กระทบยอดค้างชำระ/การรับ-จ่ายเงินจริงที่บันทึกไว้แล้ว)")) return;
+    setMsg(null);
+    startTransition(async () => {
+      const res = await clearInstallmentPlanAction(entryId);
+      setMsg({ ok: res.ok, text: res.message });
+      if (res.ok) router.refresh();
+    });
+  }
 
   function toggleOpen(bill: PaymentBillRow) {
     setMsg(null);
@@ -368,6 +456,120 @@ export default function PaymentsPanel({
                             </div>
                           </div>
                         ) : null}
+
+                        {/* wishlist ข้อ 7 — แผนงวดผ่อนชำระ (schedule อ้างอิงเท่านั้น ไม่กระทบยอดค้างชำระ/AR-AP) */}
+                        <div style={{ marginTop: 16 }}>
+                          <div className="strong" style={{ marginBottom: 6 }}>แผนผ่อนชำระ</div>
+                          {installmentForms[bill.entryId] ? (
+                            <div className="acc-je-form" style={{ marginTop: 0 }}>
+                              {installmentForms[bill.entryId].map((row, idx) => (
+                                <div key={idx} className="acc-field-grid" style={{ marginBottom: 8 }}>
+                                  <label className="acc-field">
+                                    <span>งวดที่ {idx + 1} — วันครบกำหนด</span>
+                                    <input
+                                      type="date"
+                                      value={row.dueDate}
+                                      onChange={(e) => patchInstallmentRow(bill.entryId, idx, { dueDate: e.target.value })}
+                                      disabled={pending}
+                                    />
+                                  </label>
+                                  <label className="acc-field">
+                                    <span>ยอดชำระงวดนี้</span>
+                                    <input
+                                      className="num"
+                                      inputMode="decimal"
+                                      value={row.amount}
+                                      onChange={(e) => patchInstallmentRow(bill.entryId, idx, { amount: e.target.value })}
+                                      placeholder="0.00"
+                                      disabled={pending}
+                                    />
+                                  </label>
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-ghost"
+                                    onClick={() => removeInstallmentRow(bill.entryId, idx)}
+                                    disabled={pending || installmentForms[bill.entryId].length <= 2}
+                                    title={installmentForms[bill.entryId].length <= 2 ? "ต้องมีอย่างน้อย 2 งวด" : undefined}
+                                  >
+                                    ลบงวดนี้
+                                  </button>
+                                </div>
+                              ))}
+                              <div className="acc-modal-actions" style={{ marginTop: 0 }}>
+                                <button type="button" className="btn btn-ghost btn-sm" onClick={() => addInstallmentRow(bill.entryId)} disabled={pending}>
+                                  + เพิ่มงวด
+                                </button>
+                              </div>
+                              <div className="muted" style={{ margin: "8px 0" }}>
+                                รวม {formatMoney(installmentRowsTotal(bill.entryId))} / ต้องเท่ากับยอดเต็มบิล {formatMoney(bill.netTotal)}
+                              </div>
+                              <div className="acc-modal-actions">
+                                <button type="button" className="btn green" onClick={() => submitInstallmentPlan(bill)} disabled={pending}>
+                                  {pending ? "กำลังบันทึก…" : "บันทึกแผน"}
+                                </button>
+                                <button type="button" className="btn btn-ghost" onClick={() => closeInstallmentEdit(bill.entryId)} disabled={pending}>
+                                  ยกเลิก
+                                </button>
+                              </div>
+                            </div>
+                          ) : bill.installments.length > 0 ? (
+                            <>
+                              {bill.hasNoteAdjustment ? (
+                                <div className="muted" style={{ marginBottom: 8 }}>
+                                  ⚠️ บิลนี้มีใบลด/เพิ่มหนี้ปรับยอดอยู่ — สถานะงวดด้านล่างคำนวณจากยอดเต็มบิลเดิมตอนตั้งแผน
+                                  อาจไม่ตรงกับยอดคงค้างจริง ให้ดูยอดค้างชำระที่คอลัมน์ด้านบนของตารางเป็นหลัก
+                                </div>
+                              ) : null}
+                              <div className="table-wrap">
+                                <table className="dlv-table acc-table">
+                                  <thead>
+                                    <tr>
+                                      <th>งวดที่</th>
+                                      <th>วันครบกำหนด</th>
+                                      <th className="num">ยอดตามแผน</th>
+                                      <th>สถานะ</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {computeInstallmentStatuses(
+                                      bill.installments,
+                                      bill.payments.reduce((s, p) => s + p.amount, 0),
+                                      todayIso()
+                                    ).map((inst) => (
+                                      <tr key={inst.id}>
+                                        <td>{inst.installmentNo}</td>
+                                        <td>{formatDateThai(inst.dueDate)}</td>
+                                        <td className="num">{formatMoney(inst.plannedAmount)}</td>
+                                        <td>
+                                          <span className={`st-badge ${INSTALLMENT_STATUS_CLASS[inst.status]}`}>
+                                            {INSTALLMENT_STATUS_LABELS[inst.status]}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <div className="acc-modal-actions">
+                                <button type="button" className="btn btn-sm" onClick={() => openInstallmentEdit(bill)} disabled={pending}>
+                                  แก้ไขแผน
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm danger"
+                                  onClick={() => onClearInstallmentPlan(bill.entryId)}
+                                  disabled={pending}
+                                >
+                                  ลบแผน
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <button type="button" className="btn btn-sm btn-ghost" onClick={() => openInstallmentEdit(bill)} disabled={pending}>
+                              + ตั้งแผนผ่อนชำระ
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </td>
                   </tr>

@@ -29,6 +29,7 @@ import {
   type BillPaymentInput,
 } from "@/lib/accounting/bill-payments";
 import { getManualEntryScope, upsertManualEntry } from "@/lib/accounting/manual-journal";
+import { setInstallmentPlan, clearInstallmentPlan, type InstallmentRowInput } from "@/lib/accounting/bill-installments";
 import { suggestFxGainLossEntryInput } from "@/lib/accounting/fx";
 import { DEFAULT_FX_GAIN_LOSS_ACCOUNT_CODE } from "@/lib/accounting/currency";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
@@ -223,5 +224,58 @@ export async function suggestFxGainLossNoteAction(
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "ทำรายการไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * ตั้ง/แก้แผนงวดผ่อนชำระของบิลเชื่อ 1 ใบ (wishlist ข้อ 7) — เฉพาะบิลเชื่อที่ยืนยันแล้วเท่านั้น
+ *   ★ IDOR-safe: derive scope จาก entryId ผ่าน getBillPaymentScope (มิเรอร์ recordBillPaymentAction เดิม
+ *   ทุกประการ) — ไม่เชื่อ customerId ที่ client ส่งมาลำพัง
+ */
+export async function setInstallmentPlanAction(
+  entryId: string,
+  rows: InstallmentRowInput[]
+): Promise<PaymentSaveResult> {
+  if (!isUuid(entryId)) return { ok: false, message: "ไม่พบบิลที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    const scope = await getBillPaymentScope(service, ctx.tenantId, entryId);
+    if (!scope) return { ok: false, message: "ไม่พบบิล (อาจถูกลบไปแล้ว)" };
+    assertCustomerInScope(ctx, scope.customerId);
+
+    const res = await setInstallmentPlan(service, ctx.tenantId, entryId, rows);
+    if (!res.ok) return { ok: false, message: res.message };
+
+    revalidatePath(PATH);
+    return { ok: true, message: "บันทึกแผนผ่อนชำระแล้ว" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "บันทึกแผนไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/** ลบแผนงวดผ่อนชำระของบิล 1 ใบ (กลับไปสถานะ "ยังไม่มีแผน") — IDOR-safe มิเรอร์ setInstallmentPlanAction */
+export async function clearInstallmentPlanAction(entryId: string): Promise<PaymentSaveResult> {
+  if (!isUuid(entryId)) return { ok: false, message: "ไม่พบบิลที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    const scope = await getBillPaymentScope(service, ctx.tenantId, entryId);
+    if (!scope) return { ok: false, message: "ไม่พบบิล (อาจถูกลบไปแล้ว)" };
+    assertCustomerInScope(ctx, scope.customerId);
+
+    const res = await clearInstallmentPlan(service, ctx.tenantId, entryId);
+    if (!res.ok) return { ok: false, message: res.message };
+
+    revalidatePath(PATH);
+    return { ok: true, message: "ลบแผนผ่อนชำระแล้ว" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ลบแผนไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
