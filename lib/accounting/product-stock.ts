@@ -25,6 +25,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isValidCalendarDate } from "@/lib/accounting/bank-reconciliation";
 import { round2 } from "@/lib/accounting/queries";
+import { getProductUnitFactors, convertQuantityToBase } from "@/lib/accounting/product-units";
 
 type DB = SupabaseClient;
 
@@ -699,6 +700,7 @@ type RawBillLineForStock = {
   product_id: string | null;
   quantity: number | string | null;
   amount: number | string | null;
+  unit_id: string | null;
 };
 
 /**
@@ -709,6 +711,9 @@ type RawBillLineForStock = {
  *     amount/quantity` (ต้นทุนต่อหน่วยจากยอดเงินหารจำนวน)
  *   - `entry_type='sale'` → สร้าง movement type `'sale'` (OUT) ต่อบรรทัด, ไม่มี `unit_cost` (ใช้
  *     moving-average ตอน replay — ดู computeStockLedger)
+ *   ★ wishlist ข้อ 2 — ถ้าบรรทัดตั้ง `unit_id` ไว้ (กรอกเป็นหน่วยอื่น เช่น โหล/ลัง) แปลง `quantity`
+ *     เป็น "หน่วยหลัก" ก่อนเทียบเงื่อนไข/บันทึกเสมอ (ดู `getProductUnitFactors`/`convertQuantityToBase`)
+ *     — `unit_id=null` (บิลเก่าทุกใบ) = factor 1 เข้ากันได้ย้อนหลัง 100%
  *
  * ★ 0.8 กันกดซ้ำสร้างซ้ำสอง (double-click/สองแท็บ) — atomic claim ด้วย
  *   `UPDATE bill_entries SET stock_synced_at=now() WHERE id=... AND tenant_id=... AND
@@ -754,18 +759,27 @@ export async function createMovementsFromBill(
 
   const { data: lineData, error: lineErr } = await db
     .from("bill_entry_lines")
-    .select("id, product_id, quantity, amount")
+    .select("id, product_id, quantity, amount, unit_id")
     .eq("tenant_id", tenantId)
     .eq("entry_id", entryId)
     .order("line_no", { ascending: true });
   if (lineErr) return { ok: false, message: "โหลดรายการบิลไม่สำเร็จ กรุณาลองใหม่" };
 
   const rawLines = (lineData ?? []) as unknown as RawBillLineForStock[];
+
+  // ★ wishlist ข้อ 2 (0.3 เดิม, 0.7 ใหม่) — quantity ที่กรอกอาจเป็นหน่วยอื่น (unit_id ไม่ null) ต้องแปลง
+  //   เป็น "หน่วยหลัก" ก่อนเทียบเงื่อนไข/บันทึก movement เสมอ — unit_id=null (บิลเก่าทุกใบ) = factor 1
+  //   (เข้ากันได้ย้อนหลัง 100%, ไม่กระทบ movement/avg-cost math เดิมแม้แต่จุดเดียว)
+  const unitIds = [...new Set(rawLines.map((l) => l.unit_id).filter((u): u is string => !!u))];
+  const factorByUnitId = await getProductUnitFactors(db, tenantId, unitIds);
+
   const skippedLineIds: string[] = [];
   const eligible: { lineId: string; productId: string; quantity: number; amount: number }[] = [];
 
   for (const l of rawLines) {
-    const qty = l.quantity === null ? null : toNum(l.quantity);
+    const rawQty = l.quantity === null ? null : toNum(l.quantity);
+    const factor = l.unit_id ? factorByUnitId.get(l.unit_id) ?? 1 : 1;
+    const qty = rawQty === null ? null : convertQuantityToBase(rawQty, factor);
     if (
       l.product_id &&
       qty !== null &&

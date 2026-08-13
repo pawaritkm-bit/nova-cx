@@ -1,15 +1,19 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import { useActionState } from "react";
 import {
   createProductAction,
   updateProductAction,
   toggleProductActiveAction,
   deleteProductAction,
+  createProductUnitAction,
+  updateProductUnitAction,
+  deleteProductUnitAction,
   type ActionResult,
 } from "./actions";
 import type { ProductRow } from "@/lib/accounting/products";
+import type { ProductUnit } from "@/lib/accounting/product-units";
 import { searchChartNonBankGrouped, type ChartAccount } from "@/lib/accounting/chart-of-accounts";
 
 /** ข้อความผลลัพธ์ของ action (ok/err) */
@@ -82,9 +86,100 @@ function AddProductForm({ chart }: { chart: ChartAccount[] }) {
   );
 }
 
-/** 1 แถวสินค้า/บริการ — แก้ไข/สลับสถานะ/ลบ */
-function ProductRowItem({ product, chart }: { product: ProductRow; chart: ChartAccount[] }) {
+/** 1 แถวหน่วยนับเพิ่มเติม — แก้ไข/ลบ (mirror ProductRowItem แบบย่อ) */
+function ProductUnitRow({ unit }: { unit: ProductUnit }) {
   const [editing, setEditing] = useState(false);
+  const [updState, updAction] = useActionState(updateProductUnitAction, null);
+  const [delState, delAction] = useActionState(deleteProductUnitAction, null);
+  const delFormRef = useRef<HTMLFormElement>(null);
+
+  function confirmDelete() {
+    if (window.confirm(`ลบหน่วยนับ "${unit.unitName}" ? (บรรทัดบิลเก่าที่ใช้หน่วยนี้ไม่หาย)`)) {
+      delFormRef.current?.requestSubmit();
+    }
+  }
+
+  if (editing) {
+    return (
+      <form action={updAction} className="inline-form" style={{ flexWrap: "wrap" }}>
+        <input type="hidden" name="id" value={unit.id} />
+        <input name="unitName" defaultValue={unit.unitName} maxLength={30} required style={{ width: 100 }} />
+        <span>=</span>
+        <input
+          name="factorToBase"
+          type="number"
+          step="0.0001"
+          min="0.0001"
+          defaultValue={unit.factorToBase}
+          required
+          style={{ width: 100 }}
+        />
+        <span className="muted">หน่วยหลัก</span>
+        <button type="submit" className="btn btn-sm">บันทึก</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>ยกเลิก</button>
+        <Msg state={updState} />
+      </form>
+    );
+  }
+
+  return (
+    <div className="inline-form" style={{ flexWrap: "wrap" }}>
+      <span>
+        1 {unit.unitName} = {unit.factorToBase.toLocaleString("th-TH")} หน่วยหลัก
+      </span>
+      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>แก้ไข</button>
+      <form action={delAction} ref={delFormRef}>
+        <input type="hidden" name="id" value={unit.id} />
+        <button type="button" className="btn danger btn-sm" onClick={confirmDelete}>ลบ</button>
+      </form>
+      <Msg state={delState} />
+    </div>
+  );
+}
+
+/** จัดการหน่วยนับเพิ่มเติมของสินค้า 1 รายการ (wishlist backlog ข้อ 2) — โหลดครั้งเดียวจาก page.tsx */
+function ProductUnitsManager({ productId, baseUnitLabel, units }: { productId: string; baseUnitLabel: string; units: ProductUnit[] }) {
+  const [state, formAction] = useActionState(createProductUnitAction, null);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  return (
+    <div style={{ padding: "8px 0", borderTop: "1px dashed var(--line, #d9dee6)" }}>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+        หน่วยหลักของสินค้านี้: <strong>{baseUnitLabel}</strong> — เพิ่มหน่วยอื่นที่แปลงกลับเป็นหน่วยหลักได้ตามตัวคูณ
+        (เช่น 1 โหล = 12 {baseUnitLabel})
+      </p>
+      {units.length === 0 ? (
+        <p className="muted" style={{ fontSize: 13 }}>ยังไม่มีหน่วยนับอื่น</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+          {units.map((u) => (
+            <ProductUnitRow key={u.id} unit={u} />
+          ))}
+        </div>
+      )}
+      <form
+        action={formAction}
+        ref={formRef}
+        className="inline-form"
+        style={{ flexWrap: "wrap" }}
+        onSubmit={() => requestAnimationFrame(() => formRef.current?.reset())}
+      >
+        <input type="hidden" name="productId" value={productId} />
+        <input name="unitName" placeholder="ชื่อหน่วย เช่น โหล, ลัง" maxLength={30} required style={{ width: 120 }} />
+        <span>=</span>
+        <input name="factorToBase" type="number" step="0.0001" min="0.0001" placeholder="ตัวคูณ" required style={{ width: 100 }} />
+        <span className="muted">{baseUnitLabel}</span>
+        <button type="submit" className="btn btn-sm">+ เพิ่มหน่วย</button>
+      </form>
+      <Msg state={state} />
+    </div>
+  );
+}
+
+/** 1 แถวสินค้า/บริการ — แก้ไข/สลับสถานะ/ลบ */
+function ProductRowItem({ product, chart, units }: { product: ProductRow; chart: ChartAccount[]; units: ProductUnit[] }) {
+  const [editing, setEditing] = useState(false);
+  const [showUnits, setShowUnits] = useState(false);
   const [updState, updAction] = useActionState(updateProductAction, null);
   const [toggleState, toggleAction] = useActionState(toggleProductActiveAction, null);
   const [delState, delAction] = useActionState(deleteProductAction, null);
@@ -131,42 +226,57 @@ function ProductRowItem({ product, chart }: { product: ProductRow; chart: ChartA
   }
 
   return (
-    <tr>
-      <td>{product.sku || "—"}</td>
-      <td>{product.name}</td>
-      <td>{product.unit || "—"}</td>
-      <td className="num">{product.defaultPrice != null ? product.defaultPrice.toLocaleString("th-TH") : "—"}</td>
-      <td>{product.defaultAccountCode || "—"}</td>
-      <td>{product.category || "—"}</td>
-      <td className="center">
-        <div className="inline-form" style={{ justifyContent: "center", flexWrap: "wrap" }}>
-          <button type="button" className="btn" onClick={() => setEditing(true)}>แก้ไข</button>
-          <form action={toggleAction}>
-            <input type="hidden" name="id" value={product.id} />
-            <input type="hidden" name="isActive" value={product.isActive ? "0" : "1"} />
-            <button type="submit" className="btn btn-ghost">
-              {product.isActive ? "ปิดใช้งาน" : "เปิดใช้งาน"}
+    <Fragment>
+      <tr>
+        <td>{product.sku || "—"}</td>
+        <td>{product.name}</td>
+        <td>{product.unit || "—"}</td>
+        <td className="num">{product.defaultPrice != null ? product.defaultPrice.toLocaleString("th-TH") : "—"}</td>
+        <td>{product.defaultAccountCode || "—"}</td>
+        <td>{product.category || "—"}</td>
+        <td className="center">
+          <div className="inline-form" style={{ justifyContent: "center", flexWrap: "wrap" }}>
+            <button type="button" className="btn" onClick={() => setEditing(true)}>แก้ไข</button>
+            <button type="button" className="btn btn-ghost" onClick={() => setShowUnits((s) => !s)}>
+              หน่วยนับ{units.length > 0 ? ` (${units.length})` : ""}
             </button>
-          </form>
-          <form action={delAction} ref={delFormRef}>
-            <input type="hidden" name="id" value={product.id} />
-            <button type="button" className="btn danger" onClick={confirmDelete}>ลบ</button>
-          </form>
-        </div>
-        <Msg state={toggleState} />
-        <Msg state={delState} />
-      </td>
-    </tr>
+            <form action={toggleAction}>
+              <input type="hidden" name="id" value={product.id} />
+              <input type="hidden" name="isActive" value={product.isActive ? "0" : "1"} />
+              <button type="submit" className="btn btn-ghost">
+                {product.isActive ? "ปิดใช้งาน" : "เปิดใช้งาน"}
+              </button>
+            </form>
+            <form action={delAction} ref={delFormRef}>
+              <input type="hidden" name="id" value={product.id} />
+              <button type="button" className="btn danger" onClick={confirmDelete}>ลบ</button>
+            </form>
+          </div>
+          <Msg state={toggleState} />
+          <Msg state={delState} />
+        </td>
+      </tr>
+      {showUnits ? (
+        <tr>
+          <td colSpan={7}>
+            <ProductUnitsManager productId={product.id} baseUnitLabel={product.unit || "หน่วยหลัก"} units={units} />
+          </td>
+        </tr>
+      ) : null}
+    </Fragment>
   );
 }
 
 export default function ProductsPanel({
   products,
   chart,
+  productUnits,
 }: {
   products: ProductRow[];
   /** ผังบัญชีของ tenant (โหลดจาก DB โดย page.tsx) — ใช้ทำ dropdown เลือกรหัสบัญชีเริ่มต้น */
   chart: ChartAccount[];
+  /** หน่วยนับเพิ่มเติมต่อสินค้า (wishlist backlog ข้อ 2, โหลดจาก DB โดย page.tsx) — key = productId */
+  productUnits: Map<string, ProductUnit[]>;
 }) {
   const [query, setQuery] = useState("");
   const [showInactive, setShowInactive] = useState(false);
@@ -214,7 +324,7 @@ export default function ProductsPanel({
         </thead>
         <tbody>
           {filtered.map((p) => (
-            <ProductRowItem key={p.id} product={p} chart={chart} />
+            <ProductRowItem key={p.id} product={p} chart={chart} units={productUnits.get(p.id) ?? []} />
           ))}
           {filtered.length === 0 ? (
             <tr>

@@ -51,6 +51,13 @@ export type BillEntryLine = {
    */
   quantity?: number | null;
   /**
+   * หน่วยนับที่กรอก `quantity` นี้ (wishlist backlog ข้อ 2, migration 0111) — อ้าง product_units.id
+   *   null/undefined = หน่วยหลักของสินค้า (products.unit เดิม, factor 1) — บิลเก่าทุกใบเป็นแบบนี้เสมอ
+   *   ★ ไม่กระทบการคำนวณของ engine เลย — ใช้แค่แปลง quantity เป็นหน่วยหลักตอนบันทึกสต็อกเท่านั้น
+   *     (ดู product-stock.ts::createMovementsFromBill) ★ optional เหมือน productId/quantity
+   */
+  unitId?: string | null;
+  /**
    * ยอดต้นฉบับสกุลต่างประเทศต่อบรรทัด ก่อน VAT (เฟส 10 ส่วน Z, migration 0086) — nullable
    *   เมื่อ entry.currency ไม่ null: `amount` (THB) = derive จาก fxAmount × entry.fxRate (0.6)
    *   เมื่อ entry.currency เป็น null (บิล THB ปกติ — ค่าเริ่มต้น/บิลเก่าทุกใบ): ไม่มีความหมาย (ไม่ derive)
@@ -319,6 +326,7 @@ type RawLine = {
   account_name: string | null;
   product_id: string | null;
   quantity: number | string | null;
+  unit_id: string | null;
   fx_amount: number | string | null;
   amount: number | string | null;
   vat_amount: number | string | null;
@@ -442,6 +450,7 @@ function mapLine(r: RawLine): BillEntryLine {
     accountName: r.account_name,
     productId: r.product_id,
     quantity: r.quantity === null || r.quantity === undefined ? null : num(r.quantity),
+    unitId: r.unit_id ?? null,
     fxAmount: r.fx_amount === null || r.fx_amount === undefined ? null : num(r.fx_amount),
     amount: num(r.amount),
     vatAmount: num(r.vat_amount),
@@ -638,7 +647,7 @@ export async function listEntries(
       db
         .from("bill_entry_lines")
         .select(
-          "id, entry_id, line_no, vat_type, description, account_code, account_name, product_id, quantity, fx_amount, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence"
+          "id, entry_id, line_no, vat_type, description, account_code, account_name, product_id, quantity, unit_id, fx_amount, amount, vat_amount, wht_rate, wht_amount, ai_filled, ai_low_confidence"
         )
         .eq("tenant_id", tenantId)
         .in("entry_id", ids)

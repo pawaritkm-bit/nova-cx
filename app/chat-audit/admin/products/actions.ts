@@ -22,6 +22,12 @@ import {
   softDeleteProduct,
   type ProductActionResult,
 } from "@/lib/accounting/products";
+import {
+  createProductUnit,
+  updateProductUnit,
+  softDeleteProductUnit,
+  type ProductUnitActionResult,
+} from "@/lib/accounting/product-units";
 
 export type ActionResult = { ok: boolean; message: string };
 
@@ -104,4 +110,67 @@ export async function deleteProductAction(
   const id = String(formData.get("id") ?? "");
   const res = await withProductAdminWrite((db, tenantId) => softDeleteProduct(db, tenantId, id));
   return res.ok ? { ok: true, message: "ลบสินค้าแล้ว" } : res;
+}
+
+// ---------------------------------------------------------------------
+// หน่วยนับเพิ่มเติมต่อสินค้า (wishlist backlog ข้อ 2) — mirror pattern เดียวกับด้านบนทุกจุด
+// ---------------------------------------------------------------------
+
+/** wrapper: guard admin + service-role + revalidate — fn คืน ProductUnitActionResult จาก data layer ตรง ๆ */
+async function withProductUnitAdminWrite(
+  fn: (db: SupabaseClient, tenantId: string) => Promise<ProductUnitActionResult>
+): Promise<ActionResult> {
+  try {
+    const authed = await createClient();
+    const ctx = await requireAdminContext(authed);
+    const service = createServiceRoleClient();
+    const res = await fn(service, ctx.tenantId);
+    if (!res.ok) return { ok: false, message: res.message };
+    revalidatePath(PATH);
+    return { ok: true, message: "บันทึกสำเร็จ" };
+  } catch (e) {
+    return { ok: false, message: friendlyError(e) };
+  }
+}
+
+/** เพิ่มหน่วยนับใหม่ให้สินค้า 1 รายการ — ★ ต้องเป็นสินค้าของ tenant นี้จริง (กันผูกข้าม tenant ผ่าน productId ปลอมจาก client) */
+export async function createProductUnitAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const productId = String(formData.get("productId") ?? "");
+  const input = { unitName: formData.get("unitName"), factorToBase: formData.get("factorToBase") };
+  const res = await withProductUnitAdminWrite(async (db, tenantId) => {
+    const { data: prod } = await db
+      .from("products")
+      .select("id")
+      .eq("id", productId)
+      .eq("tenant_id", tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (!prod) return { ok: false, message: "ไม่พบสินค้านี้" };
+    return createProductUnit(db, tenantId, productId, input);
+  });
+  return res.ok ? { ok: true, message: "เพิ่มหน่วยนับแล้ว" } : res;
+}
+
+/** แก้หน่วยนับเดิม — scope tenant อยู่ใน updateProductUnit อยู่แล้ว (id+tenant_id) */
+export async function updateProductUnitAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const id = String(formData.get("id") ?? "");
+  const input = { unitName: formData.get("unitName"), factorToBase: formData.get("factorToBase") };
+  const res = await withProductUnitAdminWrite((db, tenantId) => updateProductUnit(db, tenantId, id, input));
+  return res.ok ? { ok: true, message: "บันทึกแล้ว" } : res;
+}
+
+/** ลบหน่วยนับ (soft-delete) — บรรทัดบิลเก่าที่ผูก unit_id ไว้ไม่หาย */
+export async function deleteProductUnitAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const id = String(formData.get("id") ?? "");
+  const res = await withProductUnitAdminWrite((db, tenantId) => softDeleteProductUnit(db, tenantId, id));
+  return res.ok ? { ok: true, message: "ลบหน่วยนับแล้ว" } : res;
 }

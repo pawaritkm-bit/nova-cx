@@ -49,6 +49,7 @@ import { isCreditEligibleForPayment, hasActiveBillPaymentsForEntries } from "@/l
 import { countOverdueUnconfirmedReversals } from "@/lib/accounting/fx-revaluation";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import { listProducts } from "@/lib/accounting/products";
+import { listProductUnitsForProducts } from "@/lib/accounting/product-units";
 import ChatAuditFrame from "../_Frame";
 import EntryEditor from "./EntryEditor";
 import RowActions from "./RowActions";
@@ -906,6 +907,8 @@ export default async function AccountingPage({
   const chart = await listChartOfAccounts(service, tenantId);
   // สินค้า/บริการของ tenant (เฟส 1 ส่วน B) — โหลดครั้งเดียวต่อ request ส่งลง EntryEditor (product picker ต่อบรรทัด)
   const products = await listProducts(service, tenantId);
+  // หน่วยนับเพิ่มเติมต่อสินค้า (wishlist backlog ข้อ 2) — โหลดครั้งเดียวต่อ request ส่งลง EntryEditor
+  const productUnits = await listProductUnitsForProducts(service, tenantId, products.map((p) => p.id));
   const navRole = access.navRole;
   // staff (นักบัญชี/หัวหน้า LINE) → เมนูจำกัดเฉพาะบัญชีของตัวเอง
   const staffOnly = access.mode === "accountant" || access.mode === "lead";
@@ -1607,6 +1610,7 @@ export default async function AccountingPage({
             })}`}
             chart={chart}
             products={products}
+            productUnits={productUnits}
           />
         ) : (
           /* fallback: บิลไม่อยู่ใน nav ของแท็บที่เปิด (แก้ข้ามบริบท) — ตัวเดียว navigate ตามเดิม */
@@ -1630,6 +1634,7 @@ export default async function AccountingPage({
             })}`}
             chart={chart}
             products={products}
+            productUnits={productUnits}
             fxLocked={fxLockedEntryIds.has(editEntry.id)}
           />
         )
