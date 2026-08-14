@@ -1312,6 +1312,9 @@ export default async function AccountingPage({
         taxInvoicesHref={
           g.customerId ? `/chat-audit/accounting/tax-invoices?customerId=${g.customerId}` : undefined
         }
+        askAiHref={
+          g.customerId ? `/chat-audit/accounting/ask-ai?customerId=${g.customerId}` : undefined
+        }
         statementHref={g.customerId ? `/chat-audit/accounting/statement?customerId=${g.customerId}` : undefined}
         vatPurchaseHref={
           g.customerId
