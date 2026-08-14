@@ -131,8 +131,8 @@ export type WhtRecord = {
   lastName: string;
   /**
    * ที่อยู่ผู้มีเงินได้ — ★ ยืนยันจากไฟล์ตัวอย่างจริงว่า ภ.ง.ด.53 ต้องมีช่องนี้ (คอลัมน์ที่ 6 ของ .txt)
-   * แต่ระบบยังไม่เก็บที่อยู่ counterparty (bill_entries ไม่มีคอลัมน์นี้) → เว้นว่างไปก่อน
-   * ให้ผู้ใช้เติมเองในใบแนบจนกว่าจะเพิ่มการเก็บที่อยู่จริง
+   * มาจาก bill_entries.counterparty_address (migration 0113) ที่นักบัญชีพิมพ์กรอกเองตอนแก้บิล
+   * (EntryEditor.tsx) — ว่างเปล่าถ้ายังไม่ได้กรอก
    */
   address: string;
   /** วันที่จ่าย (= doc_date ของบิล) ISO */
@@ -177,7 +177,7 @@ export function toWhtRecord(e: BillEntry): WhtRecord | null {
     branch: RD_HEAD_OFFICE_BRANCH,
     title: "",
     lastName: "",
-    address: "",
+    address: sanitizeField(e.counterpartyAddress),
     datePaid: e.docDate,
     incomeType: sanitizeField(primary.accountName ?? primary.description),
     rate: primary.whtRate ?? 0,

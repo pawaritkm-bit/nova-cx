@@ -93,6 +93,12 @@ export type BillEntry = {
   docNo: string | null;
   counterpartyName: string | null;
   counterpartyTaxId: string | null;
+  /**
+   * ที่อยู่คู่ค้า/ผู้ถูกหักภาษี (migration 0113) — นักบัญชีพิมพ์กรอกเอง ใช้ตอน export ภ.ง.ด.3/53
+   *   (RD Prep ต้องการช่องนี้ — ดู lib/accounting/rd-export.ts) ★ optional เหมือน stockSync/currency
+   *   — กันกระทบ fixture เทสต์เดิมจำนวนมากที่ยังไม่รู้จักฟิลด์นี้ (mapEntry ของจริงเซ็ตให้เสมอ)
+   */
+  counterpartyAddress?: string | null;
   /** ผู้ขาย/ผู้ซื้อ ที่ AI อ่านได้ทั้ง 2 ฝั่ง — ให้ UI โชว์ตอน entryType='unspecified' */
   sellerName: string | null;
   sellerTaxId: string | null;
@@ -349,6 +355,7 @@ type RawEntry = {
   doc_no: string | null;
   counterparty_name: string | null;
   counterparty_tax_id: string | null;
+  counterparty_address?: string | null;
   seller_name: string | null;
   seller_tax_id: string | null;
   buyer_name: string | null;
@@ -640,6 +647,25 @@ export async function listEntries(
     // คอลัมน์ยังไม่ apply → คงเป็น null ทั้งหมด (บิล THB ปกติ)
   }
 
+  // ที่อยู่คู่ค้า (migration 0113) — ★ best-effort เหมือน fx/stockSync ข้างบน
+  //   คอลัมน์ยังไม่ apply → select error → ทุก entry ได้ default (null) แทน ไม่ทำ list ทั้งหน้าพัง
+  const addressByEntry = new Map<string, string | null>();
+  try {
+    const addrChunks = await Promise.all(
+      chunkIds(entryIds).map((ids) =>
+        db.from("bill_entries").select("id, counterparty_address").eq("tenant_id", tenantId).in("id", ids)
+      )
+    );
+    for (const { data: addrData, error: addrErr } of addrChunks) {
+      if (addrErr) continue;
+      for (const r of (addrData ?? []) as unknown as { id: string; counterparty_address: string | null }[]) {
+        addressByEntry.set(r.id, r.counterparty_address ?? null);
+      }
+    }
+  } catch {
+    // คอลัมน์ยังไม่ apply → คงเป็น null ทั้งหมด
+  }
+
   // lines ของ entry เหล่านี้ — ★ ตัดก้อน (chunkIds) เหมือนข้างบน กัน .in() ยาวเกิน limit เมื่อ entryIds เยอะ
   const linesByEntry = new Map<string, BillEntryLine[]>();
   const lineChunks = await Promise.all(
@@ -726,6 +752,7 @@ export async function listEntries(
     docNo: e.doc_no,
     counterpartyName: e.counterparty_name,
     counterpartyTaxId: e.counterparty_tax_id,
+    counterpartyAddress: addressByEntry.get(e.id) ?? null,
     sellerName: e.seller_name,
     sellerTaxId: e.seller_tax_id,
     buyerName: e.buyer_name,

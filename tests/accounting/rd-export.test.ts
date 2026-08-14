@@ -34,6 +34,7 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     attachmentObjectPath: null, uploadPath: null, uploadName: null, uploadMime: null,
     entryType: p.entryType ?? "purchase", docDate: p.docDate ?? "2026-07-05", docNo: p.docNo ?? "PV-1",
     counterpartyName: p.counterpartyName ?? null, counterpartyTaxId: p.counterpartyTaxId ?? null,
+    counterpartyAddress: p.counterpartyAddress ?? null,
     sellerName: p.sellerName ?? null, sellerTaxId: p.sellerTaxId ?? null,
     buyerName: p.buyerName ?? null, buyerTaxId: p.buyerTaxId ?? null,
     whtForm: p.whtForm ?? null, paymentMethod: "cash",
@@ -158,10 +159,11 @@ describe("rd-export: .txt ภ.ง.ด. — คั่น | + วันที่ �
     expect(lines[1].split(RD_FIELD_SEP)[1]).toBe("3101500889247");
   });
 
-  it("ภ.ง.ด.53 — 14 ฟิลด์ตามไฟล์ตัวอย่างจริง (ที่อยู่ + ช่องว่างสำรอง 2 ช่อง แทนนามสกุล)", () => {
+  it("ภ.ง.ด.53 — 14 ฟิลด์ตามไฟล์ตัวอย่างจริง (ที่อยู่ + ช่องว่างสำรอง 2 ช่อง แทนนามสกุล) — golden case จากไฟล์ตัวอย่างจริง", () => {
     const pnd53Entries = [
       mkEntry({
         id: "b", whtForm: "pnd53", counterpartyName: "บริษัท บี จำกัด", counterpartyTaxId: "0105565114216",
+        counterpartyAddress: "559/1 ถนนสนามบินน้ำ ตำบลบางกระสอ อำเภอเมืองนนทบุรี นนทบุรี 11000",
         docDate: "2026-07-10",
         lines: [mkLine({ accountName: "ค่าเช่า", amount: 20720, whtRate: 5, whtAmount: 1036 })],
       }),
@@ -176,7 +178,7 @@ describe("rd-export: .txt ภ.ง.ด. — คั่น | + วันที่ �
     expect(cells[0]).toBe("1");
     expect(cells[1]).toBe("0105565114216");
     expect(cells[4]).toBe("บริษัท บี จำกัด");
-    expect(cells[5]).toBe(""); // ที่อยู่ — ยังไม่มีข้อมูลเก็บใน DB
+    expect(cells[5]).toBe("559/1 ถนนสนามบินน้ำ ตำบลบางกระสอ อำเภอเมืองนนทบุรี นนทบุรี 11000"); // ที่อยู่ — กรอกโดยนักบัญชี (migration 0113)
     expect(cells[6]).toBe(""); // ช่องว่างสำรอง #1
     expect(cells[7]).toBe(""); // ช่องว่างสำรอง #2
     expect(cells[8]).toBe("10/07/2569"); // วันจ่าย เลื่อนไป index 8 (จาก 6 เดิม)
@@ -185,6 +187,18 @@ describe("rd-export: .txt ภ.ง.ด. — คั่น | + วันที่ �
     expect(cells[11]).toBe("20720.00");
     expect(cells[12]).toBe("1036.00");
     expect(cells[13]).toBe("1");
+  });
+
+  it("ภ.ง.ด.53 — ไม่กรอกที่อยู่ → ช่องที่อยู่ว่าง (ไม่พัง)", () => {
+    const pnd53Entries = [
+      mkEntry({
+        id: "b", whtForm: "pnd53", counterpartyName: "บริษัท บี จำกัด", counterpartyTaxId: "0105565114216",
+        lines: [mkLine({ accountName: "ค่าเช่า", amount: 20720, whtRate: 5, whtAmount: 1036 })],
+      }),
+    ];
+    const r = buildPndReport(pnd53Entries, "pnd53");
+    const cells = buildPndTextLines(r)[0].split(RD_FIELD_SEP);
+    expect(cells[5]).toBe("");
   });
 });
 
