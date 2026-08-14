@@ -26,6 +26,11 @@ export const ACCOUNT_CODE_MAX = 20;
 export const CATEGORY_MAX = 100;
 /** เพดานราคา (กันค่าเวอร์ผิดปกติ — ธุรกิจ SME ทั่วไปไม่เกินนี้) */
 export const PRICE_MAX = 1_000_000_000;
+/** ฟิลด์เพิ่มเติม (0112) — เทียบเท่าโปรแกรมบัญชี desktop ทั่วไป */
+export const BARCODE_MAX = 60;
+export const NAME_EN_MAX = 200;
+/** ประเภท VAT เริ่มต้นของสินค้า — ใช้ prefill vat_type ต่อบรรทัดบิลตอนเลือกสินค้า (ดูคอมเมนต์ migration 0112) */
+export type ProductVatType = "vat" | "novat";
 
 /** เพดานแถว (สินค้า/บริการไม่ควรเกินหลักพัน — กันดึงเวอร์) */
 const LIMIT = 5000;
@@ -41,6 +46,19 @@ export type Product = {
   defaultAccountCode: string | null;
   /** หมวดสินค้า (เฟส 8 ส่วน X, 0.10) — text อิสระ null = ยังไม่ตั้ง (รายงานสต็อกเข้ากลุ่ม default "สินค้า") */
   category: string | null;
+  /** บาร์โค้ด (0112) — null = ยังไม่ตั้ง */
+  barcode: string | null;
+  /** ชื่อภาษาอังกฤษ (0112) — null = ยังไม่ตั้ง */
+  nameEn: string | null;
+  /** ราคาขายระดับ 2-5 (0112) — ราคาระดับ 1 คือ defaultPrice เดิม, null = ยังไม่ตั้งระดับนั้น */
+  price2: number | null;
+  price3: number | null;
+  price4: number | null;
+  price5: number | null;
+  /** ประเภท VAT เริ่มต้น (0112) — null = ยังไม่ตั้ง (ไม่ prefill ทับ vat_type ของบรรทัดบิล) */
+  defaultVatType: ProductVatType | null;
+  /** สินค้าทดแทน (0112) — ชี้ไป products.id อีกแถวหนึ่ง, null = ไม่มี */
+  replacementProductId: string | null;
 };
 
 /** แถวสินค้าสำหรับหน้า admin (มี isActive เพิ่มจาก Product) */
@@ -82,6 +100,14 @@ type RawProduct = {
   default_price: number | string | null;
   default_account_code: string | null;
   category?: string | null;
+  barcode?: string | null;
+  name_en?: string | null;
+  price_2?: number | string | null;
+  price_3?: number | string | null;
+  price_4?: number | string | null;
+  price_5?: number | string | null;
+  default_vat_type?: string | null;
+  replacement_product_id?: string | null;
 };
 
 function mapProduct(r: RawProduct): Product {
@@ -93,8 +119,19 @@ function mapProduct(r: RawProduct): Product {
     defaultPrice: num(r.default_price),
     defaultAccountCode: r.default_account_code,
     category: r.category ?? null,
+    barcode: r.barcode ?? null,
+    nameEn: r.name_en ?? null,
+    price2: num(r.price_2 ?? null),
+    price3: num(r.price_3 ?? null),
+    price4: num(r.price_4 ?? null),
+    price5: num(r.price_5 ?? null),
+    defaultVatType: r.default_vat_type === "vat" || r.default_vat_type === "novat" ? r.default_vat_type : null,
+    replacementProductId: r.replacement_product_id ?? null,
   };
 }
+
+const PRODUCT_COLUMNS =
+  "id, sku, name, unit, default_price, default_account_code, category, barcode, name_en, price_2, price_3, price_4, price_5, default_vat_type, replacement_product_id";
 
 /**
  * ดึงสินค้า "ที่ใช้งานได้จริง" ของ tenant (is_active + ไม่ถูกลบ) เรียงตามชื่อ
@@ -104,7 +141,7 @@ function mapProduct(r: RawProduct): Product {
 export async function listProducts(db: DB, tenantId: string): Promise<Product[]> {
   const { data, error } = await db
     .from("products")
-    .select("id, sku, name, unit, default_price, default_account_code, category")
+    .select(PRODUCT_COLUMNS)
     .eq("tenant_id", tenantId)
     .eq("is_active", true)
     .is("deleted_at", null)
@@ -118,7 +155,7 @@ export async function listProducts(db: DB, tenantId: string): Promise<Product[]>
 export async function listProductsAdmin(db: DB, tenantId: string): Promise<ProductRow[]> {
   const { data, error } = await db
     .from("products")
-    .select("id, sku, name, unit, default_price, default_account_code, category, is_active")
+    .select(`${PRODUCT_COLUMNS}, is_active`)
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
     .order("name", { ascending: true })
@@ -139,6 +176,8 @@ export function searchProducts(list: Product[], q: string): Product[] {
   );
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** input ที่ validate แล้ว (ก่อนเขียน DB) */
 export type ValidatedProductInput = {
   sku: string | null;
@@ -147,6 +186,14 @@ export type ValidatedProductInput = {
   defaultPrice: number | null;
   defaultAccountCode: string | null;
   category: string | null;
+  barcode: string | null;
+  nameEn: string | null;
+  price2: number | null;
+  price3: number | null;
+  price4: number | null;
+  price5: number | null;
+  defaultVatType: ProductVatType | null;
+  replacementProductId: string | null;
 };
 
 /**
@@ -162,6 +209,14 @@ export function validateProductInput(input: {
   defaultPrice?: unknown;
   defaultAccountCode?: unknown;
   category?: unknown;
+  barcode?: unknown;
+  nameEn?: unknown;
+  price2?: unknown;
+  price3?: unknown;
+  price4?: unknown;
+  price5?: unknown;
+  defaultVatType?: unknown;
+  replacementProductId?: unknown;
 }): ValidatedProductInput | null {
   const name = normText(input.name, NAME_MAX);
   if (!name) return null;
@@ -175,6 +230,34 @@ export function validateProductInput(input: {
     defaultPrice = Math.round(Math.min(n, PRICE_MAX) * 100) / 100;
   }
 
+  // ราคาระดับ 2-5: เหมือน defaultPrice ทุกอย่าง (ไม่บังคับ, กรอกแล้วต้อง >= 0)
+  const priceTiers: (number | null)[] = [];
+  for (const raw of [input.price2, input.price3, input.price4, input.price5]) {
+    if (raw === undefined || raw === null || raw === "") {
+      priceTiers.push(null);
+      continue;
+    }
+    const n = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    priceTiers.push(Math.round(Math.min(n, PRICE_MAX) * 100) / 100);
+  }
+
+  // ประเภท VAT เริ่มต้น: ไม่กรอก/ค่าว่าง → null (ยังไม่ตั้ง) · ค่าอื่นที่ไม่ใช่ vat/novat → ปฏิเสธทั้ง input
+  const rawVat = input.defaultVatType;
+  let defaultVatType: ProductVatType | null = null;
+  if (rawVat !== undefined && rawVat !== null && rawVat !== "") {
+    if (rawVat !== "vat" && rawVat !== "novat") return null;
+    defaultVatType = rawVat;
+  }
+
+  // สินค้าทดแทน: ไม่กรอก → null · กรอกแล้วต้องเป็น uuid รูปแบบถูกต้อง
+  const rawReplacement = input.replacementProductId;
+  let replacementProductId: string | null = null;
+  if (typeof rawReplacement === "string" && rawReplacement.trim()) {
+    if (!UUID_RE.test(rawReplacement.trim())) return null;
+    replacementProductId = rawReplacement.trim();
+  }
+
   return {
     sku: normOptionalText(input.sku, SKU_MAX),
     name,
@@ -182,7 +265,37 @@ export function validateProductInput(input: {
     defaultPrice,
     defaultAccountCode: normOptionalText(input.defaultAccountCode, ACCOUNT_CODE_MAX),
     category: normOptionalText(input.category, CATEGORY_MAX),
+    barcode: normOptionalText(input.barcode, BARCODE_MAX),
+    nameEn: normOptionalText(input.nameEn, NAME_EN_MAX),
+    price2: priceTiers[0],
+    price3: priceTiers[1],
+    price4: priceTiers[2],
+    price5: priceTiers[3],
+    defaultVatType,
+    replacementProductId,
   };
+}
+
+/**
+ * ยืนยันว่า replacementProductId (ถ้ามี) เป็นสินค้าจริงของ tenant นี้ (ไม่ถูกลบ) — กัน IDOR:
+ *   ★ ไม่พอแค่เช็ครูปแบบ uuid ใน validateProductInput (pure function ไม่มี DB ให้เช็ค) — ต้องเช็คที่นี่
+ *   ก่อนเขียน DB จริง ไม่งั้น client ส่ง id ของสินค้า tenant อื่นมาผูกเป็น "สินค้าทดแทน" ได้ (ดูคอมเมนต์
+ *   หัวไฟล์: "ทุก query/write กรอง tenant_id") — คืน true ถ้าไม่ได้ส่ง replacementProductId มาเลย (null)
+ */
+async function replacementProductIsValid(
+  db: DB,
+  tenantId: string,
+  replacementProductId: string | null
+): Promise<boolean> {
+  if (!replacementProductId) return true;
+  const { data } = await db
+    .from("products")
+    .select("id")
+    .eq("id", replacementProductId)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  return !!data;
 }
 
 /** สร้างสินค้าใหม่ (tenant นี้) */
@@ -196,10 +309,21 @@ export async function createProduct(
     defaultPrice?: unknown;
     defaultAccountCode?: unknown;
     category?: unknown;
+    barcode?: unknown;
+    nameEn?: unknown;
+    price2?: unknown;
+    price3?: unknown;
+    price4?: unknown;
+    price5?: unknown;
+    defaultVatType?: unknown;
+    replacementProductId?: unknown;
   }
 ): Promise<ProductActionResult> {
   const v = validateProductInput(input);
   if (!v) return { ok: false, message: "กรุณากรอกชื่อสินค้า/บริการ (และตรวจว่าราคาไม่ติดลบ)" };
+  if (!(await replacementProductIsValid(db, tenantId, v.replacementProductId))) {
+    return { ok: false, message: "ไม่พบสินค้าทดแทนที่เลือก" };
+  }
 
   const { data, error } = await db
     .from("products")
@@ -211,6 +335,14 @@ export async function createProduct(
       default_price: v.defaultPrice,
       default_account_code: v.defaultAccountCode,
       category: v.category,
+      barcode: v.barcode,
+      name_en: v.nameEn,
+      price_2: v.price2,
+      price_3: v.price3,
+      price_4: v.price4,
+      price_5: v.price5,
+      default_vat_type: v.defaultVatType,
+      replacement_product_id: v.replacementProductId,
     })
     .select("id")
     .maybeSingle();
@@ -234,10 +366,25 @@ export async function updateProduct(
     defaultPrice?: unknown;
     defaultAccountCode?: unknown;
     category?: unknown;
+    barcode?: unknown;
+    nameEn?: unknown;
+    price2?: unknown;
+    price3?: unknown;
+    price4?: unknown;
+    price5?: unknown;
+    defaultVatType?: unknown;
+    replacementProductId?: unknown;
   }
 ): Promise<ProductActionResult> {
   const v = validateProductInput(input);
   if (!v) return { ok: false, message: "กรุณากรอกชื่อสินค้า/บริการ (และตรวจว่าราคาไม่ติดลบ)" };
+  // ★ กันเลือกตัวเองเป็นสินค้าทดแทนของตัวเอง (วนลูป ไม่มีประโยชน์)
+  if (v.replacementProductId === id) {
+    return { ok: false, message: "เลือกสินค้าทดแทนเป็นสินค้าตัวเองไม่ได้" };
+  }
+  if (!(await replacementProductIsValid(db, tenantId, v.replacementProductId))) {
+    return { ok: false, message: "ไม่พบสินค้าทดแทนที่เลือก" };
+  }
 
   const { error } = await db
     .from("products")
@@ -248,6 +395,14 @@ export async function updateProduct(
       default_price: v.defaultPrice,
       default_account_code: v.defaultAccountCode,
       category: v.category,
+      barcode: v.barcode,
+      name_en: v.nameEn,
+      price_2: v.price2,
+      price_3: v.price3,
+      price_4: v.price4,
+      price_5: v.price5,
+      default_vat_type: v.defaultVatType,
+      replacement_product_id: v.replacementProductId,
     })
     .eq("id", id)
     .eq("tenant_id", tenantId)

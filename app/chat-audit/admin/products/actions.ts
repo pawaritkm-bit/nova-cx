@@ -68,6 +68,14 @@ export async function createProductAction(
     defaultPrice: formData.get("defaultPrice"),
     defaultAccountCode: formData.get("defaultAccountCode"),
     category: formData.get("category"),
+    barcode: formData.get("barcode"),
+    nameEn: formData.get("nameEn"),
+    price2: formData.get("price2"),
+    price3: formData.get("price3"),
+    price4: formData.get("price4"),
+    price5: formData.get("price5"),
+    defaultVatType: formData.get("defaultVatType"),
+    replacementProductId: formData.get("replacementProductId"),
   };
   const res = await withProductAdminWrite((db, tenantId) => createProduct(db, tenantId, input));
   return res.ok ? { ok: true, message: "เพิ่มสินค้าแล้ว" } : res;
@@ -86,6 +94,14 @@ export async function updateProductAction(
     defaultPrice: formData.get("defaultPrice"),
     defaultAccountCode: formData.get("defaultAccountCode"),
     category: formData.get("category"),
+    barcode: formData.get("barcode"),
+    nameEn: formData.get("nameEn"),
+    price2: formData.get("price2"),
+    price3: formData.get("price3"),
+    price4: formData.get("price4"),
+    price5: formData.get("price5"),
+    defaultVatType: formData.get("defaultVatType"),
+    replacementProductId: formData.get("replacementProductId"),
   };
   const res = await withProductAdminWrite((db, tenantId) => updateProduct(db, tenantId, id, input));
   return res.ok ? { ok: true, message: "บันทึกแล้ว" } : res;

@@ -49,8 +49,44 @@ function AccountCodeSelect({
   );
 }
 
+/** dropdown เลือกสินค้าทดแทน (ตัวเลือกจากสินค้าอื่นทั้งหมด ยกเว้นตัวเอง) */
+function ReplacementSelect({
+  products,
+  excludeId,
+  defaultValue,
+}: {
+  products: ProductRow[];
+  excludeId?: string;
+  defaultValue: string;
+}) {
+  return (
+    <select name="replacementProductId" defaultValue={defaultValue} style={{ width: 160 }}>
+      <option value="">— ไม่มีสินค้าทดแทน —</option>
+      {products
+        .filter((p) => p.id !== excludeId)
+        .map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.sku ? `${p.sku} · ` : ""}
+            {p.name}
+          </option>
+        ))}
+    </select>
+  );
+}
+
+/** dropdown ประเภท VAT เริ่มต้นของสินค้า — ใช้ prefill vat_type ต่อบรรทัดบิลตอนเลือกสินค้า */
+function VatTypeSelect({ defaultValue }: { defaultValue: string }) {
+  return (
+    <select name="defaultVatType" defaultValue={defaultValue} style={{ width: 150 }}>
+      <option value="">— ไม่ตั้งค่า —</option>
+      <option value="vat">VAT นอก (ค่าเริ่มต้น)</option>
+      <option value="novat">ไม่มี VAT</option>
+    </select>
+  );
+}
+
 /** ฟอร์มเพิ่มสินค้า/บริการใหม่ */
-function AddProductForm({ chart }: { chart: ChartAccount[] }) {
+function AddProductForm({ chart, products }: { chart: ChartAccount[]; products: ProductRow[] }) {
   const [state, formAction] = useActionState(createProductAction, null);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -68,18 +104,26 @@ function AddProductForm({ chart }: { chart: ChartAccount[] }) {
       }}
     >
       <input name="sku" placeholder="รหัส/SKU (ถ้ามี)" maxLength={60} style={{ width: 130 }} />
+      <input name="barcode" placeholder="บาร์โค้ด (ถ้ามี)" maxLength={60} style={{ width: 130 }} />
       <input name="name" placeholder="ชื่อสินค้า/บริการ" maxLength={200} required style={{ width: 220 }} />
+      <input name="nameEn" placeholder="ชื่อภาษาอังกฤษ (ไม่บังคับ)" maxLength={200} style={{ width: 180 }} />
       <input name="unit" placeholder="หน่วย เช่น ชิ้น, ชม." maxLength={30} style={{ width: 110 }} />
       <input
         name="defaultPrice"
         type="number"
         step="0.01"
         min="0"
-        placeholder="ราคาเริ่มต้น"
-        style={{ width: 130 }}
+        placeholder="ราคาขาย 1"
+        style={{ width: 110 }}
       />
+      <input name="price2" type="number" step="0.01" min="0" placeholder="ราคาขาย 2" style={{ width: 110 }} />
+      <input name="price3" type="number" step="0.01" min="0" placeholder="ราคาขาย 3" style={{ width: 110 }} />
+      <input name="price4" type="number" step="0.01" min="0" placeholder="ราคาขาย 4" style={{ width: 110 }} />
+      <input name="price5" type="number" step="0.01" min="0" placeholder="ราคาขาย 5" style={{ width: 110 }} />
       <input name="category" placeholder="หมวดสินค้า (ไม่บังคับ)" maxLength={100} style={{ width: 150 }} />
       <AccountCodeSelect chart={chart} defaultValue="" />
+      <VatTypeSelect defaultValue="" />
+      <ReplacementSelect products={products} defaultValue="" />
       <button type="submit" className="btn">เพิ่มสินค้า</button>
       <Msg state={state} />
     </form>
@@ -177,7 +221,17 @@ function ProductUnitsManager({ productId, baseUnitLabel, units }: { productId: s
 }
 
 /** 1 แถวสินค้า/บริการ — แก้ไข/สลับสถานะ/ลบ */
-function ProductRowItem({ product, chart, units }: { product: ProductRow; chart: ChartAccount[]; units: ProductUnit[] }) {
+function ProductRowItem({
+  product,
+  chart,
+  units,
+  products,
+}: {
+  product: ProductRow;
+  chart: ChartAccount[];
+  units: ProductUnit[];
+  products: ProductRow[];
+}) {
   const [editing, setEditing] = useState(false);
   const [showUnits, setShowUnits] = useState(false);
   const [updState, updAction] = useActionState(updateProductAction, null);
@@ -194,11 +248,13 @@ function ProductRowItem({ product, chart, units }: { product: ProductRow; chart:
   if (editing) {
     return (
       <tr>
-        <td colSpan={7}>
+        <td colSpan={8}>
           <form action={updAction} className="inline-form" style={{ flexWrap: "wrap" }}>
             <input type="hidden" name="id" value={product.id} />
             <input name="sku" defaultValue={product.sku ?? ""} placeholder="รหัส/SKU" maxLength={60} style={{ width: 110 }} />
+            <input name="barcode" defaultValue={product.barcode ?? ""} placeholder="บาร์โค้ด" maxLength={60} style={{ width: 110 }} />
             <input name="name" defaultValue={product.name} maxLength={200} required style={{ width: 220 }} />
+            <input name="nameEn" defaultValue={product.nameEn ?? ""} placeholder="ชื่อภาษาอังกฤษ" maxLength={200} style={{ width: 160 }} />
             <input name="unit" defaultValue={product.unit ?? ""} placeholder="หน่วย" maxLength={30} style={{ width: 100 }} />
             <input
               name="defaultPrice"
@@ -206,8 +262,13 @@ function ProductRowItem({ product, chart, units }: { product: ProductRow; chart:
               step="0.01"
               min="0"
               defaultValue={product.defaultPrice ?? ""}
-              style={{ width: 120 }}
+              placeholder="ราคาขาย 1"
+              style={{ width: 100 }}
             />
+            <input name="price2" type="number" step="0.01" min="0" defaultValue={product.price2 ?? ""} placeholder="ราคาขาย 2" style={{ width: 100 }} />
+            <input name="price3" type="number" step="0.01" min="0" defaultValue={product.price3 ?? ""} placeholder="ราคาขาย 3" style={{ width: 100 }} />
+            <input name="price4" type="number" step="0.01" min="0" defaultValue={product.price4 ?? ""} placeholder="ราคาขาย 4" style={{ width: 100 }} />
+            <input name="price5" type="number" step="0.01" min="0" defaultValue={product.price5 ?? ""} placeholder="ราคาขาย 5" style={{ width: 100 }} />
             <input
               name="category"
               defaultValue={product.category ?? ""}
@@ -216,6 +277,8 @@ function ProductRowItem({ product, chart, units }: { product: ProductRow; chart:
               style={{ width: 140 }}
             />
             <AccountCodeSelect chart={chart} defaultValue={product.defaultAccountCode ?? ""} />
+            <VatTypeSelect defaultValue={product.defaultVatType ?? ""} />
+            <ReplacementSelect products={products} excludeId={product.id} defaultValue={product.replacementProductId ?? ""} />
             <button type="submit" className="btn">บันทึก</button>
             <button type="button" className="btn btn-ghost" onClick={() => setEditing(false)}>ยกเลิก</button>
           </form>
@@ -229,6 +292,7 @@ function ProductRowItem({ product, chart, units }: { product: ProductRow; chart:
     <Fragment>
       <tr>
         <td>{product.sku || "—"}</td>
+        <td>{product.barcode || "—"}</td>
         <td>{product.name}</td>
         <td>{product.unit || "—"}</td>
         <td className="num">{product.defaultPrice != null ? product.defaultPrice.toLocaleString("th-TH") : "—"}</td>
@@ -258,7 +322,7 @@ function ProductRowItem({ product, chart, units }: { product: ProductRow; chart:
       </tr>
       {showUnits ? (
         <tr>
-          <td colSpan={7}>
+          <td colSpan={8}>
             <ProductUnitsManager productId={product.id} baseUnitLabel={product.unit || "หน่วยหลัก"} units={units} />
           </td>
         </tr>
@@ -296,7 +360,7 @@ export default function ProductsPanel({
         สินค้า/บริการนี้ใช้ร่วมทุกลูกค้าภายในสำนักงานของคุณ — เลือกได้ในบรรทัดบิลของนักบัญชี (ช่วย prefill
         รายละเอียด+รหัสบัญชี แก้ต่อบรรทัดได้ปกติ)
       </p>
-      <AddProductForm chart={chart} />
+      <AddProductForm chart={chart} products={products} />
       <div className="inline-form" style={{ marginBottom: 8 }}>
         <input
           placeholder="ค้นชื่อ/รหัสสินค้า"
@@ -314,6 +378,7 @@ export default function ProductsPanel({
         <thead>
           <tr>
             <th>SKU</th>
+            <th>บาร์โค้ด</th>
             <th>ชื่อสินค้า/บริการ</th>
             <th>หน่วย</th>
             <th className="num">ราคาเริ่มต้น</th>
@@ -324,11 +389,11 @@ export default function ProductsPanel({
         </thead>
         <tbody>
           {filtered.map((p) => (
-            <ProductRowItem key={p.id} product={p} chart={chart} units={productUnits.get(p.id) ?? []} />
+            <ProductRowItem key={p.id} product={p} chart={chart} units={productUnits.get(p.id) ?? []} products={products} />
           ))}
           {filtered.length === 0 ? (
             <tr>
-              <td colSpan={7} className="muted center">ไม่พบสินค้าที่ตรงกับคำค้น</td>
+              <td colSpan={8} className="muted center">ไม่พบสินค้าที่ตรงกับคำค้น</td>
             </tr>
           ) : null}
         </tbody>
