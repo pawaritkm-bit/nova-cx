@@ -8,7 +8,7 @@ import {
   buildPndTextLines,
   buildPndWorkbook,
   groupWhtByPayee,
-  PND_FIELDS,
+  pndFields,
   buildPp30Report,
   buildPp30TextLines,
   buildPp30Workbook,
@@ -124,12 +124,12 @@ describe("rd-export: .txt ภ.ง.ด. — คั่น | + วันที่ �
     }),
   ];
 
-  it("1 บรรทัด = 1 การจ่าย, จำนวนฟิลด์ตรงกับ PND_FIELDS, คั่นด้วย |", () => {
+  it("1 บรรทัด = 1 การจ่าย, จำนวนฟิลด์ตรงกับ pndFields('pnd3'), คั่นด้วย |", () => {
     const r = buildPndReport(entries, "pnd3");
     const lines = buildPndTextLines(r);
     expect(lines).toHaveLength(1);
     const cells = lines[0].split(RD_FIELD_SEP);
-    expect(cells).toHaveLength(PND_FIELDS.length);
+    expect(cells).toHaveLength(pndFields("pnd3").length);
     // ลำดับ|taxid|สาขา|คำนำหน้า|ชื่อ|นามสกุล|วันจ่าย|ประเภท|อัตรา|จ่าย|หัก|เงื่อนไข
     expect(cells[0]).toBe("1");
     expect(cells[1]).toBe("3101500889247");
@@ -148,14 +148,43 @@ describe("rd-export: .txt ภ.ง.ด. — คั่น | + วันที่ �
     expect(text.split("\r\n").filter(Boolean)).toHaveLength(1);
   });
 
-  it("opts.header=true → เติมบรรทัดแรกเป็นชื่อคอลัมน์ตาม PND_FIELDS", () => {
+  it("opts.header=true → เติมบรรทัดแรกเป็นชื่อคอลัมน์ตาม pndFields('pnd3')", () => {
     const r = buildPndReport(entries, "pnd3");
     const lines = buildPndTextLines(r, { header: true });
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toBe(PND_FIELDS.map((f) => f.header).join(RD_FIELD_SEP));
-    expect(lines[0].split(RD_FIELD_SEP)).toHaveLength(PND_FIELDS.length);
+    expect(lines[0]).toBe(pndFields("pnd3").map((f) => f.header).join(RD_FIELD_SEP));
+    expect(lines[0].split(RD_FIELD_SEP)).toHaveLength(pndFields("pnd3").length);
     // บรรทัดข้อมูลเดิมยังอยู่ถัดจาก header ไม่เปลี่ยนแปลง
     expect(lines[1].split(RD_FIELD_SEP)[1]).toBe("3101500889247");
+  });
+
+  it("ภ.ง.ด.53 — 14 ฟิลด์ตามไฟล์ตัวอย่างจริง (ที่อยู่ + ช่องว่างสำรอง 2 ช่อง แทนนามสกุล)", () => {
+    const pnd53Entries = [
+      mkEntry({
+        id: "b", whtForm: "pnd53", counterpartyName: "บริษัท บี จำกัด", counterpartyTaxId: "0105565114216",
+        docDate: "2026-07-10",
+        lines: [mkLine({ accountName: "ค่าเช่า", amount: 20720, whtRate: 5, whtAmount: 1036 })],
+      }),
+    ];
+    const r = buildPndReport(pnd53Entries, "pnd53");
+    const lines = buildPndTextLines(r);
+    expect(lines).toHaveLength(1);
+    const cells = lines[0].split(RD_FIELD_SEP);
+    // ลำดับ|เลขภาษี|สาขา|คำนำหน้า|ชื่อ|ที่อยู่|(ว่าง)|(ว่าง)|วันจ่าย|ประเภท|อัตรา|จ่าย|หัก|เงื่อนไข
+    expect(cells).toHaveLength(14);
+    expect(cells).toHaveLength(pndFields("pnd53").length);
+    expect(cells[0]).toBe("1");
+    expect(cells[1]).toBe("0105565114216");
+    expect(cells[4]).toBe("บริษัท บี จำกัด");
+    expect(cells[5]).toBe(""); // ที่อยู่ — ยังไม่มีข้อมูลเก็บใน DB
+    expect(cells[6]).toBe(""); // ช่องว่างสำรอง #1
+    expect(cells[7]).toBe(""); // ช่องว่างสำรอง #2
+    expect(cells[8]).toBe("10/07/2569"); // วันจ่าย เลื่อนไป index 8 (จาก 6 เดิม)
+    expect(cells[9]).toBe("ค่าเช่า");
+    expect(cells[10]).toBe("5.00");
+    expect(cells[11]).toBe("20720.00");
+    expect(cells[12]).toBe("1036.00");
+    expect(cells[13]).toBe("1");
   });
 });
 

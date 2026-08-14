@@ -2,11 +2,14 @@
  * Export ไฟล์ยื่นกรมสรรพากรผ่านโปรแกรม RD Prep (ภ.ง.ด.3 / ภ.ง.ด.53 / ภ.พ.30)
  *   — pure builders (input = records → output = แถว/สตริง/Buffer) แยกจาก DB ทดสอบได้เต็ม
  *
- * ★★ layout: ยังไม่มีไฟล์ตัวอย่างจริงจากผู้ใช้ให้ตรวจ 100% — แต่ยืนยันจากคู่มือ/บทความอ้างอิง
- *    สาธารณะแล้วว่า RD Prep นำเข้าไฟล์ .txt/.csv แบบ "จับคู่คอลัมน์เอง" (drag คอลัมน์ซ้าย-ขวาตอน
- *    setup ครั้งแรก แล้วระบบจำ mapping ไว้ใช้ครั้งถัดไป) — จึง "ลำดับคอลัมน์" ของเราไม่จำเป็นต้องตรง
- *    เป๊ะกับ RD Prep เป๊ะ ๆ (ผู้ใช้จับคู่เองได้) แต่ยังคงเป็น const array (PND_FIELDS / pp30Fields)
- *    ให้แก้ง่าย + คอมเมนต์กำกับทุกคอลัมน์ เผื่อสลับลำดับให้ตรงกับที่ผู้ใช้คุ้นเคย
+ * ★★ layout ภ.ง.ด.53: ยืนยันแล้วจากไฟล์ตัวอย่างจริงที่ผู้ใช้ส่งมา (PND53_....txt) — 14 คอลัมน์
+ *    ลำดับ|เลขภาษี|สาขา|คำนำหน้า|ชื่อ|ที่อยู่|(ว่าง)|(ว่าง)|วันจ่าย|ประเภทเงินได้|อัตรา|จ่าย|หัก|เงื่อนไข
+ *    ต่างจากที่เดาไว้เดิม (12 คอลัมน์ ไม่มีที่อยู่) → แก้เป็น pndFields(form) แยกตามแบบ เพราะ
+ *    ภ.ง.ด.3 (บุคคล) ยังไม่มีไฟล์ตัวอย่างจริงยืนยัน จึงคงโครง 12 คอลัมน์เดิมไว้ก่อน (มี "นามสกุล"
+ *    แทนที่ "ที่อยู่") — อย่าเดารวมเป็นชุดเดียวกับ ภ.ง.ด.53 จนกว่าจะมีตัวอย่างจริงมายืนยัน
+ *    ทั่วไป (ไม่ใช่แค่ ภ.ง.ด.) RD Prep นำเข้าไฟล์ .txt/.csv แบบ "จับคู่คอลัมน์เอง" (drag คอลัมน์
+ *    ซ้าย-ขวาตอน setup ครั้งแรก แล้วระบบจำ mapping ไว้ใช้ครั้งถัดไป) — จึงพอมี buffer ให้ผิดลำดับ
+ *    ได้บ้าง แต่ "จำนวนคอลัมน์" ต้องตรง ไม่งั้น mapping ที่จำไว้จะเลื่อนเพี้ยนทั้งไฟล์
  *
  * ★ .txt: คั่นด้วย `|` (pipe) เท่านั้น — ยืนยันจากคู่มือ RD Prep (เลือก delimiter "|" ตอน import)
  *    1 บรรทัด = 1 record · CRLF (RD Prep รันบน Windows)
@@ -126,7 +129,11 @@ export type WhtRecord = {
   /** คำนำหน้า/นามสกุล: แยกไม่ได้จากข้อมูล → ปล่อยว่าง (ชื่อเต็มไปช่อง "ชื่อ") */
   title: string;
   lastName: string;
-  /** ที่อยู่ผู้มีเงินได้ — ระบบยังไม่เก็บ → เว้นว่างให้ผู้ใช้เติมในใบแนบ */
+  /**
+   * ที่อยู่ผู้มีเงินได้ — ★ ยืนยันจากไฟล์ตัวอย่างจริงว่า ภ.ง.ด.53 ต้องมีช่องนี้ (คอลัมน์ที่ 6 ของ .txt)
+   * แต่ระบบยังไม่เก็บที่อยู่ counterparty (bill_entries ไม่มีคอลัมน์นี้) → เว้นว่างไปก่อน
+   * ให้ผู้ใช้เติมเองในใบแนบจนกว่าจะเพิ่มการเก็บที่อยู่จริง
+   */
   address: string;
   /** วันที่จ่าย (= doc_date ของบิล) ISO */
   datePaid: string | null;
@@ -180,20 +187,9 @@ export function toWhtRecord(e: BillEntry): WhtRecord | null {
   };
 }
 
-/**
- * ลำดับคอลัมน์ .txt/Excel ของ ภ.ง.ด.3/53 (มาตรฐาน — แก้ง่าย)
- *   index (1-based) มาจาก running seq ของ record ที่ยื่นได้
- */
-export const PND_FIELDS: ReadonlyArray<{
-  header: string;
-  get: (r: WhtRecord, seq: number) => string;
-}> = [
-  { header: "ลำดับที่", get: (_r, seq) => String(seq) },
-  { header: "เลขประจำตัวผู้เสียภาษี", get: (r) => r.payeeTaxId ?? "" }, // 13 หลัก ผู้ถูกหัก
-  { header: "เลขที่สาขา", get: (r) => r.branch }, // 00000 = สนญ.
-  { header: "คำนำหน้า", get: (r) => r.title }, // ว่าง (แยกไม่ได้)
-  { header: "ชื่อ", get: (r) => r.payeeName }, // ชื่อเต็ม counterparty
-  { header: "นามสกุล", get: (r) => r.lastName }, // ว่าง (นิติ/แยกไม่ได้)
+type PndField = { header: string; get: (r: WhtRecord, seq: number) => string };
+
+const PND_TAIL_FIELDS: readonly PndField[] = [
   { header: "วันเดือนปีที่จ่าย", get: (r) => toThaiDate(r.datePaid) }, // dd/mm/yyyy พ.ศ.
   { header: "ประเภทเงินได้", get: (r) => r.incomeType },
   { header: "อัตราภาษี", get: (r) => formatRate(r.rate) },
@@ -201,6 +197,34 @@ export const PND_FIELDS: ReadonlyArray<{
   { header: "ภาษีที่หัก", get: (r) => formatAmount(r.whtAmount) },
   { header: "เงื่อนไข", get: (r) => r.condition }, // 1 = หัก ณ ที่จ่าย
 ];
+
+/**
+ * ลำดับคอลัมน์ .txt/Excel ของ ภ.ง.ด.3/53 — แยกตามแบบ เพราะยืนยันจากไฟล์ตัวอย่างจริงแล้วว่า
+ * ภ.ง.ด.53 (นิติบุคคล) ไม่มีช่อง "นามสกุล" แต่มีช่อง "ที่อยู่" + ช่องว่างสำรองอีก 2 ช่องแทน
+ * (ดูคอมเมนต์หัวไฟล์) — ภ.ง.ด.3 (บุคคลธรรมดา) ยังไม่มีไฟล์ตัวอย่างจริง คงโครงเดิมไว้ก่อน
+ *   index (1-based) มาจาก running seq ของ record ที่ยื่นได้
+ */
+export function pndFields(form: PndForm): readonly PndField[] {
+  const head: readonly PndField[] = [
+    { header: "ลำดับที่", get: (_r, seq) => String(seq) },
+    { header: "เลขประจำตัวผู้เสียภาษี", get: (r) => r.payeeTaxId ?? "" }, // 13 หลัก ผู้ถูกหัก
+    { header: "เลขที่สาขา", get: (r) => r.branch }, // 00000 = สนญ.
+    { header: "คำนำหน้า", get: (r) => r.title }, // ว่าง (แยกไม่ได้)
+    { header: "ชื่อ", get: (r) => r.payeeName }, // ชื่อเต็ม counterparty
+  ];
+  if (form === "pnd53") {
+    // ★ ยืนยันจากไฟล์ตัวอย่างจริง (นิติบุคคลไม่มีนามสกุล) — ที่อยู่ + ช่องว่างสำรอง 2 ช่อง
+    return [
+      ...head,
+      { header: "ที่อยู่", get: (r) => r.address },
+      { header: "", get: () => "" }, // ช่องว่างสำรอง (ยืนยันตำแหน่งจากไฟล์ตัวอย่างจริง — ไม่ทราบความหมาย)
+      { header: "", get: () => "" }, // ช่องว่างสำรอง (เช่นเดียวกัน)
+      ...PND_TAIL_FIELDS,
+    ];
+  }
+  // pnd3 — ยังไม่มีไฟล์ตัวอย่างจริงยืนยัน คงโครงเดิม (นามสกุลแยก ไม่มีที่อยู่)
+  return [...head, { header: "นามสกุล", get: (r) => r.lastName }, ...PND_TAIL_FIELDS];
+}
 
 export type WhtTotals = { count: number; paidTotal: number; whtTotal: number };
 
@@ -261,9 +285,11 @@ export function buildPndReport(entries: BillEntry[], form: PndForm): PndReport {
   };
 }
 
-/** แถว .txt (คั่น |) ของ record เดียว ตาม PND_FIELDS */
-export function whtRecordToLine(r: WhtRecord, seq: number): string {
-  return PND_FIELDS.map((f) => sanitizeField(f.get(r, seq))).join(RD_FIELD_SEP);
+/** แถว .txt (คั่น |) ของ record เดียว ตาม pndFields(form) */
+export function whtRecordToLine(r: WhtRecord, seq: number, form: PndForm): string {
+  return pndFields(form)
+    .map((f) => sanitizeField(f.get(r, seq)))
+    .join(RD_FIELD_SEP);
 }
 
 /** ตัวเลือกสร้างบรรทัด .txt — ดูคอมเมนต์หัวไฟล์เรื่อง header row */
@@ -276,9 +302,10 @@ export type RdTextOptions = { header?: boolean };
  *   ★ opts.header = true → เติมบรรทัดแรกเป็นชื่อคอลัมน์ (opt-in — ดูคอมเมนต์หัวไฟล์)
  */
 export function buildPndTextLines(report: PndReport, opts: RdTextOptions = {}): string[] {
-  const dataLines = report.records.map((r, i) => whtRecordToLine(r, i + 1));
+  const dataLines = report.records.map((r, i) => whtRecordToLine(r, i + 1, report.form));
   if (!opts.header) return dataLines;
-  return [PND_FIELDS.map((f) => sanitizeField(f.header)).join(RD_FIELD_SEP), ...dataLines];
+  const fields = pndFields(report.form);
+  return [fields.map((f) => sanitizeField(f.header)).join(RD_FIELD_SEP), ...dataLines];
 }
 
 /**
