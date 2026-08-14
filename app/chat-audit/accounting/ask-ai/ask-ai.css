@@ -1,0 +1,85 @@
+/* ============================================================
+   ถาม AI เรื่องข้อมูลธุรกิจ (wishlist backlog ข้อ 3)
+   ★ prefix askai- กันชนสไตล์เดิม
+   ============================================================ */
+.nova-dash .askai-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.nova-dash .askai-messages {
+  min-height: 260px;
+  max-height: 480px;
+  overflow-y: auto;
+  border: 1px solid var(--line, #d9dee6);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #fafbfd;
+}
+
+.nova-dash .askai-empty {
+  color: var(--muted, #667);
+  font-size: 14px;
+}
+.nova-dash .askai-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.nova-dash .askai-suggestion {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line, #d9dee6);
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--navy-800, #1f2a44);
+}
+.nova-dash .askai-suggestion:hover { background: var(--navy-50, #eef4ff); }
+
+.nova-dash .askai-bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.nova-dash .askai-user {
+  align-self: flex-end;
+  background: var(--navy-800, #1f6feb);
+  color: #fff;
+  border-bottom-right-radius: 2px;
+}
+.nova-dash .askai-assistant {
+  align-self: flex-start;
+  background: #fff;
+  border: 1px solid var(--line, #d9dee6);
+  color: #1a1a1a;
+  border-bottom-left-radius: 2px;
+}
+.nova-dash .askai-assistant.askai-error {
+  border-color: #f0b4a8;
+  background: #fff5f3;
+  color: #a8321f;
+}
+.nova-dash .askai-pending { color: var(--muted, #667); font-style: italic; }
+
+.nova-dash .askai-input-row {
+  display: flex;
+  gap: 8px;
+}
+.nova-dash .askai-input-row input {
+  flex: 1 1 auto;
+  padding: 10px 14px;
+  border: 1px solid var(--line, #d9dee6);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.nova-dash .askai-input-row input:focus { outline: none; border-color: var(--navy-800, #1f6feb); }
