@@ -208,6 +208,8 @@ export default function EntryEditor({
   );
   const [partyName, setPartyName] = useState<string>(entry.counterpartyName ?? "");
   const [partyTaxId, setPartyTaxId] = useState<string>(entry.counterpartyTaxId ?? "");
+  // ที่อยู่คู่ค้า/ผู้ถูกหักภาษี — นักบัญชีพิมพ์กรอกเอง ใช้ตอน export ภ.ง.ด.3/53 (migration 0113)
+  const [partyAddress, setPartyAddress] = useState<string>(entry.counterpartyAddress ?? "");
   const [whtForm, setWhtForm] = useState<WhtForm | "">(entry.whtForm ?? "");
   // วิธีจ่าย/รับเงิน (บัญชีคู่ฝั่งเครดิต)
   //   ★ บัญชีเงินฝาก (transfer) ใช้ default 1020 — เลิก UI เลือกบัญชีธนาคารต่อลูกค้าแล้ว
@@ -387,6 +389,7 @@ export default function EntryEditor({
       docNo: docNo || null,
       counterpartyName: partyName || null,
       counterpartyTaxId: partyTaxId || null,
+      counterpartyAddress: partyAddress || null,
       whtForm: whtForm || null,
       paymentMethod: paymentMethod || null,
       // คงบัญชีเงินฝากที่ผูกไว้เดิม (ถ้ามี) — เลิก UI เลือกแล้ว แต่ไม่ล้างข้อมูลเดิม
@@ -736,6 +739,16 @@ export default function EntryEditor({
               <label className="acc-field">
                 <span>เลขผู้เสียภาษี {aiSrc && entry.counterpartyTaxId ? <AiTag /> : null}</span>
                 <input type="text" value={partyTaxId} onChange={(e) => setPartyTaxId(e.target.value)} disabled={locked} placeholder="13 หลัก" />
+              </label>
+              <label className="acc-field acc-field-wide">
+                <span>ที่อยู่คู่ค้า (สำหรับยื่นภาษี ภ.ง.ด.3/53)</span>
+                <input
+                  type="text"
+                  value={partyAddress}
+                  onChange={(e) => setPartyAddress(e.target.value)}
+                  disabled={locked}
+                  placeholder="ที่อยู่ผู้ถูกหักภาษี ณ ที่จ่าย (ถ้ามี)"
+                />
               </label>
             </div>
 

@@ -21,6 +21,12 @@ export type UpsertEntryInput = {
   docNo?: string | null;
   counterpartyName?: string | null;
   counterpartyTaxId?: string | null;
+  /**
+   * ที่อยู่คู่ค้า/ผู้ถูกหักภาษี (migration 0113) — นักบัญชีพิมพ์กรอกเอง ใช้ตอน export ภ.ง.ด.3/53
+   *   undefined = ไม่แตะค่าเดิม (pattern เดียวกับ currency/fxRate) — กันไม่ให้ caller อื่น (เช่น
+   *   recurring-invoice/bill-payments) ที่ยังไม่รู้จักฟิลด์นี้ ไปเผลอล้างค่าที่กรอกไว้แล้วเป็น null
+   */
+  counterpartyAddress?: string | null;
   whtForm?: WhtForm | null;
   /** วิธีจ่าย/รับเงิน → บัญชีคู่ฝั่งเครดิต (null = ล้าง) */
   paymentMethod?: PaymentMethod | null;
@@ -137,6 +143,8 @@ export async function upsertEntry(
   }
   // วันครบกำหนดชำระ: ใส่เฉพาะเมื่อส่งค่ามา (undefined = ไม่แตะ — กัน update ทับเป็น null)
   if (input.dueDate !== undefined) payload.due_date = input.dueDate ?? null;
+  // ที่อยู่คู่ค้า: ใส่เฉพาะเมื่อส่งค่ามา (undefined = ไม่แตะ — กัน update ทับเป็น null)
+  if (input.counterpartyAddress !== undefined) payload.counterparty_address = input.counterpartyAddress ?? null;
   // ไฟล์อัปเอง: ใส่เฉพาะเมื่อส่งค่ามา (undefined = ไม่แตะ — กัน update ทับไฟล์เดิมเป็น null)
   if (input.uploadPath !== undefined) payload.upload_path = input.uploadPath;
   if (input.uploadName !== undefined) payload.upload_name = input.uploadName;

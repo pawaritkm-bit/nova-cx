@@ -206,6 +206,8 @@ export type SaveEntryInput = {
   docNo?: string | null;
   counterpartyName?: string | null;
   counterpartyTaxId?: string | null;
+  /** ที่อยู่คู่ค้า/ผู้ถูกหักภาษี — นักบัญชีพิมพ์กรอกเอง ใช้ตอน export ภ.ง.ด.3/53 (migration 0113) */
+  counterpartyAddress?: string | null;
   whtForm?: WhtForm | null;
   /** วิธีจ่าย/รับเงิน → บัญชีคู่ฝั่งเครดิต (เงินสด/โอน/เชื่อ) */
   paymentMethod?: PaymentMethod | null;
@@ -321,6 +323,7 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
       docNo: clampText(input.docNo, 60),
       counterpartyName: clampText(input.counterpartyName, 200),
       counterpartyTaxId: clampText(input.counterpartyTaxId, 20),
+      counterpartyAddress: clampText(input.counterpartyAddress, 300),
       whtForm: asWhtForm(input.whtForm),
       paymentMethod,
       paymentBankAccountId,
