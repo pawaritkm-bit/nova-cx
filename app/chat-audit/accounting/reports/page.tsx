@@ -488,7 +488,7 @@ export default async function AccountingReportsPage({
 
   // ยื่นสรรพากร (RD Prep): เลือกแบบ + รูปแบบไฟล์ (txt/xlsx)
   const rdExportBase = "/chat-audit/accounting/reports/rd-export";
-  const rdQuery = (rdForm: string, fmt: "txt" | "xlsx") => {
+  const rdQuery = (rdForm: string, fmt: "txt" | "xlsx", withHeader?: boolean) => {
     const q = new URLSearchParams();
     q.set("customerId", customerId);
     q.set("form", rdForm);
@@ -496,6 +496,7 @@ export default async function AccountingReportsPage({
     if (from) q.set("from", from);
     if (to) q.set("to", to);
     if (!includeDraft) q.set("draft", "0");
+    if (withHeader) q.set("header", "1");
     return `${rdExportBase}?${q.toString()}`;
   };
   const RD_ITEMS: { form: string; label: string; count: number }[] = rdSummary
@@ -655,8 +656,9 @@ export default async function AccountingReportsPage({
                 ยื่นสรรพากร (RD Prep)
               </div>
               <p className="muted" style={{ marginTop: 0, marginBottom: 12 }}>
-                ไฟล์สำหรับนำเข้าโปรแกรม RD Prep — .txt (มาตรฐาน คั่นด้วย |) และ Excel
-                (ไว้ตรวจ). ★ layout เป็นมาตรฐานที่พบบ่อย ถ้า import แล้วไม่ตรง แจ้งเพื่อปรับได้
+                ไฟล์สำหรับนำเข้าโปรแกรม RD Prep — .txt (คั่นด้วย |) และ Excel (ไว้ตรวจ)
+                RD Prep ให้จับคู่คอลัมน์เองตอน import ครั้งแรก (แล้วจำ mapping ไว้ใช้ครั้งถัดไป)
+                — ถ้ายังไม่เคยตั้งค่า mapping มาก่อน ใช้ตัว &quot;มีหัวคอลัมน์&quot; จะช่วยให้จับคู่ง่ายขึ้น
               </p>
 
               <div className="table-wrap">
@@ -679,6 +681,13 @@ export default async function AccountingReportsPage({
                             className={`btn btn-sm${it.count === 0 ? " btn-ghost" : ""}`}
                           >
                             ⬇ .txt
+                          </a>
+                          <a
+                            href={rdQuery(it.form, "txt", true)}
+                            className="btn btn-sm btn-ghost"
+                            title="เติมบรรทัดแรกเป็นชื่อคอลัมน์ — ช่วยตอน setup จับคู่คอลัมน์ครั้งแรกใน RD Prep"
+                          >
+                            ⬇ .txt (มีหัวคอลัมน์)
                           </a>
                           <a
                             href={rdQuery(it.form, "xlsx")}

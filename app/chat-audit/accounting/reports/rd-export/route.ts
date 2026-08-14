@@ -50,6 +50,8 @@ export async function GET(req: Request) {
   const includeDraft = url.searchParams.get("draft") !== "0";
   const form = url.searchParams.get("form") as RdForm | null;
   const fmt = url.searchParams.get("fmt") === "xlsx" ? "xlsx" : "txt";
+  // เติมบรรทัดแรกเป็นชื่อคอลัมน์ใน .txt (opt-in — ช่วยตอน setup จับคู่คอลัมน์ครั้งแรกใน RD Prep)
+  const withHeader = url.searchParams.get("header") === "1";
 
   if (!getSupabaseEnv()) {
     return NextResponse.json({ error: "db_unavailable", message: "ยังไม่ได้ตั้งค่าฐานข้อมูล" }, { status: 503 });
@@ -105,7 +107,7 @@ export async function GET(req: Request) {
         contentType = XLSX_CONTENT_TYPE;
         ext = "xlsx";
       } else {
-        const text = joinRdLines(buildPndTextLines(report));
+        const text = joinRdLines(buildPndTextLines(report, { header: withHeader }));
         body = encodeRdText(text);
         contentType = `text/plain; charset=${resolveTxtEncoding()}`;
         ext = "txt";
@@ -118,7 +120,7 @@ export async function GET(req: Request) {
         contentType = XLSX_CONTENT_TYPE;
         ext = "xlsx";
       } else {
-        const text = joinRdLines(buildPp30TextLines(report));
+        const text = joinRdLines(buildPp30TextLines(report, { header: withHeader }));
         body = encodeRdText(text);
         contentType = `text/plain; charset=${resolveTxtEncoding()}`;
         ext = "txt";
