@@ -142,10 +142,20 @@ describe("rd-export: .txt ภ.ง.ด. — คั่น | + วันที่ �
     expect(cells[11]).toBe("1");
   });
 
-  it("ไม่มีแถวรวม/หัวในไฟล์ .txt (เฉพาะ record ที่ยื่นได้)", () => {
+  it("ไม่มีแถวรวม/หัวในไฟล์ .txt โดย default (เฉพาะ record ที่ยื่นได้)", () => {
     const r = buildPndReport(entries, "pnd3");
     const text = joinRdLines(buildPndTextLines(r));
     expect(text.split("\r\n").filter(Boolean)).toHaveLength(1);
+  });
+
+  it("opts.header=true → เติมบรรทัดแรกเป็นชื่อคอลัมน์ตาม PND_FIELDS", () => {
+    const r = buildPndReport(entries, "pnd3");
+    const lines = buildPndTextLines(r, { header: true });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe(PND_FIELDS.map((f) => f.header).join(RD_FIELD_SEP));
+    expect(lines[0].split(RD_FIELD_SEP)).toHaveLength(PND_FIELDS.length);
+    // บรรทัดข้อมูลเดิมยังอยู่ถัดจาก header ไม่เปลี่ยนแปลง
+    expect(lines[1].split(RD_FIELD_SEP)[1]).toBe("3101500889247");
   });
 });
 
@@ -208,6 +218,13 @@ describe("rd-export: ภ.พ.30 — รายงานภาษีขาย/ซ�
     expect(cells[2]).toBe("INV-1");
     expect(cells[6]).toBe("1000.00");
     expect(cells[7]).toBe("70.00");
+  });
+
+  it("opts.header=true → เติมบรรทัดแรกเป็นชื่อคอลัมน์ตาม pp30Fields(kind)", () => {
+    const r = buildPp30Report(entries, "sale");
+    const lines = buildPp30TextLines(r, { header: true });
+    expect(lines).toHaveLength(3); // header + 2 record (s1, s2)
+    expect(lines[0]).toBe(pp30Fields("sale").map((f) => f.header).join(RD_FIELD_SEP));
   });
 });
 

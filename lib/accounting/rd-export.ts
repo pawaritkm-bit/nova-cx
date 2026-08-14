@@ -2,13 +2,21 @@
  * Export ไฟล์ยื่นกรมสรรพากรผ่านโปรแกรม RD Prep (ภ.ง.ด.3 / ภ.ง.ด.53 / ภ.พ.30)
  *   — pure builders (input = records → output = แถว/สตริง/Buffer) แยกจาก DB ทดสอบได้เต็ม
  *
- * ★★ สำคัญ: layout ทุกแบบเป็น "มาตรฐานที่พบบ่อย (รอผู้ใช้ยืนยันตัวอย่างจริงจาก RD Prep)"
- *    ผู้ใช้จะลอง import แล้วปรับทีหลังถ้าไม่ตรง — จึงทำ "ลำดับคอลัมน์" เป็น const array
- *    (PND_FIELDS / pp30Fields) แก้ง่าย + คอมเมนต์กำกับทุกคอลัมน์
+ * ★★ layout: ยังไม่มีไฟล์ตัวอย่างจริงจากผู้ใช้ให้ตรวจ 100% — แต่ยืนยันจากคู่มือ/บทความอ้างอิง
+ *    สาธารณะแล้วว่า RD Prep นำเข้าไฟล์ .txt/.csv แบบ "จับคู่คอลัมน์เอง" (drag คอลัมน์ซ้าย-ขวาตอน
+ *    setup ครั้งแรก แล้วระบบจำ mapping ไว้ใช้ครั้งถัดไป) — จึง "ลำดับคอลัมน์" ของเราไม่จำเป็นต้องตรง
+ *    เป๊ะกับ RD Prep เป๊ะ ๆ (ผู้ใช้จับคู่เองได้) แต่ยังคงเป็น const array (PND_FIELDS / pp30Fields)
+ *    ให้แก้ง่าย + คอมเมนต์กำกับทุกคอลัมน์ เผื่อสลับลำดับให้ตรงกับที่ผู้ใช้คุ้นเคย
  *
- * ★ .txt: คั่นด้วย `|` (pipe) 1 บรรทัด = 1 record · CRLF (RD Prep รันบน Windows)
+ * ★ .txt: คั่นด้วย `|` (pipe) เท่านั้น — ยืนยันจากคู่มือ RD Prep (เลือก delimiter "|" ตอน import)
+ *    1 บรรทัด = 1 record · CRLF (RD Prep รันบน Windows)
  *    encoding default = TIS-620 (ไทยไม่เพี้ยนใน RD Prep คลาสสิก) — สลับเป็น UTF-8
  *    ได้ผ่าน env RD_TXT_ENCODING ถ้า RD Prep เวอร์ชันใหม่รับ UTF-8
+ * ★ header row: RD Prep รองรับตัวเลือก "บรรทัดแรกเป็นชื่อคอลัมน์" ตอน import (ใช้ช่วยจับคู่คอลัมน์
+ *    ครั้งแรก) — ไม่ได้ "ทำให้ import พัง" ตามที่เคยเข้าใจผิดไว้ก่อนหน้า จึงเปิดเป็นตัวเลือก opt-in
+ *    (`{ header: true }`) ผ่าน buildPndTextLines/buildPp30TextLines โดย default ยังไม่ใส่ (ปลอดภัย
+ *    กับ mapping เดิมที่ผู้ใช้เคยตั้งค่าไว้แล้วถ้ามี — เปลี่ยน default จะไปสลับ mapping ที่จำไว้)
+ * ★ วันที่: dd/mm/yyyy แบบ พ.ศ. — ยืนยันจากคู่มือ RD Prep เช่นกัน (toThaiDate)
  * ★ Excel: UTF-8 ปกติ (exceljs) — มีหัวตาราง + แถวรวมท้าย อ่านง่ายสำหรับตรวจ
  * ★ ยอดรวมท้าย: ใส่เฉพาะใน Excel/รายงาน (report.totals) — ไม่ใส่ในไฟล์ .txt import
  *    เพราะ RD Prep parse ทีละ record แถวสรุปจะทำ import พัง (ดู buildPndTextLines)
@@ -258,13 +266,19 @@ export function whtRecordToLine(r: WhtRecord, seq: number): string {
   return PND_FIELDS.map((f) => sanitizeField(f.get(r, seq))).join(RD_FIELD_SEP);
 }
 
+/** ตัวเลือกสร้างบรรทัด .txt — ดูคอมเมนต์หัวไฟล์เรื่อง header row */
+export type RdTextOptions = { header?: boolean };
+
 /**
- * บรรทัด .txt ของ ภ.ง.ด. ทั้งไฟล์ (เฉพาะ record ที่ยื่นได้ — ไม่มี header/แถวรวม)
+ * บรรทัด .txt ของ ภ.ง.ด. ทั้งไฟล์ (เฉพาะ record ที่ยื่นได้ — ไม่มีแถวรวม)
  *   ★ 1 บรรทัด = 1 การจ่าย (RD Prep จัดกลุ่มตามเลขภาษีเอง)
  *   ★ ยอดรวมอยู่ใน report.totals + Excel เท่านั้น (แถวรวมในไฟล์ import จะทำ RD Prep พัง)
+ *   ★ opts.header = true → เติมบรรทัดแรกเป็นชื่อคอลัมน์ (opt-in — ดูคอมเมนต์หัวไฟล์)
  */
-export function buildPndTextLines(report: PndReport): string[] {
-  return report.records.map((r, i) => whtRecordToLine(r, i + 1));
+export function buildPndTextLines(report: PndReport, opts: RdTextOptions = {}): string[] {
+  const dataLines = report.records.map((r, i) => whtRecordToLine(r, i + 1));
+  if (!opts.header) return dataLines;
+  return [PND_FIELDS.map((f) => sanitizeField(f.header)).join(RD_FIELD_SEP), ...dataLines];
 }
 
 /**
@@ -426,12 +440,17 @@ export function pp30RecordToLine(r: Pp30Record, seq: number, kind: Pp30Kind): st
     .join(RD_FIELD_SEP);
 }
 
-/** บรรทัด .txt ของ ภ.พ.30 ทั้งไฟล์ (ไม่มี header/แถวรวม — ยอดรวมอยู่ใน Excel/report) */
-export function buildPp30TextLines(report: Pp30Report): string[] {
+/**
+ * บรรทัด .txt ของ ภ.พ.30 ทั้งไฟล์ (ไม่มีแถวรวม — ยอดรวมอยู่ใน Excel/report)
+ *   ★ opts.header = true → เติมบรรทัดแรกเป็นชื่อคอลัมน์ (opt-in — ดูคอมเมนต์หัวไฟล์)
+ */
+export function buildPp30TextLines(report: Pp30Report, opts: RdTextOptions = {}): string[] {
   const fields = pp30Fields(report.kind);
-  return report.records.map((r, i) =>
+  const dataLines = report.records.map((r, i) =>
     fields.map((f) => sanitizeField(f.get(r, i + 1))).join(RD_FIELD_SEP)
   );
+  if (!opts.header) return dataLines;
+  return [fields.map((f) => sanitizeField(f.header)).join(RD_FIELD_SEP), ...dataLines];
 }
 
 // =====================================================================

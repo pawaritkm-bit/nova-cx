@@ -31,10 +31,18 @@ import { getFlowAccountSharedConfig } from "@/lib/env";
  *   bankAccountId ฝั่ง FlowAccount ที่เรายังไม่มี mapping — เกินขอบเขต M1 ตามเจตนาเดิมของแผน)
  *
  * ★★★ เฟส 5 ส่วน P (T30/T31, decision 0.3) — บิลซื้อ/ค่าใช้จ่าย ★★★
- *   ⚠️ endpoint นี้ยังไม่ยืนยันจาก OpenAPI ทางการ — เป็นสมมติฐานจากความสมมาตรกับ tax-invoices/cash-invoices
- *   ต้องทดสอบกับ sandbox จริงก่อนใช้งานจริง (T30: ค้นหา `docs/05-flowaccount-integration.md` ทั้งไฟล์แล้ว
- *   ไม่พบสเปก OpenAPI ฉบับเต็มของฝั่งซื้อ/ค่าใช้จ่ายที่ยืนยันแล้วเหมือนฝั่งขาย — มีแค่ชื่อ class
- *   `expensesApi`/`purchaseOrderApi` จาก community SDK ที่เป็นเอกสารอ้างอิงเท่านั้น ไม่ใช่การยืนยันสเปกจริง)
+ *   ⚠️ endpoint นี้ยังไม่ยืนยันสเปกฉบับเต็มจาก OpenAPI ทางการ (request/response schema ระดับ field) —
+ *   เป็นสมมติฐานจากความสมมาตรกับ tax-invoices/cash-invoices ต้องทดสอบกับ sandbox จริงก่อนใช้งานจริง
+ *   (T30: ค้นหา `docs/05-flowaccount-integration.md` ทั้งไฟล์แล้วไม่พบสเปก OpenAPI ฉบับเต็มของฝั่งซื้อ/
+ *   ค่าใช้จ่ายที่ยืนยันแล้วเหมือนฝั่งขาย — มีแค่ชื่อ class `expensesApi`/`purchaseOrderApi` จาก community SDK
+ *   ที่เป็นเอกสารอ้างอิงเท่านั้น ไม่ใช่การยืนยันสเปกจริง)
+ *
+ *   ★ อัปเดต (ค้นข้อมูลสาธารณะเพิ่ม — ยังไม่ใช่ sandbox test): เอกสารทางการที่ developers.flowaccount.com
+ *   ("ภาพรวมใบกำกับภาษีซื้อ (Supplier Invoice)") ยืนยันว่า FlowAccount OpenAPI มีชนิดเอกสาร `expenses` และ
+ *   `purchases` อยู่จริง (ใช้ชื่อเดียวกับที่เราเดาไว้ที่นี่) — เพิ่มความมั่นใจว่าชื่อ endpoint ไม่ผิดทาง
+ *   แต่ยัง**ไม่ยืนยัน** exact path prefix/request-body field ระดับเดียวกับฝั่งขาย (tax-invoices/cash-invoices
+ *   ที่ยืนยันจาก OpenAPI spec เต็มแล้ว) — ยังต้องทดสอบ sandbox จริงก่อนใช้งานจริงอยู่ดี
+ *
  *   สมมติฐานที่ใช้ (ตาม decision 0.3 ของแผน docs/06-accounting-features-roadmap.md):
  *     Purchase Bill (เชื่อ ยังไม่จ่าย)  : POST {apiBaseUrl}/purchases  (auth: Bearer token, body=SimpleDocument)
  *     Cash Expense   (จ่ายเงินสดแล้ว)   : POST {apiBaseUrl}/expenses  (body ทรงเดียวกัน)
