@@ -87,6 +87,15 @@ describe("createProductAction", () => {
       defaultPrice: "100",
       defaultAccountCode: "4010",
       category: null, // ★ ไม่กรอกหมวดสินค้า (FormData.get คืน null) — เฟส 8 ส่วน X, 0.10
+      // ★ [0112] ไม่กรอกฟิลด์ใหม่ (FormData.get คืน null)
+      barcode: null,
+      nameEn: null,
+      price2: null,
+      price3: null,
+      price4: null,
+      price5: null,
+      defaultVatType: null,
+      replacementProductId: null,
     });
   });
 

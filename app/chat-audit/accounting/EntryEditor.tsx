@@ -800,6 +800,9 @@ export default function EntryEditor({
                               accountName: acct ? acct.name : l.accountName,
                               // ★ เปลี่ยนสินค้า → หน่วยนับเดิมอาจไม่มีความหมาย (คนละสินค้า) รีเซ็ตเป็นหน่วยหลัก
                               unitId: null,
+                              // ★ (0112) prefill vat_type จาก default ของสินค้า เฉพาะถ้าตั้งค่าไว้จริง —
+                              //   สินค้าที่ยังไม่เคยตั้ง (null) ต้องไม่ไปทับ vat_type เดิมของบรรทัด
+                              ...(p.defaultVatType ? { vatType: p.defaultVatType } : {}),
                             });
                           }}
                           onClear={() => patchLine(l.key, { productId: null, unitId: null })}

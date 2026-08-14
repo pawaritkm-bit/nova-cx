@@ -110,6 +110,14 @@ describe("validateProductInput", () => {
       defaultPrice: 200,
       defaultAccountCode: "4010",
       category: null,
+      barcode: null,
+      nameEn: null,
+      price2: null,
+      price3: null,
+      price4: null,
+      price5: null,
+      defaultVatType: null,
+      replacementProductId: null,
     });
   });
 
@@ -122,7 +130,45 @@ describe("validateProductInput", () => {
       defaultPrice: null,
       defaultAccountCode: null,
       category: null,
+      barcode: null,
+      nameEn: null,
+      price2: null,
+      price3: null,
+      price4: null,
+      price5: null,
+      defaultVatType: null,
+      replacementProductId: null,
     });
+  });
+
+  it("★ [0112] barcode/ชื่ออังกฤษ ว่าง/กรอกมา → trim แล้วเก็บ หรือ null ถ้าว่าง", () => {
+    const v1 = validateProductInput({ name: "สินค้า A", barcode: "  8850000000012  ", nameEn: "  Product A  " });
+    expect(v1?.barcode).toBe("8850000000012");
+    expect(v1?.nameEn).toBe("Product A");
+    const v2 = validateProductInput({ name: "สินค้า A" });
+    expect(v2?.barcode).toBeNull();
+    expect(v2?.nameEn).toBeNull();
+  });
+
+  it("★ [0112] ราคาขาย 2-5: ไม่กรอก → null, กรอกแล้วติดลบ/ไม่ใช่ตัวเลข → ปฏิเสธทั้ง input", () => {
+    const v = validateProductInput({ name: "สินค้า A", price2: 100, price3: "200.5", price4: "", price5: undefined });
+    expect(v).toMatchObject({ price2: 100, price3: 200.5, price4: null, price5: null });
+    expect(validateProductInput({ name: "สินค้า A", price2: -1 })).toBeNull();
+    expect(validateProductInput({ name: "สินค้า A", price3: "abc" })).toBeNull();
+  });
+
+  it("★ [0112] defaultVatType: ว่าง → null, ค่าถูกต้อง → เก็บตรงตัว, ค่าอื่น → ปฏิเสธทั้ง input", () => {
+    expect(validateProductInput({ name: "สินค้า A" })?.defaultVatType).toBeNull();
+    expect(validateProductInput({ name: "สินค้า A", defaultVatType: "vat" })?.defaultVatType).toBe("vat");
+    expect(validateProductInput({ name: "สินค้า A", defaultVatType: "novat" })?.defaultVatType).toBe("novat");
+    expect(validateProductInput({ name: "สินค้า A", defaultVatType: "weird" })).toBeNull();
+  });
+
+  it("★ [0112] replacementProductId: ว่าง → null, uuid ถูกรูปแบบ → เก็บ, ผิดรูปแบบ → ปฏิเสธทั้ง input", () => {
+    const uuid = "11111111-1111-1111-1111-111111111111";
+    expect(validateProductInput({ name: "สินค้า A" })?.replacementProductId).toBeNull();
+    expect(validateProductInput({ name: "สินค้า A", replacementProductId: uuid })?.replacementProductId).toBe(uuid);
+    expect(validateProductInput({ name: "สินค้า A", replacementProductId: "not-a-uuid" })).toBeNull();
   });
 
   it("★ [เฟส 8] กรอกหมวดสินค้ามาด้วย → เก็บ category ที่ trim แล้ว (0.10)", () => {
@@ -137,9 +183,19 @@ describe("validateProductInput", () => {
 });
 
 describe("searchProducts — pure, ใช้ใน combobox", () => {
+  const EXTRA = {
+    barcode: null,
+    nameEn: null,
+    price2: null,
+    price3: null,
+    price4: null,
+    price5: null,
+    defaultVatType: null,
+    replacementProductId: null,
+  } as const;
   const list: Product[] = [
-    { id: "p1", sku: "SKU-1", name: "ที่ปรึกษาบัญชี", unit: "ชม.", defaultPrice: 500, defaultAccountCode: "4010", category: null },
-    { id: "p2", sku: "SKU-2", name: "จัดทำบัญชีรายเดือน", unit: "เดือน", defaultPrice: 3000, defaultAccountCode: null, category: null },
+    { id: "p1", sku: "SKU-1", name: "ที่ปรึกษาบัญชี", unit: "ชม.", defaultPrice: 500, defaultAccountCode: "4010", category: null, ...EXTRA },
+    { id: "p2", sku: "SKU-2", name: "จัดทำบัญชีรายเดือน", unit: "เดือน", defaultPrice: 3000, defaultAccountCode: null, category: null, ...EXTRA },
   ];
 
   it("q ว่าง → คืนทั้งหมด", () => {
@@ -174,7 +230,11 @@ describe("listProducts — เฉพาะที่ active (สำหรับ p
     });
     const res = await listProducts(db, "t1");
     expect(res).toEqual([
-      { id: "p1", sku: "SKU-1", name: "สินค้า A", unit: "ชิ้น", defaultPrice: 150.5, defaultAccountCode: "4010", category: null },
+      {
+        id: "p1", sku: "SKU-1", name: "สินค้า A", unit: "ชิ้น", defaultPrice: 150.5, defaultAccountCode: "4010",
+        category: null, barcode: null, nameEn: null, price2: null, price3: null, price4: null, price5: null,
+        defaultVatType: null, replacementProductId: null,
+      },
     ]);
   });
 
@@ -198,7 +258,11 @@ describe("listProductsAdmin — รวม inactive", () => {
     });
     const res = await listProductsAdmin(db, "t1");
     expect(res).toEqual([
-      { id: "p1", sku: null, name: "สินค้า B", unit: null, defaultPrice: null, defaultAccountCode: null, category: null, isActive: false },
+      {
+        id: "p1", sku: null, name: "สินค้า B", unit: null, defaultPrice: null, defaultAccountCode: null,
+        category: null, barcode: null, nameEn: null, price2: null, price3: null, price4: null, price5: null,
+        defaultVatType: null, replacementProductId: null, isActive: false,
+      },
     ]);
   });
 });
@@ -233,6 +297,25 @@ describe("createProduct", () => {
     const res = await createProduct(db, "t1", { name: "สินค้า A", sku: "DUP" });
     expect(res).toEqual({ ok: false, message: "รหัสสินค้า (SKU) นี้มีอยู่แล้ว" });
   });
+
+  it("★ [0112] สินค้าทดแทนไม่มีจริง/เป็นของ tenant อื่น → ปฏิเสธ ไม่ยิง insert (กัน IDOR)", async () => {
+    const { db, ops } = makeDb({});
+    const res = await createProduct(db, "t1", {
+      name: "สินค้า A",
+      replacementProductId: "22222222-2222-2222-2222-222222222222",
+    });
+    expect(res).toEqual({ ok: false, message: "ไม่พบสินค้าทดแทนที่เลือก" });
+    expect(ops.find((o) => o.kind === "insert" && o.table === "products")).toBeUndefined();
+  });
+
+  it("★ [0112] สินค้าทดแทนมีจริงใน tenant เดียวกัน → ผ่าน + insert พร้อม replacement_product_id", async () => {
+    const otherId = "22222222-2222-2222-2222-222222222222";
+    const { db, ops } = makeDb({ products: { id: otherId } });
+    const res = await createProduct(db, "t1", { name: "สินค้า A", replacementProductId: otherId });
+    expect(res).toEqual({ ok: true, id: "new-id" });
+    const ins = ops.find((o) => o.kind === "insert" && o.table === "products")!;
+    expect(ins.payload!.replacement_product_id).toBe(otherId);
+  });
 });
 
 describe("updateProduct", () => {
@@ -256,6 +339,46 @@ describe("updateProduct", () => {
     const { db } = makeDb({ "products:updateError": { code: "23505" } });
     const res = await updateProduct(db, "t1", "p1", { name: "สินค้า A", sku: "DUP" });
     expect(res).toEqual({ ok: false, message: "รหัสสินค้า (SKU) นี้มีอยู่แล้ว" });
+  });
+
+  it("★ [0112] เลือกสินค้าทดแทนเป็นตัวเอง → ปฏิเสธ ไม่ยิง update", async () => {
+    const { db, ops } = makeDb({});
+    const selfId = "11111111-1111-1111-1111-111111111111";
+    const res = await updateProduct(db, "t1", selfId, { name: "สินค้า A", replacementProductId: selfId });
+    expect(res.ok).toBe(false);
+    expect(ops.find((o) => o.kind === "update" && o.table === "products")).toBeUndefined();
+  });
+
+  it("★ [0112] สินค้าทดแทนไม่มีจริง/เป็นของ tenant อื่น → ปฏิเสธ ไม่ยิง update (กัน IDOR)", async () => {
+    const { db, ops } = makeDb({}); // ★ ไม่ canned "products" → replacementProductIsValid หา "ไม่พบ"
+    const selfId = "11111111-1111-1111-1111-111111111111";
+    const otherId = "22222222-2222-2222-2222-222222222222";
+    const res = await updateProduct(db, "t1", selfId, { name: "สินค้า A", replacementProductId: otherId });
+    expect(res).toEqual({ ok: false, message: "ไม่พบสินค้าทดแทนที่เลือก" });
+    expect(ops.find((o) => o.kind === "update" && o.table === "products")).toBeUndefined();
+  });
+
+  it("★ [0112] เลือกสินค้าทดแทนเป็นตัวอื่นที่มีจริงใน tenant เดียวกัน → ผ่าน + เขียนคอลัมน์ใหม่ทั้งหมด", async () => {
+    const otherId = "22222222-2222-2222-2222-222222222222";
+    const { db, ops } = makeDb({ products: { id: otherId } }); // ★ จำลองว่าเจอสินค้าทดแทนใน tenant นี้จริง
+    const selfId = "11111111-1111-1111-1111-111111111111";
+    const res = await updateProduct(db, "t1", selfId, {
+      name: "สินค้า A",
+      barcode: "8850000000012",
+      nameEn: "Product A",
+      price2: 10,
+      defaultVatType: "novat",
+      replacementProductId: otherId,
+    });
+    expect(res).toEqual({ ok: true, id: selfId });
+    const upd = ops.find((o) => o.kind === "update" && o.table === "products")!;
+    expect(upd.payload).toMatchObject({
+      barcode: "8850000000012",
+      name_en: "Product A",
+      price_2: 10,
+      default_vat_type: "novat",
+      replacement_product_id: otherId,
+    });
   });
 });
 
