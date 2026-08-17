@@ -6,7 +6,7 @@ import { extractUploadedEntry } from "@/lib/line/bill-extract-worker";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // ★ AI อ่านบิล (gpt-5-mini reasoning + PDF หลายบิล) ช้า — ให้ headroom 120s
-export const maxDuration = 120;
+export const maxDuration = 300; // เพดาน Vercel Pro — รองรับบิล PDF รวมหลายใบไฟล์ใหญ่ (split หลายชิ้น)
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

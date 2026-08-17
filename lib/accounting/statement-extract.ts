@@ -13,6 +13,8 @@
  * ★ PDPA: ไม่ log เนื้อสเตทเมนต์/ชื่อ/ยอด — log แค่ error สั้น ๆ ไม่มีข้อมูลอ่อนไหว
  */
 
+import { downscaleImageIfLarge } from "@/lib/accounting/image-prep";
+import { extractPdfMaybeSplit } from "@/lib/accounting/pdf-split";
 import type { StatementTxn, TxnDirection } from "@/lib/accounting/statement-analyze";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
@@ -258,12 +260,18 @@ async function callExtract(userContent: unknown, timeoutMs: number = EXTRACT_TIM
 }
 
 /**
- * สกัดธุรกรรมจากไฟล์ PDF/รูป (ส่งตรงเข้า OpenAI file/image input) — เรียกครั้งเดียวจบ (ไม่ chunk)
+ * สกัดธุรกรรมจากไฟล์ PDF/รูป — PDF ใหญ่เกินเพดานจะถูกตัดเป็นชิ้นอ่านทีละชิ้นแล้วรวมผลอัตโนมัติ
  *   @returns StatementTxn[] · [] เมื่อ error/timeout/ไม่มี key
  */
 export async function extractStatementFromFile(fileData: Buffer, mime: string): Promise<StatementTxn[]> {
+  return extractPdfMaybeSplit(fileData, mime, extractStatementFromFileSingle);
+}
+
+/** เรียก AI ครั้งเดียว (ไฟล์/ชิ้นเดียว ≤เพดาน) — ตัวจริงที่ extractStatementFromFile / split เรียก */
+async function extractStatementFromFileSingle(fileData: Buffer, mime: string): Promise<StatementTxn[]> {
   const isPdf = (mime || "").toLowerCase().includes("pdf");
-  const dataUrl = `data:${mime || "image/jpeg"};base64,${fileData.toString("base64")}`;
+  const prepped = await downscaleImageIfLarge(fileData, mime); // ย่อรูปสแกนใหญ่ (PDF ไม่แตะ)
+  const dataUrl = `data:${prepped.mime || "image/jpeg"};base64,${prepped.data.toString("base64")}`;
   const filePart = isPdf
     ? { type: "file", file: { filename: "statement.pdf", file_data: dataUrl } }
     : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };

@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 // ★★★ 2026-08-12 (แก้บั๊ก A) — ไฟล์ Excel/CSV ใหญ่ตอนนี้แบ่งเป็นหลายชุดยิง AI พร้อมกัน (concurrency 8,
 //   ดู MAX_CONCURRENT_CHUNKS ใน statement-extract.ts) แทนที่จะเรียกครั้งเดียวจบ — เพิ่ม headroom จาก 120s
 //   เป็น 240s (worst case ไฟล์ใหญ่สุด 24 ชุด÷8 = 3 รอบ × timeout ต่อชุด 45s = 135s ยังมี margin เหลือมาก)
-export const maxDuration = 240;
+export const maxDuration = 300; // เพดาน Vercel Pro — รับ ~8 ชิ้น (~190MB) ต่อไฟล์
 
 const BILLS_BUCKET = "bills";
 const STATEMENT_PREFIX = "statement";
