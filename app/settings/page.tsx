@@ -214,9 +214,14 @@ export default async function SettingsPage() {
               okText="เปิดรับข้อมูล (มี API key)"
               offText="ปิด (ยังไม่ตั้ง API key)"
               detail={
-                status.novaSales.tenantBound
-                  ? "ผูก tenant แล้ว"
-                  : "ยังไม่ผูก tenant"
+                [
+                  status.novaSales.tenantBound
+                    ? "ผูก tenant แล้ว"
+                    : "ยังไม่ผูก tenant",
+                  status.novaSales.baseUrl
+                    ? "outbound พร้อม"
+                    : "outbound ปิด (ยังไม่ตั้ง BASE_URL)",
+                ].join(" · ")
               }
             />
           </div>

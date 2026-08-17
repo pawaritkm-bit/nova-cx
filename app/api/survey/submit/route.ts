@@ -21,6 +21,10 @@ import {
 import { computeCsat, computeNps } from "@/lib/survey/scoring";
 import { buildConsentPayload } from "@/lib/pdpa";
 import { newRequestId, logServerError, serverErrorResponse } from "@/lib/http";
+import {
+  extractMappableServices,
+  fireInterestedServiceSignals,
+} from "@/lib/integrations/nova-sales-interested-service";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -136,6 +140,19 @@ export async function POST(request: NextRequest) {
       nps,
       consent: buildConsentPayload(),
     });
+
+    // CX → Sales outbound: ส่งสัญญาณ "ลูกค้าสนใจบริการเสริม" (Form A เท่านั้น)
+    if (inv.survey_type === "A") {
+      const services = extractMappableServices(answers as Record<string, unknown>);
+      if (services.length > 0) {
+        void fireInterestedServiceSignals(db, {
+          customerId: inv.customer_id,
+          services,
+          surveyRef: responseId,
+          answers: answers as Record<string, unknown>,
+        }).catch(() => {});
+      }
+    }
 
     return NextResponse.json(
       {

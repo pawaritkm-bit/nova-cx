@@ -77,6 +77,16 @@ export function getNovaSalesQueryApiKey(): string | undefined {
   return process.env.NOVA_SALES_QUERY_API_KEY || undefined;
 }
 
+/**
+ * base URL ของ NOVA Sales สำหรับ outbound call ใหม่ (interested-service ฯลฯ)
+ *   เช่น https://nova-sales.vercel.app  (ไม่ต้องมี / ปิดท้าย)
+ *   คืน undefined ถ้ายังไม่ตั้ง → outbound interested-service เป็น no-op (ไม่ error)
+ */
+export function getNovaSalesBaseUrl(): string | undefined {
+  const v = process.env.NOVA_SALES_BASE_URL || undefined;
+  return v ? v.replace(/\/+$/, "") : undefined;
+}
+
 export type FlowAccountSharedConfig = {
   /** endpoint ขอ token (OAuth2 client_credentials) เช่น https://openapi.flowaccount.com/test/token */
   tokenUrl: string;
