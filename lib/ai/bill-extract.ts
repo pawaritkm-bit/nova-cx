@@ -19,6 +19,8 @@ import {
   buildChartByCode,
   searchChartNonBank,
 } from "@/lib/accounting/chart-of-accounts";
+import { downscaleImageIfLarge } from "@/lib/accounting/image-prep";
+import { extractPdfMaybeSplit } from "@/lib/accounting/pdf-split";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -447,8 +449,9 @@ export async function extractBillData(
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null; // degrade: ไม่มี key → ข้ามการสกัด
 
-  // ★ บิลไลน์ (รูปใบเดียว) = ใช้ OPENAI_MODEL/gpt-4o-mini (ประหยัด · มาเยอะทุกวันผ่าน cron)
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  // ★ บิลไลน์ (รูปใบเดียว) — อัปเป็นโมเดลแม่น (เดิม gpt-4o-mini อ่านคอลัมน์/ยอดผิด = นักบัญชีเสียเวลาแก้มากสุด)
+  //   default = EXTRACT_MODEL (gpt-5-mini) · override ด้วย OPENAI_LINE_BILL_MODEL ถ้าต้องคุมต้นทุน/ความเร็ว
+  const model = process.env.OPENAI_LINE_BILL_MODEL || EXTRACT_MODEL;
   const isPdf = (mime || "").toLowerCase().includes("pdf");
   const dataUrl = `data:${mime || "image/jpeg"};base64,${imageData.toString("base64")}`;
 
@@ -457,29 +460,29 @@ export async function extractBillData(
     ? { type: "file", file: { filename: "bill.pdf", file_data: dataUrl } }
     : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };
 
+  // reasoning model (gpt-5*/o-series) ใช้ max_completion_tokens + ห้ามส่ง temperature (+ ช้ากว่า → timeout ยาวขึ้น)
+  const reasoning = isReasoningModel(model);
+  const reqBody: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: "system", content: buildSystemPrompt(chart) },
+      { role: "user", content: [{ type: "text", text: USER_PROMPT }, filePart] },
+    ],
+  };
+  if (reasoning) {
+    reqBody.max_completion_tokens = 8000; // เผื่อ reasoning tokens + schema ต่อ field
+  } else {
+    reqBody.temperature = 0;
+    reqBody.max_tokens = 4000;
+  }
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), reasoning ? EXTRACT_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(OPENAI_API_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        // บิลหลายบรรทัด (โดยเฉพาะ PDF) + schema ต่อ field มี confidence → output ยาว
-        //   ตั้งเพดานสูงพอกัน JSON โดนตัดกลางคัน (billed ตาม output จริง — cap ไม่เพิ่มค่าใช้จ่าย)
-        max_tokens: 4000,
-        messages: [
-          { role: "system", content: buildSystemPrompt(chart) },
-          {
-            role: "user",
-            content: [{ type: "text", text: USER_PROMPT }, filePart],
-          },
-        ],
-      }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(reqBody),
       signal: controller.signal,
     });
 
@@ -492,13 +495,34 @@ export async function extractBillData(
     const content = body.choices?.[0]?.message?.content;
     if (!content) return null;
 
-    return normalizeExtraction(extractJson(content), buildChartByCode(chart));
+    const bill = normalizeExtraction(extractJson(content), buildChartByCode(chart));
+    return bill ? flagVatInconsistency(bill) : null;
   } catch {
     console.warn("[bill-extract] extract error");
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * ตรวจความสมเหตุผลของ VAT ต่อบรรทัด — safety net จับเคส AI อ่านคอลัมน์สลับ/ยอดเพี้ยน
+ *   ที่ยังรอดจาก confidence gate: บรรทัด vat_type='vat' ที่มีทั้งฐานและ VAT
+ *   แต่ VAT ≠ ~7% ของฐาน (เผื่อปัดเศษ) → mark low_confidence ให้นักบัญชีตรวจ
+ *   ★ ไม่แก้ตัวเลข (เว้นการตัดสินให้คน) — แค่ยกธง "ตรวจก่อนยืนยัน"
+ */
+const VAT_RATE = 0.07;
+export function flagVatInconsistency(bill: ExtractedBill): ExtractedBill {
+  return {
+    ...bill,
+    lines: bill.lines.map((l) => {
+      if (l.vat_type !== "vat" || l.low_confidence) return l;
+      if (l.amount === null || l.amount <= 0 || l.vat_amount === null || l.vat_amount <= 0) return l;
+      const expected = l.amount * VAT_RATE;
+      const tolerance = Math.max(1, l.amount * 0.02); // ±2% ของฐาน หรือ ±1 บาท (อันไหนมากกว่า)
+      return Math.abs(l.vat_amount - expected) > tolerance ? { ...l, low_confidence: true } : l;
+    }),
+  };
 }
 
 /** บิลนี้ "มีเนื้อหาจริง" ไหม (กันสร้าง entry เปล่าจาก element ขยะ) */
@@ -526,12 +550,23 @@ export async function extractBillsData(
   mime: string,
   chart: ChartAccount[] = []
 ): Promise<ExtractedBill[]> {
+  // PDF ใหญ่เกินเพดาน → ตัดเป็นชิ้นอ่านทีละชิ้นแล้วรวมบิลอัตโนมัติ (chart ผูกผ่าน closure)
+  return extractPdfMaybeSplit(imageData, mime, (data, m) => extractBillsDataSingle(data, m, chart));
+}
+
+/** เรียก AI ครั้งเดียว (ไฟล์/ชิ้นเดียว ≤เพดาน) — ตัวจริงที่ extractBillsData / split เรียก */
+async function extractBillsDataSingle(
+  imageData: Buffer,
+  mime: string,
+  chart: ChartAccount[] = []
+): Promise<ExtractedBill[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return [];
 
   const model = EXTRACT_MODEL;
   const isPdf = (mime || "").toLowerCase().includes("pdf");
-  const dataUrl = `data:${mime || "image/jpeg"};base64,${imageData.toString("base64")}`;
+  const prepped = await downscaleImageIfLarge(imageData, mime); // ย่อรูปสแกน/ถ่ายบิลใหญ่ (PDF ไม่แตะ)
+  const dataUrl = `data:${prepped.mime || "image/jpeg"};base64,${prepped.data.toString("base64")}`;
   const filePart = isPdf
     ? { type: "file", file: { filename: "bill.pdf", file_data: dataUrl } }
     : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };
@@ -578,6 +613,7 @@ export async function extractBillsData(
     return rawBills
       .map((b) => normalizeExtraction(b as Record<string, unknown>, chartByCode))
       .filter((b): b is ExtractedBill => b !== null && billHasContent(b))
+      .map(flagVatInconsistency)
       .slice(0, 30);
   } catch {
     console.warn("[bill-extract] multi extract error");

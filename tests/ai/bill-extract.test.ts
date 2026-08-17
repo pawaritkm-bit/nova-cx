@@ -1,7 +1,39 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { normalizeExtraction, extractBillData } from "@/lib/ai/bill-extract";
+import {
+  type ExtractedBill,
+  type ExtractedLine,
+  flagVatInconsistency,
+  normalizeExtraction,
+  extractBillData,
+} from "@/lib/ai/bill-extract";
 import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { TEST_CHART } from "@/tests/accounting/fixtures/chart";
+
+/** สร้างบิลทดสอบ 1 ใบ 1 บรรทัด (default vat) */
+function billWithLine(line: Partial<ExtractedLine>): ExtractedBill {
+  return {
+    doc_date: "2026-08-01",
+    doc_no: "INV-1",
+    seller_name: "ก",
+    seller_tax_id: null,
+    buyer_name: "ข",
+    buyer_tax_id: null,
+    overall_confidence: 0.9,
+    lines: [
+      {
+        vat_type: "vat",
+        description: "สินค้า",
+        amount: 100,
+        vat_amount: 7,
+        account_code: null,
+        wht_rate: null,
+        wht_amount: null,
+        low_confidence: false,
+        ...line,
+      },
+    ],
+  };
+}
 
 /**
  * bill-extract — สกัดข้อมูลบิลด้วย AI vision (★ high-confidence only)
@@ -11,6 +43,29 @@ import { TEST_CHART } from "@/tests/accounting/fixtures/chart";
  */
 
 const TEST_CHART_BY_CODE = buildChartByCode(TEST_CHART);
+
+describe("flagVatInconsistency — safety net VAT 7%", () => {
+  it("VAT ถูกต้อง (7% ของฐาน) → ไม่ flag", () => {
+    const out = flagVatInconsistency(billWithLine({ amount: 100, vat_amount: 7 }));
+    expect(out.lines[0].low_confidence).toBe(false);
+  });
+  it("VAT เพี้ยน (อ่านคอลัมน์ผิด เช่น 70) → flag low_confidence", () => {
+    const out = flagVatInconsistency(billWithLine({ amount: 100, vat_amount: 70 }));
+    expect(out.lines[0].low_confidence).toBe(true);
+  });
+  it("เผื่อปัดเศษ (VAT 7.05 จากฐาน 100.7) → ไม่ flag", () => {
+    const out = flagVatInconsistency(billWithLine({ amount: 100.7, vat_amount: 7.05 }));
+    expect(out.lines[0].low_confidence).toBe(false);
+  });
+  it("บรรทัด novat → ข้าม (ไม่ flag แม้ vat_amount แปลก)", () => {
+    const out = flagVatInconsistency(billWithLine({ vat_type: "novat", amount: 100, vat_amount: 50 }));
+    expect(out.lines[0].low_confidence).toBe(false);
+  });
+  it("amount/vat เป็น null → ข้าม (ให้คนคีย์)", () => {
+    const out = flagVatInconsistency(billWithLine({ amount: null, vat_amount: null }));
+    expect(out.lines[0].low_confidence).toBe(false);
+  });
+});
 
 describe("normalizeExtraction — high-confidence gating", () => {
   it("field confidence สูง (>=0.8) → เก็บค่า (seller+buyer แยกกัน)", () => {

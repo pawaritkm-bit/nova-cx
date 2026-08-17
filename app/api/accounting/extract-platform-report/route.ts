@@ -18,7 +18,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // สถาปัตยกรรม timeout/chunking เดียวกับ extract-statement (ดูคอมเมนต์ที่นั่น) — ไฟล์ Excel/CSV ใหญ่
 // แบ่งเป็นหลายชุดยิง AI พร้อมกัน (concurrency 8) worst case 3 รอบ × 45s ยังมี margin เหลือจาก 240s
-export const maxDuration = 240;
+export const maxDuration = 300; // เพดาน Vercel Pro — รองรับรายงานแพลตฟอร์มไฟล์ใหญ่ (split หลายชิ้น)
 
 const BILLS_BUCKET = "bills";
 const PLATFORM_REPORT_PREFIX = "platform-report";

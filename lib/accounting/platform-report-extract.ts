@@ -14,6 +14,8 @@
  * ★ PDPA: ไม่ log เนื้อรายงาน/เลขคำสั่งซื้อ/ยอด — log แค่ error สั้น ๆ ไม่มีข้อมูลอ่อนไหว
  */
 
+import { downscaleImageIfLarge } from "@/lib/accounting/image-prep";
+import { extractPdfMaybeSplit } from "@/lib/accounting/pdf-split";
 import { extractJson } from "@/lib/accounting/statement-extract";
 import type { PlatformCategory, PlatformLineDirection, PlatformReportLine } from "@/lib/accounting/platform-report-analyze";
 
@@ -216,12 +218,18 @@ async function callExtract(userContent: unknown, timeoutMs: number = EXTRACT_TIM
 }
 
 /**
- * สกัดรายการจากไฟล์ PDF/รูป (ส่งตรงเข้า OpenAI file/image input) — เรียกครั้งเดียวจบ (ไม่ chunk)
+ * สกัดรายการจากไฟล์ PDF/รูป — PDF ใหญ่เกินเพดานจะถูกตัดเป็นชิ้นอ่านทีละชิ้นแล้วรวมผลอัตโนมัติ
  *   @returns PlatformReportLine[] · [] เมื่อ error/timeout/ไม่มี key
  */
 export async function extractPlatformReportFromFile(fileData: Buffer, mime: string): Promise<PlatformReportLine[]> {
+  return extractPdfMaybeSplit(fileData, mime, extractPlatformReportFromFileSingle);
+}
+
+/** เรียก AI ครั้งเดียว (ไฟล์/ชิ้นเดียว ≤เพดาน) */
+async function extractPlatformReportFromFileSingle(fileData: Buffer, mime: string): Promise<PlatformReportLine[]> {
   const isPdf = (mime || "").toLowerCase().includes("pdf");
-  const dataUrl = `data:${mime || "image/jpeg"};base64,${fileData.toString("base64")}`;
+  const prepped = await downscaleImageIfLarge(fileData, mime); // ย่อรูปสแกนใหญ่ (PDF ไม่แตะ)
+  const dataUrl = `data:${prepped.mime || "image/jpeg"};base64,${prepped.data.toString("base64")}`;
   const filePart = isPdf
     ? { type: "file", file: { filename: "platform-report.pdf", file_data: dataUrl } }
     : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };
