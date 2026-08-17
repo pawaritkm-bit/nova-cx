@@ -210,6 +210,24 @@ insert into public.survey_versions (id, tenant_id, template_id, version_no, publ
           {"value":"yes","label":"ใช้ต่อแน่นอน"},{"value":"maybe","label":"ไม่แน่ใจ"},{"value":"no","label":"อาจยกเลิก"}
         ]}
       ]},
+      {"code":"services","title":"บริการเสริมที่สนใจ","questions":[
+        {"code":"a_services","text":"บริการเสริมที่สนใจ (เลือกได้หลายข้อ)","type":"multi","options":[
+          {"value":"tax_planning","label":"วางแผนภาษี"},
+          {"value":"internal_accounting","label":"บัญชีภายใน"},
+          {"value":"system_setup","label":"วางระบบบัญชี"},
+          {"value":"cfo","label":"CFO/วางแผนการเงิน"},
+          {"value":"audit_closing","label":"ปิดงบ/ผู้สอบบัญชี"},
+          {"value":"holding_company","label":"Holding"},
+          {"value":"due_diligence","label":"Due Diligence/ซื้อขายกิจการ"},
+          {"value":"reg_company","label":"จดทะเบียนบริษัท"},
+          {"value":"change_director","label":"เปลี่ยนกรรมการ/ผู้ถือหุ้น/ที่ตั้ง"},
+          {"value":"legal_general","label":"กฎหมายธุรกิจ/สัญญา"},
+          {"value":"visa","label":"วีซ่า/ใบอนุญาตทำงาน"},
+          {"value":"stock_audit","label":"ออดิทคลังสินค้า"},
+          {"value":"company_closure","label":"ปิดบริษัท/หจก."},
+          {"value":"none","label":"ยังไม่ต้องการ","is_exclusive":true}
+        ]}
+      ]},
       {"code":"contact","title":"การติดต่อกลับ","questions":[
         {"code":"want_callback","text":"ต้องการให้ทีมติดต่อกลับหรือไม่","type":"single","options":[
           {"value":"yes","label":"ต้องการ"},{"value":"no","label":"ไม่ต้องการ"}

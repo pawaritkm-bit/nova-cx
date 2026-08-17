@@ -15,6 +15,7 @@ import {
   isLineDevMode,
   getNovaSalesApiKey,
   getNovaSalesTenantId,
+  getNovaSalesBaseUrl,
 } from "@/lib/env";
 import { isAIConfigured } from "@/lib/ai/provider";
 
@@ -42,6 +43,8 @@ export type IntegrationStatus = {
     apiKey: boolean;
     /** ผูก tenant กับ key (allowlist กัน key เขียนข้าม tenant) */
     tenantBound: boolean;
+    /** ตั้ง base URL สำหรับ outbound interested-service */
+    baseUrl: boolean;
   };
 };
 
@@ -72,6 +75,7 @@ export function collectIntegrationStatus(): IntegrationStatus {
     novaSales: {
       apiKey: !!getNovaSalesApiKey(),
       tenantBound: !!getNovaSalesTenantId(),
+      baseUrl: !!getNovaSalesBaseUrl(),
     },
   };
 }
