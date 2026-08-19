@@ -21,6 +21,7 @@ import { parseStatementDeterministic } from "@/lib/accounting/statement-determin
 import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv";
 import { extractStatementFromText } from "@/lib/accounting/statement-extract";
 import { NOTE_MARKER, parseLockedNote, buildWrongPasswordNote, lockedNoteFileName } from "@/lib/accounting/locked-note";
+import { sanitizeDocName } from "@/lib/accounting/doc-naming";
 
 const READ_MARK = "✅ ";
 const MAX_NOTES_PER_RUN = 20;
@@ -94,7 +95,8 @@ export async function retryLockedStatements(): Promise<RetryLockedResult> {
       const det = parseStatementDeterministic(unlocked.text);
       if (det.fullyReconciled) {
         const csv = buildStatementSummaryCsv(det.transactions, det.bank);
-        await saveRawCsvToOneDrive({ folderParts, fileName: `${base}-สรุป.csv`, csv });
+        const docBase = det.accountName ? sanitizeDocName(det.accountName) : base;
+        await saveRawCsvToOneDrive({ folderParts, fileName: `${docBase} - สรุป.csv`, csv });
       } else {
         const txns = await extractStatementFromText(unlocked.text);
         if (txns.length === 0) continue; // อ่านไม่ได้จริง → คงโน้ตไว้ให้นักบัญชีจัดการเอง

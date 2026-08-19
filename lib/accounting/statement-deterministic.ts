@@ -158,9 +158,61 @@ function dirHint(text: string): TxnDirection | null {
   return null;
 }
 
+/** ป้ายที่บอกว่า "จบชื่อบัญชีแล้ว" (ตัดส่วนท้ายที่เป็นข้อมูลอื่น) */
+const NAME_STOPS = /(ประเภทบัญชี|เลขที่บัญชี|เลขบัญชี|Account\s*No|Account\s*Type|สาขา|รอบ|Product|สกุลเงิน|Currency|Period|Branch|วันที่)/i;
+
+function cleanName(s: string): string {
+  let v = (s || "").replace(/^[\s:：/\-–]+/, "").trim();
+  const mm = v.match(NAME_STOPS);
+  if (mm && mm.index !== undefined && mm.index > 0) v = v.slice(0, mm.index);
+  return v.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * สกัด "ชื่อบัญชี" (ชื่อเจ้าของบัญชี) จากหัวสเตทเมนต์ — ไว้ตั้งชื่อไฟล์เอกสาร
+ *   รองรับ "ชื่อบัญชี <ชื่อ>" (บรรทัดเดียว/บรรทัดถัดไป) + "ชื่อ-สกุล/Account Name"
+ *   อ่านไม่ได้/ไม่เจอ → null (caller ใช้ชื่อ default)
+ */
+/** คำนำหน้าชื่อ (ไทย) — ใช้จับบรรทัดที่เป็น "ชื่อเจ้าของบัญชี" แบบ fallback */
+const NAME_TITLE = /^(นาย|นางสาว|นาง|น\.ส\.|ด\.ช\.|ด\.ญ\.|บริษัท|ห\.?จ\.?ก\.?|ร้าน|คุณ)\s*.+/;
+
+/** คำที่เป็น "ป้าย" ไม่ใช่ชื่อ — กันจับป้ายมาเป็นชื่อ (SCB วาง label เป็นคอลัมน์) */
+const NOT_NAME = /^(Name|Address|Date|Branch|Account(\s*No\.?|\s*Type)?|Type|Currency|Period|No\.?|ที่อยู่|ประเภทบัญชี|เลขที่บัญชี|สาขา|วันที่)$/i;
+
+export function extractAccountName(text: string): string | null {
+  const head = (text ?? "").slice(0, 2500).replace(/\r/g, "");
+  const lines = head.split("\n").map((l) => l.trim());
+
+  // 1) หาโดยป้าย "ชื่อบัญชี / ชื่อ-สกุล / Account Name" (เผื่อ "ชื่อ" ถูก encode เพี้ยน → ชื.{0,2}อ)
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/(?:ชื.{0,2}อบัญชี|ชื.{0,2}อ\s*[-–]\s*(?:นามสกุล|สกุล)|Account Name)\s*(?:\/\s*Account Name)?\s*[:：]?\s*(.*)/);
+    if (!m) continue;
+    let name = cleanName(m[1]);
+    if (!name || name.length < 2 || NOT_NAME.test(name) || /Account Name/i.test(name)) {
+      name = "";
+      for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+        const nx = cleanName(lines[j]);
+        if (nx && nx.length >= 2 && !NAME_STOPS.test(nx) && !NOT_NAME.test(nx) && !/Account Name|^ชื.{0,2}อ/i.test(nx) && /[ก-๙A-Za-z]/.test(nx)) { name = nx; break; }
+      }
+    }
+    if (name && name.length >= 2 && name.length <= 60 && !NOT_NAME.test(name) && /[ก-๙A-Za-z]/.test(name)) return name;
+  }
+
+  // 2) fallback: บรรทัดในหัว (25 บรรทัดแรก) ที่ขึ้นต้นด้วยคำนำหน้าชื่อไทย = ชื่อเจ้าของบัญชี
+  for (const l of lines.slice(0, 25)) {
+    if (NAME_TITLE.test(l)) {
+      const name = cleanName(l);
+      if (name && name.length >= 3 && name.length <= 60) return name;
+    }
+  }
+  return null;
+}
+
 export type DeterministicParseResult = {
   transactions: StatementTxn[];
   bank: string;
+  /** ชื่อเจ้าของบัญชีจากหัวสเตทเมนต์ (ไว้ตั้งชื่อไฟล์เอกสาร) · null = อ่านไม่ได้ */
+  accountName: string | null;
   /** จำนวนแถวที่ประกอบได้ทั้งหมด (ก่อนคัดที่ไม่ใช่ธุรกรรม) */
   recordCount: number;
   /** สัดส่วนแถวที่ยอดคงเหลือไล่ต่อกันได้ (0–1) — ใกล้ 1 = มั่นใจสูง */
@@ -282,6 +334,7 @@ export function parseStatementDeterministic(text: string): DeterministicParseRes
   return {
     transactions: txns,
     bank,
+    accountName: extractAccountName(text),
     recordCount: recs.length,
     reconcileRatio: Math.min(1, reconcileRatio),
     // เชื่อถือได้สูงเมื่อ (1) มีรายการ (2) ยอดคงเหลือไล่ต่อกันได้เกือบทุกแถว (≥0.9)

@@ -514,6 +514,7 @@ export async function processPendingAttachments(
           group,
           month,
           fileName,
+          originalName: row.original_name,
           mime: content.mime,
           data: content.data,
         });

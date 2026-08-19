@@ -17,6 +17,7 @@ import { parseStatementDeterministic } from "@/lib/accounting/statement-determin
 import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv";
 import { excelBufferToRows, csvBufferToRows } from "@/lib/accounting/statement-parse";
 import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/locked-note";
+import { sanitizeDocName, shopNameFromFilename } from "@/lib/accounting/doc-naming";
 import { classifyDocTypeFromImage, classifyDocTypeFromText } from "@/lib/ai/classify-doc";
 import { decryptField } from "@/lib/crypto/field";
 import { isOneDriveEnabled, renameOneDriveFile } from "@/lib/storage/onedrive";
@@ -109,6 +110,8 @@ export async function autoReadSaleAttachment(params: {
   group: MirrorGroupContext;
   month: string;
   fileName: string;
+  /** ชื่อไฟล์เดิมจากลูกค้า (มีชื่อร้าน/ไทย) — ใช้ตั้งชื่อเอกสารรายงานแพลตฟอร์ม */
+  originalName?: string | null;
   mime: string;
   data: Buffer;
 }): Promise<void> {
@@ -174,7 +177,9 @@ export async function autoReadSaleAttachment(params: {
       const det = parseStatementDeterministic(text);
       if (det.fullyReconciled) {
         const csv = buildStatementSummaryCsv(det.transactions, det.bank);
-        await saveRawCsvToOneDrive({ folderParts, fileName: `${base}-สรุป.csv`, csv });
+        // ชื่อเอกสาร = ชื่อบัญชีจริงจากหัวสเตทเมนต์ (fallback ชื่อไฟล์เดิมถ้าอ่านชื่อไม่ได้)
+        const docBase = det.accountName ? sanitizeDocName(det.accountName) : base;
+        await saveRawCsvToOneDrive({ folderParts, fileName: `${docBase} - สรุป.csv`, csv });
         await markSourceRead(folderParts, params.fileName); // ✅ อ่านแล้ว
         return;
       }
@@ -209,7 +214,10 @@ export async function autoReadSaleAttachment(params: {
         : await extractPlatformReportFromFile(params.data, params.mime);
     const result = platformCsv(lines as unknown as Record<string, unknown>[]);
     if (result.rows.length === 0) return;
-    await saveResultCsvToOneDrive({ folderParts, fileName: `${base}-ผลอ่าน-platform.csv`, headers: result.headers, rows: result.rows });
+    // ชื่อเอกสาร = ชื่อร้านจากชื่อไฟล์เดิม (เช่น "เจนเบเกอรี่ 1") · fallback ชื่อไฟล์เดิม
+    const shop = shopNameFromFilename(params.originalName);
+    const platBase = shop ? sanitizeDocName(shop) : base;
+    await saveResultCsvToOneDrive({ folderParts, fileName: `${platBase} - ยอดขาย.csv`, headers: result.headers, rows: result.rows });
     await markSourceRead(folderParts, params.fileName); // ✅ อ่านแล้ว
   } catch {
     console.warn("[auto-read] failed");
