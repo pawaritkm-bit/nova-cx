@@ -37,8 +37,9 @@ function shortSuffix(group: NonNullable<MirrorGroupContext>): string {
   return tail ? ` (${tail})` : "";
 }
 
-/** ชื่อโฟลเดอร์ลูกค้าใน OneDrive: ชื่อไลน์ (decrypt) > customer_code > 'ไม่ระบุ' + suffix กันซ้ำ */
-function resolveOneDriveFolder(group: NonNullable<MirrorGroupContext>): string {
+/** ชื่อโฟลเดอร์ลูกค้าใน OneDrive: ชื่อไลน์ (decrypt) > customer_code > 'ไม่ระบุ' + suffix กันซ้ำ
+ *   export ให้ auto-read เซฟผลลัพธ์ลงโฟลเดอร์เดียวกับไฟล์ต้นฉบับ */
+export function resolveOneDriveFolder(group: NonNullable<MirrorGroupContext>): string {
   let base = "";
   if (group.display_name_enc) {
     try {

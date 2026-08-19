@@ -28,6 +28,15 @@ async function getTextWith(buffer: Buffer, password?: string): Promise<string | 
   }
 }
 
+/** อ่าน text จาก PDF ที่ไม่ติดรหัส (digital) — ไว้ให้ classify · ติดรหัส/อ่านไม่ได้ → null */
+export async function readPdfPlainText(buffer: Buffer): Promise<string | null> {
+  try {
+    return await getTextWith(buffer);
+  } catch {
+    return null; // PasswordException = ติดรหัส (ต้องใช้ unlockPdfToText แทน)
+  }
+}
+
 /** true ถ้า PDF ติดรหัส (เปิดโดยไม่มีรหัสแล้วเจอ PasswordException) */
 export async function isPdfEncrypted(buffer: Buffer): Promise<boolean> {
   try {
