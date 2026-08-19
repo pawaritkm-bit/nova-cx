@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
-import { autoReadSaleAttachment } from "@/lib/line/auto-read";
 import { getLineClient } from "@/lib/line/client";
 import { resolveOneDriveFolder } from "@/lib/line/onedrive-mirror";
 import { isBillStorageEnabled, storeBillFile } from "@/lib/storage/bill-storage";
@@ -468,16 +467,25 @@ export async function processPendingAttachments(
       continue;
     }
 
-    // ★ อ่านอัตโนมัติ + save ผลกลับ OneDrive (เฉพาะ sale OA · gate ACCT_AUTO_READ ปิดไว้ · best-effort)
-    await autoReadSaleAttachment({
-      db,
-      chatGroupId: group?.id ?? "",
-      group,
-      month,
-      fileName,
-      mime: content.mime,
-      data: content.data,
-    });
+    // ★ อ่านอัตโนมัติ + save ผลกลับ OneDrive (เฉพาะ sale OA · gate ACCT_AUTO_READ · best-effort)
+    //   ★ dynamic import: กัน dep หนัก (pdfjs/claude/sharp) โหลดตอน cron module init
+    //     (เดิม import ระดับบน ทำ cron process-attachments 500 — กระทบ ingest ทุก OA)
+    if (process.env.ACCT_AUTO_READ === "on" && isSaleOa) {
+      try {
+        const { autoReadSaleAttachment } = await import("@/lib/line/auto-read");
+        await autoReadSaleAttachment({
+          db,
+          chatGroupId: group?.id ?? "",
+          group,
+          month,
+          fileName,
+          mime: content.mime,
+          data: content.data,
+        });
+      } catch {
+        console.warn("[attachments] auto-read import/run failed");
+      }
+    }
 
     // จำไว้ใน batch — แถวอื่นที่ sha256 เดียวกันในรอบนี้ reuse ได้เลย
     batchDedup.set(sha256, { fileId: saved.objectPath, url: saved.url });
