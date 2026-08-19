@@ -14,15 +14,17 @@
  * ★ PDPA: ไม่ log เนื้อรายงาน/เลขคำสั่งซื้อ/ยอด — log แค่ error สั้น ๆ ไม่มีข้อมูลอ่อนไหว
  */
 
+import { classifyDocSource } from "@/lib/accounting/doc-source";
 import { downscaleImageIfLarge } from "@/lib/accounting/image-prep";
 import { extractPdfMaybeSplit } from "@/lib/accounting/pdf-split";
 import { extractJson } from "@/lib/accounting/statement-extract";
 import type { PlatformCategory, PlatformLineDirection, PlatformReportLine } from "@/lib/accounting/platform-report-analyze";
+import { extractJsonWithClaude } from "@/lib/ai/claude-extract";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
 /** โมเดลอ่านรายงาน (PDF/ตารางยาว) — ใช้ตัวเดียวกับอ่านสเตทเมนต์/บิล */
-const EXTRACT_MODEL = process.env.OPENAI_EXTRACT_MODEL || "gpt-5-mini";
+const EXTRACT_MODEL = process.env.ACCT_DIGITAL_MODEL || process.env.OPENAI_EXTRACT_MODEL || "gpt-5-mini";
 
 /** timeout — เรียกครั้งเดียวจบ (PDF/รูป, ไม่ chunk) */
 const EXTRACT_TIMEOUT_MS = 110_000;
@@ -227,6 +229,22 @@ export async function extractPlatformReportFromFile(fileData: Buffer, mime: stri
 
 /** เรียก AI ครั้งเดียว (ไฟล์/ชิ้นเดียว ≤เพดาน) */
 async function extractPlatformReportFromFileSingle(fileData: Buffer, mime: string): Promise<PlatformReportLine[]> {
+  const source = await classifyDocSource(mime, fileData);
+
+  // สแกน/รูป (OCR) → Claude Sonnet 5 · ล้มเหลว/ไม่มี key → fallback OpenAI กันงานตก
+  if (source === "scan_or_image") {
+    const preppedScan = await downscaleImageIfLarge(fileData, mime);
+    const raw = await extractJsonWithClaude({
+      system: SYSTEM_PROMPT,
+      userPrompt: FILE_USER_PROMPT,
+      fileData: preppedScan.data,
+      mime: preppedScan.mime || mime,
+    });
+    if (raw !== null) return normalizePlatformExtraction(raw);
+    // Claude ล่ม/ไม่มี key → ตกไปให้ OpenAI ลองอ่านต่อด้านล่าง
+  }
+
+  // digital_pdf (มี text layer, ถูก) หรือ fallback จาก scan → OpenAI (gpt-5-mini)
   const isPdf = (mime || "").toLowerCase().includes("pdf");
   const prepped = await downscaleImageIfLarge(fileData, mime); // ย่อรูปสแกนใหญ่ (PDF ไม่แตะ)
   const dataUrl = `data:${prepped.mime || "image/jpeg"};base64,${prepped.data.toString("base64")}`;
