@@ -11,10 +11,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { classifyDocSource } from "@/lib/accounting/doc-source";
 import { saveRawCsvToOneDrive, saveResultCsvToOneDrive } from "@/lib/accounting/onedrive-result";
 import { isPdfEncrypted, readPdfPlainText, unlockPdfToText } from "@/lib/accounting/pdf-unlock";
-import { extractPlatformReportFromFile, extractPlatformReportFromText } from "@/lib/accounting/platform-report-extract";
-import { extractStatementFromFile, extractStatementFromText } from "@/lib/accounting/statement-extract";
+import { extractPlatformReportFromFile, extractPlatformReportFromText, extractPlatformReportFromTextChunks } from "@/lib/accounting/platform-report-extract";
+import { extractStatementFromFile, extractStatementFromText, extractStatementFromTextChunks } from "@/lib/accounting/statement-extract";
 import { parseStatementDeterministic } from "@/lib/accounting/statement-deterministic";
 import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv";
+import { excelBufferToRows, csvBufferToRows } from "@/lib/accounting/statement-parse";
 import { classifyDocTypeFromImage, classifyDocTypeFromText } from "@/lib/ai/classify-doc";
 import { decryptField } from "@/lib/crypto/field";
 import { isOneDriveEnabled } from "@/lib/storage/onedrive";
@@ -104,80 +105,97 @@ export async function autoReadSaleAttachment(params: {
     if ((group.chat_channels?.oa_type || "") !== "sale") return;
     if (!isOneDriveEnabled()) return; // ต้องมี OneDrive ไว้เก็บผล
 
-    const isPdf = (params.mime || "").toLowerCase().includes("pdf");
-
-    // 1) ปลดรหัสถ้าติด (ดึงรหัสจากแชท) → ได้ text
-    let unlockedText: string | null = null;
-    if (isPdf && (await isPdfEncrypted(params.data))) {
-      const pws = await gatherChatPasswords(params.db, params.chatGroupId);
-      const unlocked = await unlockPdfToText(params.data, pws);
-      if (!unlocked) return; // ปลดไม่ได้ → ข้าม (นักบัญชีอ่านมือ)
-      unlockedText = unlocked.text;
-    }
-
-    // 2) จัดประเภทด้วย gpt-5-mini (statement/platform/other)
-    const source = await classifyDocSource(params.mime, params.data);
-    let docType: "statement" | "platform" | "other";
-    if (unlockedText) {
-      docType = await classifyDocTypeFromText(unlockedText);
-    } else if (source === "digital_pdf") {
-      const t = await readPdfPlainText(params.data);
-      docType = t ? await classifyDocTypeFromText(t) : "other";
-    } else if (source === "scan_or_image") {
-      docType = await classifyDocTypeFromImage(params.data, params.mime);
-    } else {
-      return; // excel/csv ผ่าน path อื่น
-    }
-    if (docType === "other") return;
+    const mimeL = (params.mime || "").toLowerCase();
+    const nameL = (params.fileName || "").toLowerCase();
+    const isPdf = mimeL.includes("pdf") || nameL.endsWith(".pdf");
+    const isExcel =
+      mimeL.includes("spreadsheetml") || mimeL.includes("ms-excel") || mimeL.includes("excel") ||
+      nameL.endsWith(".xlsx") || nameL.endsWith(".xls");
+    const isCsv = mimeL.includes("csv") || nameL.endsWith(".csv");
 
     const folder = resolveOneDriveFolder(group);
     const base = params.fileName.replace(/\.[^.]+$/, "");
     const folderParts = [folder, params.month];
 
-    // 3) อ่าน + save
-    if (docType === "statement") {
-      // 3a) ★ ทางหลัก: parser แบบ deterministic (bank-agnostic, balance-delta) — ทุกธนาคาร ฟรี เร็ว
-      //     สเกลไฟล์ใหญ่ได้ (ทดสอบ 1.84MB/13k รายการ) + ยอด reconcile ตรงหัวสเตทเมนต์
-      //     ใช้ได้กับ PDF ดิจิทัลที่มี text (ปลดรหัสแล้ว/ไม่ติดรหัส) — สแกน/รูป ตกไป AI ข้างล่าง
-      let digitalText: string | null = unlockedText;
-      if (!digitalText && source === "digital_pdf") digitalText = await readPdfPlainText(params.data);
-      if (digitalText) {
-        const det = parseStatementDeterministic(digitalText);
-        // ★ ไว้ใจผลโค้ดเฉพาะเมื่อ reconcile ผ่าน (ยอดคงเหลือไล่ครบ) — แบงก์/layout ที่ยังไม่เคยเห็น
-        //   ถ้าไม่ผ่าน ตกไปให้ AI อ่านแทน (กัน "อ่านได้บางส่วนแบบผิดเงียบ")
-        if (det.fullyReconciled) {
-          const csv = buildStatementSummaryCsv(det.transactions, det.bank);
-          await saveRawCsvToOneDrive({ folderParts, fileName: `${base}-สรุป.csv`, csv });
-          return; // สำเร็จด้วยโค้ด — ไม่ต้องเรียก AI
+    // 1) ดึง "ข้อความ" ของไฟล์ตามชนิด (Excel/CSV/PDF) + เก็บ chunks ไว้ให้ AI ถ้าต้องใช้ fallback
+    let text: string | null = null;
+    let chunks: string[] | null = null;
+    let source: "excel_csv" | "digital_pdf" | "scan_or_image" | "unknown" = "unknown";
+
+    if (isExcel) {
+      try { const r = await excelBufferToRows(params.data); chunks = r.chunks; text = r.chunks.join("\n"); } catch { /* best-effort */ }
+      source = "excel_csv";
+    } else if (isCsv) {
+      try { const r = csvBufferToRows(params.data); chunks = r.chunks; text = r.chunks.join("\n"); } catch { /* best-effort */ }
+      source = "excel_csv";
+    } else if (isPdf) {
+      if (await isPdfEncrypted(params.data)) {
+        // ติดรหัส → ลองรหัสจากแชท · ปลดไม่ได้ (ลูกค้าไม่ได้ส่งรหัส) → วางโน้ตเตือนให้นักบัญชีขอรหัส
+        const pws = await gatherChatPasswords(params.db, params.chatGroupId);
+        const unlocked = await unlockPdfToText(params.data, pws);
+        if (!unlocked) {
+          await saveRawCsvToOneDrive({
+            folderParts,
+            fileName: `${base} - ⚠️ ติดรหัสผ่าน.txt`,
+            csv:
+              "ไฟล์นี้ล็อกด้วยรหัสผ่าน ระบบเปิดอ่านอัตโนมัติไม่ได้ (ไม่พบรหัสในแชท)\r\n" +
+              "กรุณาขอรหัสผ่านจากลูกค้า แล้วเปิด/อ่านด้วยตนเอง หรือให้ลูกค้าพิมพ์รหัสในแชทแล้วส่งไฟล์ใหม่\r\n" +
+              `ไฟล์ต้นฉบับ: ${params.fileName}`,
+          });
+          return;
         }
+        text = unlocked.text;
+        source = "digital_pdf";
+      } else {
+        const src = await classifyDocSource(params.mime, params.data);
+        source = src === "scan_or_image" ? "scan_or_image" : "digital_pdf";
+        if (source === "digital_pdf") text = await readPdfPlainText(params.data);
       }
-      // 3b) fallback: สแกน/รูป หรือ deterministic อ่านไม่ได้ → AI (Sonnet OCR / gpt-5-mini) เหมือนเดิม
-      const txns = unlockedText
-        ? await extractStatementFromText(unlockedText)
-        : await extractStatementFromFile(params.data, params.mime);
+    } else {
+      const src = await classifyDocSource(params.mime, params.data);
+      source = src === "scan_or_image" ? "scan_or_image" : src === "digital_pdf" ? "digital_pdf" : "excel_csv";
+    }
+
+    // 2) ★ ทางหลัก: ลอง parser สเตทเมนต์ (deterministic) กับ text ใด ๆ ที่ได้มา
+    //    reconcile ผ่าน = เป็นสเตทเมนต์ธนาคารจริง 100% → save สรุป (ฟรี/เร็ว ไม่ต้องพึ่ง AI จัดประเภท)
+    if (text) {
+      const det = parseStatementDeterministic(text);
+      if (det.fullyReconciled) {
+        const csv = buildStatementSummaryCsv(det.transactions, det.bank);
+        await saveRawCsvToOneDrive({ folderParts, fileName: `${base}-สรุป.csv`, csv });
+        return;
+      }
+    }
+
+    // 3) ไม่ใช่สเตทเมนต์ที่ reconcile ได้ → จัดประเภท statement/platform/other แล้วอ่านด้วย AI
+    let docType: "statement" | "platform" | "other";
+    if (text) docType = await classifyDocTypeFromText(text);
+    else if (source === "scan_or_image") docType = await classifyDocTypeFromImage(params.data, params.mime);
+    else docType = "other";
+    if (docType === "other") return;
+
+    // 4) อ่านด้วย AI ตามชนิด + save (chunks ถ้ามี = ไฟล์ Excel/CSV ยาว → ยิงเป็นชุด)
+    if (docType === "statement") {
+      const txns = chunks
+        ? (await extractStatementFromTextChunks(chunks)).txns
+        : text
+          ? await extractStatementFromText(text)
+          : await extractStatementFromFile(params.data, params.mime);
       const result = statementCsv(txns as unknown as Record<string, unknown>[]);
       if (result.rows.length === 0) return;
-      await saveResultCsvToOneDrive({
-        folderParts,
-        fileName: `${base}-ผลอ่าน-statement.csv`,
-        headers: result.headers,
-        rows: result.rows,
-      });
+      await saveResultCsvToOneDrive({ folderParts, fileName: `${base}-ผลอ่าน-statement.csv`, headers: result.headers, rows: result.rows });
       return;
     }
 
-    // platform report — คงเดิม (AI)
-    const lines = unlockedText
-      ? await extractPlatformReportFromText(unlockedText)
-      : await extractPlatformReportFromFile(params.data, params.mime);
+    // platform report (Shopee/Lazada/TikTok — มักเป็น Excel)
+    const lines = chunks
+      ? (await extractPlatformReportFromTextChunks(chunks)).lines
+      : text
+        ? await extractPlatformReportFromText(text)
+        : await extractPlatformReportFromFile(params.data, params.mime);
     const result = platformCsv(lines as unknown as Record<string, unknown>[]);
     if (result.rows.length === 0) return;
-    await saveResultCsvToOneDrive({
-      folderParts,
-      fileName: `${base}-ผลอ่าน-platform.csv`,
-      headers: result.headers,
-      rows: result.rows,
-    });
+    await saveResultCsvToOneDrive({ folderParts, fileName: `${base}-ผลอ่าน-platform.csv`, headers: result.headers, rows: result.rows });
   } catch {
     console.warn("[auto-read] failed");
   }
