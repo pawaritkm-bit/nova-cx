@@ -18,10 +18,23 @@ import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv
 import { excelBufferToRows, csvBufferToRows } from "@/lib/accounting/statement-parse";
 import { classifyDocTypeFromImage, classifyDocTypeFromText } from "@/lib/ai/classify-doc";
 import { decryptField } from "@/lib/crypto/field";
-import { isOneDriveEnabled } from "@/lib/storage/onedrive";
+import { isOneDriveEnabled, renameOneDriveFile } from "@/lib/storage/onedrive";
 import { resolveOneDriveFolder, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 
 const MAX_PASSWORD_CANDIDATES = 40;
+
+/** เครื่องหมาย "อ่านแล้ว" นำหน้าชื่อไฟล์ต้นฉบับใน OneDrive (ให้นักบัญชีเห็นทันทีว่าระบบอ่านแล้ว) */
+const READ_MARK = "✅ ";
+
+/** ติด ✅ ที่ไฟล์ต้นฉบับใน OneDrive = "อ่านแล้ว" (best-effort · กันติดซ้ำ) */
+async function markSourceRead(folderParts: string[], fileName: string): Promise<void> {
+  if (!fileName || fileName.startsWith(READ_MARK)) return;
+  try {
+    await renameOneDriveFile({ folderParts, fileName, newName: READ_MARK + fileName });
+  } catch {
+    /* best-effort — ผลอ่านถูก save แล้ว การติดธงพลาดไม่ใช่เรื่องคอขาดบาดตาย */
+  }
+}
 
 /** ดึงข้อความล่าสุดในแชทกลุ่มนี้ (decrypt) → รวมเป็นรายการรหัสผู้สมัคร (ทั้งข้อความเต็ม + token) */
 async function gatherChatPasswords(db: SupabaseClient, chatGroupId: string): Promise<string[]> {
@@ -163,6 +176,7 @@ export async function autoReadSaleAttachment(params: {
       if (det.fullyReconciled) {
         const csv = buildStatementSummaryCsv(det.transactions, det.bank);
         await saveRawCsvToOneDrive({ folderParts, fileName: `${base}-สรุป.csv`, csv });
+        await markSourceRead(folderParts, params.fileName); // ✅ อ่านแล้ว
         return;
       }
     }
@@ -184,6 +198,7 @@ export async function autoReadSaleAttachment(params: {
       const result = statementCsv(txns as unknown as Record<string, unknown>[]);
       if (result.rows.length === 0) return;
       await saveResultCsvToOneDrive({ folderParts, fileName: `${base}-ผลอ่าน-statement.csv`, headers: result.headers, rows: result.rows });
+      await markSourceRead(folderParts, params.fileName); // ✅ อ่านแล้ว
       return;
     }
 
@@ -196,6 +211,7 @@ export async function autoReadSaleAttachment(params: {
     const result = platformCsv(lines as unknown as Record<string, unknown>[]);
     if (result.rows.length === 0) return;
     await saveResultCsvToOneDrive({ folderParts, fileName: `${base}-ผลอ่าน-platform.csv`, headers: result.headers, rows: result.rows });
+    await markSourceRead(folderParts, params.fileName); // ✅ อ่านแล้ว
   } catch {
     console.warn("[auto-read] failed");
   }

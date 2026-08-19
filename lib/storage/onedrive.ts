@@ -157,3 +157,41 @@ export async function uploadOneDriveFile(params: {
     return null;
   }
 }
+
+/**
+ * เปลี่ยนชื่อไฟล์ใน OneDrive (PATCH driveItem.name) — ใช้ติดเครื่องหมาย ✅ "อ่านแล้ว" ที่ไฟล์ต้นฉบับ
+ *   @param folderParts โฟลเดอร์ใต้ ONEDRIVE_ROOT (ไม่รวม root)
+ *   @param fileName    ชื่อไฟล์เดิม
+ *   @param newName     ชื่อใหม่ (ในโฟลเดอร์เดิม)
+ *   @returns true ถ้าสำเร็จ · false ถ้าล้ม/ปิดฟีเจอร์ (best-effort ไม่ throw)
+ */
+export async function renameOneDriveFile(params: {
+  folderParts: string[];
+  fileName: string;
+  newName: string;
+}): Promise<boolean> {
+  const cfg = getOneDriveConfig();
+  if (!cfg) return false;
+  const token = await getAccessToken();
+  if (!token) return false;
+  try {
+    const encodedPath = encodePath([cfg.root, ...params.folderParts, params.fileName]);
+    const url =
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}` +
+      `/drive/root:/${encodedPath}`;
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: params.newName }),
+    });
+    if (!res.ok) {
+      console.warn(`[onedrive] rename failed status=${res.status}`);
+      if (res.status === 401) invalidateToken();
+      return false;
+    }
+    return true;
+  } catch {
+    console.warn("[onedrive] rename error");
+    return false;
+  }
+}
