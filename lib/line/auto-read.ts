@@ -143,7 +143,9 @@ export async function autoReadSaleAttachment(params: {
       if (!digitalText && source === "digital_pdf") digitalText = await readPdfPlainText(params.data);
       if (digitalText) {
         const det = parseStatementDeterministic(digitalText);
-        if (det.transactions.length > 0) {
+        // ★ ไว้ใจผลโค้ดเฉพาะเมื่อ reconcile ผ่าน (ยอดคงเหลือไล่ครบ) — แบงก์/layout ที่ยังไม่เคยเห็น
+        //   ถ้าไม่ผ่าน ตกไปให้ AI อ่านแทน (กัน "อ่านได้บางส่วนแบบผิดเงียบ")
+        if (det.fullyReconciled) {
           const csv = buildStatementSummaryCsv(det.transactions, det.bank);
           await saveRawCsvToOneDrive({ folderParts, fileName: `${base}-สรุป.csv`, csv });
           return; // สำเร็จด้วยโค้ด — ไม่ต้องเรียก AI

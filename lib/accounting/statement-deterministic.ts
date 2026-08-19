@@ -163,7 +163,9 @@ export type DeterministicParseResult = {
   bank: string;
   /** จำนวนแถวที่ประกอบได้ทั้งหมด (ก่อนคัดที่ไม่ใช่ธุรกรรม) */
   recordCount: number;
-  /** true = balance-delta จับได้ทุกแถว (ไม่ตก fallback) → เชื่อถือได้สูง */
+  /** สัดส่วนแถวที่ยอดคงเหลือไล่ต่อกันได้ (0–1) — ใกล้ 1 = มั่นใจสูง */
+  reconcileRatio: number;
+  /** true = มีรายการ + reconcile ผ่าน (≥0.9) → เชื่อถือได้สูง · false → caller ควร fallback AI */
   fullyReconciled: boolean;
 };
 
@@ -237,7 +239,12 @@ export function parseStatementDeterministic(text: string): DeterministicParseRes
     return score;
   }
 
-  const pos: "first" | "last" = scorePos("first") > scorePos("last") ? "first" : "last";
+  const sFirst = scorePos("first");
+  const sLast = scorePos("last");
+  const pos: "first" | "last" = sFirst > sLast ? "first" : "last";
+  // สัดส่วนแถวที่ "ยอดคงเหลือไล่ต่อกันได้" (|Δbalance| = จำนวนเงินที่ปรากฏในแถว) — สัญญาณ reconcile
+  //   ★ ใกล้ 1.0 = สเตทเมนต์มีคอลัมน์คงเหลือจริง + อ่านถูก layout · ต่ำ = แบงก์แปลก/ไม่มีคอลัมน์คงเหลือ
+  const reconcileRatio = rows.length > 1 ? Math.max(sFirst, sLast) / (rows.length - 1) : 0;
 
   // 3) หา opening ตั้งต้น — ถ้าสเตทเมนต์ไม่พิมพ์ "ยอดยกมา" ลอง bootstrap จากแถวแรก
   //    (amount = token ที่ไม่ใช่คอลัมน์ balance + ทิศทางจากคำในแถว) → opening = bal ∓ amount
@@ -276,8 +283,9 @@ export function parseStatementDeterministic(text: string): DeterministicParseRes
     transactions: txns,
     bank,
     recordCount: recs.length,
-    // เชื่อถือได้สูงเมื่อไล่ balance ครบทั้งไฟล์ (ไม่ต้องทิ้งแถวแรกเพราะรู้/เดา opening ได้)
-    //   ★ แม้ opening มาจากการเดา ทิศทาง/ยอดของทุกแถวก็ยังถูก (สรุปใช้ Δ ไม่ใช่ค่าสัมบูรณ์)
-    fullyReconciled: txns.length > 0 && !firstSkipped,
+    reconcileRatio: Math.min(1, reconcileRatio),
+    // เชื่อถือได้สูงเมื่อ (1) มีรายการ (2) ยอดคงเหลือไล่ต่อกันได้เกือบทุกแถว (≥0.9)
+    //   ★ ถ้าไม่ผ่าน = แบงก์ที่ยังไม่เคยเห็น/layout แปลก → caller ควรตกไปให้ AI อ่านแทน (กันผลผิดเงียบ)
+    fullyReconciled: txns.length > 0 && !firstSkipped && reconcileRatio >= 0.9,
   };
 }
