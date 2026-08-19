@@ -3,8 +3,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import { autoReadSaleAttachment } from "@/lib/line/auto-read";
 import { getLineClient } from "@/lib/line/client";
-import { mirrorSaleAttachmentToOneDrive } from "@/lib/line/onedrive-mirror";
+import { resolveOneDriveFolder } from "@/lib/line/onedrive-mirror";
 import { isBillStorageEnabled, storeBillFile } from "@/lib/storage/bill-storage";
+import { isOneDriveEnabled } from "@/lib/storage/onedrive";
 import { classifyBillImage } from "@/lib/ai/bill-classify";
 
 /**
@@ -447,22 +448,25 @@ export async function processPendingAttachments(
       if (sanitized) fileName = `${contentId}_${sanitized}`;
     }
 
+    // ★ sale OA (สนง.บัญชี Finovas): เก็บ OneDrive แยกชื่อไลน์ "ที่เดียว" (ไม่ซ้ำ Supabase — ประหยัดพื้นที่)
+    //   OA อื่น/บิล: เก็บ Supabase เหมือนเดิม · OneDrive ไม่พร้อม → fallback Supabase กันไฟล์หาย
+    const isSaleOa = (group?.chat_channels?.oa_type || "") === "sale";
+    const useOneDrive = isSaleOa && group !== null && isOneDriveEnabled();
+    const storeFolder = useOneDrive && group ? resolveOneDriveFolder(group) : customerFolder;
     const saved = await storeBillFile({
       db,
       tenantId: row.tenant_id,
-      folderParts: [customerFolder, month],
+      folderParts: [storeFolder, month],
       fileName,
       mime: content.mime,
       data: content.data,
+      backendOverride: useOneDrive ? "onedrive" : undefined,
     });
     if (!saved) {
       await markFailed(db, row.id, row.fetch_attempts, "storage_upload_failed");
       failed++;
       continue;
     }
-
-    // ★ สำเนาขึ้น OneDrive แยกโฟลเดอร์ชื่อไลน์ (เฉพาะ sale OA) — additive best-effort ไม่กระทบ flow เดิม
-    await mirrorSaleAttachmentToOneDrive({ group, month, fileName, mime: content.mime, data: content.data });
 
     // ★ อ่านอัตโนมัติ + save ผลกลับ OneDrive (เฉพาะ sale OA · gate ACCT_AUTO_READ ปิดไว้ · best-effort)
     await autoReadSaleAttachment({

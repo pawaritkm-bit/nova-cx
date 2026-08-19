@@ -153,8 +153,10 @@ export async function storeBillFile(params: {
   fileName: string;
   mime: string;
   data: Buffer;
+  /** บังคับ backend ต่อไฟล์ (ข้าม env) — เช่น sale OA ให้เก็บ OneDrive ที่เดียว */
+  backendOverride?: BillStorageBackend;
 }): Promise<{ objectPath: string; url: string } | null> {
-  const backend = getBillStorageBackend();
+  const backend = params.backendOverride ?? getBillStorageBackend();
   if (backend === "drive") return storeViaDrive(params);
   if (backend === "onedrive") return storeViaOneDrive(params);
   return storeViaSupabase(params);
