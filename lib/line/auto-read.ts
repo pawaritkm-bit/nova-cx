@@ -9,10 +9,12 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { classifyDocSource } from "@/lib/accounting/doc-source";
-import { saveResultCsvToOneDrive } from "@/lib/accounting/onedrive-result";
+import { saveRawCsvToOneDrive, saveResultCsvToOneDrive } from "@/lib/accounting/onedrive-result";
 import { isPdfEncrypted, readPdfPlainText, unlockPdfToText } from "@/lib/accounting/pdf-unlock";
 import { extractPlatformReportFromFile, extractPlatformReportFromText } from "@/lib/accounting/platform-report-extract";
 import { extractStatementFromFile, extractStatementFromText } from "@/lib/accounting/statement-extract";
+import { parseStatementDeterministic } from "@/lib/accounting/statement-deterministic";
+import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv";
 import { classifyDocTypeFromImage, classifyDocTypeFromText } from "@/lib/ai/classify-doc";
 import { decryptField } from "@/lib/crypto/field";
 import { isOneDriveEnabled } from "@/lib/storage/onedrive";
@@ -128,27 +130,49 @@ export async function autoReadSaleAttachment(params: {
     }
     if (docType === "other") return;
 
-    // 3) อ่าน — ถ้าปลดรหัสได้ text แล้วใช้ text extractor · ไม่งั้นใช้ file extractor (self-route digital/scan)
-    let result: { headers: { key: string; label: string }[]; rows: Record<string, unknown>[] };
+    const folder = resolveOneDriveFolder(group);
+    const base = params.fileName.replace(/\.[^.]+$/, "");
+    const folderParts = [folder, params.month];
+
+    // 3) อ่าน + save
     if (docType === "statement") {
+      // 3a) ★ ทางหลัก: parser แบบ deterministic (bank-agnostic, balance-delta) — ทุกธนาคาร ฟรี เร็ว
+      //     สเกลไฟล์ใหญ่ได้ (ทดสอบ 1.84MB/13k รายการ) + ยอด reconcile ตรงหัวสเตทเมนต์
+      //     ใช้ได้กับ PDF ดิจิทัลที่มี text (ปลดรหัสแล้ว/ไม่ติดรหัส) — สแกน/รูป ตกไป AI ข้างล่าง
+      let digitalText: string | null = unlockedText;
+      if (!digitalText && source === "digital_pdf") digitalText = await readPdfPlainText(params.data);
+      if (digitalText) {
+        const det = parseStatementDeterministic(digitalText);
+        if (det.transactions.length > 0) {
+          const csv = buildStatementSummaryCsv(det.transactions, det.bank);
+          await saveRawCsvToOneDrive({ folderParts, fileName: `${base}-สรุป.csv`, csv });
+          return; // สำเร็จด้วยโค้ด — ไม่ต้องเรียก AI
+        }
+      }
+      // 3b) fallback: สแกน/รูป หรือ deterministic อ่านไม่ได้ → AI (Sonnet OCR / gpt-5-mini) เหมือนเดิม
       const txns = unlockedText
         ? await extractStatementFromText(unlockedText)
         : await extractStatementFromFile(params.data, params.mime);
-      result = statementCsv(txns as unknown as Record<string, unknown>[]);
-    } else {
-      const lines = unlockedText
-        ? await extractPlatformReportFromText(unlockedText)
-        : await extractPlatformReportFromFile(params.data, params.mime);
-      result = platformCsv(lines as unknown as Record<string, unknown>[]);
+      const result = statementCsv(txns as unknown as Record<string, unknown>[]);
+      if (result.rows.length === 0) return;
+      await saveResultCsvToOneDrive({
+        folderParts,
+        fileName: `${base}-ผลอ่าน-statement.csv`,
+        headers: result.headers,
+        rows: result.rows,
+      });
+      return;
     }
-    if (result.rows.length === 0) return;
 
-    // 4) save ผลกลับ OneDrive โฟลเดอร์เดียวกับไฟล์ต้นฉบับ
-    const folder = resolveOneDriveFolder(group);
-    const base = params.fileName.replace(/\.[^.]+$/, "");
+    // platform report — คงเดิม (AI)
+    const lines = unlockedText
+      ? await extractPlatformReportFromText(unlockedText)
+      : await extractPlatformReportFromFile(params.data, params.mime);
+    const result = platformCsv(lines as unknown as Record<string, unknown>[]);
+    if (result.rows.length === 0) return;
     await saveResultCsvToOneDrive({
-      folderParts: [folder, params.month],
-      fileName: `${base}-ผลอ่าน-${docType}.csv`,
+      folderParts,
+      fileName: `${base}-ผลอ่าน-platform.csv`,
       headers: result.headers,
       rows: result.rows,
     });

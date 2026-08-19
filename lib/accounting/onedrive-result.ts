@@ -21,6 +21,31 @@ function toCsv(headers: { key: string; label: string }[], rows: Record<string, u
 }
 
 /**
+ * เซฟ "CSV ที่ประกอบเป็นสตริงแล้ว" (เช่น สรุปหลายส่วนในไฟล์เดียว) ขึ้น OneDrive
+ *   @returns true ถ้าสำเร็จ
+ */
+export async function saveRawCsvToOneDrive(params: {
+  folderParts: string[];
+  fileName: string;
+  csv: string;
+}): Promise<boolean> {
+  try {
+    if (!params.csv.trim()) return false;
+    const data = Buffer.from("﻿" + params.csv, "utf8"); // BOM กัน Excel อ่านไทยเพี้ยน
+    const saved = await uploadOneDriveFile({
+      folderParts: params.folderParts,
+      fileName: params.fileName,
+      mime: "text/csv",
+      data,
+    });
+    return saved !== null;
+  } catch {
+    console.warn("[onedrive-result] save raw failed");
+    return false;
+  }
+}
+
+/**
  * เซฟผลลัพธ์เป็น CSV ขึ้น OneDrive โฟลเดอร์ [folderParts]/fileName
  *   @returns true ถ้าสำเร็จ
  */
