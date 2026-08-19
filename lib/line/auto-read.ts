@@ -18,6 +18,7 @@ import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv
 import { excelBufferToRows, csvBufferToRows } from "@/lib/accounting/statement-parse";
 import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/locked-note";
 import { sanitizeDocName, shopNameFromFilename } from "@/lib/accounting/doc-naming";
+import { parsePlatformFile, detectPlatformFromName, buildPlatformSummaryCsv } from "@/lib/accounting/platform/parse";
 import { classifyDocTypeFromImage, classifyDocTypeFromText } from "@/lib/ai/classify-doc";
 import { decryptField } from "@/lib/crypto/field";
 import { isOneDriveEnabled, renameOneDriveFile } from "@/lib/storage/onedrive";
@@ -185,7 +186,29 @@ export async function autoReadSaleAttachment(params: {
       }
     }
 
-    // 3) ไม่ใช่สเตทเมนต์ที่ reconcile ได้ → จัดประเภท statement/platform/other แล้วอ่านด้วย AI
+    // 2.5) ★ รายงานแพลตฟอร์ม (Excel/CSV) → ลองอ่านด้วยโค้ด (deterministic) ก่อน
+    //   ได้ 4 ตัวเลข (ยอดขาย/ค่าธรรมเนียม/ขนส่ง/ส่วนลด) + รายเดือน ตรง NOVA Sales · ฟรี ไม่ต้อง AI จัดประเภท
+    if (isExcel || isCsv) {
+      try {
+        const ab = params.data.buffer.slice(params.data.byteOffset, params.data.byteOffset + params.data.byteLength) as ArrayBuffer;
+        const plat = detectPlatformFromName(params.originalName || params.fileName);
+        const ext = await parsePlatformFile(
+          { name: params.originalName || params.fileName, ext: isCsv ? "csv" : "xlsx", buffer: ab },
+          plat,
+        );
+        if (ext.figures.grossSales > 0 || ext.figures.platformFee > 0) {
+          const shop = shopNameFromFilename(params.originalName);
+          const platBase = shop ? sanitizeDocName(shop) : base;
+          await saveRawCsvToOneDrive({ folderParts, fileName: `${platBase} - ยอดขาย.csv`, csv: buildPlatformSummaryCsv(ext) });
+          await markSourceRead(folderParts, params.fileName); // ✅ อ่านแล้ว
+          return;
+        }
+      } catch {
+        /* อ่านโค้ดไม่ได้ → ตกไปให้ AI ข้างล่าง */
+      }
+    }
+
+    // 3) ไม่ใช่สเตทเมนต์/แพลตฟอร์มที่โค้ดอ่านได้ → จัดประเภท statement/platform/other แล้วอ่านด้วย AI
     let docType: "statement" | "platform" | "other";
     if (text) docType = await classifyDocTypeFromText(text);
     else if (source === "scan_or_image") docType = await classifyDocTypeFromImage(params.data, params.mime);

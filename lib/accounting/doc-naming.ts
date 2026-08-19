@@ -19,7 +19,9 @@ export function shopNameFromFilename(name: string | null | undefined): string | 
   if (!name) return null;
   let n = name.replace(/\.[^.]+$/, ""); // ตัดนามสกุล
   n = n.replace(/[_\s]*\d{6,8}\s*[–\-]\s*\d{6,8}.*$/, ""); // ตัดช่วงวันที่ท้าย (YYYYMMDD–YYYYMMDD)
-  n = n.replace(/^(?:ยอดขาย\S*|ภาพรวม\S*|รายงาน\S*|สรุป\S*|report\S*|sales?\S*)[_\s]+/i, ""); // ตัดคำนำหน้าประเภท
+  n = n.replace(/[_\s]*\d{1,2}[-/]\d{4}\s*$/, ""); // ตัดเดือน-ปีท้าย (MM-YYYY)
+  n = n.replace(/^(?:shopee|tiktok|lazada|grab|lineman|foodstory)[_\s]+/i, ""); // ตัดคำนำหน้าแพลตฟอร์ม
+  n = n.replace(/^(?:ยอดขาย|ภาพรวม|รายงาน|สรุป|report|sales?)[^_\s]*[_\s]+/i, ""); // ตัดคำนำหน้าประเภท (หยุดที่ตัวคั่นแรก)
   n = sanitizeDocName(n);
   return n.length >= 2 ? n : null;
 }
