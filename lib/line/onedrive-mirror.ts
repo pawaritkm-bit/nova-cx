@@ -10,7 +10,7 @@
  * ★ PDPA: ไม่ log ชื่อ/เนื้อไฟล์ — log แค่ error สั้น ๆ · ชื่อไทยเป็น PII แต่เก็บใน OneDrive ภายในบริษัท
  */
 import { decryptField } from "@/lib/crypto/field";
-import { isOneDriveEnabled, uploadOneDriveFile } from "@/lib/storage/onedrive";
+import { isOneDriveEnabled, uploadOneDriveFile, listOneDriveChildren } from "@/lib/storage/onedrive";
 
 /** context ขั้นต่ำที่ต้องใช้ (subset ของ GroupContext ใน attachments.ts) */
 export type MirrorGroupContext = {
@@ -30,11 +30,36 @@ function sanitizeFolderName(raw: string): string {
   return raw.replace(FORBIDDEN_NAME_CHARS, " ").replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
+/** 4 ตัวท้ายของ ref/id (ดิบ) — ใช้เป็น "กุญแจ" จับคู่โฟลเดอร์กับลูกค้า แม้ชื่อโฟลเดอร์ถูกเปลี่ยน */
+function refTail(group: NonNullable<MirrorGroupContext>): string {
+  return (group.group_ref || group.id || "").trim().slice(-4);
+}
+
 /** 4 ตัวท้ายของ ref/id ไว้กันชื่อไลน์ซ้ำ/เปลี่ยน (เช่น "บ.วรรณนัช (aB3d)") */
 function shortSuffix(group: NonNullable<MirrorGroupContext>): string {
-  const src = (group.group_ref || group.id || "").trim();
-  const tail = src.slice(-4);
+  const tail = refTail(group);
   return tail ? ` (${tail})` : "";
+}
+
+/**
+ * หาโฟลเดอร์ลูกค้าใน OneDrive แบบ "ยึด LINE id เป็นหลัก" (ไม่ยึดชื่อ)
+ *   ★ ถ้านักบัญชี rename โฟลเดอร์เป็นชื่อไทยเอง (แต่คงเลข "(xxxx)" ท้ายไว้) → ระบบยังจับคู่เจอ
+ *     ไฟล์ใหม่จึงเข้าโฟลเดอร์เดิม ไม่แตกโฟลเดอร์ซ้ำ
+ *   ไม่เจอโฟลเดอร์เดิม → คืนชื่อ default (ชื่อไลน์ + suffix) เพื่อสร้างใหม่
+ */
+export async function resolveSaleFolder(group: NonNullable<MirrorGroupContext>): Promise<string> {
+  const tail = refTail(group);
+  if (tail) {
+    try {
+      const existing = (await listOneDriveChildren([])).find(
+        (c) => c.isFolder && c.name.includes(`(${tail})`)
+      );
+      if (existing) return existing.name; // เคารพชื่อที่นักบัญชีตั้งเอง
+    } catch {
+      /* best-effort — ตกไปใช้ชื่อ default */
+    }
+  }
+  return resolveOneDriveFolder(group);
 }
 
 /** ชื่อโฟลเดอร์ลูกค้าใน OneDrive: ชื่อไลน์ (decrypt) > customer_code > 'ไม่ระบุ' + suffix กันซ้ำ

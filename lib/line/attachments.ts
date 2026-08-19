@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import { getLineClient } from "@/lib/line/client";
-import { resolveOneDriveFolder } from "@/lib/line/onedrive-mirror";
+import { resolveSaleFolder } from "@/lib/line/onedrive-mirror";
 import { isBillStorageEnabled, storeBillFile } from "@/lib/storage/bill-storage";
 import { isOneDriveEnabled } from "@/lib/storage/onedrive";
 import { classifyBillImage } from "@/lib/ai/bill-classify";
@@ -484,7 +484,7 @@ export async function processPendingAttachments(
     //   OA อื่น/บิล: เก็บ Supabase เหมือนเดิม · OneDrive ไม่พร้อม → fallback Supabase กันไฟล์หาย
     const isSaleOa = (group?.chat_channels?.oa_type || "") === "sale";
     const useOneDrive = isSaleOa && group !== null && isOneDriveEnabled();
-    const storeFolder = useOneDrive && group ? resolveOneDriveFolder(group) : customerFolder;
+    const storeFolder = useOneDrive && group ? await resolveSaleFolder(group) : customerFolder;
     // sale OA (OneDrive): เก็บในโฟลเดอร์ลูกค้าตรง ๆ ไม่ซ้อนโฟลเดอร์เดือน · OA อื่น (Supabase): คงโฟลเดอร์เดือนเดิม
     const storeFolderParts = useOneDrive ? [storeFolder] : [storeFolder, month];
     const saved = await storeBillFile({

@@ -20,7 +20,7 @@ import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/loc
 import { classifyDocTypeFromImage, classifyDocTypeFromText } from "@/lib/ai/classify-doc";
 import { decryptField } from "@/lib/crypto/field";
 import { isOneDriveEnabled, renameOneDriveFile } from "@/lib/storage/onedrive";
-import { resolveOneDriveFolder, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
+import { resolveSaleFolder, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 
 const MAX_PASSWORD_CANDIDATES = 40;
 
@@ -127,7 +127,7 @@ export async function autoReadSaleAttachment(params: {
       nameL.endsWith(".xlsx") || nameL.endsWith(".xls");
     const isCsv = mimeL.includes("csv") || nameL.endsWith(".csv");
 
-    const folder = resolveOneDriveFolder(group);
+    const folder = await resolveSaleFolder(group);
     const base = params.fileName.replace(/\.[^.]+$/, "");
     const folderParts = [folder]; // เก็บในโฟลเดอร์ลูกค้าตรง ๆ (ไม่ซ้อนโฟลเดอร์เดือน)
 
