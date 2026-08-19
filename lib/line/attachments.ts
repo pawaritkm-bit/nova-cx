@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import { getLineClient } from "@/lib/line/client";
+import { mirrorSaleAttachmentToOneDrive } from "@/lib/line/onedrive-mirror";
 import { isBillStorageEnabled, storeBillFile } from "@/lib/storage/bill-storage";
 import { classifyBillImage } from "@/lib/ai/bill-classify";
 
@@ -68,6 +69,8 @@ type AttachmentRow = {
 type GroupContext = {
   id: string | null;
   customer_id: string | null;
+  group_ref: string | null;
+  display_name_enc: string | null;
   customers: { customer_code: string | null } | null;
   chat_channels: { oa_type: string | null } | null;
 };
@@ -295,7 +298,7 @@ export async function processPendingAttachments(
        chat_messages!inner (
          sent_at,
          chat_groups!inner (
-           id, customer_id,
+           id, customer_id, group_ref, display_name_enc,
            customers ( customer_code ),
            chat_channels ( oa_type )
          )
@@ -456,6 +459,9 @@ export async function processPendingAttachments(
       failed++;
       continue;
     }
+
+    // ★ สำเนาขึ้น OneDrive แยกโฟลเดอร์ชื่อไลน์ (เฉพาะ sale OA) — additive best-effort ไม่กระทบ flow เดิม
+    await mirrorSaleAttachmentToOneDrive({ group, month, fileName, mime: content.mime, data: content.data });
 
     // จำไว้ใน batch — แถวอื่นที่ sha256 เดียวกันในรอบนี้ reuse ได้เลย
     batchDedup.set(sha256, { fileId: saved.objectPath, url: saved.url });
