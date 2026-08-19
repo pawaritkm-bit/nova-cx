@@ -76,6 +76,22 @@ type GroupContext = {
   chat_channels: { oa_type: string | null } | null;
 };
 
+/**
+ * true = เป็นไฟล์สเตทเมนต์/รายงานแพลตฟอร์มที่รับได้ (PDF/Excel/CSV)
+ *   ★ ใช้กับ sale OA เท่านั้น: ดึงเข้า OneDrive เฉพาะเอกสาร ไม่ดึงรูป (jpg/png) ตามที่ลูกค้าสั่ง
+ *   ดูทั้ง mime และนามสกุลไฟล์เดิม (บางไฟล์มาเป็น application/octet-stream)
+ */
+function isFinanceDocFormat(mime: string, name: string | null | undefined): boolean {
+  const m = (mime || "").toLowerCase();
+  const n = (name || "").toLowerCase();
+  const isPdf = m.includes("pdf") || n.endsWith(".pdf");
+  const isExcel =
+    m.includes("spreadsheetml") || m.includes("ms-excel") || m.includes("excel") ||
+    n.endsWith(".xlsx") || n.endsWith(".xls");
+  const isCsv = m.includes("csv") || n.endsWith(".csv");
+  return isPdf || isExcel || isCsv;
+}
+
 /** map mime → นามสกุลไฟล์ (รูป + เอกสารทั่วไป) · เดาไม่ได้ = bin */
 function extFromMime(mime: string): string {
   const m = mime.toLowerCase();
@@ -369,6 +385,23 @@ export async function processPendingAttachments(
 
     const sha256 = createHash("sha256").update(content.data).digest("hex");
     const isFile = row.attachment_type === "file";
+
+    // 2.4) ★ sale OA (สนง.บัญชี Finovas): ดึงเข้า OneDrive เฉพาะสเตทเมนต์/รายงานแพลตฟอร์ม (PDF/Excel/CSV)
+    //   รูปภาพ (jpg/png) ไม่ต้องดึง → ปิดงานเป็น skipped ('sale_image_skipped') ไม่เก็บ ไม่อ่าน
+    if ((group?.chat_channels?.oa_type || "") === "sale" && !isFinanceDocFormat(content.mime, row.original_name)) {
+      await db
+        .from("message_attachments")
+        .update({
+          fetch_status: "skipped",
+          fetch_error: "sale_image_skipped",
+          fetched_at: new Date().toISOString(),
+          doc_kind: "other",
+          doc_checked: true,
+        })
+        .eq("id", row.id);
+      skipped++;
+      continue;
+    }
 
     // 2.5) คัดกรอง (ต่างกันตามชนิด):
     //   - ไฟล์ (file, PDF/เอกสาร): ★ ไม่คัด AI — เก็บทุกไฟล์เสมอ (classifyBillImage ใช้กับรูปเท่านั้น)
