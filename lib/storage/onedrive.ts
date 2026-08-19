@@ -158,6 +158,109 @@ export async function uploadOneDriveFile(params: {
   }
 }
 
+/** แปลง parentReference.path ("/drive/root:/NOVA-Bills/ลูกค้า/2026-08") → folderParts ใต้ root */
+export function folderPartsFromParentPath(parentPath: string, root: string): string[] {
+  let after = "";
+  const i = parentPath.indexOf(":/");
+  after = i >= 0 ? parentPath.slice(i + 2) : parentPath;
+  try { after = decodeURIComponent(after); } catch { /* raw */ }
+  const parts = after.split("/").filter((p) => p.length > 0);
+  if (parts[0] === root) parts.shift();
+  return parts;
+}
+
+/**
+ * ลิสต์ลูกในโฟลเดอร์ (path ใต้ root · [] = ตัว ONEDRIVE_ROOT เอง) → [{id,name,isFolder}]
+ *   ★ ใช้แทน search (Graph search บน OneDrive app-only จัดindex ช้า/ไม่ทัน) — listing เห็นทันที
+ */
+export async function listOneDriveChildren(folderParts: string[]): Promise<{ id: string; name: string; isFolder: boolean }[]> {
+  const cfg = getOneDriveConfig();
+  if (!cfg) return [];
+  const token = await getAccessToken();
+  if (!token) return [];
+  try {
+    const encodedPath = encodePath([cfg.root, ...folderParts]);
+    const url =
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}/drive/root:/${encodedPath}:/children` +
+      `?$select=id,name,folder&$top=400`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) { if (res.status === 401) invalidateToken(); return []; }
+    const data = (await res.json()) as { value?: { id: string; name: string; folder?: unknown }[] };
+    return (data.value ?? []).map((v) => ({ id: v.id, name: v.name, isFolder: v.folder !== undefined }));
+  } catch {
+    return [];
+  }
+}
+
+/** ค้นหาไฟล์ใน OneDrive ตามชื่อ/เนื้อหา (Graph search) → [{id,name,parentPath}] · ล้ม → [] */
+export async function searchOneDriveItems(query: string): Promise<{ id: string; name: string; parentPath: string }[]> {
+  const cfg = getOneDriveConfig();
+  if (!cfg) return [];
+  const token = await getAccessToken();
+  if (!token) return [];
+  try {
+    const url =
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}` +
+      `/drive/root/search(q='${encodeURIComponent(query)}')?$select=id,name,parentReference&$top=100`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) { if (res.status === 401) invalidateToken(); return []; }
+    const data = (await res.json()) as { value?: { id: string; name: string; parentReference?: { path?: string } }[] };
+    return (data.value ?? []).map((v) => ({ id: v.id, name: v.name, parentPath: v.parentReference?.path ?? "" }));
+  } catch {
+    return [];
+  }
+}
+
+/** โหลดเนื้อไฟล์ (binary) ตาม path ใต้ root → Buffer หรือ null */
+export async function downloadOneDriveFile(folderParts: string[], fileName: string): Promise<Buffer | null> {
+  const cfg = getOneDriveConfig();
+  if (!cfg) return null;
+  const token = await getAccessToken();
+  if (!token) return null;
+  try {
+    const encodedPath = encodePath([cfg.root, ...folderParts, fileName]);
+    const url =
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}/drive/root:/${encodedPath}:/content`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) { if (res.status === 401) invalidateToken(); return null; }
+    return Buffer.from(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+/** อ่านไฟล์ข้อความตาม id → string หรือ null (ตัด BOM) */
+export async function getOneDriveTextById(id: string): Promise<string | null> {
+  const cfg = getOneDriveConfig();
+  if (!cfg) return null;
+  const token = await getAccessToken();
+  if (!token) return null;
+  try {
+    const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}/drive/items/${id}/content`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) { if (res.status === 401) invalidateToken(); return null; }
+    return (await res.text()).replace(/^﻿/, "");
+  } catch {
+    return null;
+  }
+}
+
+/** ลบไฟล์ตาม id → true ถ้าสำเร็จ */
+export async function deleteOneDriveItemById(id: string): Promise<boolean> {
+  const cfg = getOneDriveConfig();
+  if (!cfg) return false;
+  const token = await getAccessToken();
+  if (!token) return false;
+  try {
+    const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}/drive/items/${id}`;
+    const res = await fetch(url, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+    if (res.status === 401) invalidateToken();
+    return res.ok || res.status === 204;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * เปลี่ยนชื่อไฟล์ใน OneDrive (PATCH driveItem.name) — ใช้ติดเครื่องหมาย ✅ "อ่านแล้ว" ที่ไฟล์ต้นฉบับ
  *   @param folderParts โฟลเดอร์ใต้ ONEDRIVE_ROOT (ไม่รวม root)

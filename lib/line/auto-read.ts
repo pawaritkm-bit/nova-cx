@@ -16,6 +16,7 @@ import { extractStatementFromFile, extractStatementFromText, extractStatementFro
 import { parseStatementDeterministic } from "@/lib/accounting/statement-deterministic";
 import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv";
 import { excelBufferToRows, csvBufferToRows } from "@/lib/accounting/statement-parse";
+import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/locked-note";
 import { classifyDocTypeFromImage, classifyDocTypeFromText } from "@/lib/ai/classify-doc";
 import { decryptField } from "@/lib/crypto/field";
 import { isOneDriveEnabled, renameOneDriveFile } from "@/lib/storage/onedrive";
@@ -147,13 +148,11 @@ export async function autoReadSaleAttachment(params: {
         const pws = await gatherChatPasswords(params.db, params.chatGroupId);
         const unlocked = await unlockPdfToText(params.data, pws);
         if (!unlocked) {
+          // วางไฟล์โน้ตให้นักบัญชีพิมพ์รหัส → cron `retry-locked` จะอ่านให้อัตโนมัติภายหลัง
           await saveRawCsvToOneDrive({
             folderParts,
-            fileName: `${base} - ⚠️ ติดรหัสผ่าน.txt`,
-            csv:
-              "ไฟล์นี้ล็อกด้วยรหัสผ่าน ระบบเปิดอ่านอัตโนมัติไม่ได้ (ไม่พบรหัสในแชท)\r\n" +
-              "กรุณาขอรหัสผ่านจากลูกค้า แล้วเปิด/อ่านด้วยตนเอง หรือให้ลูกค้าพิมพ์รหัสในแชทแล้วส่งไฟล์ใหม่\r\n" +
-              `ไฟล์ต้นฉบับ: ${params.fileName}`,
+            fileName: lockedNoteFileName(base),
+            csv: buildLockedNoteContent(params.fileName),
           });
           return;
         }
