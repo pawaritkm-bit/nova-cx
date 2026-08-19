@@ -101,6 +101,7 @@ export default function StatementAnalyzer({
   const [done, setDone] = useState(false);
   const [txns, setTxns] = useState<StatementTxn[]>([]);
   const [fileResults, setFileResults] = useState<FileResult[]>([]);
+  const [pdfPassword, setPdfPassword] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   // สรุปรายเดือน + คนโอนซ้ำ คำนวณใหม่ทุกครั้งที่ตารางเปลี่ยน (helper เดียวกับ server) — รวมทุกไฟล์แล้ว
@@ -147,13 +148,19 @@ export default function StatementAnalyzer({
       const res = await fetch("/api/accounting/extract-statement", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: prep.path, customerId, fileName: file.name }),
+        body: JSON.stringify({ path: prep.path, customerId, fileName: file.name, password: pdfPassword || undefined }),
       });
       const data = (await res.json().catch(() => null)) as
-        | { ok?: boolean; transactions?: StatementTxn[]; meta?: StatementMeta }
+        | { ok?: boolean; transactions?: StatementTxn[]; meta?: StatementMeta; message?: string }
         | null;
       if (!res.ok || !data?.ok) {
-        return { fileName: file.name, ok: false, errorMessage: "อ่านสเตทเมนต์ไม่สำเร็จ กรุณาลองใหม่", transactions: [], meta: null };
+        return {
+          fileName: file.name,
+          ok: false,
+          errorMessage: data?.message ?? "อ่านสเตทเมนต์ไม่สำเร็จ กรุณาลองใหม่",
+          transactions: [],
+          meta: null,
+        };
       }
       return {
         fileName: file.name,
@@ -258,8 +265,17 @@ export default function StatementAnalyzer({
             setSelectedNames(files.map((f) => f.name));
           }}
         />
+        <input
+          type="text"
+          value={pdfPassword}
+          onChange={(e) => setPdfPassword(e.target.value)}
+          placeholder="รหัสผ่าน PDF (ถ้าติดรหัส)"
+          disabled={pending}
+          autoComplete="off"
+          style={{ maxWidth: 200 }}
+        />
         <button type="button" className="btn" onClick={submit} disabled={pending}>
-          {phase === "reading" ? "กำลังอัปโหลด + AI กำลังอ่าน…" : "อัปสเตทเมนต์ + แยกรายการ"}
+          {phase === "reading" ? "กำลังอัปโหลด + กำลังอ่าน…" : "อัปสเตทเมนต์ + แยกรายการ"}
         </button>
         {fileResults.length > 0 ? (
           <button type="button" className="btn btn-ghost" onClick={clearAll} disabled={pending}>

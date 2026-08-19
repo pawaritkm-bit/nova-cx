@@ -4,8 +4,11 @@ import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/acces
 import { classifyUpload } from "@/lib/accounting/upload";
 import {
   extractStatementFromFile,
+  extractStatementFromText,
   extractStatementFromTextChunks,
 } from "@/lib/accounting/statement-extract";
+import { parseStatementDeterministic } from "@/lib/accounting/statement-deterministic";
+import { isPdfEncrypted, readPdfPlainText, unlockPdfToText } from "@/lib/accounting/pdf-unlock";
 import { excelBufferToRows, csvBufferToRows } from "@/lib/accounting/statement-parse";
 import { mimeFromPath } from "@/lib/line/bill-extract-worker";
 import {
@@ -46,10 +49,12 @@ export async function POST(request: NextRequest) {
       path?: unknown;
       customerId?: unknown;
       fileName?: unknown;
+      password?: unknown;
     };
     const path = typeof body.path === "string" ? body.path : "";
     const customerId = typeof body.customerId === "string" && body.customerId ? body.customerId : null;
     const fileName = typeof body.fileName === "string" ? body.fileName : "";
+    const password = typeof body.password === "string" ? body.password.trim() : "";
 
     // ★ path ต้องอยู่ใต้โฟลเดอร์ statement ของ tenant นี้เท่านั้น (กันชี้ไฟล์ข้าม tenant/ที่อื่น)
     if (!path.startsWith(`${access.tenantId}/${STATEMENT_PREFIX}/`)) {
@@ -79,19 +84,55 @@ export async function POST(request: NextRequest) {
       failedChunks: number;
     } | null = null;
 
-    if (kind === "image" || kind === "pdf") {
-      txns = await extractStatementFromFile(buf, mime);
+    if (kind === "pdf") {
+      // ★ ลองอ่านด้วยโค้ด deterministic ก่อน (ฟรี) — ดึง text จาก PDF · ติดรหัสใช้รหัสที่กรอก
+      let text: string | null = null;
+      if (await isPdfEncrypted(buf)) {
+        if (!password) {
+          return NextResponse.json(
+            { ok: false, error: "password_required", message: "ไฟล์นี้ติดรหัส กรุณากรอกรหัสผ่าน PDF แล้วกดอ่านอีกครั้ง" },
+            { status: 200 }
+          );
+        }
+        const unlocked = await unlockPdfToText(buf, [password]);
+        if (!unlocked) {
+          return NextResponse.json(
+            { ok: false, error: "bad_password", message: "รหัสผ่าน PDF ไม่ถูกต้อง กรุณาตรวจสอบแล้วลองใหม่" },
+            { status: 200 }
+          );
+        }
+        text = unlocked.text;
+      } else {
+        text = await readPdfPlainText(buf);
+      }
+      if (text) {
+        const det = parseStatementDeterministic(text);
+        // reconcile ผ่าน = อ่านด้วยโค้ด (ฟรี) · ไม่ผ่าน = fallback AI บน text
+        txns = det.fullyReconciled && det.transactions.length > 0 ? det.transactions : await extractStatementFromText(text);
+      } else {
+        // PDF ไม่มี text (สแกน/รูปเป็น PDF) → AI OCR
+        txns = await extractStatementFromFile(buf, mime);
+      }
+    } else if (kind === "image") {
+      txns = await extractStatementFromFile(buf, mime); // สแกน/รูป → AI OCR
     } else if (kind === "excel" || kind === "csv") {
       const parsed = kind === "excel" ? await excelBufferToRows(buf) : csvBufferToRows(buf);
-      const extracted = await extractStatementFromTextChunks(parsed.chunks);
-      txns = extracted.txns;
-      meta = {
-        totalRows: parsed.totalRows,
-        includedRows: parsed.includedRows,
-        truncated: parsed.truncated,
-        chunkCount: extracted.chunkCount,
-        failedChunks: extracted.failedChunks,
-      };
+      // ★ ลอง deterministic บน text ก่อน (บางแบงก์ส่ง Excel ที่มีคอลัมน์ยอดคงเหลือ)
+      const det = parseStatementDeterministic(parsed.chunks.join("\n"));
+      if (det.fullyReconciled && det.transactions.length > 0) {
+        txns = det.transactions;
+        meta = { totalRows: parsed.totalRows, includedRows: parsed.includedRows, truncated: parsed.truncated, chunkCount: 0, failedChunks: 0 };
+      } else {
+        const extracted = await extractStatementFromTextChunks(parsed.chunks);
+        txns = extracted.txns;
+        meta = {
+          totalRows: parsed.totalRows,
+          includedRows: parsed.includedRows,
+          truncated: parsed.truncated,
+          chunkCount: extracted.chunkCount,
+          failedChunks: extracted.failedChunks,
+        };
+      }
     } else {
       return NextResponse.json({ ok: false, error: "unsupported" }, { status: 415 });
     }
