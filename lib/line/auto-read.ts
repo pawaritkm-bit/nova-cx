@@ -129,7 +129,7 @@ export async function autoReadSaleAttachment(params: {
 
     const folder = resolveOneDriveFolder(group);
     const base = params.fileName.replace(/\.[^.]+$/, "");
-    const folderParts = [folder, params.month];
+    const folderParts = [folder]; // เก็บในโฟลเดอร์ลูกค้าตรง ๆ (ไม่ซ้อนโฟลเดอร์เดือน)
 
     // 1) ดึง "ข้อความ" ของไฟล์ตามชนิด (Excel/CSV/PDF) + เก็บ chunks ไว้ให้ AI ถ้าต้องใช้ fallback
     let text: string | null = null;

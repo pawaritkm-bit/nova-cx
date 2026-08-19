@@ -485,10 +485,12 @@ export async function processPendingAttachments(
     const isSaleOa = (group?.chat_channels?.oa_type || "") === "sale";
     const useOneDrive = isSaleOa && group !== null && isOneDriveEnabled();
     const storeFolder = useOneDrive && group ? resolveOneDriveFolder(group) : customerFolder;
+    // sale OA (OneDrive): เก็บในโฟลเดอร์ลูกค้าตรง ๆ ไม่ซ้อนโฟลเดอร์เดือน · OA อื่น (Supabase): คงโฟลเดอร์เดือนเดิม
+    const storeFolderParts = useOneDrive ? [storeFolder] : [storeFolder, month];
     const saved = await storeBillFile({
       db,
       tenantId: row.tenant_id,
-      folderParts: [storeFolder, month],
+      folderParts: storeFolderParts,
       fileName,
       mime: content.mime,
       data: content.data,

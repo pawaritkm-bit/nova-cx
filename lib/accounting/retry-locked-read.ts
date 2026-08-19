@@ -46,23 +46,29 @@ export type RetryLockedResult = {
 export async function retryLockedStatements(): Promise<RetryLockedResult> {
   if (!isOneDriveEnabled()) return { disabled: true, scanned: 0, read: 0, wrongPassword: 0, waiting: 0 };
 
-  // ★ ไล่โฟลเดอร์ (ไม่ใช้ search — index ช้า): NOVA-Bills → [ลูกค้า] → [เดือน] → หาไฟล์โน้ต
+  // ★ ไล่โฟลเดอร์ (ไม่ใช้ search — index ช้า): NOVA-Bills → [ลูกค้า] หาไฟล์โน้ตในโฟลเดอร์ลูกค้าตรง ๆ
+  //   (และเผื่อโฟลเดอร์เดือนเก่าที่ยังเหลือ — ไล่ลงอีก 1 ชั้น เพื่อ backward-compat)
   const notes: { id: string; folderParts: string[]; sourceFileName: string | null; passwords: string[] }[] = [];
+  const collect = async (fp: string[], children: { id: string; name: string; isFolder: boolean }[]) => {
+    for (const f of children) {
+      if (f.isFolder || !f.name.includes(NOTE_MARKER)) continue;
+      const content = await getOneDriveTextById(f.id);
+      if (!content) continue;
+      const { sourceFileName, passwords } = parseLockedNote(content);
+      notes.push({ id: f.id, folderParts: fp, sourceFileName, passwords });
+    }
+  };
   const customers = (await listOneDriveChildren([])).filter((c) => c.isFolder).slice(0, MAX_CUSTOMER_FOLDERS);
   outer: for (const cust of customers) {
-    const months = (await listOneDriveChildren([cust.name])).filter((m) => m.isFolder);
-    for (const mon of months) {
-      const children = await listOneDriveChildren([cust.name, mon.name]);
-      for (const f of children) {
-        if (f.isFolder || !f.name.includes(NOTE_MARKER)) continue;
-        const content = await getOneDriveTextById(f.id);
-        if (!content) continue;
-        const { sourceFileName, passwords } = parseLockedNote(content);
-        notes.push({ id: f.id, folderParts: [cust.name, mon.name], sourceFileName, passwords });
-        if (notes.length >= MAX_NOTES_PER_RUN) break outer;
-      }
+    const custChildren = await listOneDriveChildren([cust.name]);
+    await collect([cust.name], custChildren); // โน้ตในโฟลเดอร์ลูกค้าตรง ๆ (โครงใหม่)
+    if (notes.length >= MAX_NOTES_PER_RUN) break;
+    for (const sub of custChildren.filter((c) => c.isFolder)) {
+      await collect([cust.name, sub.name], await listOneDriveChildren([cust.name, sub.name])); // โฟลเดอร์เดือนเก่า
+      if (notes.length >= MAX_NOTES_PER_RUN) break outer;
     }
   }
+  notes.splice(MAX_NOTES_PER_RUN); // คุมเพดาน
 
   let read = 0, wrongPassword = 0, waiting = 0;
 
