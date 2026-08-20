@@ -59,10 +59,10 @@ function analyzeSender(description: string): { key: string; unnamed: boolean } {
 }
 
 type SenderRow = { name: string; count: number; total: number };
-function buildSenderInflow(txns: StatementTxn[]): SenderRow[] {
+function buildPartyFlow(txns: StatementTxn[], dir: "in" | "out"): SenderRow[] {
   const byKey = new Map<string, { name: string; count: number; total: number }>();
   for (const t of txns) {
-    if (t.direction !== "in" || t.amount == null) continue;
+    if (t.direction !== dir || t.amount == null) continue;
     const { key, unnamed } = analyzeSender(t.description ?? "");
     const groupKey = unnamed ? UNNAMED_KEY : key;
     const display = unnamed ? UNNAMED_LABEL : (t.description ?? "").replace(/\s+/g, " ").trim();
@@ -77,10 +77,10 @@ function buildSenderInflow(txns: StatementTxn[]): SenderRow[] {
 }
 
 type MonthRow = { key: string; label: string; total: number; count: number };
-function buildMonthlyInflow(txns: StatementTxn[]): MonthRow[] {
+function buildMonthlyFlow(txns: StatementTxn[], dir: "in" | "out"): MonthRow[] {
   const byMonth = new Map<string, { total: number; count: number }>();
   for (const t of txns) {
-    if (t.direction !== "in" || t.amount == null) continue;
+    if (t.direction !== dir || t.amount == null) continue;
     const k = monthKey(t.date);
     if (k === null) continue;
     const b = byMonth.get(k) ?? { total: 0, count: 0 };
@@ -108,28 +108,34 @@ function row(cells: (string | number)[]): string {
  *   @param bankLabel ชื่อธนาคารไทยมาตรฐาน (คอลัมน์ "ธนาคาร" ในส่วนรายการทั้งหมด)
  */
 export function buildStatementSummaryCsv(txns: StatementTxn[], bankLabel: string): string {
-  const months = buildMonthlyInflow(txns);
-  const senders = buildSenderInflow(txns);
   const lines: string[] = [];
 
-  // ส่วนที่ 1: เงินเข้าแยกรายเดือน
-  lines.push("เงินเข้าแยกรายเดือน");
-  lines.push(row(["เดือน", "เงินเข้ารวม(บาท)", "จำนวนรายการ"]));
-  let mTot = 0, mCnt = 0;
-  for (const m of months) {
-    lines.push(row([m.label, num(m.total), m.count]));
-    mTot += m.total; mCnt += m.count;
-  }
-  lines.push(row(["รวมทุกเดือน", num(round2(mTot)), mCnt]));
-  lines.push("");
+  /** ส่วน "แยกรายเดือน" (เข้า/ออก) + แถวรวม */
+  const pushMonthly = (title: string, amtCol: string, dir: "in" | "out") => {
+    const months = buildMonthlyFlow(txns, dir);
+    lines.push(title);
+    lines.push(row(["เดือน", amtCol, "จำนวนรายการ"]));
+    let tot = 0, cnt = 0;
+    for (const m of months) { lines.push(row([m.label, num(m.total), m.count])); tot += m.total; cnt += m.count; }
+    lines.push(row(["รวมทุกเดือน", num(round2(tot)), cnt]));
+    lines.push("");
+  };
+  /** ส่วน "แยกตามคู่ค้า" (ผู้โอน/ผู้รับ) */
+  const pushParty = (title: string, partyCol: string, dir: "in" | "out") => {
+    lines.push(title);
+    lines.push(row([partyCol, "จำนวนครั้ง", "ยอดรวม(บาท)"]));
+    for (const s of buildPartyFlow(txns, dir)) lines.push(row([s.name, s.count, num(s.total)]));
+    lines.push("");
+  };
 
-  // ส่วนที่ 2: เงินเข้าแยกตามผู้โอน
-  lines.push("เงินเข้าแยกตามผู้โอน");
-  lines.push(row(["ผู้โอน", "จำนวนครั้ง", "ยอดรวม(บาท)"]));
-  for (const s of senders) lines.push(row([s.name, s.count, num(s.total)]));
-  lines.push("");
+  // เงินเข้า (รายเดือน + ผู้โอน) — ★ คงรูปแบบเดิมที่ลูกค้าอนุมัติไว้
+  pushMonthly("เงินเข้าแยกรายเดือน", "เงินเข้ารวม(บาท)", "in");
+  pushParty("เงินเข้าแยกตามผู้โอน", "ผู้โอน", "in");
+  // เงินออก (รายเดือน + ผู้รับ) — ★ เพิ่มใหม่: สเตทเมนต์ที่มีแต่รายจ่ายจะไม่ว่างเปล่าอีกต่อไป
+  pushMonthly("เงินออกแยกรายเดือน", "เงินออกรวม(บาท)", "out");
+  pushParty("เงินออกแยกตามผู้รับ", "ผู้รับ", "out");
 
-  // ส่วนที่ 3: รายการทั้งหมด (เรียงวันที่เก่า→ใหม่)
+  // รายการทั้งหมด (เรียงวันที่เก่า→ใหม่)
   lines.push("รายการทั้งหมด");
   lines.push(row(["วันที่", "ธนาคาร", "คำอธิบาย", "ทิศทาง", "จำนวน(บาท)"]));
   const sorted = [...txns].sort((a, b) => String(a.date).localeCompare(String(b.date)));

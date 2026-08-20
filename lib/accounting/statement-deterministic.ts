@@ -79,7 +79,7 @@ function findOpeningBalance(text: string): number | null {
 //     โค้ดย่อโผล่ใน "รายการคู่ค้า" ด้วย → จับ strong ก่อนเสมอ กันระบุเป็นธนาคารคู่ค้าผิดตัว
 //     และห้ามใช้ "กรุงเทพ" เดี่ยว ๆ (ชนที่อยู่ "กรุงเทพฯ")
 const BANK_HINTS: { std: string; strong: RegExp; weak: RegExp }[] = [
-  { std: "กสิกรไทย", strong: /ธนาคารกสิกร|kasikornbank|k\s?plus/i, weak: /\bkbank\b|kkapi/i },
+  { std: "กสิกรไทย", strong: /ธนาคารกสิกร|kasikornbank|k\s?plus|dd\.048/i, weak: /\bkbank\b|kkapi/i },
   { std: "ไทยพาณิชย์", strong: /ไทยพาณิชย์|siam commercial bank/i, weak: /\bscb\b/i },
   { std: "ทหารไทยธนชาต", strong: /ทหารไทยธนชาต|ธนาคารทหารไทย|ทีทีบี|ttbbank|thanachart/i, weak: /\bttb\b|\btmb\b/i },
   { std: "เกียรตินาคินภัทร", strong: /เกียรตินาคิน|kiatnakin|\bdime\b/i, weak: /\bkkp\b/i },
