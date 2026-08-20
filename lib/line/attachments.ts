@@ -6,6 +6,7 @@ import { resolveSaleFolder, oaOneDriveRoot } from "@/lib/line/onedrive-mirror";
 import { isBillStorageEnabled, storeBillFile } from "@/lib/storage/bill-storage";
 import { isOneDriveEnabled } from "@/lib/storage/onedrive";
 import { classifyBillImage } from "@/lib/ai/bill-classify";
+import type { FinanceClassification } from "@/lib/accounting/classify-finance-doc";
 
 /**
  * Bill Attachment pipeline (เฟส 1 ฝั่ง CX)
@@ -511,8 +512,33 @@ export async function processPendingAttachments(
       if (base) fileName = `${contentId}_${base}.${ext}`;
     }
     const storeFolder = useOneDrive && group ? await resolveSaleFolder(group, oneDriveRoot) : customerFolder;
-    // OneDrive: เก็บในโฟลเดอร์ลูกค้า/กลุ่มตรง ๆ ไม่ซ้อนโฟลเดอร์เดือน · Supabase: คงโฟลเดอร์เดือนเดิม
-    const storeFolderParts = useOneDrive ? [storeFolder] : [storeFolder, month];
+
+    // ★ subfolder-by-type (เฉพาะ OneDrive + เปิด auto-read): จัดประเภทจาก "เนื้อไฟล์" ครั้งเดียว
+    //   → วางไฟล์ในโฟลเดอร์ย่อยตามชนิด (สเตทเมนต์ / รายงานแพลตฟอร์ม / บิลอื่นๆ) แล้วส่ง cls ต่อให้
+    //   auto-read summarize โดยไม่อ่าน/จัดประเภทซ้ำ · ★ dynamic import: กัน dep หนัก (pdf/excel/AI) โหลดตอน cron init
+    const autoReadOn = process.env.ACCT_AUTO_READ === "on" && useOneDrive && group !== null;
+    let classification: FinanceClassification | undefined;
+    if (autoReadOn) {
+      try {
+        const { extractAndClassify } = await import("@/lib/accounting/classify-finance-doc");
+        classification = await extractAndClassify({
+          db,
+          chatGroupId: group?.id ?? "",
+          fileName,
+          originalName: row.original_name,
+          mime: content.mime,
+          data: content.data,
+        });
+      } catch {
+        classification = undefined; // จัดประเภทพลาด → วางแบบ flat (auto-read จะจัดเองภายหลัง)
+      }
+    }
+    // OneDrive: [ลูกค้า, ชนิด] (มี cls) หรือ [ลูกค้า] (ไม่มี) · Supabase: คงโฟลเดอร์เดือนเดิม
+    const storeFolderParts = useOneDrive
+      ? classification
+        ? [storeFolder, classification.subFolder]
+        : [storeFolder]
+      : [storeFolder, month];
     const saved = await storeBillFile({
       db,
       tenantId: row.tenant_id,
@@ -530,9 +556,9 @@ export async function processPendingAttachments(
     }
 
     // ★ อ่านอัตโนมัติ + save ผลกลับ OneDrive (sale + care ที่เก็บลง OneDrive · gate ACCT_AUTO_READ · best-effort)
+    //   ★ ส่ง classification ที่จัดไว้แล้วต่อ → auto-read summarize ในโฟลเดอร์ย่อยเดียวกัน ไม่อ่านซ้ำ
     //   ★ dynamic import: กัน dep หนัก (pdfjs/claude/sharp) โหลดตอน cron module init
-    //     (เดิม import ระดับบน ทำ cron process-attachments 500 — กระทบ ingest ทุก OA)
-    if (process.env.ACCT_AUTO_READ === "on" && useOneDrive) {
+    if (autoReadOn) {
       try {
         const { autoReadSaleAttachment } = await import("@/lib/line/auto-read");
         await autoReadSaleAttachment({
@@ -544,6 +570,7 @@ export async function processPendingAttachments(
           originalName: row.original_name,
           mime: content.mime,
           data: content.data,
+          classification,
         });
       } catch {
         console.warn("[attachments] auto-read import/run failed");
