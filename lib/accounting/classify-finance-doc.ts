@@ -96,6 +96,22 @@ function done(type: FinanceDocType, rest: Omit<FinanceClassification, "type" | "
 }
 
 /**
+ * ตรวจว่าไฟล์เป็น "สรุปแล้ว" ของสเตทเมนต์/รายงานแพลตฟอร์ม (หรือสเตทเมนต์ที่ยังไม่ reconcile)
+ *   → คืนชนิดเพื่อจัดเข้าโฟลเดอร์ถูกต้อง แทนที่จะตกไป "บิลอื่นๆ"
+ *   ตรวจจากชื่อไฟล์ + มาร์กเกอร์โครงสร้างในเนื้อหา (หัวสรุป/หัวสเตทเมนต์ไทย) · ไม่เข้าเกณฑ์ → null
+ */
+function detectSummaryType(text: string | null, fileName: string, originalName?: string | null): FinanceDocType | null {
+  const name = `${originalName || ""} ${fileName || ""}`.toLowerCase();
+  const body = (text || "").slice(0, 6000);
+  // รายงานแพลตฟอร์ม (สรุปแล้ว / ไฟล์แพลตฟอร์ม)
+  if (/shopee|tiktok|lazada|แพลตฟอร์ม/i.test(name) || /ยอดขายรวม/.test(body)) return "platform";
+  // สเตทเมนต์ (สรุปแล้ว / สเตทเมนต์ที่โครงชัดแต่ยังไม่ reconcile)
+  if (/statement|สเตทเมน|บัญชีเงินฝาก/i.test(name)) return "statement";
+  if (/เงินเข้าแยกรายเดือน|เงินเข้าแยกตามผู้โอน|รวมฝากเงิน|รวมถอนเงิน|ยอดยกมา|ยอดยกไป|รายการทั้งหมด/.test(body)) return "statement";
+  return null;
+}
+
+/**
  * ดึงข้อความ + จัดประเภทเอกสารการเงินจากเนื้อไฟล์ (เรียกครั้งเดียว ใช้ทั้ง routing + summarize)
  */
 export async function extractAndClassify(params: {
@@ -189,6 +205,13 @@ export async function extractAndClassify(params: {
     } catch {
       platform = null;
     }
+  }
+
+  // 3.5) ★ ไฟล์ "สรุปแล้ว" (สรุปสเตทเมนต์/รายงานแพลตฟอร์มที่ทำไว้แล้ว หรือสเตทเมนต์ที่ยังไม่ reconcile)
+  //   → จัดเข้าโฟลเดอร์ตามชนิด ไม่ใช่ "บิลอื่นๆ" (ตามที่ลูกค้าขอ) — ตรวจจากชื่อไฟล์ + โครงเนื้อหา
+  const summaryType = detectSummaryType(text, params.fileName, params.originalName);
+  if (summaryType) {
+    return done(summaryType, { locked, text, chunks, source, det, platform, unlockedPassword });
   }
 
   // 4) fallback: AI จัดประเภท (text → text classify · สแกน/ภาพ → image classify)
