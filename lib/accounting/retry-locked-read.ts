@@ -22,6 +22,7 @@ import { parseStatementDeterministic } from "@/lib/accounting/statement-determin
 import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv";
 import { extractStatementFromText } from "@/lib/accounting/statement-extract";
 import { gatherChatPasswords } from "@/lib/accounting/classify-finance-doc";
+import { getRememberedPasswords, rememberStatementPassword } from "@/lib/accounting/statement-password-memory";
 import { NOTE_MARKER, parseLockedNote, buildWrongPasswordNote, lockedNoteFileName } from "@/lib/accounting/locked-note";
 import { sanitizeDocName } from "@/lib/accounting/doc-naming";
 import { CARE_ONEDRIVE_ROOT } from "@/lib/line/onedrive-mirror";
@@ -50,14 +51,17 @@ export type RetryLockedResult = {
  * หา chat_group_id จากชื่อโฟลเดอร์ลูกค้า (ท้ายชื่อมี "(xxxx)" = 4 ตัวท้ายของ group_ref/id)
  *   → ไว้ดึงรหัสจากแชทกลุ่มนั้น (ลูกค้ามักพิมพ์รหัสในแชท) · คลุมเครือ (เจอ >1) → null (กันข้ามกลุ่ม/PDPA)
  */
-async function resolveGroupIdFromFolder(db: SupabaseClient, folderName: string): Promise<string | null> {
+async function resolveGroupFromFolder(
+  db: SupabaseClient,
+  folderName: string,
+): Promise<{ id: string; tenantId: string } | null> {
   const m = (folderName || "").match(/\(([^)]{2,12})\)\s*$/);
   const tail = m?.[1]?.trim();
   if (!tail) return null;
   try {
-    const { data } = await db.from("chat_groups").select("id").ilike("group_ref", `%${tail}`).limit(2);
-    const rows = (data as { id: string }[] | null) ?? [];
-    return rows.length === 1 ? rows[0].id : null;
+    const { data } = await db.from("chat_groups").select("id, tenant_id").ilike("group_ref", `%${tail}`).limit(2);
+    const rows = (data as { id: string; tenant_id: string }[] | null) ?? [];
+    return rows.length === 1 ? { id: rows[0].id, tenantId: rows[0].tenant_id } : null;
   } catch {
     return null;
   }
@@ -104,14 +108,19 @@ export async function retryLockedStatements(db?: SupabaseClient): Promise<RetryL
       const { sourceFileName, passwords, folderParts, root } = note;
       if (!sourceFileName) continue;
 
-      // ★ รวมรหัสจากแชทกลุ่ม (ลูกค้ามักพิมพ์รหัสในแชท) + รหัสในโน้ต (นักบัญชีพิมพ์)
+      // ★ รวมรหัส: โน้ต (นักบัญชีพิมพ์) + แชทกลุ่ม (ลูกค้าส่ง) + รหัสที่จำไว้ของกลุ่มนี้ (ผูกชื่อบัญชี)
       let chatPasswords: string[] = [];
+      let rememberedPasswords: string[] = [];
+      let grp: { id: string; tenantId: string } | null = null;
       if (db) {
-        const gid = await resolveGroupIdFromFolder(db, folderParts[0] ?? "");
-        if (gid) chatPasswords = await gatherChatPasswords(db, gid);
+        grp = await resolveGroupFromFolder(db, folderParts[0] ?? "");
+        if (grp) {
+          chatPasswords = await gatherChatPasswords(db, grp.id);
+          rememberedPasswords = await getRememberedPasswords(db, { tenantId: grp.tenantId, chatGroupId: grp.id });
+        }
       }
-      const allPasswords = [...passwords, ...chatPasswords];
-      if (allPasswords.length === 0) { waiting++; continue; } // ยังไม่มีรหัสทั้งในแชทและโน้ต
+      const allPasswords = [...passwords, ...chatPasswords, ...rememberedPasswords];
+      if (allPasswords.length === 0) { waiting++; continue; } // ยังไม่มีรหัสทั้งในโน้ต/แชท/ที่จำไว้
 
       const buf = await downloadOneDriveFile(folderParts, sourceFileName, root);
       if (!buf) continue;
@@ -132,6 +141,18 @@ export async function retryLockedStatements(db?: SupabaseClient): Promise<RetryL
       // อ่าน: deterministic ก่อน · ไม่ reconcile → AI
       const base = sourceFileName.replace(/\.[^.]+$/, "");
       const det = parseStatementDeterministic(unlocked.text);
+
+      // ★ ปลดสำเร็จ + อ่านชื่อบัญชีได้ → จำรหัสไว้ (ผูกชื่อบัญชี) ลองครั้งหน้าอัตโนมัติ ไม่ต้องพิมพ์ซ้ำ
+      if (db && grp && det.accountName) {
+        await rememberStatementPassword(db, {
+          tenantId: grp.tenantId,
+          chatGroupId: grp.id,
+          accountName: det.accountName,
+          bank: det.bank,
+          password: unlocked.password,
+        });
+      }
+
       if (det.fullyReconciled) {
         const csv = buildStatementSummaryCsv(det.transactions, det.bank);
         const docBase = det.accountName ? sanitizeDocName(det.accountName) : base;

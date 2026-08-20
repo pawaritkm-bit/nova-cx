@@ -524,6 +524,7 @@ export async function processPendingAttachments(
         classification = await extractAndClassify({
           db,
           chatGroupId: group?.id ?? "",
+          tenantId: row.tenant_id,
           fileName,
           originalName: row.original_name,
           mime: content.mime,

@@ -22,6 +22,7 @@ import { parseStatementDeterministic, type DeterministicParseResult } from "@/li
 import { excelBufferToRows, csvBufferToRows } from "@/lib/accounting/statement-parse";
 import { detectPlatformFromName, parsePlatformFile } from "@/lib/accounting/platform/parse";
 import { classifyDocTypeFromImage, classifyDocTypeFromText } from "@/lib/ai/classify-doc";
+import { getRememberedPasswords, rememberStatementPassword } from "@/lib/accounting/statement-password-memory";
 import { decryptField } from "@/lib/crypto/field";
 
 const MAX_PASSWORD_CANDIDATES = 40;
@@ -100,6 +101,8 @@ function done(type: FinanceDocType, rest: Omit<FinanceClassification, "type" | "
 export async function extractAndClassify(params: {
   db: SupabaseClient;
   chatGroupId: string;
+  /** tenant — มี = เปิดใช้ "จำรหัส": ลองรหัสที่จำไว้ + จำรหัสที่ปลดสำเร็จ (ผูกชื่อบัญชี) */
+  tenantId?: string;
   fileName: string;
   originalName?: string | null;
   mime: string;
@@ -128,8 +131,12 @@ export async function extractAndClassify(params: {
     source = "excel_csv";
   } else if (isPdf) {
     if (await isPdfEncrypted(params.data)) {
-      const pws = await gatherChatPasswords(params.db, params.chatGroupId);
-      const unlocked = await unlockPdfToText(params.data, pws);
+      // รหัสที่ลอง: แชทลูกค้า + รหัสที่จำไว้ของกลุ่มนี้ (ผูกชื่อบัญชี)
+      const chatPws = await gatherChatPasswords(params.db, params.chatGroupId);
+      const remembered = params.tenantId
+        ? await getRememberedPasswords(params.db, { tenantId: params.tenantId, chatGroupId: params.chatGroupId })
+        : [];
+      const unlocked = await unlockPdfToText(params.data, [...chatPws, ...remembered]);
       if (!unlocked) {
         // ปลดไม่ได้ (ยังไม่มีรหัส) → statement (โฟลเดอร์สเตทเมนต์) + locked ให้ auto-read วางโน้ต
         return done("statement", { locked: true, text: null, chunks: null, source: "digital_pdf", det: null, platform: null, unlockedPassword: null });
@@ -151,6 +158,16 @@ export async function extractAndClassify(params: {
   let det: DeterministicParseResult | null = null;
   if (text) {
     det = parseStatementDeterministic(text);
+    // ★ ปลดด้วยรหัสสำเร็จ + อ่านชื่อบัญชีได้ → จำรหัสไว้ (ผูกชื่อบัญชี) ลองครั้งหน้าอัตโนมัติ
+    if (unlockedPassword && params.tenantId && det.accountName) {
+      await rememberStatementPassword(params.db, {
+        tenantId: params.tenantId,
+        chatGroupId: params.chatGroupId,
+        accountName: det.accountName,
+        bank: det.bank,
+        password: unlockedPassword,
+      });
+    }
     if (det.fullyReconciled) {
       return done("statement", { locked, text, chunks, source, det, platform: null, unlockedPassword });
     }
