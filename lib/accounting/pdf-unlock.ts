@@ -1,31 +1,22 @@
 /**
  * pdf-unlock.ts — ตรวจ/ปลดล็อก PDF ที่ติดรหัส (สเตทเมนต์ธนาคารไทยมักติดรหัส)
- *   ใช้ pdf-parse (pdfjs) ที่รองรับ LoadParameters.password + throw PasswordException เมื่อรหัสผิด
+ *   ใช้ unpdf (pdfjs serverless) ที่รองรับ option.password + โยน PasswordException เมื่อรหัสผิด/ต้องรหัส
+ *   ★ เปลี่ยนจาก pdf-parse → unpdf เพราะ pdf-parse (pdfjs-dist) crash บน Vercel serverless (DOMMatrix)
  *
- * แนวคิด: ลองรหัสจากแชทลูกค้าทีละตัวจน "เปิดได้จริง" (getText สำเร็จ) → ตัวนั้นคือรหัสที่ถูก
+ * แนวคิด: ลองรหัสจากแชทลูกค้าทีละตัวจน "เปิดได้จริง" (ดึง text สำเร็จ) → ตัวนั้นคือรหัสที่ถูก
  *   ★ ทนที่สุด: ไม่ต้องเดาว่า "ข้อความไหนคือรหัส" — ลองจนเปิดได้เอง
  * ★ degrade ปลอดภัย: ปลดไม่ได้/อ่านไม่ได้ → คืน null (caller ตกไปหน้า "รอตรวจสอบ")
  * ★ PDPA: ห้าม log รหัส/เนื้อไฟล์ — log แค่ error สั้น ๆ
  */
-import "@/lib/accounting/pdfjs-polyfill"; // ★ ต้องมาก่อน pdf-parse (polyfill DOMMatrix ให้ pdfjs โหลดได้บน serverless)
-import { PDFParse, PasswordException } from "pdf-parse";
+import { extractPdfLayoutText, isPdfPasswordError } from "@/lib/accounting/pdf-text";
 
-/** ลองดึง text ด้วย (อาจใส่รหัส) — สำเร็จคืน string · PasswordException โยนต่อ (รหัสผิด/ต้องรหัส) · error อื่น → null */
+/** ลองดึง text (อาจใส่รหัส) — สำเร็จคืน string · PasswordException โยนต่อ (รหัสผิด/ต้องรหัส) · error อื่น → null */
 async function getTextWith(buffer: Buffer, password?: string): Promise<string | null> {
-  let parser: PDFParse | null = null;
   try {
-    parser = new PDFParse(password ? { data: buffer, password } : { data: buffer });
-    const res = await parser.getText();
-    return String((res as { text?: unknown })?.text ?? "");
+    return await extractPdfLayoutText(buffer, password);
   } catch (e) {
-    if (e instanceof PasswordException) throw e;
+    if (isPdfPasswordError(e)) throw e;
     return null;
-  } finally {
-    try {
-      await (parser as unknown as { destroy?: () => Promise<void> })?.destroy?.();
-    } catch {
-      /* best-effort cleanup */
-    }
   }
 }
 
@@ -44,7 +35,7 @@ export async function isPdfEncrypted(buffer: Buffer): Promise<boolean> {
     await getTextWith(buffer);
     return false;
   } catch (e) {
-    return e instanceof PasswordException;
+    return isPdfPasswordError(e);
   }
 }
 
