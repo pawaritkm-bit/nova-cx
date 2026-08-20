@@ -7,8 +7,6 @@
  * ★ DOMMatrix ทำงานจริงระดับ affine 2D (พอสำหรับ text extraction ของ pdfjs) · Path2D/ImageData เป็น stub
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 class DOMMatrixPolyfill {
   a = 1; b = 0; c = 0; d = 1; e = 0; f = 0;
   m11 = 1; m12 = 0; m13 = 0; m14 = 0;
@@ -79,7 +77,7 @@ class DOMMatrixPolyfill {
   }
 }
 
-const g = globalThis as any;
+const g = globalThis as unknown as Record<string, unknown>;
 if (typeof g.DOMMatrix === "undefined") g.DOMMatrix = DOMMatrixPolyfill;
 if (typeof g.DOMPoint === "undefined") {
   g.DOMPoint = class { x; y; z; w; constructor(x = 0, y = 0, z = 0, w = 1) { this.x = x; this.y = y; this.z = z; this.w = w; } };
