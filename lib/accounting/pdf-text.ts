@@ -4,8 +4,10 @@
  *   unpdf ใช้ pdfjs รุ่น serverless ในตัว → ไม่ต้อง polyfill DOMMatrix/Path2D
  *
  * layout reconstruction: getTextContent ให้ text items พร้อมตำแหน่ง (transform[4]=x, [5]=y)
- *   → เรียงตาม y(บนลงล่าง) แล้ว x(ซ้ายไปขวา) → จับกลุ่มเป็น "บรรทัด" ตามระยะ y ใกล้กัน
+ *   → เรียง y(บนลงล่าง) จับกลุ่มเป็น "บรรทัด" ตามระยะ y ใกล้กัน → ในแต่ละบรรทัดเรียง x(ซ้ายไปขวา)
  *   ทำให้ได้ layout ใกล้เคียงสายตา (สำคัญมากกับ parser สเตทเมนต์ที่ยึดตำแหน่งคอลัมน์)
+ *   ★ การเรียง x "ต่อบรรทัด" สำคัญ: บางแบงก์ (SCB) วางคอลัมน์รายละเอียดสูงกว่าเส้นเลขนิดเดียว
+ *     ถ้าเรียงรวมทั้งไฟล์ (y ก่อน) รายละเอียดจะมาก่อนวันที่ → parser จับ "แถว" ไม่ได้
  *
  * ★ PDPA: ไม่ log เนื้อ text/รหัส — โยน error สั้น ๆ เท่านั้น
  */
@@ -39,21 +41,25 @@ export async function extractPdfLayoutText(buffer: Buffer, password?: string): P
     const items = (content.items as PdfTextItem[]).filter(
       (i) => typeof i?.str === "string" && i.str.length > 0
     );
-    // เรียง: y มากก่อน (บนสุดของหน้า) → x น้อยก่อน (ซ้ายไปขวา)
+    // เรียง: y มากก่อน (บนสุดของหน้า) → x น้อยก่อน — ใช้จัดลำดับ "จับกลุ่มบรรทัด"
     items.sort((a, b) => b.transform[5] - a.transform[5] || a.transform[4] - b.transform[4]);
     const lines: string[] = [];
-    let cur = "";
+    let group: PdfTextItem[] = [];
     let lastY: number | null = null;
+    const flush = () => {
+      if (!group.length) return;
+      // ★ ในบรรทัดเดียว เรียงซ้าย→ขวาตาม x (คอลัมน์) แล้วต่อด้วย \t
+      group.sort((a, b) => a.transform[4] - b.transform[4]);
+      lines.push(group.map((g) => g.str).join("\t"));
+      group = [];
+    };
     for (const it of items) {
       const y = it.transform[5];
-      if (lastY !== null && Math.abs(y - lastY) > LINE_Y_THRESHOLD) {
-        lines.push(cur);
-        cur = "";
-      }
-      cur += (cur ? "\t" : "") + it.str;
+      if (lastY !== null && Math.abs(y - lastY) > LINE_Y_THRESHOLD) flush();
+      group.push(it);
       lastY = y;
     }
-    if (cur) lines.push(cur);
+    flush();
     pages.push(lines.join("\n"));
   }
   return pages.join("\n");
