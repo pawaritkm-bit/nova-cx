@@ -219,7 +219,32 @@ export type DeterministicParseResult = {
   reconcileRatio: number;
   /** true = มีรายการ + reconcile ผ่าน (≥0.9) → เชื่อถือได้สูง · false → caller ควร fallback AI */
   fullyReconciled: boolean;
+  /** ยอดรวมที่ "พิมพ์ไว้ในสเตทเมนต์" (ถ้ามี) — ไว้ตรวจว่าที่อ่านได้ครบตรงไหม · null = ไม่พบในไฟล์ */
+  printedTotals: PrintedTotals | null;
 };
+
+export type PrintedTotals = {
+  inCount: number | null;
+  inAmount: number | null;
+  outCount: number | null;
+  outAmount: number | null;
+};
+
+/** ดึง "ยอดรวมที่พิมพ์ในสเตทเมนต์" (รวมฝาก/รวมถอน) — รองรับหลายรูปแบบ · ไม่พบ → null ทุกช่อง */
+function extractPrintedTotals(text: string): PrintedTotals | null {
+  const numOf = (s: string | undefined) => (s ? Number(s.replace(/,/g, "")) : NaN);
+  // ไทย: "รวมฝากเงิน 240 รายการ 1,803,583.79" / "รวมถอนเงิน 952 รายการ ..." (KBank ฯลฯ)
+  const inM = text.match(/รวม(?:เงิน)?ฝาก(?:เงิน)?\D{0,10}(\d[\d,]*)\s*รายการ\D{0,10}([\d,]+\.\d{2})/);
+  const outM = text.match(/รวม(?:เงิน)?ถอน(?:เงิน)?\D{0,10}(\d[\d,]*)\s*รายการ\D{0,10}([\d,]+\.\d{2})/);
+  if (!inM && !outM) return null;
+  const val = (n: number) => (Number.isFinite(n) ? n : null);
+  return {
+    inCount: inM ? val(numOf(inM[1])) : null,
+    inAmount: inM ? val(numOf(inM[2])) : null,
+    outCount: outM ? val(numOf(outM[1])) : null,
+    outAmount: outM ? val(numOf(outM[2])) : null,
+  };
+}
 
 /**
  * อ่านสเตทเมนต์จากข้อความ (PDF ดิจิทัลที่ดึง text แล้ว) แบบ deterministic
@@ -340,5 +365,6 @@ export function parseStatementDeterministic(text: string): DeterministicParseRes
     // เชื่อถือได้สูงเมื่อ (1) มีรายการ (2) ยอดคงเหลือไล่ต่อกันได้เกือบทุกแถว (≥0.9)
     //   ★ ถ้าไม่ผ่าน = แบงก์ที่ยังไม่เคยเห็น/layout แปลก → caller ควรตกไปให้ AI อ่านแทน (กันผลผิดเงียบ)
     fullyReconciled: txns.length > 0 && !firstSkipped && reconcileRatio >= 0.9,
+    printedTotals: extractPrintedTotals(text),
   };
 }

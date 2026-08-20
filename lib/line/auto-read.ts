@@ -18,6 +18,7 @@ import { buildPlatformSummaryCsv } from "@/lib/accounting/platform/parse";
 import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/locked-note";
 import { sanitizeDocName, shopNameFromFilename } from "@/lib/accounting/doc-naming";
 import { extractAndClassify, type FinanceClassification } from "@/lib/accounting/classify-finance-doc";
+import { gatherRecentChatText, interpretDocPurpose } from "@/lib/accounting/doc-purpose";
 import { isOneDriveEnabled, renameOneDriveFile } from "@/lib/storage/onedrive";
 import { resolveSaleFolder, oaOneDriveRoot, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 
@@ -115,9 +116,20 @@ export async function autoReadSaleAttachment(params: {
       return;
     }
 
+    // ★ ให้ AI ตีความ "จุดประสงค์ที่ลูกค้าส่งเอกสาร" จากบริบทแชท → เติมเป็นบรรทัดบนสุดของไฟล์สรุป (best-effort)
+    const purposePrefix = async (docType: "statement" | "platform"): Promise<string> => {
+      try {
+        const chatText = await gatherRecentChatText(params.db, params.chatGroupId);
+        const p = await interpretDocPurpose({ chatText, docType, docName: params.originalName || params.fileName });
+        return p ? `จุดประสงค์ที่ลูกค้าส่ง: ${p}\r\n\r\n` : "";
+      } catch {
+        return "";
+      }
+    };
+
     // 1) สเตทเมนต์ deterministic (reconcile ผ่าน) → สรุปฟรี/เร็ว ไม่ต้องพึ่ง AI
     if (cls.det?.fullyReconciled) {
-      const csv = buildStatementSummaryCsv(cls.det.transactions, cls.det.bank);
+      const csv = (await purposePrefix("statement")) + buildStatementSummaryCsv(cls.det.transactions, cls.det.bank, cls.det.printedTotals);
       const docBase = cls.det.accountName ? sanitizeDocName(cls.det.accountName) : base;
       await saveRawCsvToOneDrive({ folderParts, fileName: `${docBase} - สรุป.csv`, csv, root });
       await markSourceRead(folderParts, params.fileName, root);
@@ -128,7 +140,8 @@ export async function autoReadSaleAttachment(params: {
     if (cls.platform && (cls.platform.figures.grossSales > 0 || cls.platform.figures.platformFee > 0)) {
       const shop = shopNameFromFilename(params.originalName);
       const platBase = shop ? sanitizeDocName(shop) : base;
-      await saveRawCsvToOneDrive({ folderParts, fileName: `${platBase} - ยอดขาย.csv`, csv: buildPlatformSummaryCsv(cls.platform), root });
+      const csv = (await purposePrefix("platform")) + buildPlatformSummaryCsv(cls.platform);
+      await saveRawCsvToOneDrive({ folderParts, fileName: `${platBase} - ยอดขาย.csv`, csv, root });
       await markSourceRead(folderParts, params.fileName, root);
       return;
     }

@@ -154,7 +154,7 @@ export async function retryLockedStatements(db?: SupabaseClient): Promise<RetryL
       }
 
       if (det.fullyReconciled) {
-        const csv = buildStatementSummaryCsv(det.transactions, det.bank);
+        const csv = buildStatementSummaryCsv(det.transactions, det.bank, det.printedTotals);
         const docBase = det.accountName ? sanitizeDocName(det.accountName) : base;
         await saveRawCsvToOneDrive({ folderParts, fileName: `${docBase} - สรุป.csv`, csv, root });
       } else {

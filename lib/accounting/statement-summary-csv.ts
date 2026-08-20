@@ -11,6 +11,7 @@
  * ★ ตัวเลข: ไม่มีลูกน้ำคั่นพัน + ตัดศูนย์ท้ายทศนิยม (15300, 72912.5, 262.13) — ตรงฟอร์แมตตัวอย่าง
  */
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
+import type { PrintedTotals } from "@/lib/accounting/statement-deterministic";
 
 function round2(x: number): number {
   return Math.round((x + Number.EPSILON) * 100) / 100;
@@ -117,8 +118,29 @@ function row(cells: (string | number)[]): string {
  *   @param txns  รายการธุรกรรมทั้งหมด (เข้า/ออก)
  *   @param bankLabel ชื่อธนาคารไทยมาตรฐาน (คอลัมน์ "ธนาคาร" ในส่วนรายการทั้งหมด)
  */
-export function buildStatementSummaryCsv(txns: StatementTxn[], bankLabel: string): string {
+export function buildStatementSummaryCsv(txns: StatementTxn[], bankLabel: string, printed?: PrintedTotals | null): string {
   const lines: string[] = [];
+
+  // ส่วนบนสุด: ★ ตรวจสอบยอด (ที่อ่านได้ vs ยอดรวมที่พิมพ์ในสเตทเมนต์) — ถ้าไฟล์พิมพ์ยอดรวมไว้
+  if (printed && (printed.inAmount != null || printed.outAmount != null)) {
+    const parsed = (dir: "in" | "out") => {
+      let c = 0, s = 0;
+      for (const t of txns) if (t.direction === dir && t.amount != null) { c++; s += t.amount; }
+      return { c, s: round2(s) };
+    };
+    const chk = (pC: number | null, pA: number | null, got: { c: number; s: number }) => {
+      if (pA == null) return "-";
+      const amtOk = Math.abs(pA - got.s) < 0.01;
+      const cntOk = pC == null || pC === got.c;
+      return amtOk && cntOk ? "✓ ตรง" : "✗ ไม่ตรง";
+    };
+    const inG = parsed("in"), outG = parsed("out");
+    lines.push("ตรวจสอบยอด (ที่อ่านได้ เทียบกับที่พิมพ์ในสเตทเมนต์)");
+    lines.push(row(["", "ที่ระบบอ่านได้", "ที่พิมพ์ในสเตทเมนต์", "ผล"]));
+    lines.push(row(["เงินเข้า", `${inG.c} รายการ / ${num(inG.s)}`, printed.inAmount != null ? `${printed.inCount ?? "?"} รายการ / ${num(printed.inAmount)}` : "-", chk(printed.inCount, printed.inAmount, inG)]));
+    lines.push(row(["เงินออก", `${outG.c} รายการ / ${num(outG.s)}`, printed.outAmount != null ? `${printed.outCount ?? "?"} รายการ / ${num(printed.outAmount)}` : "-", chk(printed.outCount, printed.outAmount, outG)]));
+    lines.push("");
+  }
 
   /** ส่วน "แยกรายเดือน" (เข้า/ออก) + แถวรวม */
   const pushMonthly = (title: string, amtCol: string, dir: "in" | "out") => {
