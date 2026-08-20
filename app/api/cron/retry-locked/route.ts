@@ -36,12 +36,7 @@ async function handle(request: NextRequest) {
     return NextResponse.json({ status: "ok", ...summary }, { status: 200 });
   } catch (e) {
     logServerError("cron/retry-locked", requestId, e);
-    // ★ DIAG ชั่วคราว: คืนข้อความ error จริง เพื่อระบุโมดูลที่พัง (จะเอาออกหลังแก้)
-    const err = e as { message?: string; stack?: string };
-    return NextResponse.json(
-      { status: "error", request_id: requestId, message: String(err?.message ?? e), stack: String(err?.stack ?? "").slice(0, 600) },
-      { status: 200 }
-    );
+    return NextResponse.json({ status: "error", request_id: requestId }, { status: 200 });
   }
 }
 
