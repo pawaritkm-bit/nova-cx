@@ -43,8 +43,18 @@ const UNNAMED_KEY = " __unnamed__";
 const GENERIC_WORDS =
   /transfer|deposit|payment|interest|received|withdraw|\bin\b|\bout\b|\bfrom\b|\bto\b|\btr\b|\bfr\b|bank|prompt\s?pay|msisdn|natid|โอนเงิน|เงินโอน|รับโอน|รับเงินโอน|พร้อมเพย์|ดอกเบี้ย|โบนัส|ค่าธรรมเนียม|ฝากเงิน|ถอนเงิน|โอนออก|โอนเข้า|เข้าบัญชี/gi;
 
+/** ตัด "เลขอ้างอิงธุรกรรม" ที่ไม่ซ้ำกันออก เพื่อให้จ่ายร้านเดียวกันรวมเป็นกองเดียว
+ *   เช่น "ชำระ Ref X4KGD SHOPEEPAY" / "Ref XRRX4 SHOPEEPAY" → รวมเป็น "ชำระ SHOPEEPAY" กองเดียว
+ *   (Ref code = X + ตัวอักษร/เลขคละ 4-8 ตัว · ตัดเฉพาะเมื่อขึ้นต้นด้วย ref/รหัสอ้างอิง) */
+function stripTxnRef(s: string): string {
+  return s
+    .replace(/\b(ref(?:erence)?(?:\s*(?:no|number))?|รหัสอ้างอิง|เลขที่อ้างอิง)\.?\s*[:#]?\s*[a-z0-9]{3,}/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function analyzeSender(description: string): { key: string; unnamed: boolean } {
-  const raw = (description ?? "").replace(/\s+/g, " ").trim();
+  const raw = stripTxnRef((description ?? "").replace(/\s+/g, " ").trim());
   if (!raw) return { key: "", unnamed: true };
   const nameCore = raw
     .toLowerCase()
@@ -65,7 +75,7 @@ function buildPartyFlow(txns: StatementTxn[], dir: "in" | "out"): SenderRow[] {
     if (t.direction !== dir || t.amount == null) continue;
     const { key, unnamed } = analyzeSender(t.description ?? "");
     const groupKey = unnamed ? UNNAMED_KEY : key;
-    const display = unnamed ? UNNAMED_LABEL : (t.description ?? "").replace(/\s+/g, " ").trim();
+    const display = unnamed ? UNNAMED_LABEL : stripTxnRef((t.description ?? "").replace(/\s+/g, " ").trim());
     const b = byKey.get(groupKey) ?? { name: display, count: 0, total: 0 };
     b.total += t.amount;
     b.count += 1;
