@@ -93,24 +93,37 @@ async function loadContactName(
   return null;
 }
 
-/** ดึงรายการจากบิล (prefill) — คืน items + วันที่บิล (scope tenant + ต้องเป็นลูกค้ารายเดียวกัน) */
-async function loadBillPrefill(
+type BillHeader = {
+  customerId: string | null;
+  buyerName: string | null;
+  buyerTaxId: string | null;
+  items: ReceiptCertItem[];
+  docDate: string;
+};
+
+/** ดึงบิล (header + รายการ) จาก bill id (scope tenant) — ใช้ได้ทั้งบิลที่ผูก/ไม่ผูกลูกค้า
+ *   ★ scope จริงเช็คที่ caller (customerInScope ถ้ามีลูกค้า) — ที่นี่กันแค่ tenant */
+async function loadBill(
   service: SupabaseClient,
   tenantId: string,
-  billId: string,
-  customerId: string
-): Promise<{ items: ReceiptCertItem[]; docDate: string } | null> {
+  billId: string
+): Promise<BillHeader | null> {
   const { data: entry } = await service
     .from("bill_entries")
-    .select("id, customer_id, doc_date")
+    .select("id, customer_id, doc_date, buyer_name, counterparty_name, counterparty_tax_id")
     .eq("id", billId)
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
     .maybeSingle();
   if (!entry) return null;
-  const e = entry as { id: string; customer_id: string | null; doc_date: string | null };
-  // บิลต้องเป็นของลูกค้ารายนี้ (กันดึงข้ามลูกค้า/นอกสโคป)
-  if (e.customer_id !== customerId) return null;
+  const e = entry as {
+    id: string;
+    customer_id: string | null;
+    doc_date: string | null;
+    buyer_name: string | null;
+    counterparty_name: string | null;
+    counterparty_tax_id: string | null;
+  };
 
   const { data: lineData } = await service
     .from("bill_entry_lines")
@@ -139,7 +152,13 @@ async function loadBillPrefill(
     note: "",
   }));
 
-  return { items, docDate: billDate };
+  return {
+    customerId: e.customer_id,
+    buyerName: e.buyer_name,
+    buyerTaxId: e.counterparty_tax_id,
+    items,
+    docDate: billDate,
+  };
 }
 
 export default async function ReceiptCertPage({
@@ -161,57 +180,60 @@ export default async function ReceiptCertPage({
   if (!access) redirect("/login?redirect=/chat-audit/accounting");
 
   const tenantId = access.tenantId;
-  const customerId = (sp.customer ?? "").trim();
-  if (!UUID_RE.test(customerId)) {
-    return <ErrorShell message="ไม่พบลูกค้า — เปิดใบรับรองจากการ์ดลูกค้า หรือแถวบิลอีกครั้ง" />;
+  const customerParam = (sp.customer ?? "").trim();
+  const billId = (sp.bill ?? "").trim();
+
+  // ★ เปิดได้ 2 ทาง: มีลูกค้า (customer) หรือมีบิล (bill) อย่างน้อยหนึ่งอย่าง
+  //   → รองรับ "ทุกบิล" รวมบิลที่ยังไม่ผูกลูกค้า (ตามที่ลูกค้าสั่ง: ปุ่มขึ้นทุกบิล)
+  if (!UUID_RE.test(customerParam) && !UUID_RE.test(billId)) {
+    return <ErrorShell message="เปิดใบรับรองจากแถวบิล หรือการ์ดลูกค้าอีกครั้ง" />;
   }
-  // ★ สโคป: นักบัญชีออกใบรับรองได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
-  if (!customerInScope(access, customerId)) {
+
+  // โหลดบิลก่อน (ถ้ามี) — ได้ header (buyer/tax) + รายการ + ลูกค้าที่ผูกกับบิล
+  let bill: BillHeader | null = null;
+  if (UUID_RE.test(billId)) {
+    bill = await loadBill(service, tenantId, billId);
+  }
+
+  // ลูกค้าที่ใช้ทำหัวกระดาษ = param (ถ้าให้มา) หรือ ลูกค้าที่ผูกกับบิล
+  const customerId = UUID_RE.test(customerParam) ? customerParam : bill?.customerId ?? "";
+
+  // ★ สโคป: ถ้ามีลูกค้า → นักบัญชีต้องดูแลลูกค้ารายนั้น · บิลที่ยังไม่ผูกลูกค้า → ผ่าน (tenant + สิทธิ์บัญชีพอ)
+  if (UUID_RE.test(customerId) && !customerInScope(access, customerId)) {
     return <ErrorShell message="ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" />;
   }
 
-  // หัวกระดาษ = ข้อมูลลูกค้า (ผู้จ่าย/ผู้รับรอง)
-  const { data: custRow } = await service
-    .from("customers")
-    .select("id, name, business_name, tax_id, customer_code")
-    .eq("id", customerId)
-    .eq("tenant_id", tenantId)
-    .is("deleted_at", null)
-    .maybeSingle();
-  if (!custRow) {
-    return <ErrorShell message="ไม่พบลูกค้า (อาจถูกลบไปแล้ว)" />;
-  }
-  const cust = custRow as {
-    id: string;
-    name: string | null;
-    business_name: string | null;
-    tax_id: string | null;
-    customer_code: string | null;
-  };
-
-  const businessName = (cust.business_name || cust.name || "").trim();
-  const contactName = await loadContactName(service, tenantId, customerId);
-  // ข้าพเจ้า/ผู้จ่าย = ผู้ติดต่อลูกค้า ถ้าไม่มี → ชื่อกิจการลูกค้า
-  const defaultPayerName = contactName || businessName;
-
-  // prefill จากบิล (ถ้าส่ง ?bill= มา และผ่านสโคป)
-  const billId = (sp.bill ?? "").trim();
-  let items: ReceiptCertItem[] = [];
-  let docDate = "";
-  if (UUID_RE.test(billId)) {
-    const pre = await loadBillPrefill(service, tenantId, billId, customerId);
-    if (pre) {
-      items = pre.items;
-      docDate = pre.docDate;
+  // หัวกระดาษ = ข้อมูลลูกค้า (ผู้จ่าย/ผู้รับรอง) — ถ้าไม่มีลูกค้า ใช้ชื่อ "ผู้ซื้อ" ที่อ่านได้จากบิลแทน (นักบัญชีแก้ได้)
+  let defaultPayerName = "";
+  let taxId = "";
+  if (UUID_RE.test(customerId)) {
+    const { data: custRow } = await service
+      .from("customers")
+      .select("id, name, business_name, tax_id, customer_code")
+      .eq("id", customerId)
+      .eq("tenant_id", tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    const cust = custRow as { name: string | null; business_name: string | null; tax_id: string | null } | null;
+    if (cust) {
+      const businessName = (cust.business_name || cust.name || "").trim();
+      const contactName = await loadContactName(service, tenantId, customerId);
+      defaultPayerName = contactName || businessName;
+      taxId = cust.tax_id ?? "";
     }
   }
-  if (items.length === 0) items = [{ date: "", description: "", amount: 0, note: "" }];
-  if (!docDate) docDate = todayThaiDate();
+  // ไม่มีลูกค้า/ไม่มีชื่อ → เดาจากบิล (ผู้ซื้อ) ให้นักบัญชีแก้
+  if (!defaultPayerName) defaultPayerName = bill?.buyerName ?? "";
+  if (!taxId) taxId = bill?.buyerTaxId ?? "";
+
+  const items: ReceiptCertItem[] =
+    bill && bill.items.length > 0 ? bill.items : [{ date: "", description: "", amount: 0, note: "" }];
+  const docDate = bill?.docDate || todayThaiDate();
 
   return (
     <ReceiptCertDoc
       customerName={defaultPayerName}
-      taxId={cust.tax_id ?? ""}
+      taxId={taxId}
       docDate={docDate}
       items={items}
       backHref="/chat-audit/accounting"

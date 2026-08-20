@@ -105,18 +105,16 @@ export default function RowActions({
         <Link href={editHref} className="acc-mini-btn" scroll={false} aria-label="ตรวจ/แก้">
           ตรวจ/แก้
         </Link>
-        {/* ออกใบรับรองแทนใบเสร็จ (prefill รายการ/ยอด/วันที่ จากบิลนี้) — เฉพาะบิลที่ผูกลูกค้า */}
-        {customerId ? (
-          <a
-            href={`/chat-audit/accounting/receipt-cert?customer=${customerId}&bill=${entryId}`}
-            className="acc-mini-btn"
-            target="_blank"
-            rel="noopener"
-            title="ออกใบรับรองแทนใบเสร็จจากบิลนี้"
-          >
-            ใบรับรองฯ
-          </a>
-        ) : null}
+        {/* ออกใบรับรองแทนใบเสร็จ (prefill รายการ/ยอด/วันที่ จากบิลนี้) — ★ ขึ้นทุกบิล (รวมบิลที่ยังไม่ผูกลูกค้า) */}
+        <a
+          href={`/chat-audit/accounting/receipt-cert?bill=${entryId}${customerId ? `&customer=${customerId}` : ""}`}
+          className="acc-mini-btn"
+          target="_blank"
+          rel="noopener"
+          title="ออกใบรับรองแทนใบเสร็จจากบิลนี้"
+        >
+          ใบรับรองฯ
+        </a>
         {/* ออกหนังสือรับรองหัก ณ ที่จ่าย — เฉพาะบิลซื้อที่มีรายการ WHT (isWhtCertEligible ทั้ง 2 เงื่อนไข) */}
         {customerId && entryType === "purchase" && hasWht ? (
           <a
