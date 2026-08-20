@@ -9,6 +9,7 @@
  *   - ดึงไม่ได้/ว่าง = สแกนเป็นภาพ (ต้อง OCR)
  * ★ PDPA: ไม่ log เนื้อ text ที่ดึงได้ — ใช้แค่ "ความยาว" ตัดสิน
  */
+import "@/lib/accounting/pdfjs-polyfill"; // ★ ต้องมาก่อน pdf-parse (polyfill DOMMatrix ให้ pdfjs โหลดได้บน serverless)
 import { PDFParse } from "pdf-parse";
 
 export type DocSource = "excel_csv" | "digital_pdf" | "scan_or_image";

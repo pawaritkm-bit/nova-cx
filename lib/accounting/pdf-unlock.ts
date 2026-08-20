@@ -7,6 +7,7 @@
  * ★ degrade ปลอดภัย: ปลดไม่ได้/อ่านไม่ได้ → คืน null (caller ตกไปหน้า "รอตรวจสอบ")
  * ★ PDPA: ห้าม log รหัส/เนื้อไฟล์ — log แค่ error สั้น ๆ
  */
+import "@/lib/accounting/pdfjs-polyfill"; // ★ ต้องมาก่อน pdf-parse (polyfill DOMMatrix ให้ pdfjs โหลดได้บน serverless)
 import { PDFParse, PasswordException } from "pdf-parse";
 
 /** ลองดึง text ด้วย (อาจใส่รหัส) — สำเร็จคืน string · PasswordException โยนต่อ (รหัสผิด/ต้องรหัส) · error อื่น → null */
