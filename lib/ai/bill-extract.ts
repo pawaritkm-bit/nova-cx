@@ -41,6 +41,109 @@ function isReasoningModel(model: string): boolean {
   return /^(gpt-5|o\d)/i.test(model);
 }
 
+/** โมเดล vision ของ Gemini (fallback เมื่อไม่มี OPENAI_API_KEY) — paid tier ไม่เทรนข้อมูล */
+const GEMINI_VISION_MODEL = process.env.ACCT_VISION_MODEL || "gemini-3.6-flash";
+
+/**
+ * เรียก Gemini vision → คืน "เนื้อ JSON" (string) หรือ null
+ *   ★ ใช้ schema/prompt เดียวกับ OpenAI (buildSystemPrompt) → ผ่าน normalizeExtraction เดิมได้เลย
+ */
+async function geminiExtractContent(
+  system: string,
+  user: string,
+  imageData: Buffer,
+  mime: string,
+  maxTokens: number,
+  timeoutMs: number
+): Promise<string | null> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
+  const m = (mime || "").toLowerCase();
+  const media = m.includes("pdf") ? "application/pdf" : m.startsWith("image/") ? mime : "image/jpeg";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent?key=${key}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{ parts: [{ inline_data: { mime_type: media, data: imageData.toString("base64") } }, { text: `${system}\n\n${user}` }] }],
+          generationConfig: { temperature: 0, responseMimeType: "application/json", maxOutputTokens: maxTokens },
+        }),
+      }
+    );
+    if (!res.ok) {
+      console.warn(`[bill-extract] gemini http ${res.status}`);
+      return null;
+    }
+    const body = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+    return body.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
+  } catch {
+    console.warn("[bill-extract] gemini error");
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * เรียก vision extract — เลือก provider อัตโนมัติ: OPENAI ก่อน (ถ้ามี key) · ไม่มี → Gemini
+ *   คืน "เนื้อ JSON" (string) หรือ null · ★ ทำให้สกัดบิลทำงานได้แม้ไม่มี OPENAI_API_KEY (ใช้ Gemini แทน)
+ */
+async function runBillVision(
+  system: string,
+  user: string,
+  imageData: Buffer,
+  mime: string,
+  openaiModel: string,
+  maxTokens: number
+): Promise<string | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (apiKey) {
+    const isPdf = (mime || "").toLowerCase().includes("pdf");
+    const dataUrl = `data:${mime || "image/jpeg"};base64,${imageData.toString("base64")}`;
+    const filePart = isPdf
+      ? { type: "file", file: { filename: "bill.pdf", file_data: dataUrl } }
+      : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };
+    const reasoning = isReasoningModel(openaiModel);
+    const reqBody: Record<string, unknown> = {
+      model: openaiModel,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: [{ type: "text", text: user }, filePart] },
+      ],
+    };
+    if (reasoning) reqBody.max_completion_tokens = maxTokens * 2;
+    else { reqBody.temperature = 0; reqBody.max_tokens = maxTokens; }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), reasoning ? EXTRACT_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(OPENAI_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(reqBody),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        console.warn(`[bill-extract] openai http ${res.status}`);
+        return null;
+      }
+      const body = (await res.json()) as ChatCompletionResponse;
+      return body.choices?.[0]?.message?.content ?? null;
+    } catch {
+      console.warn("[bill-extract] openai error");
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  // ไม่มี OPENAI key → Gemini (paid tier)
+  return geminiExtractContent(system, user, imageData, mime, maxTokens, EXTRACT_TIMEOUT_MS);
+}
+
 /** เกณฑ์ความมั่นใจ "สูง" ต่อ field — >= นี้ = มั่นใจ (ไม่ mark เดา) */
 const FIELD_THRESHOLD = 0.8;
 
@@ -446,63 +549,13 @@ export async function extractBillData(
   mime: string,
   chart: ChartAccount[] = []
 ): Promise<ExtractedBill | null> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return null; // degrade: ไม่มี key → ข้ามการสกัด
-
-  // ★ บิลไลน์ (รูปใบเดียว) — อัปเป็นโมเดลแม่น (เดิม gpt-4o-mini อ่านคอลัมน์/ยอดผิด = นักบัญชีเสียเวลาแก้มากสุด)
-  //   default = EXTRACT_MODEL (gpt-5-mini) · override ด้วย OPENAI_LINE_BILL_MODEL ถ้าต้องคุมต้นทุน/ความเร็ว
+  // ★ บิลไลน์ (รูปใบเดียว) — OpenAI ก่อน (ถ้ามี key) · ไม่มี → Gemini (paid tier)
+  //   default OpenAI model = EXTRACT_MODEL (gpt-5-mini) · override ด้วย OPENAI_LINE_BILL_MODEL
   const model = process.env.OPENAI_LINE_BILL_MODEL || EXTRACT_MODEL;
-  const isPdf = (mime || "").toLowerCase().includes("pdf");
-  const dataUrl = `data:${mime || "image/jpeg"};base64,${imageData.toString("base64")}`;
-
-  // รูป → image_url (detail=high อ่านเลขชัด) · PDF → file input (OpenAI อ่าน PDF ได้ผ่าน type:file)
-  const filePart = isPdf
-    ? { type: "file", file: { filename: "bill.pdf", file_data: dataUrl } }
-    : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };
-
-  // reasoning model (gpt-5*/o-series) ใช้ max_completion_tokens + ห้ามส่ง temperature (+ ช้ากว่า → timeout ยาวขึ้น)
-  const reasoning = isReasoningModel(model);
-  const reqBody: Record<string, unknown> = {
-    model,
-    messages: [
-      { role: "system", content: buildSystemPrompt(chart) },
-      { role: "user", content: [{ type: "text", text: USER_PROMPT }, filePart] },
-    ],
-  };
-  if (reasoning) {
-    reqBody.max_completion_tokens = 8000; // เผื่อ reasoning tokens + schema ต่อ field
-  } else {
-    reqBody.temperature = 0;
-    reqBody.max_tokens = 4000;
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), reasoning ? EXTRACT_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch(OPENAI_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(reqBody),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      console.warn(`[bill-extract] openai http ${res.status}`);
-      return null;
-    }
-
-    const body = (await res.json()) as ChatCompletionResponse;
-    const content = body.choices?.[0]?.message?.content;
-    if (!content) return null;
-
-    const bill = normalizeExtraction(extractJson(content), buildChartByCode(chart));
-    return bill ? flagVatInconsistency(bill) : null;
-  } catch {
-    console.warn("[bill-extract] extract error");
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  const content = await runBillVision(buildSystemPrompt(chart), USER_PROMPT, imageData, mime, model, 4000);
+  if (!content) return null;
+  const bill = normalizeExtraction(extractJson(content), buildChartByCode(chart));
+  return bill ? flagVatInconsistency(bill) : null;
 }
 
 /**
@@ -560,65 +613,22 @@ async function extractBillsDataSingle(
   mime: string,
   chart: ChartAccount[] = []
 ): Promise<ExtractedBill[]> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return [];
+  // ไม่มีทั้ง OpenAI และ Gemini key → ข้าม
+  if (!process.env.OPENAI_API_KEY && !process.env.GEMINI_API_KEY) return [];
 
-  const model = EXTRACT_MODEL;
-  const isPdf = (mime || "").toLowerCase().includes("pdf");
   const prepped = await downscaleImageIfLarge(imageData, mime); // ย่อรูปสแกน/ถ่ายบิลใหญ่ (PDF ไม่แตะ)
-  const dataUrl = `data:${prepped.mime || "image/jpeg"};base64,${prepped.data.toString("base64")}`;
-  const filePart = isPdf
-    ? { type: "file", file: { filename: "bill.pdf", file_data: dataUrl } }
-    : { type: "image_url", image_url: { url: dataUrl, detail: "high" } };
+  const content = await runBillVision(buildSystemPrompt(chart), MULTI_USER_PROMPT, prepped.data, prepped.mime, EXTRACT_MODEL, 8000);
+  if (!content) return [];
 
-  // reasoning model (gpt-5*/o-series) ใช้ max_completion_tokens + ห้ามส่ง temperature
-  const reasoning = isReasoningModel(model);
-  const reqBody: Record<string, unknown> = {
-    model,
-    messages: [
-      { role: "system", content: buildSystemPrompt(chart) },
-      { role: "user", content: [{ type: "text", text: MULTI_USER_PROMPT }, filePart] },
-    ],
-  };
-  if (reasoning) {
-    reqBody.max_completion_tokens = 16000; // เผื่อ reasoning tokens + output หลายบิล
-  } else {
-    reqBody.temperature = 0;
-    reqBody.max_tokens = 8000;
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), EXTRACT_TIMEOUT_MS);
-  try {
-    const res = await fetch(OPENAI_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(reqBody),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      console.warn(`[bill-extract] multi openai http ${res.status}`);
-      return [];
-    }
-    const body = (await res.json()) as ChatCompletionResponse;
-    const content = body.choices?.[0]?.message?.content;
-    if (!content) return [];
-
-    const obj = extractJson(content);
-    if (!obj) return [];
-    const rawBills = Array.isArray((obj as { bills?: unknown }).bills)
-      ? ((obj as { bills: unknown[] }).bills)
-      : [obj]; // เผื่อโมเดลคืน object เดี่ยว
-    const chartByCode = buildChartByCode(chart);
-    return rawBills
-      .map((b) => normalizeExtraction(b as Record<string, unknown>, chartByCode))
-      .filter((b): b is ExtractedBill => b !== null && billHasContent(b))
-      .map(flagVatInconsistency)
-      .slice(0, 30);
-  } catch {
-    console.warn("[bill-extract] multi extract error");
-    return [];
-  } finally {
-    clearTimeout(timer);
-  }
+  const obj = extractJson(content);
+  if (!obj) return [];
+  const rawBills = Array.isArray((obj as { bills?: unknown }).bills)
+    ? ((obj as { bills: unknown[] }).bills)
+    : [obj]; // เผื่อโมเดลคืน object เดี่ยว
+  const chartByCode = buildChartByCode(chart);
+  return rawBills
+    .map((b) => normalizeExtraction(b as Record<string, unknown>, chartByCode))
+    .filter((b): b is ExtractedBill => b !== null && billHasContent(b))
+    .map(flagVatInconsistency)
+    .slice(0, 30);
 }
