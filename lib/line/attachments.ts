@@ -131,6 +131,20 @@ function sanitizeAsciiFileName(raw: string): string {
   return /[A-Za-z0-9]/.test(cleaned) ? cleaned : "";
 }
 
+/** แยกนามสกุลไฟล์จริงจากชื่อ (จุดสุดท้าย, ตัวอักษร/เลข 1-8 ตัว) → { base, ext } · ไม่มี → ext="" */
+function splitNameExt(raw: string): { base: string; ext: string } {
+  const m = raw.trim().match(/^(.*)\.([A-Za-z0-9]{1,8})$/);
+  return m ? { base: m[1], ext: m[2].toLowerCase() } : { base: raw.trim(), ext: "" };
+}
+
+/** sanitize ชื่อฐานสำหรับ OneDrive: คงไทย/unicode ตัดเฉพาะอักขระต้องห้าม + ยุบช่องว่าง (ว่าง→"") */
+// eslint-disable-next-line no-control-regex
+const ONEDRIVE_FORBIDDEN = /[\/:*?"<>|\x00-\x1f\\]/g;
+function sanitizeOneDriveBase(raw: string): string {
+  const v = raw.replace(ONEDRIVE_FORBIDDEN, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  return /\S/.test(v) ? v : "";
+}
+
 /** 'YYYY-MM' จาก timestamp string (fallback เดือนปัจจุบันถ้า parse ไม่ได้) */
 function monthFolder(ts: string): string {
   const d = new Date(ts);
@@ -474,16 +488,22 @@ export async function processPendingAttachments(
     const customerFolder = group ? resolveCustomerFolder(group) : "unassigned";
     const month = monthFolder(row.created_at);
     const stampBase = `${safeStamp(row.chat_messages?.sent_at ?? null)}_${contentId}`;
-    let fileName = `${stampBase}.${extFromMime(content.mime)}`;
-    if (isFile) {
-      const sanitized = row.original_name ? sanitizeAsciiFileName(row.original_name) : "";
-      if (sanitized) fileName = `${contentId}_${sanitized}`;
-    }
 
     // ★ sale OA (สนง.บัญชี Finovas): เก็บ OneDrive แยกชื่อไลน์ "ที่เดียว" (ไม่ซ้ำ Supabase — ประหยัดพื้นที่)
     //   OA อื่น/บิล: เก็บ Supabase เหมือนเดิม · OneDrive ไม่พร้อม → fallback Supabase กันไฟล์หาย
     const isSaleOa = (group?.chat_channels?.oa_type || "") === "sale";
     const useOneDrive = isSaleOa && group !== null && isOneDriveEnabled();
+
+    // ชื่อไฟล์: ★ คงนามสกุลจริงเสมอ (กัน OneDrive/SharePoint พรีวิวไม่ได้เพราะไม่มี .pdf/.xlsx)
+    //   นามสกุล = จากชื่อเดิม > เดาจาก mime · ฐานชื่อ: OneDrive คงไทยได้ · Supabase ต้อง ASCII
+    //   ฐานว่าง (ชื่อไทยล้วนบน Supabase) → fallback <sent_at>_<contentId>
+    const split = row.original_name ? splitNameExt(row.original_name) : { base: "", ext: "" };
+    const ext = split.ext || extFromMime(content.mime) || "bin";
+    let fileName = `${stampBase}.${ext}`;
+    if (isFile && split.base) {
+      const base = useOneDrive ? sanitizeOneDriveBase(split.base) : sanitizeAsciiFileName(split.base);
+      if (base) fileName = `${contentId}_${base}.${ext}`;
+    }
     const storeFolder = useOneDrive && group ? await resolveSaleFolder(group) : customerFolder;
     // sale OA (OneDrive): เก็บในโฟลเดอร์ลูกค้าตรง ๆ ไม่ซ้อนโฟลเดอร์เดือน · OA อื่น (Supabase): คงโฟลเดอร์เดือนเดิม
     const storeFolderParts = useOneDrive ? [storeFolder] : [storeFolder, month];
