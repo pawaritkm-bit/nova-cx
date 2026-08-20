@@ -35,7 +35,19 @@ const nextConfig = {
   //   2) แม้ external แล้ว ก็ต้องประกาศไฟล์ .woff ไว้ใน outputFileTracingIncludes ด้วย เพื่อให้ Vercel
   //      serverless bundler (@vercel/nft) copy ไฟล์ไปลง deployment จริง (local `next dev`/`next build` ไม่ผ่าน
   //      @vercel/nft จึงไม่เจอไฟล์หายตอน build เอง — ต้อง verify อีกรอบหลัง deploy จริงบน Vercel)
-  serverExternalPackages: ["@fontsource/sarabun"],
+  //   ★ 2026-08-20 — ตัวอ่านสเตทเมนต์/แพลตฟอร์ม (auto-read + retry-locked) พังบน Vercel serverless
+  //     (retry-locked 500 ตอน import, auto-read dynamic import throw เงียบ → ไฟล์เข้า OneDrive แต่ไม่ถูกอ่าน)
+  //     เพราะ deps หนัก/มี native/asset ถูก webpack bundle แล้ว init ไม่ผ่านใน lambda → ประกาศ external
+  //     ให้ Next ปล่อยเป็น native require + @vercel/nft copy node_modules จริงไปด้วย (แบบเดียวกับ sarabun)
+  serverExternalPackages: [
+    "@fontsource/sarabun",
+    "pdf-parse",
+    "pdfjs-dist",
+    "sharp",
+    "exceljs",
+    "@anthropic-ai/sdk",
+    "pdf-lib",
+  ],
   outputFileTracingIncludes: {
     "/**": [
       "./node_modules/@fontsource/sarabun/files/sarabun-thai-400-normal.woff",
