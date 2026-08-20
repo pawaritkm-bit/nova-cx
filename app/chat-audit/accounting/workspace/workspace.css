@@ -1,0 +1,81 @@
+/* โต๊ะทำงานบัญชี (ดีไซน์ใหม่) — scoped .wsp-* กันชนสไตล์หน้าเดิม */
+.wsp-switch{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.wsp-switch-link{color:#64748b;font-size:13px;text-decoration:none;font-weight:600}
+.wsp-switch-link:hover{color:#2563eb}
+.wsp-badge-new{background:#eff6ff;color:#2563eb;font-size:11px;font-weight:800;border-radius:20px;padding:2px 10px}
+
+.wsp-flow{display:flex;gap:6px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:10px;margin-bottom:14px;overflow:auto;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.wsp-step{flex:1;min-width:130px;display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:10px}
+.wsp-step .n{width:24px;height:24px;border-radius:50%;background:#f1f5f9;color:#64748b;display:grid;place-items:center;font-weight:700;font-size:12px;flex:none}
+.wsp-step .t{font-weight:600;font-size:12.5px;color:#334155}
+.wsp-step .b{margin-left:auto;background:#fee2e2;color:#b91c1c;border-radius:20px;padding:0 8px;font-size:11px;font-weight:800}
+.wsp-step.done .n{background:#e7f7f0;color:#0f9d6b}
+.wsp-step.done .b{background:#e7f7f0;color:#0f9d6b}
+.wsp-step.active{background:#eff6ff}
+.wsp-step.active .n{background:#2563eb;color:#fff}
+.wsp-step.active .t{color:#2563eb}
+
+.wsp-layout{display:grid;grid-template-columns:300px 1fr;gap:14px;align-items:start}
+@media(max-width:900px){.wsp-layout{grid-template-columns:1fr}}
+
+.wsp-rail{background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.wsp-month{display:flex;gap:8px;padding:12px 14px;border-bottom:1px solid #e2e8f0;align-items:flex-start}
+.wsp-month-tabs{display:flex;flex-wrap:wrap;gap:5px}
+.wsp-mtab{font-size:12px;font-weight:600;color:#64748b;background:#f1f5f9;border-radius:8px;padding:4px 9px;text-decoration:none}
+.wsp-mtab.on{background:#2563eb;color:#fff}
+.wsp-kpis{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 14px;border-bottom:1px solid #e2e8f0}
+.wsp-kpis div{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:7px 10px;display:flex;flex-direction:column}
+.wsp-kpis .k{font-size:11px;color:#64748b}
+.wsp-kpis .v{font-weight:800;font-size:15px}
+.wsp-kpis .v.warn{color:#d97706}
+.wsp-kpis .v.ok{color:#0f9d6b}
+.wsp-qtitle{font-weight:700;font-size:12.5px;padding:12px 14px 6px;display:flex;justify-content:space-between}
+.wsp-qtitle span{color:#94a3b8;font-weight:500}
+.wsp-queue{max-height:600px;overflow:auto}
+.wsp-qrow{display:flex;gap:9px;align-items:center;padding:10px 14px;border-top:1px solid #f1f5f9;text-decoration:none;color:inherit;border-left:3px solid transparent}
+.wsp-qrow:hover{background:#f8fafc}
+.wsp-qrow.on{background:#eff6ff;border-left-color:#2563eb}
+.wsp-qrow .av{width:32px;height:32px;border-radius:9px;background:#e0e7ff;color:#4338ca;display:grid;place-items:center;font-weight:700;font-size:11px;flex:none}
+.wsp-qrow .nm{display:flex;flex-direction:column;min-width:0;flex:1}
+.wsp-qrow .nm b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wsp-qrow .nm small{font-size:11px;color:#94a3b8;display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:2px}
+.wsp-qrow .pill{font-size:9.5px;font-weight:800;border-radius:20px;padding:1px 6px}
+.wsp-qrow .pill.draft{background:#fff7ed;color:#d97706}
+.wsp-qrow .pill.un{background:#f1f5f9;color:#64748b}
+.wsp-qrow .pill.ok{background:#e7f7f0;color:#0f9d6b}
+.wsp-qrow .flag{margin-left:auto;font-size:11px;font-weight:800;color:#b91c1c;flex:none}
+.wsp-qrow .flag.clear{color:#0f9d6b}
+
+.wsp-center{background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.wsp-tabs{display:flex;gap:4px;padding:10px 12px 0;border-bottom:1px solid #e2e8f0;flex-wrap:wrap}
+.wsp-tab{padding:8px 14px;border-radius:10px 10px 0 0;font-weight:600;font-size:12.5px;color:#64748b;text-decoration:none;border:1px solid transparent;border-bottom:none}
+.wsp-tab.on{color:#2563eb;background:#fff;border-color:#e2e8f0;box-shadow:0 -2px 0 #2563eb inset}
+.wsp-center-head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e2e8f0}
+.wsp-center-head b{font-size:15px}
+.wsp-center-head .muted{color:#94a3b8;font-size:12.5px}
+
+.wsp-reviews{padding:12px;display:flex;flex-direction:column;gap:10px}
+.wsp-card{display:flex;gap:12px;border:1px solid #e2e8f0;border-radius:12px;padding:10px;align-items:center}
+.wsp-card.pend{border-color:#fed7aa;background:#fffdf9}
+.wsp-card.done{opacity:.85}
+.wsp-thumb{width:70px;height:88px;border-radius:8px;overflow:hidden;background:#f1f5f9;display:grid;place-items:center;flex:none;border:1px solid #e2e8f0}
+.wsp-thumb img{width:100%;height:100%;object-fit:cover}
+.wsp-thumb .ext{font-weight:800;font-size:12px;color:#475569}
+.wsp-thumb .ext.none{font-size:10px;color:#94a3b8;font-weight:500}
+.wsp-fields{flex:1;min-width:0}
+.wsp-row1{display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+.wsp-row1 .type{font-size:11px;font-weight:800;border-radius:6px;padding:2px 8px}
+.wsp-row1 .type.purchase{background:#eff6ff;color:#2563eb}
+.wsp-row1 .type.sale{background:#e7f7f0;color:#0f9d6b}
+.wsp-row1 .type.unspecified{background:#f1f5f9;color:#64748b}
+.wsp-row1 .party{font-weight:600;font-size:13px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wsp-row1 .st{font-size:10.5px;font-weight:800;border-radius:6px;padding:2px 8px}
+.wsp-row1 .st.draft{background:#fff7ed;color:#d97706}
+.wsp-row1 .st.ok{background:#e7f7f0;color:#0f9d6b}
+.wsp-row2{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#64748b}
+.wsp-row2 b{color:#1e293b}
+.wsp-row2 b.net{color:#0f9d6b}
+.wsp-act{display:flex;flex-direction:column;gap:6px;flex:none}
+.wsp-btn{text-decoration:none;text-align:center;padding:8px 14px;border-radius:9px;font-weight:700;font-size:12.5px;white-space:nowrap}
+.wsp-btn.primary{background:#0f9d6b;color:#fff}
+.wsp-btn.ghost{background:#fff;color:#64748b;border:1px solid #e2e8f0}
