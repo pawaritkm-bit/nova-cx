@@ -39,6 +39,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/cron/extract-bills?mode=reextract",
+      "schedule": "*/20 * * * *"
+    },
+    {
       "path": "/api/cron/generate-recurring-je",
       "schedule": "0 2 * * *"
     },

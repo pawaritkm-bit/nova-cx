@@ -60,33 +60,36 @@ async function geminiExtractContent(
   if (!key) return null;
   const m = (mime || "").toLowerCase();
   const media = m.includes("pdf") ? "application/pdf" : m.startsWith("image/") ? mime : "image/jpeg";
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent?key=${key}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [{ parts: [{ inline_data: { mime_type: media, data: imageData.toString("base64") } }, { text: `${system}\n\n${user}` }] }],
-          generationConfig: { temperature: 0, responseMimeType: "application/json", maxOutputTokens: maxTokens },
-        }),
+  const reqBody = JSON.stringify({
+    contents: [{ parts: [{ inline_data: { mime_type: media, data: imageData.toString("base64") } }, { text: `${system}\n\n${user}` }] }],
+    generationConfig: { temperature: 0, responseMimeType: "application/json", maxOutputTokens: maxTokens },
+  });
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent?key=${key}`;
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // ลองสูงสุด 4 ครั้ง — retry+backoff เฉพาะ error ชั่วคราว (429 rate limit / 5xx overloaded)
+  const MAX = 4;
+  for (let attempt = 0; attempt < MAX; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: reqBody });
+      if (!res.ok) {
+        const transient = res.status === 429 || res.status >= 500;
+        const willRetry = transient && attempt < MAX - 1;
+        console.warn(`[bill-extract] gemini http ${res.status}${willRetry ? " (retry)" : ""}`);
+        if (willRetry) { clearTimeout(timer); await delay(2000 * (attempt + 1) + Math.floor(Math.random() * 500)); continue; }
+        return null;
       }
-    );
-    if (!res.ok) {
-      console.warn(`[bill-extract] gemini http ${res.status}`);
+      const body = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      return body.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
+    } catch {
+      console.warn("[bill-extract] gemini error");
       return null;
+    } finally {
+      clearTimeout(timer);
     }
-    const body = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-    return body.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
-  } catch {
-    console.warn("[bill-extract] gemini error");
-    return null;
-  } finally {
-    clearTimeout(timer);
   }
+  return null;
 }
 
 /**
@@ -552,7 +555,9 @@ export async function extractBillData(
   // ★ บิลไลน์ (รูปใบเดียว) — OpenAI ก่อน (ถ้ามี key) · ไม่มี → Gemini (paid tier)
   //   default OpenAI model = EXTRACT_MODEL (gpt-5-mini) · override ด้วย OPENAI_LINE_BILL_MODEL
   const model = process.env.OPENAI_LINE_BILL_MODEL || EXTRACT_MODEL;
-  const content = await runBillVision(buildSystemPrompt(chart), USER_PROMPT, imageData, mime, model, 4000);
+  // ★ ย่อรูปใหญ่ก่อน (รูปสแกน/ถ่ายบิลหลาย MB) — กัน Gemini 400 (payload/ขนาดเกิน) · PDF ไม่แตะ
+  const prepped = await downscaleImageIfLarge(imageData, mime);
+  const content = await runBillVision(buildSystemPrompt(chart), USER_PROMPT, prepped.data, prepped.mime, model, 4000);
   if (!content) return null;
   const bill = normalizeExtraction(extractJson(content), buildChartByCode(chart));
   return bill ? flagVatInconsistency(bill) : null;
