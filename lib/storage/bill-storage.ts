@@ -129,6 +129,7 @@ async function storeViaOneDrive(params: {
   fileName: string;
   mime: string;
   data: Buffer;
+  root?: string;
 }): Promise<{ objectPath: string; url: string } | null> {
   // uploadOneDriveFile คืน { objectPath, url } ตรง interface กลางอยู่แล้ว
   return uploadOneDriveFile({
@@ -136,6 +137,7 @@ async function storeViaOneDrive(params: {
     fileName: params.fileName,
     mime: params.mime,
     data: params.data,
+    root: params.root,
   });
 }
 
@@ -155,6 +157,8 @@ export async function storeBillFile(params: {
   data: Buffer;
   /** บังคับ backend ต่อไฟล์ (ข้าม env) — เช่น sale OA ให้เก็บ OneDrive ที่เดียว */
   backendOverride?: BillStorageBackend;
+  /** โฟลเดอร์รากบน OneDrive (default "NOVA-Bills") — care ใช้ "NOVA-Care" */
+  root?: string;
 }): Promise<{ objectPath: string; url: string } | null> {
   const backend = params.backendOverride ?? getBillStorageBackend();
   if (backend === "drive") return storeViaDrive(params);

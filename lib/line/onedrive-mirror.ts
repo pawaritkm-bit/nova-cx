@@ -10,7 +10,14 @@
  * ★ PDPA: ไม่ log ชื่อ/เนื้อไฟล์ — log แค่ error สั้น ๆ · ชื่อไทยเป็น PII แต่เก็บใน OneDrive ภายในบริษัท
  */
 import { decryptField } from "@/lib/crypto/field";
-import { isOneDriveEnabled, uploadOneDriveFile, listOneDriveChildren } from "@/lib/storage/onedrive";
+import { isOneDriveEnabled, uploadOneDriveFile, listOneDriveChildren, getOneDriveConfig } from "@/lib/storage/onedrive";
+
+/** โฟลเดอร์รากบน OneDrive ตามชนิด OA: care → "NOVA-Care" · อื่น (sale) → ONEDRIVE_ROOT ("NOVA-Bills") */
+export const CARE_ONEDRIVE_ROOT = "NOVA-Care";
+export function oaOneDriveRoot(oaType: string | null | undefined): string {
+  if (oaType === "care") return CARE_ONEDRIVE_ROOT;
+  return getOneDriveConfig()?.root ?? "NOVA-Bills";
+}
 
 /** context ขั้นต่ำที่ต้องใช้ (subset ของ GroupContext ใน attachments.ts) */
 export type MirrorGroupContext = {
@@ -47,14 +54,14 @@ function shortSuffix(group: NonNullable<MirrorGroupContext>): string {
  *     ไฟล์ใหม่จึงเข้าโฟลเดอร์เดิม ไม่แตกโฟลเดอร์ซ้ำ
  *   ไม่เจอโฟลเดอร์เดิม → คืนชื่อ default (ชื่อไลน์ + suffix) เพื่อสร้างใหม่
  */
-export async function resolveSaleFolder(group: NonNullable<MirrorGroupContext>): Promise<string> {
+export async function resolveSaleFolder(group: NonNullable<MirrorGroupContext>, root?: string): Promise<string> {
   const tail = refTail(group);
   if (tail) {
     try {
-      const existing = (await listOneDriveChildren([])).find(
+      const existing = (await listOneDriveChildren([], root)).find(
         (c) => c.isFolder && c.name.includes(`(${tail})`)
       );
-      if (existing) return existing.name; // เคารพชื่อที่นักบัญชีตั้งเอง
+      if (existing) return existing.name; // เคารพชื่อที่นักบัญชี/แอดมินตั้งเอง
     } catch {
       /* best-effort — ตกไปใช้ชื่อ default */
     }

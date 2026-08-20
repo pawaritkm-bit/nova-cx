@@ -28,6 +28,7 @@ export async function saveRawCsvToOneDrive(params: {
   folderParts: string[];
   fileName: string;
   csv: string;
+  root?: string;
 }): Promise<boolean> {
   try {
     if (!params.csv.trim()) return false;
@@ -37,6 +38,7 @@ export async function saveRawCsvToOneDrive(params: {
       fileName: params.fileName,
       mime: "text/csv",
       data,
+      root: params.root,
     });
     return saved !== null;
   } catch {
@@ -54,6 +56,7 @@ export async function saveResultCsvToOneDrive(params: {
   fileName: string;
   headers: { key: string; label: string }[];
   rows: Record<string, unknown>[];
+  root?: string;
 }): Promise<boolean> {
   try {
     if (params.rows.length === 0) return false;
@@ -64,6 +67,7 @@ export async function saveResultCsvToOneDrive(params: {
       fileName: params.fileName,
       mime: "text/csv",
       data,
+      root: params.root,
     });
     return saved !== null;
   } catch {

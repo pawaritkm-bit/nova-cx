@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import { getLineClient } from "@/lib/line/client";
-import { resolveSaleFolder } from "@/lib/line/onedrive-mirror";
+import { resolveSaleFolder, oaOneDriveRoot } from "@/lib/line/onedrive-mirror";
 import { isBillStorageEnabled, storeBillFile } from "@/lib/storage/bill-storage";
 import { isOneDriveEnabled } from "@/lib/storage/onedrive";
 import { classifyBillImage } from "@/lib/ai/bill-classify";
@@ -489,10 +489,16 @@ export async function processPendingAttachments(
     const month = monthFolder(row.created_at);
     const stampBase = `${safeStamp(row.chat_messages?.sent_at ?? null)}_${contentId}`;
 
-    // ★ sale OA (สนง.บัญชี Finovas): เก็บ OneDrive แยกชื่อไลน์ "ที่เดียว" (ไม่ซ้ำ Supabase — ประหยัดพื้นที่)
-    //   OA อื่น/บิล: เก็บ Supabase เหมือนเดิม · OneDrive ไม่พร้อม → fallback Supabase กันไฟล์หาย
-    const isSaleOa = (group?.chat_channels?.oa_type || "") === "sale";
-    const useOneDrive = isSaleOa && group !== null && isOneDriveEnabled();
+    // ★ เก็บ OneDrive:
+    //   - sale OA (สนง.บัญชี Finovas): เอกสาร (PDF/Excel/CSV) → NOVA-Bills · รูปถูก skip ที่ 2.4 แล้ว
+    //   - care OA (Finovas Care): "ไฟล์" (เอกสารทุกชนิด) → NOVA-Care · "รูป" → Supabase เหมือนเดิม
+    //   OA อื่น/บิล: เก็บ Supabase · OneDrive ไม่พร้อม → fallback Supabase กันไฟล์หาย
+    const oaType = group?.chat_channels?.oa_type || "";
+    const isSaleOa = oaType === "sale";
+    const isCareOa = oaType === "care";
+    const useOneDrive =
+      group !== null && isOneDriveEnabled() && (isSaleOa || (isCareOa && isFile));
+    const oneDriveRoot = oaOneDriveRoot(oaType); // sale → NOVA-Bills · care → NOVA-Care
 
     // ชื่อไฟล์: ★ คงนามสกุลจริงเสมอ (กัน OneDrive/SharePoint พรีวิวไม่ได้เพราะไม่มี .pdf/.xlsx)
     //   นามสกุล = จากชื่อเดิม > เดาจาก mime · ฐานชื่อ: OneDrive คงไทยได้ · Supabase ต้อง ASCII
@@ -504,8 +510,8 @@ export async function processPendingAttachments(
       const base = useOneDrive ? sanitizeOneDriveBase(split.base) : sanitizeAsciiFileName(split.base);
       if (base) fileName = `${contentId}_${base}.${ext}`;
     }
-    const storeFolder = useOneDrive && group ? await resolveSaleFolder(group) : customerFolder;
-    // sale OA (OneDrive): เก็บในโฟลเดอร์ลูกค้าตรง ๆ ไม่ซ้อนโฟลเดอร์เดือน · OA อื่น (Supabase): คงโฟลเดอร์เดือนเดิม
+    const storeFolder = useOneDrive && group ? await resolveSaleFolder(group, oneDriveRoot) : customerFolder;
+    // OneDrive: เก็บในโฟลเดอร์ลูกค้า/กลุ่มตรง ๆ ไม่ซ้อนโฟลเดอร์เดือน · Supabase: คงโฟลเดอร์เดือนเดิม
     const storeFolderParts = useOneDrive ? [storeFolder] : [storeFolder, month];
     const saved = await storeBillFile({
       db,
@@ -515,6 +521,7 @@ export async function processPendingAttachments(
       mime: content.mime,
       data: content.data,
       backendOverride: useOneDrive ? "onedrive" : undefined,
+      root: useOneDrive ? oneDriveRoot : undefined,
     });
     if (!saved) {
       await markFailed(db, row.id, row.fetch_attempts, "storage_upload_failed");
@@ -522,10 +529,10 @@ export async function processPendingAttachments(
       continue;
     }
 
-    // ★ อ่านอัตโนมัติ + save ผลกลับ OneDrive (เฉพาะ sale OA · gate ACCT_AUTO_READ · best-effort)
+    // ★ อ่านอัตโนมัติ + save ผลกลับ OneDrive (sale + care ที่เก็บลง OneDrive · gate ACCT_AUTO_READ · best-effort)
     //   ★ dynamic import: กัน dep หนัก (pdfjs/claude/sharp) โหลดตอน cron module init
     //     (เดิม import ระดับบน ทำ cron process-attachments 500 — กระทบ ingest ทุก OA)
-    if (process.env.ACCT_AUTO_READ === "on" && isSaleOa) {
+    if (process.env.ACCT_AUTO_READ === "on" && useOneDrive) {
       try {
         const { autoReadSaleAttachment } = await import("@/lib/line/auto-read");
         await autoReadSaleAttachment({

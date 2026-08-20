@@ -22,7 +22,7 @@ import { parsePlatformFile, detectPlatformFromName, buildPlatformSummaryCsv } fr
 import { classifyDocTypeFromImage, classifyDocTypeFromText } from "@/lib/ai/classify-doc";
 import { decryptField } from "@/lib/crypto/field";
 import { isOneDriveEnabled, renameOneDriveFile } from "@/lib/storage/onedrive";
-import { resolveSaleFolder, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
+import { resolveSaleFolder, oaOneDriveRoot, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 
 const MAX_PASSWORD_CANDIDATES = 40;
 
@@ -30,10 +30,10 @@ const MAX_PASSWORD_CANDIDATES = 40;
 const READ_MARK = "✅ ";
 
 /** ติด ✅ ที่ไฟล์ต้นฉบับใน OneDrive = "อ่านแล้ว" (best-effort · กันติดซ้ำ) */
-async function markSourceRead(folderParts: string[], fileName: string): Promise<void> {
+async function markSourceRead(folderParts: string[], fileName: string, root?: string): Promise<void> {
   if (!fileName || fileName.startsWith(READ_MARK)) return;
   try {
-    await renameOneDriveFile({ folderParts, fileName, newName: READ_MARK + fileName });
+    await renameOneDriveFile({ folderParts, fileName, newName: READ_MARK + fileName, root });
   } catch {
     /* best-effort — ผลอ่านถูก save แล้ว การติดธงพลาดไม่ใช่เรื่องคอขาดบาดตาย */
   }
@@ -120,8 +120,10 @@ export async function autoReadSaleAttachment(params: {
     if (process.env.ACCT_AUTO_READ !== "on") return; // gate: ปิดไว้จนกว่าจะเทสต์ของจริง
     const { group } = params;
     if (!group) return;
-    if ((group.chat_channels?.oa_type || "") !== "sale") return;
+    const oaType = group.chat_channels?.oa_type || "";
+    if (oaType !== "sale" && oaType !== "care") return; // อ่านให้ทั้ง sale + care
     if (!isOneDriveEnabled()) return; // ต้องมี OneDrive ไว้เก็บผล
+    const root = oaOneDriveRoot(oaType); // sale → NOVA-Bills · care → NOVA-Care
 
     const mimeL = (params.mime || "").toLowerCase();
     const nameL = (params.fileName || "").toLowerCase();
@@ -131,9 +133,9 @@ export async function autoReadSaleAttachment(params: {
       nameL.endsWith(".xlsx") || nameL.endsWith(".xls");
     const isCsv = mimeL.includes("csv") || nameL.endsWith(".csv");
 
-    const folder = await resolveSaleFolder(group);
+    const folder = await resolveSaleFolder(group, root);
     const base = params.fileName.replace(/\.[^.]+$/, "");
-    const folderParts = [folder]; // เก็บในโฟลเดอร์ลูกค้าตรง ๆ (ไม่ซ้อนโฟลเดอร์เดือน)
+    const folderParts = [folder]; // เก็บในโฟลเดอร์ลูกค้า/กลุ่มตรง ๆ (ไม่ซ้อนโฟลเดอร์เดือน)
 
     // 1) ดึง "ข้อความ" ของไฟล์ตามชนิด (Excel/CSV/PDF) + เก็บ chunks ไว้ให้ AI ถ้าต้องใช้ fallback
     let text: string | null = null;
@@ -157,6 +159,7 @@ export async function autoReadSaleAttachment(params: {
             folderParts,
             fileName: lockedNoteFileName(base),
             csv: buildLockedNoteContent(params.fileName),
+            root,
           });
           return;
         }
@@ -180,8 +183,8 @@ export async function autoReadSaleAttachment(params: {
         const csv = buildStatementSummaryCsv(det.transactions, det.bank);
         // ชื่อเอกสาร = ชื่อบัญชีจริงจากหัวสเตทเมนต์ (fallback ชื่อไฟล์เดิมถ้าอ่านชื่อไม่ได้)
         const docBase = det.accountName ? sanitizeDocName(det.accountName) : base;
-        await saveRawCsvToOneDrive({ folderParts, fileName: `${docBase} - สรุป.csv`, csv });
-        await markSourceRead(folderParts, params.fileName); // ✅ อ่านแล้ว
+        await saveRawCsvToOneDrive({ folderParts, fileName: `${docBase} - สรุป.csv`, csv, root });
+        await markSourceRead(folderParts, params.fileName, root); // ✅ อ่านแล้ว
         return;
       }
     }
@@ -199,8 +202,8 @@ export async function autoReadSaleAttachment(params: {
         if (ext.figures.grossSales > 0 || ext.figures.platformFee > 0) {
           const shop = shopNameFromFilename(params.originalName);
           const platBase = shop ? sanitizeDocName(shop) : base;
-          await saveRawCsvToOneDrive({ folderParts, fileName: `${platBase} - ยอดขาย.csv`, csv: buildPlatformSummaryCsv(ext) });
-          await markSourceRead(folderParts, params.fileName); // ✅ อ่านแล้ว
+          await saveRawCsvToOneDrive({ folderParts, fileName: `${platBase} - ยอดขาย.csv`, csv: buildPlatformSummaryCsv(ext), root });
+          await markSourceRead(folderParts, params.fileName, root); // ✅ อ่านแล้ว
           return;
         }
       } catch {
@@ -224,8 +227,8 @@ export async function autoReadSaleAttachment(params: {
           : await extractStatementFromFile(params.data, params.mime);
       const result = statementCsv(txns as unknown as Record<string, unknown>[]);
       if (result.rows.length === 0) return;
-      await saveResultCsvToOneDrive({ folderParts, fileName: `${base}-ผลอ่าน-statement.csv`, headers: result.headers, rows: result.rows });
-      await markSourceRead(folderParts, params.fileName); // ✅ อ่านแล้ว
+      await saveResultCsvToOneDrive({ folderParts, fileName: `${base}-ผลอ่าน-statement.csv`, headers: result.headers, rows: result.rows, root });
+      await markSourceRead(folderParts, params.fileName, root); // ✅ อ่านแล้ว
       return;
     }
 
@@ -240,8 +243,8 @@ export async function autoReadSaleAttachment(params: {
     // ชื่อเอกสาร = ชื่อร้านจากชื่อไฟล์เดิม (เช่น "เจนเบเกอรี่ 1") · fallback ชื่อไฟล์เดิม
     const shop = shopNameFromFilename(params.originalName);
     const platBase = shop ? sanitizeDocName(shop) : base;
-    await saveResultCsvToOneDrive({ folderParts, fileName: `${platBase} - ยอดขาย.csv`, headers: result.headers, rows: result.rows });
-    await markSourceRead(folderParts, params.fileName); // ✅ อ่านแล้ว
+    await saveResultCsvToOneDrive({ folderParts, fileName: `${platBase} - ยอดขาย.csv`, headers: result.headers, rows: result.rows, root });
+    await markSourceRead(folderParts, params.fileName, root); // ✅ อ่านแล้ว
   } catch {
     console.warn("[auto-read] failed");
   }

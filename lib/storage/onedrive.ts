@@ -115,6 +115,8 @@ export async function uploadOneDriveFile(params: {
   fileName: string;
   mime: string;
   data: Buffer;
+  /** โฟลเดอร์รากบนสุด (default = ONEDRIVE_ROOT="NOVA-Bills") — care ใช้ "NOVA-Care" */
+  root?: string;
 }): Promise<{ objectPath: string; url: string } | null> {
   const cfg = getOneDriveConfig();
   if (!cfg) return null;
@@ -122,14 +124,15 @@ export async function uploadOneDriveFile(params: {
   if (!token) return null;
 
   try {
+    const topRoot = params.root ?? cfg.root;
     // path แบบอ่านง่าย (objectPath ที่คืนกลับ) — ไม่ encode
-    const objectPath = [cfg.root, ...params.folderParts, params.fileName]
+    const objectPath = [topRoot, ...params.folderParts, params.fileName]
       .map((p) => p.trim())
       .filter((p) => p.length > 0)
       .join("/");
 
     // path ที่ encode ต่อ segment สำหรับใส่ใน URL
-    const encodedPath = encodePath([cfg.root, ...params.folderParts, params.fileName]);
+    const encodedPath = encodePath([topRoot, ...params.folderParts, params.fileName]);
 
     const url =
       `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}` +
@@ -173,13 +176,13 @@ export function folderPartsFromParentPath(parentPath: string, root: string): str
  * ลิสต์ลูกในโฟลเดอร์ (path ใต้ root · [] = ตัว ONEDRIVE_ROOT เอง) → [{id,name,isFolder}]
  *   ★ ใช้แทน search (Graph search บน OneDrive app-only จัดindex ช้า/ไม่ทัน) — listing เห็นทันที
  */
-export async function listOneDriveChildren(folderParts: string[]): Promise<{ id: string; name: string; isFolder: boolean }[]> {
+export async function listOneDriveChildren(folderParts: string[], root?: string): Promise<{ id: string; name: string; isFolder: boolean }[]> {
   const cfg = getOneDriveConfig();
   if (!cfg) return [];
   const token = await getAccessToken();
   if (!token) return [];
   try {
-    const encodedPath = encodePath([cfg.root, ...folderParts]);
+    const encodedPath = encodePath([root ?? cfg.root, ...folderParts]);
     const url =
       `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}/drive/root:/${encodedPath}:/children` +
       `?$select=id,name,folder&$top=400`;
@@ -212,13 +215,13 @@ export async function searchOneDriveItems(query: string): Promise<{ id: string; 
 }
 
 /** โหลดเนื้อไฟล์ (binary) ตาม path ใต้ root → Buffer หรือ null */
-export async function downloadOneDriveFile(folderParts: string[], fileName: string): Promise<Buffer | null> {
+export async function downloadOneDriveFile(folderParts: string[], fileName: string, root?: string): Promise<Buffer | null> {
   const cfg = getOneDriveConfig();
   if (!cfg) return null;
   const token = await getAccessToken();
   if (!token) return null;
   try {
-    const encodedPath = encodePath([cfg.root, ...folderParts, fileName]);
+    const encodedPath = encodePath([root ?? cfg.root, ...folderParts, fileName]);
     const url =
       `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}/drive/root:/${encodedPath}:/content`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -272,13 +275,14 @@ export async function renameOneDriveFile(params: {
   folderParts: string[];
   fileName: string;
   newName: string;
+  root?: string;
 }): Promise<boolean> {
   const cfg = getOneDriveConfig();
   if (!cfg) return false;
   const token = await getAccessToken();
   if (!token) return false;
   try {
-    const encodedPath = encodePath([cfg.root, ...params.folderParts, params.fileName]);
+    const encodedPath = encodePath([params.root ?? cfg.root, ...params.folderParts, params.fileName]);
     const url =
       `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}` +
       `/drive/root:/${encodedPath}`;

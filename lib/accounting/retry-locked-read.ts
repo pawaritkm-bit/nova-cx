@@ -22,6 +22,7 @@ import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv
 import { extractStatementFromText } from "@/lib/accounting/statement-extract";
 import { NOTE_MARKER, parseLockedNote, buildWrongPasswordNote, lockedNoteFileName } from "@/lib/accounting/locked-note";
 import { sanitizeDocName } from "@/lib/accounting/doc-naming";
+import { CARE_ONEDRIVE_ROOT } from "@/lib/line/onedrive-mirror";
 
 const READ_MARK = "✅ ";
 const MAX_NOTES_PER_RUN = 20;
@@ -47,26 +48,29 @@ export type RetryLockedResult = {
 export async function retryLockedStatements(): Promise<RetryLockedResult> {
   if (!isOneDriveEnabled()) return { disabled: true, scanned: 0, read: 0, wrongPassword: 0, waiting: 0 };
 
-  // ★ ไล่โฟลเดอร์ (ไม่ใช้ search — index ช้า): NOVA-Bills → [ลูกค้า] หาไฟล์โน้ตในโฟลเดอร์ลูกค้าตรง ๆ
-  //   (และเผื่อโฟลเดอร์เดือนเก่าที่ยังเหลือ — ไล่ลงอีก 1 ชั้น เพื่อ backward-compat)
-  const notes: { id: string; folderParts: string[]; sourceFileName: string | null; passwords: string[] }[] = [];
-  const collect = async (fp: string[], children: { id: string; name: string; isFolder: boolean }[]) => {
+  // ★ ไล่โฟลเดอร์ (ไม่ใช้ search — index ช้า) ทั้ง 2 ราก: NOVA-Bills (sale) + NOVA-Care (care)
+  //   → [ลูกค้า/กลุ่ม] หาไฟล์โน้ตในโฟลเดอร์ตรง ๆ (และเผื่อโฟลเดอร์เดือนเก่า — ไล่ลงอีก 1 ชั้น)
+  const ROOTS: (string | undefined)[] = [undefined, CARE_ONEDRIVE_ROOT]; // undefined = NOVA-Bills (default)
+  const notes: { id: string; folderParts: string[]; root?: string; sourceFileName: string | null; passwords: string[] }[] = [];
+  const collect = async (root: string | undefined, fp: string[], children: { id: string; name: string; isFolder: boolean }[]) => {
     for (const f of children) {
       if (f.isFolder || !f.name.includes(NOTE_MARKER)) continue;
       const content = await getOneDriveTextById(f.id);
       if (!content) continue;
       const { sourceFileName, passwords } = parseLockedNote(content);
-      notes.push({ id: f.id, folderParts: fp, sourceFileName, passwords });
+      notes.push({ id: f.id, folderParts: fp, root, sourceFileName, passwords });
     }
   };
-  const customers = (await listOneDriveChildren([])).filter((c) => c.isFolder).slice(0, MAX_CUSTOMER_FOLDERS);
-  outer: for (const cust of customers) {
-    const custChildren = await listOneDriveChildren([cust.name]);
-    await collect([cust.name], custChildren); // โน้ตในโฟลเดอร์ลูกค้าตรง ๆ (โครงใหม่)
-    if (notes.length >= MAX_NOTES_PER_RUN) break;
-    for (const sub of custChildren.filter((c) => c.isFolder)) {
-      await collect([cust.name, sub.name], await listOneDriveChildren([cust.name, sub.name])); // โฟลเดอร์เดือนเก่า
+  outer: for (const root of ROOTS) {
+    const customers = (await listOneDriveChildren([], root)).filter((c) => c.isFolder).slice(0, MAX_CUSTOMER_FOLDERS);
+    for (const cust of customers) {
+      const custChildren = await listOneDriveChildren([cust.name], root);
+      await collect(root, [cust.name], custChildren); // โน้ตในโฟลเดอร์ตรง ๆ (โครงใหม่)
       if (notes.length >= MAX_NOTES_PER_RUN) break outer;
+      for (const sub of custChildren.filter((c) => c.isFolder)) {
+        await collect(root, [cust.name, sub.name], await listOneDriveChildren([cust.name, sub.name], root)); // โฟลเดอร์เดือนเก่า
+        if (notes.length >= MAX_NOTES_PER_RUN) break outer;
+      }
     }
   }
   notes.splice(MAX_NOTES_PER_RUN); // คุมเพดาน
@@ -75,18 +79,18 @@ export async function retryLockedStatements(): Promise<RetryLockedResult> {
 
   for (const note of notes) {
     try {
-      const { sourceFileName, passwords, folderParts } = note;
+      const { sourceFileName, passwords, folderParts, root } = note;
       if (!sourceFileName) continue;
       if (passwords.length === 0) { waiting++; continue; } // ยังไม่พิมพ์รหัส
 
-      const buf = await downloadOneDriveFile(folderParts, sourceFileName);
+      const buf = await downloadOneDriveFile(folderParts, sourceFileName, root);
       if (!buf) continue;
 
       const unlocked = await unlockPdfToText(buf, passwords);
       if (!unlocked) {
         // รหัสไม่ถูก → เขียนทับโน้ตให้ลองใหม่ (ชื่อเดิม)
         wrongPassword++;
-        await saveRawCsvToOneDrive({ folderParts, fileName: lockedNoteFileName(sourceFileName.replace(/\.[^.]+$/, "")), csv: buildWrongPasswordNote(sourceFileName) });
+        await saveRawCsvToOneDrive({ folderParts, fileName: lockedNoteFileName(sourceFileName.replace(/\.[^.]+$/, "")), csv: buildWrongPasswordNote(sourceFileName), root });
         continue;
       }
 
@@ -96,7 +100,7 @@ export async function retryLockedStatements(): Promise<RetryLockedResult> {
       if (det.fullyReconciled) {
         const csv = buildStatementSummaryCsv(det.transactions, det.bank);
         const docBase = det.accountName ? sanitizeDocName(det.accountName) : base;
-        await saveRawCsvToOneDrive({ folderParts, fileName: `${docBase} - สรุป.csv`, csv });
+        await saveRawCsvToOneDrive({ folderParts, fileName: `${docBase} - สรุป.csv`, csv, root });
       } else {
         const txns = await extractStatementFromText(unlocked.text);
         if (txns.length === 0) continue; // อ่านไม่ได้จริง → คงโน้ตไว้ให้นักบัญชีจัดการเอง
@@ -105,12 +109,13 @@ export async function retryLockedStatements(): Promise<RetryLockedResult> {
           fileName: `${base}-ผลอ่าน-statement.csv`,
           headers: STATEMENT_HEADERS,
           rows: txns as unknown as Record<string, unknown>[],
+          root,
         });
       }
 
       // ติด ✅ ที่ต้นฉบับ + ลบโน้ต
       if (!sourceFileName.startsWith(READ_MARK)) {
-        await renameOneDriveFile({ folderParts, fileName: sourceFileName, newName: READ_MARK + sourceFileName });
+        await renameOneDriveFile({ folderParts, fileName: sourceFileName, newName: READ_MARK + sourceFileName, root });
       }
       await deleteOneDriveItemById(note.id);
       read++;
