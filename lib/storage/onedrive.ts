@@ -271,6 +271,84 @@ export async function deleteOneDriveItemById(id: string): Promise<boolean> {
  *   @param newName     ชื่อใหม่ (ในโฟลเดอร์เดิม)
  *   @returns true ถ้าสำเร็จ · false ถ้าล้ม/ปิดฟีเจอร์ (best-effort ไม่ throw)
  */
+/**
+ * สร้างโฟลเดอร์ (idempotent) — ใช้ก่อน move เพราะ Graph move ต้องมีโฟลเดอร์ปลายทางอยู่แล้ว
+ *   POST .../{parent}:/children {name, folder, conflictBehavior:fail} · มีอยู่แล้ว (409) = ถือว่าสำเร็จ
+ *   @returns true ถ้ามีโฟลเดอร์นั้นอยู่ (สร้างใหม่/มีอยู่แล้ว) · false ถ้าล้มจริง
+ */
+export async function ensureOneDriveFolder(folderParts: string[], root?: string): Promise<boolean> {
+  const cfg = getOneDriveConfig();
+  if (!cfg) return false;
+  const token = await getAccessToken();
+  if (!token) return false;
+  const parts = folderParts.map((p) => p.trim()).filter((p) => p.length > 0);
+  if (parts.length === 0) return true;
+  const name = parts[parts.length - 1];
+  const parent = parts.slice(0, -1);
+  try {
+    const topRoot = root ?? cfg.root;
+    const encodedParent = encodePath([topRoot, ...parent]);
+    // POST children ของ parent (ถ้า parent = root ล้วน ใช้ /root:/{root}:/children)
+    const url =
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}` +
+      `/drive/root:/${encodedParent}:/children`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name, folder: {}, "@microsoft.graph.conflictBehavior": "fail" }),
+    });
+    if (res.ok) return true;
+    if (res.status === 409) return true; // มีอยู่แล้ว
+    if (res.status === 401) invalidateToken();
+    console.warn(`[onedrive] ensureFolder failed status=${res.status}`);
+    return false;
+  } catch {
+    console.warn("[onedrive] ensureFolder error");
+    return false;
+  }
+}
+
+/**
+ * ย้ายไฟล์ไปโฟลเดอร์ใหม่ (PATCH driveItem.parentReference) — ใช้จัดไฟล์เก่าเข้าโฟลเดอร์ย่อยตามชนิด
+ *   ★ สร้างโฟลเดอร์ปลายทางให้ก่อน (ensureOneDriveFolder) เพราะ Graph move ต้องมีปลายทางอยู่แล้ว
+ *   @returns true ถ้าสำเร็จ · false ถ้าล้ม/ปิดฟีเจอร์ (best-effort ไม่ throw)
+ */
+export async function moveOneDriveFile(params: {
+  folderParts: string[];
+  fileName: string;
+  destFolderParts: string[];
+  root?: string;
+}): Promise<boolean> {
+  const cfg = getOneDriveConfig();
+  if (!cfg) return false;
+  const token = await getAccessToken();
+  if (!token) return false;
+  const topRoot = params.root ?? cfg.root;
+  await ensureOneDriveFolder(params.destFolderParts, params.root);
+  try {
+    const encodedPath = encodePath([topRoot, ...params.folderParts, params.fileName]);
+    const url =
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}` +
+      `/drive/root:/${encodedPath}`;
+    // parentReference.path = path เชิงตรรกะ (ไม่ต้อง URL-encode ใน JSON body)
+    const destPath = [topRoot, ...params.destFolderParts].map((p) => p.trim()).filter(Boolean).join("/");
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ parentReference: { path: `/drive/root:/${destPath}` } }),
+    });
+    if (!res.ok) {
+      console.warn(`[onedrive] move failed status=${res.status}`);
+      if (res.status === 401) invalidateToken();
+      return false;
+    }
+    return true;
+  } catch {
+    console.warn("[onedrive] move error");
+    return false;
+  }
+}
+
 export async function renameOneDriveFile(params: {
   folderParts: string[];
   fileName: string;
