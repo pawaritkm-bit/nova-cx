@@ -32,7 +32,10 @@ async function handle(request: NextRequest) {
   try {
     // ★ dynamic import: กัน dep หนัก crash ตอน cold-start ของ route (แบบเดียวกับ process-attachments)
     const { retryLockedStatements } = await import("@/lib/accounting/retry-locked-read");
-    const summary = await retryLockedStatements();
+    const { createServiceRoleClient } = await import("@/lib/supabase/server");
+    // ส่ง service client → retry-locked ลอง "รหัสจากแชทกลุ่ม" ด้วย (ลูกค้ามักพิมพ์รหัสในแชท)
+    const db = createServiceRoleClient();
+    const summary = await retryLockedStatements(db);
     return NextResponse.json({ status: "ok", ...summary }, { status: 200 });
   } catch (e) {
     logServerError("cron/retry-locked", requestId, e);

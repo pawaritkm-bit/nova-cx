@@ -15,11 +15,13 @@ import {
   deleteOneDriveItemById,
   renameOneDriveFile,
 } from "@/lib/storage/onedrive";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { saveRawCsvToOneDrive, saveResultCsvToOneDrive } from "@/lib/accounting/onedrive-result";
 import { unlockPdfToText } from "@/lib/accounting/pdf-unlock";
 import { parseStatementDeterministic } from "@/lib/accounting/statement-deterministic";
 import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv";
 import { extractStatementFromText } from "@/lib/accounting/statement-extract";
+import { gatherChatPasswords } from "@/lib/accounting/classify-finance-doc";
 import { NOTE_MARKER, parseLockedNote, buildWrongPasswordNote, lockedNoteFileName } from "@/lib/accounting/locked-note";
 import { sanitizeDocName } from "@/lib/accounting/doc-naming";
 import { CARE_ONEDRIVE_ROOT } from "@/lib/line/onedrive-mirror";
@@ -44,8 +46,28 @@ export type RetryLockedResult = {
   waiting: number; // ยังไม่พิมพ์รหัส
 };
 
-/** อ่านไฟล์ติดรหัสซ้ำจากโน้ตที่นักบัญชีพิมพ์รหัส — เรียกจาก cron */
-export async function retryLockedStatements(): Promise<RetryLockedResult> {
+/**
+ * หา chat_group_id จากชื่อโฟลเดอร์ลูกค้า (ท้ายชื่อมี "(xxxx)" = 4 ตัวท้ายของ group_ref/id)
+ *   → ไว้ดึงรหัสจากแชทกลุ่มนั้น (ลูกค้ามักพิมพ์รหัสในแชท) · คลุมเครือ (เจอ >1) → null (กันข้ามกลุ่ม/PDPA)
+ */
+async function resolveGroupIdFromFolder(db: SupabaseClient, folderName: string): Promise<string | null> {
+  const m = (folderName || "").match(/\(([^)]{2,12})\)\s*$/);
+  const tail = m?.[1]?.trim();
+  if (!tail) return null;
+  try {
+    const { data } = await db.from("chat_groups").select("id").ilike("group_ref", `%${tail}`).limit(2);
+    const rows = (data as { id: string }[] | null) ?? [];
+    return rows.length === 1 ? rows[0].id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * อ่านไฟล์ติดรหัสซ้ำ — เรียกจาก cron
+ *   @param db (optional) service client — มี = ลอง "รหัสจากแชทกลุ่ม" ด้วย (นอกจากรหัสในโน้ต)
+ */
+export async function retryLockedStatements(db?: SupabaseClient): Promise<RetryLockedResult> {
   if (!isOneDriveEnabled()) return { disabled: true, scanned: 0, read: 0, wrongPassword: 0, waiting: 0 };
 
   // ★ ไล่โฟลเดอร์ (ไม่ใช้ search — index ช้า) ทั้ง 2 ราก: NOVA-Bills (sale) + NOVA-Care (care)
@@ -81,16 +103,29 @@ export async function retryLockedStatements(): Promise<RetryLockedResult> {
     try {
       const { sourceFileName, passwords, folderParts, root } = note;
       if (!sourceFileName) continue;
-      if (passwords.length === 0) { waiting++; continue; } // ยังไม่พิมพ์รหัส
+
+      // ★ รวมรหัสจากแชทกลุ่ม (ลูกค้ามักพิมพ์รหัสในแชท) + รหัสในโน้ต (นักบัญชีพิมพ์)
+      let chatPasswords: string[] = [];
+      if (db) {
+        const gid = await resolveGroupIdFromFolder(db, folderParts[0] ?? "");
+        if (gid) chatPasswords = await gatherChatPasswords(db, gid);
+      }
+      const allPasswords = [...passwords, ...chatPasswords];
+      if (allPasswords.length === 0) { waiting++; continue; } // ยังไม่มีรหัสทั้งในแชทและโน้ต
 
       const buf = await downloadOneDriveFile(folderParts, sourceFileName, root);
       if (!buf) continue;
 
-      const unlocked = await unlockPdfToText(buf, passwords);
+      const unlocked = await unlockPdfToText(buf, allPasswords);
       if (!unlocked) {
-        // รหัสไม่ถูก → เขียนทับโน้ตให้ลองใหม่ (ชื่อเดิม)
-        wrongPassword++;
-        await saveRawCsvToOneDrive({ folderParts, fileName: lockedNoteFileName(sourceFileName.replace(/\.[^.]+$/, "")), csv: buildWrongPasswordNote(sourceFileName), root });
+        // ปลดไม่ได้: นักบัญชีพิมพ์รหัส (มีในโน้ต) แต่ผิด → เขียนทับโน้ตให้ลองใหม่
+        //   ถ้ามีแต่รหัสจากแชท (โน้ตยังว่าง) → ยังถือว่า "รอนักบัญชี" (ไม่ spam โน้ตรหัสผิด)
+        if (passwords.length > 0) {
+          wrongPassword++;
+          await saveRawCsvToOneDrive({ folderParts, fileName: lockedNoteFileName(sourceFileName.replace(/\.[^.]+$/, "")), csv: buildWrongPasswordNote(sourceFileName), root });
+        } else {
+          waiting++;
+        }
         continue;
       }
 
