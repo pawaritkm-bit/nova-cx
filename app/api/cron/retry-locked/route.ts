@@ -1,6 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { newRequestId, logServerError, isValidCronAuth } from "@/lib/http";
-import { retryLockedStatements } from "@/lib/accounting/retry-locked-read";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,11 +30,18 @@ async function handle(request: NextRequest) {
   }
 
   try {
+    // ★ dynamic import: กัน dep หนัก crash ตอน cold-start ของ route (แบบเดียวกับ process-attachments)
+    const { retryLockedStatements } = await import("@/lib/accounting/retry-locked-read");
     const summary = await retryLockedStatements();
     return NextResponse.json({ status: "ok", ...summary }, { status: 200 });
   } catch (e) {
     logServerError("cron/retry-locked", requestId, e);
-    return NextResponse.json({ status: "error", request_id: requestId }, { status: 200 });
+    // ★ DIAG ชั่วคราว: คืนข้อความ error จริง เพื่อระบุโมดูลที่พัง (จะเอาออกหลังแก้)
+    const err = e as { message?: string; stack?: string };
+    return NextResponse.json(
+      { status: "error", request_id: requestId, message: String(err?.message ?? e), stack: String(err?.stack ?? "").slice(0, 600) },
+      { status: 200 }
+    );
   }
 }
 
