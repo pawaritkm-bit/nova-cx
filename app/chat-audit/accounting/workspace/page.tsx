@@ -311,9 +311,8 @@ export default async function AccountingWorkspacePage({
         {!staffOnly ? (
           <Link href="/chat-audit/accounting/workspace" className="wsp-switch-link">👤 เปลี่ยนนักบัญชี</Link>
         ) : null}
-        <Link href={`/chat-audit/accounting${q({})}`} className="wsp-switch-link">↩ หน้าแบบเดิม</Link>
         {selectedAccountantLabel ? <span className="muted" style={{ fontSize: 13 }}>· {selectedAccountantLabel}</span> : null}
-        <span className="wsp-badge-new">ดีไซน์ใหม่</span>
+        <span className="wsp-badge-new">โต๊ะทำงานบัญชี</span>
       </div>
 
       {/* FLOW STEPPER */}

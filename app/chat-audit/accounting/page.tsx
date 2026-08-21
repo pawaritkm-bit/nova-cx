@@ -887,6 +887,18 @@ export default async function AccountingPage({
 }) {
   const sp = await searchParams;
 
+  // ★ หน้าเก่า (list) ถูกแทนที่ด้วย "โต๊ะทำงาน" (workspace) แล้ว — เข้าหน้านี้แบบไม่ได้แก้บิล → เด้งไปหน้าใหม่
+  //   คงไว้เฉพาะกรณี ?edit=<id> เพราะโต๊ะทำงานยัง "ยืม" EntryEditor ตัวนี้เปิดแก้/ยืนยันบิล (ตัวที่บันทึกจริง)
+  //   ★ ส่ง accountant/month/open ต่อ → ปิดตัวแก้แล้วกลับไปโต๊ะทำงานที่บริบทเดิม
+  if (!sp.edit) {
+    const p = new URLSearchParams();
+    if (sp.accountant) p.set("accountant", sp.accountant);
+    if (sp.month) p.set("month", sp.month);
+    if (sp.open) p.set("open", sp.open);
+    const qs = p.toString();
+    redirect(`/chat-audit/accounting/workspace${qs ? `?${qs}` : ""}`);
+  }
+
   if (!getSupabaseEnv()) {
     return (
       <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="ลงบันทึกบัญชี" subtitle="ภาษีซื้อ/ขาย">
