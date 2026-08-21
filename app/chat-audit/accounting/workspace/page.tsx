@@ -13,7 +13,6 @@ import { formatMoney } from "@/lib/accounting/calc";
 import ChatAuditFrame from "../../_Frame";
 import DeleteBillButton from "./DeleteBillButton";
 import RenameCustomerButton from "./RenameCustomerButton";
-import EntryDateField from "../EntryDateField";
 import "../../chat-admin.css";
 import "../accounting.css";
 import "./workspace.css";
@@ -475,9 +474,6 @@ export default async function AccountingWorkspacePage({
                           <span>VAT <b>฿{formatMoney(s.vat)}</b></span>
                           <span>รวมจ่าย <b className="net">฿{formatMoney(s.net)}</b></span>
                         </div>
-                        {pend ? (
-                          <div className="wsp-move">📅 ย้ายเดือน / แก้วันที่: <EntryDateField entryId={e.id} /></div>
-                        ) : null}
                       </div>
                       <div className="wsp-act">
                         <Link href={editHref(e)} className="wsp-btn primary">ตรวจ / ยืนยัน →</Link>
