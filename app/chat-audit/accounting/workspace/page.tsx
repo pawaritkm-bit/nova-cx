@@ -4,7 +4,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess } from "@/lib/accounting/access";
-import { customerIdsForAccountant } from "@/lib/accounting/accountant-scope";
+import { customerIdsForAccountant, listAccountantsWithCounts, getEmployeeName, type AccountantCard } from "@/lib/accounting/accountant-scope";
+import { listTeamAccountantCards, type TeamAccountantCard } from "@/lib/accounting/lead-scope";
 import { listEntries, summarizeEntry, type BillEntry } from "@/lib/accounting/queries";
 import { groupEntriesByCustomer, UNASSIGNED_CUSTOMER } from "@/lib/accounting/group";
 import { monthKeyOf } from "@/lib/accounting/monthly";
@@ -69,6 +70,50 @@ async function fetchCodes(service: SupabaseClient, tenantId: string, ids: string
 
 const isPending = (e: BillEntry) => e.status !== "confirmed";
 
+/** การ์ดเลือกนักบัญชี (admin) — กดเข้าดูโต๊ะทำงานของลูกค้าที่คนนั้นดูแล */
+function AccountantPicker({ accountants }: { accountants: AccountantCard[] }) {
+  return (
+    <div className="card">
+      <div className="section-title"><span>เลือกนักบัญชี</span><span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>{accountants.length.toLocaleString("th-TH")} คน</span></div>
+      <div className="acc-team-grid">
+        <Link href="/chat-audit/accounting/workspace?accountant=all" className="acc-team-card acc-team-all">
+          <span className="acc-team-avatar">ALL</span><span className="acc-team-name">ทั้งสำนักงาน</span><span className="acc-team-sub">ดูลูกค้าทุกคนรวมกัน</span>
+        </Link>
+        {accountants.length === 0 ? (
+          <p className="empty" style={{ gridColumn: "1 / -1" }}>ยังไม่มีนักบัญชีที่ถูกกำหนดเป็นผู้ดูแล</p>
+        ) : accountants.map((a) => (
+          <Link key={a.employeeId} href={`/chat-audit/accounting/workspace?accountant=${a.employeeId}`} className="acc-team-card">
+            <span className="acc-team-avatar">{a.name.slice(0, 2)}</span>
+            <span className="acc-team-name">{a.name}</span>
+            <span className="acc-team-sub">{a.customerCount.toLocaleString("th-TH")} ลูกค้า · {a.billCount.toLocaleString("th-TH")} รายการ</span>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** การ์ดเลือกนักบัญชีในทีม (lead) */
+function TeamPicker({ leadName, cards }: { leadName: string | null; cards: TeamAccountantCard[] }) {
+  return (
+    <div className="card">
+      <div className="section-title"><span>ตรวจงานทีม{leadName ? ` · ${leadName}` : ""}</span><span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>👑 หัวหน้าทีม · เลือกนักบัญชี</span></div>
+      {cards.length === 0 ? <p className="empty">ยังไม่มีนักบัญชีในทีม</p> : (
+        <div className="acc-team-grid">
+          {cards.map((c) => (
+            <Link key={c.employeeId} href={`/chat-audit/accounting/workspace?accountant=${c.employeeId}`} className={`acc-team-card${c.pendingCount > 0 ? " needs" : ""}`}>
+              <span className="acc-team-avatar">{c.name.slice(0, 2)}</span>
+              <span className="acc-team-name">{c.name}{c.isSelf ? <span className="acc-team-self"> (ของฉัน)</span> : null}</span>
+              <span className="acc-team-sub">{c.customerCount.toLocaleString("th-TH")} ลูกค้า · {c.billCount.toLocaleString("th-TH")} บิล</span>
+              {c.pendingCount > 0 ? <span className="acc-team-flag">ค้าง {c.pendingCount.toLocaleString("th-TH")} ใบ</span> : <span className="acc-team-flag clear">เรียบร้อย</span>}
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * /chat-audit/accounting/workspace — "โต๊ะทำงานนักบัญชี" (ดีไซน์ใหม่ · เพิ่มเข้ามาไม่แตะหน้าเดิม)
  *   flow เดียวจบ: คิวลูกค้าซ้าย → ตรวจเอกสารทีละใบตรงกลาง → เปิดตัวแก้เดิม (EntryEditor) ที่หน้าเดิม
@@ -97,16 +142,31 @@ export default async function AccountingWorkspacePage({
   const staffOnly = access.mode === "accountant" || access.mode === "lead";
   const accountantParam = (sp.accountant ?? "").trim();
 
-  // สโคปลูกค้า (เหมือนหน้าเดิม แบบย่อ): accountant→ตัวเอง · admin/lead→ตามที่เลือก/ทั้งหมดในสิทธิ์
+  // ★ Landing: admin/lead ยังไม่เลือกนักบัญชี → โชว์การ์ดให้เลือกก่อน (เหมือนหน้าเดิม)
+  const frameProps = { active: "chat-accounting" as const, role: navRole, authed: true, staffOnly, title: "โต๊ะทำงานบัญชี", subtitle: "เลือกนักบัญชีเพื่อดูลูกค้าที่ดูแล" };
+  if (access.mode === "admin" && accountantParam === "") {
+    const accountants = await listAccountantsWithCounts(service, tenantId);
+    return <ChatAuditFrame {...frameProps}><AccountantPicker accountants={accountants} /></ChatAuditFrame>;
+  }
+  if (access.mode === "lead" && accountantParam === "") {
+    const cards = await listTeamAccountantCards(service, tenantId, access.employeeId!);
+    return <ChatAuditFrame {...frameProps}><TeamPicker leadName={access.name} cards={cards} /></ChatAuditFrame>;
+  }
+
+  // สโคปลูกค้า: accountant→ตัวเอง · เลือกคน→ลูกค้าของคนนั้น · "all"→ทั้งหมด(admin)/ทีม(lead)
   let scopeIds: string[] | undefined;
   if (access.mode === "accountant") {
     scopeIds = [...(access.allowedCustomerIds ?? new Set<string>())];
+  } else if (accountantParam === "all") {
+    scopeIds = access.mode === "lead" && access.allowedCustomerIds ? [...access.allowedCustomerIds] : undefined; // admin all = ทุกลูกค้า
   } else if (UUID_RE.test(accountantParam)) {
     const ids = await customerIdsForAccountant(service, tenantId, accountantParam);
     scopeIds = access.mode === "lead" && access.allowedCustomerIds ? ids.filter((id) => access.allowedCustomerIds!.has(id)) : ids;
-  } else if (access.mode === "lead") {
-    scopeIds = access.allowedCustomerIds ? [...access.allowedCustomerIds] : [];
-  } // admin ไม่เลือก → undefined = ทุกลูกค้า
+  }
+
+  let selectedAccountantLabel = "";
+  if (accountantParam === "all") selectedAccountantLabel = "ทั้งสำนักงาน";
+  else if (UUID_RE.test(accountantParam)) selectedAccountantLabel = (await getEmployeeName(service, tenantId, accountantParam)) ?? "";
 
   let all: BillEntry[] = [];
   try {
@@ -185,8 +245,12 @@ export default async function AccountingWorkspacePage({
     <ChatAuditFrame active="chat-accounting" role={navRole} authed staffOnly={staffOnly} title="โต๊ะทำงานบัญชี" subtitle="ดีไซน์ใหม่ · ตรวจเอกสารไหลลื่นในหน้าเดียว">
       {/* ลิงก์สลับกลับหน้าเดิม */}
       <div className="wsp-switch">
-        <Link href={`/chat-audit/accounting${q({})}`} className="wsp-switch-link">↩ กลับหน้าลงบันทึกบัญชี (แบบเดิม)</Link>
-        <span className="wsp-badge-new">ดีไซน์ใหม่ (เบต้า)</span>
+        {!staffOnly ? (
+          <Link href="/chat-audit/accounting/workspace" className="wsp-switch-link">👤 เปลี่ยนนักบัญชี</Link>
+        ) : null}
+        <Link href={`/chat-audit/accounting${q({})}`} className="wsp-switch-link">↩ หน้าแบบเดิม</Link>
+        {selectedAccountantLabel ? <span className="muted" style={{ fontSize: 13 }}>· {selectedAccountantLabel}</span> : null}
+        <span className="wsp-badge-new">ดีไซน์ใหม่</span>
       </div>
 
       {/* FLOW STEPPER */}
@@ -242,6 +306,7 @@ export default async function AccountingWorkspacePage({
         <div className="wsp-center">
           <div className="wsp-tabs">
             <span className="wsp-tab on">📝 ตรวจเอกสาร {openGroup ? `· ${reviewList.filter(isPending).length} ค้าง` : ""}</span>
+            <a className="wsp-tab" href="/chat-audit/accounting/bank-reconciliation">🏦 กระทบยอดธนาคาร</a>
             <a className="wsp-tab" href={`/chat-audit/accounting/export?month=${selectedMonth}&type=purchase${accountantParam ? `&accountant=${accountantParam}` : ""}`}>🧾 ภพ.30 ซื้อ</a>
             <a className="wsp-tab" href={`/chat-audit/accounting/export?month=${selectedMonth}&type=sale${accountantParam ? `&accountant=${accountantParam}` : ""}`}>🧾 ภพ.30 ขาย</a>
           </div>

@@ -111,7 +111,7 @@ const NAV_GROUPS: NavGroup[] = [
       { key: "chat-bills", href: "/chat-audit/bills", label: "บิลลูกค้า", canSee: isAdminRole },
       // ลงบันทึกบัญชี ภาษีซื้อ/ขาย (แยกตามลูกค้า) — admin/executive เท่านั้น
       //   ★ "วงแชร์" ย้ายเป็นแท็บในการ์ดลูกค้า (auto-flag เฉพาะท้าวแชร์) — ไม่มีเมนูแยกแล้ว
-      { key: "chat-accounting", href: "/chat-audit/accounting", label: "ลงบันทึกบัญชี", canSee: isAdminRole },
+      { key: "chat-accounting", href: "/chat-audit/accounting/workspace", label: "ลงบันทึกบัญชี", canSee: isAdminRole },
     ],
   },
   {
@@ -165,7 +165,7 @@ const STAFF_NAV_GROUPS: NavGroup[] = [
     items: [
       {
         key: "chat-accounting",
-        href: "/chat-audit/accounting",
+        href: "/chat-audit/accounting/workspace",
         label: "ลงบันทึกบัญชี (ของฉัน)",
         canSee: () => true,
       },
