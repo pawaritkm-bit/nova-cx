@@ -10,7 +10,7 @@
  * ★ PDPA: ไม่ log ชื่อ/เนื้อไฟล์ — log แค่ error สั้น ๆ · ชื่อไทยเป็น PII แต่เก็บใน OneDrive ภายในบริษัท
  */
 import { decryptField } from "@/lib/crypto/field";
-import { isOneDriveEnabled, uploadOneDriveFile, listOneDriveChildren, getOneDriveConfig } from "@/lib/storage/onedrive";
+import { isOneDriveEnabled, uploadOneDriveFile, listOneDriveChildren, getOneDriveConfig, renameOneDriveFile } from "@/lib/storage/onedrive";
 
 /** โฟลเดอร์รากบน OneDrive ตามชนิด OA: care → "NOVA-Care" · อื่น (sale) → ONEDRIVE_ROOT ("NOVA-Bills") */
 export const CARE_ONEDRIVE_ROOT = "NOVA-Care";
@@ -48,25 +48,46 @@ function shortSuffix(group: NonNullable<MirrorGroupContext>): string {
   return tail ? ` (${tail})` : "";
 }
 
+/** มี "ชื่อไลน์จริง" ไหม (display_name อ่านได้ หรือมี customer_code) — ใช้ตัดสินว่าจะ rename ตามชื่อไลน์
+ *   (กันเคส decrypt ไม่ได้ → desired = "ไม่ระบุ" แล้วเผลอ rename โฟลเดอร์ที่มีชื่อจริงอยู่ทิ้ง) */
+function hasRealLineName(group: NonNullable<MirrorGroupContext>): boolean {
+  if (group.display_name_enc) {
+    try {
+      if (sanitizeFolderName(decryptField(group.display_name_enc))) return true;
+    } catch {
+      /* decrypt ไม่ได้ */
+    }
+  }
+  return !!group.customers?.customer_code?.trim();
+}
+
 /**
- * หาโฟลเดอร์ลูกค้าใน OneDrive แบบ "ยึด LINE id เป็นหลัก" (ไม่ยึดชื่อ)
- *   ★ ถ้านักบัญชี rename โฟลเดอร์เป็นชื่อไทยเอง (แต่คงเลข "(xxxx)" ท้ายไว้) → ระบบยังจับคู่เจอ
- *     ไฟล์ใหม่จึงเข้าโฟลเดอร์เดิม ไม่แตกโฟลเดอร์ซ้ำ
+ * หาโฟลเดอร์ลูกค้าใน OneDrive แบบ "ยึด LINE id เป็นหลัก" (จับด้วยเลข "(xxxx)" ท้ายชื่อ)
+ *   ★ ชื่อโฟลเดอร์ = ตามชื่อไลน์ปัจจุบันเสมอ — ถ้าชื่อไลน์เปลี่ยน โฟลเดอร์เดิม (match ด้วย suffix)
+ *     จะถูก rename ให้ตรงชื่อใหม่ตอน AI ดึงไฟล์ครั้งถัดไป (คงเนื้อในทั้งหมด · คง suffix)
  *   ไม่เจอโฟลเดอร์เดิม → คืนชื่อ default (ชื่อไลน์ + suffix) เพื่อสร้างใหม่
  */
 export async function resolveSaleFolder(group: NonNullable<MirrorGroupContext>, root?: string): Promise<string> {
   const tail = refTail(group);
+  const desired = resolveOneDriveFolder(group); // ชื่อไลน์ปัจจุบัน + suffix
   if (tail) {
     try {
       const existing = (await listOneDriveChildren([], root)).find(
         (c) => c.isFolder && c.name.includes(`(${tail})`)
       );
-      if (existing) return existing.name; // เคารพชื่อที่นักบัญชี/แอดมินตั้งเอง
+      if (existing) {
+        // ชื่อไลน์เปลี่ยน + มีชื่อจริง → rename โฟลเดอร์เดิมให้ตรงชื่อปัจจุบัน (ค้นหาในไลน์ OA ง่ายขึ้น)
+        if (existing.name !== desired && hasRealLineName(group)) {
+          const ok = await renameOneDriveFile({ folderParts: [], fileName: existing.name, newName: desired, root });
+          return ok ? desired : existing.name; // rename ไม่ได้ (ชื่อชน/สิทธิ์) → คงชื่อเดิม (ไม่แตกโฟลเดอร์)
+        }
+        return existing.name;
+      }
     } catch {
       /* best-effort — ตกไปใช้ชื่อ default */
     }
   }
-  return resolveOneDriveFolder(group);
+  return desired;
 }
 
 /** ชื่อโฟลเดอร์ลูกค้าใน OneDrive: ชื่อไลน์ (decrypt) > customer_code > 'ไม่ระบุ' + suffix กันซ้ำ
