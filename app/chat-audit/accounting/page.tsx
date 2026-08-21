@@ -1384,6 +1384,47 @@ export default async function AccountingPage({
     </div>
   );
 
+  // ★ เปิดหน้านี้เพื่อ "แก้บิล" (จากโต๊ะทำงาน ผ่าน ?edit=) → แสดง "เฉพาะตัวแก้" (bare, ไม่ render list ข้างหลัง)
+  //   กันเมนู/รายการเก่าโผล่ทับกันรก · ปิดแล้วกลับไปโต๊ะทำงานที่บริบทเดิม
+  if (editEntry) {
+    const wsClose = `/chat-audit/accounting/workspace${buildQuery({
+      accountant: accParam,
+      month: monthParam,
+      open: sp.open && sp.open !== "" ? sp.open : undefined,
+    })}`;
+    return (
+      <ChatAuditFrame active="chat-accounting" role={navRole} authed staffOnly={staffOnly} bare title="ตรวจ/แก้บิล" subtitle="">
+        {editInNav && pagerBills.length > 0 ? (
+          <EntryEditorPager
+            bills={pagerBills}
+            initialId={editEntry.id}
+            customerLabel={customerLabel(editEntry.customerId ? codeById.get(editEntry.customerId) ?? null : null, editEntry.customerName)}
+            orderIds={navOrderIds}
+            closeHref={wsClose}
+            chart={chart}
+            products={products}
+            productUnits={productUnits}
+          />
+        ) : (
+          <EntryEditor
+            key={editEntry.id}
+            entry={editEntry}
+            viewUrl={editViewUrl}
+            viewIsImage={editIsImage}
+            fileName={editEntry.uploadName}
+            orderIds={navOrderIds}
+            customerLabel={customerLabel(editEntry.customerId ? codeById.get(editEntry.customerId) ?? null : null, editEntry.customerName)}
+            closeHref={wsClose}
+            chart={chart}
+            products={products}
+            productUnits={productUnits}
+            fxLocked={fxLockedEntryIds.has(editEntry.id)}
+          />
+        )}
+      </ChatAuditFrame>
+    );
+  }
+
   return (
     <ChatAuditFrame
       active="chat-accounting"
@@ -1604,56 +1645,7 @@ export default async function AccountingPage({
         )}
       </div>
 
-      {/* ---- หน้าต่างตรวจ/แก้ (verify panel) ---- */}
-      {editEntry ? (
-        editInNav && pagerBills.length > 0 ? (
-          /* ★ เลื่อนบิลแบบ client (instant · รูป preload) — กด ก่อนหน้า/ถัดไป ไม่โหลดหน้าใหม่ */
-          <EntryEditorPager
-            bills={pagerBills}
-            initialId={editEntry.id}
-            customerLabel={customerLabel(
-              editEntry.customerId ? codeById.get(editEntry.customerId) ?? null : null,
-              editEntry.customerName
-            )}
-            orderIds={navOrderIds}
-            closeHref={`/chat-audit/accounting${buildQuery({
-              accountant: accParam,
-              q,
-              month: monthParam,
-              open: sp.open && sp.open !== "" ? sp.open : undefined,
-              type: selectedType,
-            })}`}
-            chart={chart}
-            products={products}
-            productUnits={productUnits}
-          />
-        ) : (
-          /* fallback: บิลไม่อยู่ใน nav ของแท็บที่เปิด (แก้ข้ามบริบท) — ตัวเดียว navigate ตามเดิม */
-          <EntryEditor
-            key={editEntry.id}
-            entry={editEntry}
-            viewUrl={editViewUrl}
-            viewIsImage={editIsImage}
-            fileName={editEntry.uploadName}
-            orderIds={navOrderIds}
-            customerLabel={customerLabel(
-              editEntry.customerId ? codeById.get(editEntry.customerId) ?? null : null,
-              editEntry.customerName
-            )}
-            closeHref={`/chat-audit/accounting${buildQuery({
-              accountant: accParam,
-              q,
-              month: monthParam,
-              open: sp.open && sp.open !== "" ? sp.open : undefined,
-              type: selectedType,
-            })}`}
-            chart={chart}
-            products={products}
-            productUnits={productUnits}
-            fxLocked={fxLockedEntryIds.has(editEntry.id)}
-          />
-        )
-      ) : null}
+      {/* ★ ตัวแก้บิลย้ายไป early-return ด้านบน (แสดง bare ไม่มี list ทับกัน) — ที่นี่ editEntry เป็น null เสมอ */}
 
       {/* แถบ "เลิกทำ" หลังลบบิล (undo) — กู้บิลที่ลบผิดกลับได้ทันที */}
       {sp.undo && UUID_RE.test(sp.undo) ? (
