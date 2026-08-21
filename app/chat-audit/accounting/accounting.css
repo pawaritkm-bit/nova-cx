@@ -377,7 +377,9 @@
 .nova-dash .acc-line input.num { text-align: right; font-variant-numeric: tabular-nums; }
 .nova-dash .acc-line input:focus,
 .nova-dash .acc-line select:focus { outline: none; border-color: var(--navy-800); }
-.nova-dash .acc-line-desc { display: flex; gap: 6px; align-items: center; }
+.nova-dash .acc-line-desc { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* ★ ตัวเลือกบัญชี (🔒รหัส + เปลี่ยน + ชื่อ) ลงบรรทัดของตัวเองในเซลล์ — ช่องแคบก็ไม่ทับกัน */
+.nova-dash .acc-line-desc .acc-acct { flex-basis: 100%; }
 .nova-dash .acc-vat-sel { flex: 0 0 76px; }
 .nova-dash .acc-desc-inp { flex: 1 1 auto; }
 
@@ -431,6 +433,7 @@
   gap: 6px;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
 }
 .nova-dash .acc-acct-picked .acc-acct-name {
   width: 100%;
