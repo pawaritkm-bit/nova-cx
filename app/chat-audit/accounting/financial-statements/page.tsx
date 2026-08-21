@@ -387,9 +387,11 @@ export default async function FinancialStatementsPage({
     qyear?: string;
     quarter?: string;
     tab?: string;
+    embed?: string;
   }>;
 }) {
   const sp = await searchParams;
+  const embed = sp.embed === "1"; // ฝังในโต๊ะทำงาน (แท็บปิดเดือน) → ซ่อนเมนู
 
   if (!getSupabaseEnv()) {
     return (
@@ -524,6 +526,7 @@ export default async function FinancialStatementsPage({
       role={navRole}
       authed
       staffOnly={staffOnly}
+      bare={embed}
       title="งบการเงินฉบับทางการ"
       subtitle="งบกำไรขาดทุน · งบแสดงฐานะการเงิน — เทียบงวด/ไตรมาส/ปีก่อนได้ พิมพ์/export เป็นทางการ"
     >

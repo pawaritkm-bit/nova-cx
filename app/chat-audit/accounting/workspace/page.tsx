@@ -72,6 +72,30 @@ async function fetchCodes(service: SupabaseClient, tenantId: string, ids: string
 
 const isPending = (e: BillEntry) => e.status !== "confirmed";
 
+/** แท็บ "ปิดเดือน" — เช็กลิสต์ความพร้อม + ฝังงบการเงินในหน้า (ไม่เด้งออก) */
+function CloseMonthView({ received, pending, confirmed, purchaseBase, saleBase, whtTotal, month }: {
+  received: number; pending: number; confirmed: number; purchaseBase: number; saleBase: number; whtTotal: number; month: string;
+}) {
+  const ready = received > 0 && pending === 0;
+  return (
+    <div className="wsp-close">
+      <div className={`wsp-close-banner ${ready ? "ok" : "warn"}`}>
+        {received === 0 ? "ยังไม่มีบิลในเดือนนี้" : ready ? "✓ พร้อมปิดเดือน — ตรวจ/ยืนยันครบทุกใบแล้ว" : `⚠ ยังมีบิลค้างตรวจ ${pending.toLocaleString("th-TH")} ใบ — ควรตรวจให้ครบก่อนปิดเดือน`}
+      </div>
+      <div className="wsp-close-grid">
+        <div><span className="k">บิลทั้งหมด</span><span className="v">{received.toLocaleString("th-TH")}</span></div>
+        <div><span className="k">ยืนยันแล้ว</span><span className="v ok">{confirmed}/{received}</span></div>
+        <div><span className="k">ค้างตรวจ</span><span className={`v ${pending > 0 ? "warn" : "ok"}`}>{pending.toLocaleString("th-TH")}</span></div>
+        <div><span className="k">ภาษีซื้อ (ฐาน)</span><span className="v">฿{formatMoney(purchaseBase)}</span></div>
+        <div><span className="k">ภาษีขาย (ฐาน)</span><span className="v">฿{formatMoney(saleBase)}</span></div>
+        <div><span className="k">หัก ณ ที่จ่าย</span><span className="v">฿{formatMoney(whtTotal)}</span></div>
+      </div>
+      <div className="wsp-close-embed-head">📑 งบการเงินฉบับทางการ</div>
+      <iframe className="wsp-embed" src={`/chat-audit/accounting/financial-statements?embed=1${month ? `&from=${month}&to=${month}` : ""}`} title="งบการเงิน" />
+    </div>
+  );
+}
+
 /** แท็บ "ภาษี ภพ.30" — ดูตารางในโปรแกรมก่อน (ไม่ดาวน์โหลดทันที) + ปุ่มดาวน์โหลด Excel แยก */
 function TaxView({ entries, month, accParam }: { entries: BillEntry[]; month: string; accParam?: string }) {
   const section = (type: "purchase" | "sale", title: string, cls: string) => {
@@ -236,7 +260,7 @@ export default async function AccountingWorkspacePage({
 
   // มุมมอง (ย้อนดูแต่ละขั้น flow ได้): received=ทุกใบ · drafted=ร่าง AI · review=ค้างตรวจ (ค่าเริ่ม)
   const view = sp.view === "received" ? "received" : sp.view === "drafted" ? "drafted" : "review";
-  const tab = sp.tab === "tax" ? "tax" : sp.tab === "reconcile" ? "reconcile" : "review"; // ตรวจเอกสาร(default)·ภาษี·กระทบยอดธนาคาร
+  const tab = sp.tab === "tax" ? "tax" : sp.tab === "reconcile" ? "reconcile" : sp.tab === "close" ? "close" : "review"; // ตรวจ(default)·กระทบยอด·ภาษี·ปิดเดือน
   const matchView = (e: BillEntry) => (view === "received" ? true : view === "drafted" ? e.status === "draft" : isPending(e));
 
   // KPI + stepper counts
@@ -246,6 +270,7 @@ export default async function AccountingWorkspacePage({
   const confirmed = received - pending;
   const purchaseBase = inMonth.filter((e) => e.entryType === "purchase").reduce((s, e) => s + summarizeEntry(e.lines).amount, 0);
   const saleBase = inMonth.filter((e) => e.entryType === "sale").reduce((s, e) => s + summarizeEntry(e.lines).amount, 0);
+  const whtTotal = inMonth.reduce((s, e) => s + summarizeEntry(e.lines).wht, 0);
 
   // เรียงกลุ่ม (ค้างตรวจก่อน) — ใช้เลือกลูกค้า default โดยไม่ต้องรอ codeMap
   const sortedGroups = [...groups].sort((a, b) => pendingOf(b) - pendingOf(a) || b.entries.length - a.entries.length);
@@ -295,7 +320,7 @@ export default async function AccountingWorkspacePage({
   // ★ ขั้น flow กดย้อนดูได้ (รับเอกสาร / AI ร่างบัญชี / ตรวจ) — เปลี่ยน view · active ตาม view ที่เลือก
   const stepHref = (v: string) => `/chat-audit/accounting/workspace${q({ view: v, open: openKey })}`;
   // active ตาม tab ก่อน (กระทบยอด=3 / ภาษี=4) ไม่งั้นตาม view (รับเอกสาร=0 / ร่าง=1 / ตรวจ=2)
-  const curIdx = tab === "reconcile" ? 3 : tab === "tax" ? 4 : view === "received" ? 0 : view === "drafted" ? 1 : 2;
+  const curIdx = tab === "reconcile" ? 3 : tab === "tax" ? 4 : tab === "close" ? 5 : view === "received" ? 0 : view === "drafted" ? 1 : 2;
   const STEPS: { t: string; c: number | null; href?: string; active?: boolean; done?: boolean }[] = [
     { t: "รับเอกสาร", c: received, href: stepHref("received") },
     { t: "AI ร่างบัญชี", c: draftCount, href: stepHref("drafted") },
@@ -303,7 +328,7 @@ export default async function AccountingWorkspacePage({
     // ★ ขั้น flow เปิด "ในหน้าเดียว" (แท็บ) ไม่เด้งออก/ไม่ดาวน์โหลด
     { t: "กระทบยอดธนาคาร", c: null, href: `/chat-audit/accounting/workspace${q({ tab: "reconcile", open: openKey })}` },
     { t: "ภาษี (ภพ.30)", c: null, href: `/chat-audit/accounting/workspace${q({ tab: "tax", open: openKey })}` },
-    { t: "ปิดเดือน", c: null },
+    { t: "ปิดเดือน", c: null, href: `/chat-audit/accounting/workspace${q({ tab: "close", open: openKey })}` },
   ].map((s, i) => ({ ...s, active: i === curIdx, done: i < curIdx }));
 
   return (
@@ -382,10 +407,13 @@ export default async function AccountingWorkspacePage({
             </Link>
             <Link className={`wsp-tab${tab === "reconcile" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ tab: "reconcile", open: openKey })}`} scroll={false}>🏦 กระทบยอดธนาคาร</Link>
             <Link className={`wsp-tab${tab === "tax" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ tab: "tax", open: openKey })}`} scroll={false}>🧾 ภาษี ภพ.30</Link>
+            <Link className={`wsp-tab${tab === "close" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ tab: "close", open: openKey })}`} scroll={false}>📑 ปิดเดือน</Link>
           </div>
 
           {tab === "reconcile" ? (
             <iframe className="wsp-embed" src={`/chat-audit/accounting/bank-reconciliation?embed=1${selectedMonth ? `&month=${selectedMonth}` : ""}`} title="กระทบยอดธนาคาร" />
+          ) : tab === "close" ? (
+            <CloseMonthView received={received} pending={pending} confirmed={confirmed} purchaseBase={purchaseBase} saleBase={saleBase} whtTotal={whtTotal} month={selectedMonth} />
           ) : tab === "tax" ? (
             <TaxView entries={inMonth} month={selectedMonth} accParam={accountantParam} />
           ) : !openGroup ? (

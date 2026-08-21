@@ -94,6 +94,18 @@
 .wsp-btn{text-decoration:none;text-align:center;padding:8px 14px;border-radius:9px;font-weight:700;font-size:12.5px;white-space:nowrap}
 .wsp-btn.primary{background:#0f9d6b;color:#fff}
 .wsp-btn.ghost{background:#fff;color:#64748b;border:1px solid #e2e8f0}
+/* แท็บปิดเดือน — เช็กลิสต์ + งบการเงินฝังในหน้า */
+.wsp-close{padding:14px;display:flex;flex-direction:column;gap:12px}
+.wsp-close-banner{padding:12px 16px;border-radius:10px;font-weight:700;font-size:13.5px}
+.wsp-close-banner.ok{background:#e7f7f0;color:#0f9d6b}
+.wsp-close-banner.warn{background:#fff7ed;color:#d97706}
+.wsp-close-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.wsp-close-grid>div{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.wsp-close-grid .k{font-size:11px;color:#64748b}
+.wsp-close-grid .v{font-size:16px;font-weight:800}
+.wsp-close-grid .v.ok{color:#0f9d6b}
+.wsp-close-grid .v.warn{color:#d97706}
+.wsp-close-embed-head{font-weight:700;font-size:13px;margin-top:6px;color:#334155}
 /* กระทบยอดธนาคาร ฝังในแท็บเดียว (iframe frameless) — ไม่เด้งออกหน้าอื่น */
 .wsp-embed{width:100%;height:82vh;border:0;display:block;background:#fff}
 /* แท็บภาษี ภพ.30 — ดูตารางในโปรแกรม + ดาวน์โหลดแยก */
