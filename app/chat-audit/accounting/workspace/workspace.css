@@ -94,6 +94,18 @@
 .wsp-btn{text-decoration:none;text-align:center;padding:8px 14px;border-radius:9px;font-weight:700;font-size:12.5px;white-space:nowrap}
 .wsp-btn.primary{background:#0f9d6b;color:#fff}
 .wsp-btn.ghost{background:#fff;color:#64748b;border:1px solid #e2e8f0}
+/* แท็บภาษี ภพ.30 — ดูตารางในโปรแกรม + ดาวน์โหลดแยก */
+.wsp-tax{padding:14px;display:flex;flex-direction:column;gap:16px}
+.wsp-tax-sec{border:1px solid #e2e8f0;border-radius:12px;overflow:hidden}
+.wsp-tax-head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;font-weight:700;font-size:13.5px}
+.wsp-tax-sec.buy .wsp-tax-head{background:#eff6ff;color:#1d4ed8}
+.wsp-tax-sec.sell .wsp-tax-head{background:#e7f7f0;color:#0f9d6b}
+.wsp-tax-tablewrap{overflow:auto;max-height:420px}
+.wsp-tax-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.wsp-tax-table th,.wsp-tax-table td{padding:7px 12px;border-bottom:1px solid #f1f5f9;text-align:left;white-space:nowrap}
+.wsp-tax-table th{position:sticky;top:0;background:#f8fafc;color:#64748b;font-weight:600;font-size:11px}
+.wsp-tax-table .num{text-align:right;font-variant-numeric:tabular-nums}
+.wsp-tax-table .wsp-tax-total td{font-weight:800;background:#fbfdff;border-top:2px solid #e2e8f0}
 .wsp-btn.danger{background:#fff;color:#dc2626;border:1px solid #fecaca;cursor:pointer;font-family:inherit}
 .wsp-btn.danger:hover{background:#fef2f2}
 .wsp-btn.danger:disabled{opacity:.6}

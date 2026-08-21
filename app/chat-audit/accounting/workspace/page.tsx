@@ -72,6 +72,49 @@ async function fetchCodes(service: SupabaseClient, tenantId: string, ids: string
 
 const isPending = (e: BillEntry) => e.status !== "confirmed";
 
+/** แท็บ "ภาษี ภพ.30" — ดูตารางในโปรแกรมก่อน (ไม่ดาวน์โหลดทันที) + ปุ่มดาวน์โหลด Excel แยก */
+function TaxView({ entries, month, accParam }: { entries: BillEntry[]; month: string; accParam?: string }) {
+  const section = (type: "purchase" | "sale", title: string, cls: string) => {
+    const rows = entries
+      .filter((e) => e.entryType === type)
+      .map((e) => {
+        const s = summarizeEntry(e.lines);
+        return { id: e.id, date: e.docDate, no: e.docNo, party: e.counterpartyName || e.sellerName || e.buyerName || "—", base: s.amount, vat: s.vat };
+      })
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const tBase = rows.reduce((x, r) => x + r.base, 0);
+    const tVat = rows.reduce((x, r) => x + r.vat, 0);
+    const dl = `/chat-audit/accounting/export?month=${month}&type=${type}${accParam ? `&accountant=${accParam}` : ""}`;
+    return (
+      <div className={`wsp-tax-sec ${cls}`}>
+        <div className="wsp-tax-head">
+          <span>{title} · {rows.length.toLocaleString("th-TH")} ใบ</span>
+          <a className="wsp-btn ghost" href={dl}>⬇ ดาวน์โหลด Excel</a>
+        </div>
+        {rows.length === 0 ? <p className="empty" style={{ padding: 16 }}>ไม่มีบิลในเดือนนี้</p> : (
+          <div className="wsp-tax-tablewrap">
+            <table className="wsp-tax-table">
+              <thead><tr><th>วันที่</th><th>เลขที่</th><th>คู่ค้า</th><th className="num">มูลค่า</th><th className="num">VAT</th></tr></thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id}><td>{formatDate(r.date)}</td><td>{r.no || "—"}</td><td>{r.party}</td><td className="num">{formatMoney(r.base)}</td><td className="num">{formatMoney(r.vat)}</td></tr>
+                ))}
+                <tr className="wsp-tax-total"><td colSpan={3}>รวม</td><td className="num">{formatMoney(tBase)}</td><td className="num">{formatMoney(tVat)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  };
+  return (
+    <div className="wsp-tax">
+      {section("purchase", "📥 ภาษีซื้อ (ภพ.30)", "buy")}
+      {section("sale", "📤 ภาษีขาย (ภพ.30)", "sell")}
+    </div>
+  );
+}
+
 /** การ์ดเลือกนักบัญชี (admin) — กดเข้าดูโต๊ะทำงานของลูกค้าที่คนนั้นดูแล */
 function AccountantPicker({ accountants }: { accountants: AccountantCard[] }) {
   return (
@@ -124,7 +167,7 @@ function TeamPicker({ leadName, cards }: { leadName: string | null; cards: TeamA
 export default async function AccountingWorkspacePage({
   searchParams,
 }: {
-  searchParams: Promise<{ accountant?: string; month?: string; open?: string; view?: string }>;
+  searchParams: Promise<{ accountant?: string; month?: string; open?: string; view?: string; tab?: string }>;
 }) {
   const sp = await searchParams;
   if (!getSupabaseEnv()) {
@@ -193,6 +236,7 @@ export default async function AccountingWorkspacePage({
 
   // มุมมอง (ย้อนดูแต่ละขั้น flow ได้): received=ทุกใบ · drafted=ร่าง AI · review=ค้างตรวจ (ค่าเริ่ม)
   const view = sp.view === "received" ? "received" : sp.view === "drafted" ? "drafted" : "review";
+  const tab = sp.tab === "tax" ? "tax" : "review"; // แท็บกลาง: ตรวจเอกสาร (default) · ภาษี ภพ.30
   const matchView = (e: BillEntry) => (view === "received" ? true : view === "drafted" ? e.status === "draft" : isPending(e));
 
   // KPI + stepper counts
@@ -332,13 +376,16 @@ export default async function AccountingWorkspacePage({
         {/* CENTER: review list ของลูกค้าที่เปิด */}
         <div className="wsp-center">
           <div className="wsp-tabs">
-            <span className="wsp-tab on">{view === "received" ? "📥 เอกสารทั้งหมด" : view === "drafted" ? "🤖 ร่าง AI" : "📝 ตรวจเอกสาร"} {openGroup ? `· ${reviewList.length} ใบ` : ""}</span>
+            <Link className={`wsp-tab${tab === "review" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ open: openKey })}`} scroll={false}>
+              {view === "received" ? "📥 เอกสารทั้งหมด" : view === "drafted" ? "🤖 ร่าง AI" : "📝 ตรวจเอกสาร"} {tab === "review" && openGroup ? `· ${reviewList.length} ใบ` : ""}
+            </Link>
             <a className="wsp-tab" href="/chat-audit/accounting/bank-reconciliation">🏦 กระทบยอดธนาคาร</a>
-            <a className="wsp-tab" href={`/chat-audit/accounting/export?month=${selectedMonth}&type=purchase${accountantParam ? `&accountant=${accountantParam}` : ""}`}>🧾 ภพ.30 ซื้อ</a>
-            <a className="wsp-tab" href={`/chat-audit/accounting/export?month=${selectedMonth}&type=sale${accountantParam ? `&accountant=${accountantParam}` : ""}`}>🧾 ภพ.30 ขาย</a>
+            <Link className={`wsp-tab${tab === "tax" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ tab: "tax", open: openKey })}`} scroll={false}>🧾 ภาษี ภพ.30</Link>
           </div>
 
-          {!openGroup ? (
+          {tab === "tax" ? (
+            <TaxView entries={inMonth} month={selectedMonth} accParam={accountantParam} />
+          ) : !openGroup ? (
             <p className="empty" style={{ padding: 40 }}>เลือกลูกค้าจากคิวด้านซ้ายเพื่อเริ่มตรวจ</p>
           ) : (
             <>
