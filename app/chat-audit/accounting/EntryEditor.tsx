@@ -495,7 +495,7 @@ export default function EntryEditor({
 
       <div className="acc-modal">
         <div className="acc-modal-head">
-          <div>
+          <div className="acc-modal-headtitle">
             <div className="acc-modal-title">ตรวจ / แก้บิล</div>
             <div className="acc-modal-sub">{customerLabel}</div>
           </div>
