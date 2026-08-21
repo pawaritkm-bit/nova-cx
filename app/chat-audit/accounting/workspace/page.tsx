@@ -294,15 +294,17 @@ export default async function AccountingWorkspacePage({
 
   // ★ ขั้น flow กดย้อนดูได้ (รับเอกสาร / AI ร่างบัญชี / ตรวจ) — เปลี่ยน view · active ตาม view ที่เลือก
   const stepHref = (v: string) => `/chat-audit/accounting/workspace${q({ view: v, open: openKey })}`;
-  const activeIdx = view === "received" ? 0 : view === "drafted" ? 1 : 2;
+  // active ตาม tab ก่อน (กระทบยอด=3 / ภาษี=4) ไม่งั้นตาม view (รับเอกสาร=0 / ร่าง=1 / ตรวจ=2)
+  const curIdx = tab === "reconcile" ? 3 : tab === "tax" ? 4 : view === "received" ? 0 : view === "drafted" ? 1 : 2;
   const STEPS: { t: string; c: number | null; href?: string; active?: boolean; done?: boolean }[] = [
-    { t: "รับเอกสาร", c: received, href: stepHref("received"), active: view === "received", done: activeIdx > 0 },
-    { t: "AI ร่างบัญชี", c: draftCount, href: stepHref("drafted"), active: view === "drafted", done: activeIdx > 1 },
-    { t: "ตรวจ/ยืนยัน", c: pending, href: stepHref("review"), active: view === "review" },
-    { t: "กระทบยอดธนาคาร", c: null, href: "/chat-audit/accounting/bank-reconciliation" },
-    { t: "ภาษี (ภพ.30)", c: null, href: `/chat-audit/accounting/export?month=${selectedMonth}&type=purchase${accountantParam ? `&accountant=${accountantParam}` : ""}` },
+    { t: "รับเอกสาร", c: received, href: stepHref("received") },
+    { t: "AI ร่างบัญชี", c: draftCount, href: stepHref("drafted") },
+    { t: "ตรวจ/ยืนยัน", c: pending, href: stepHref("review") },
+    // ★ ขั้น flow เปิด "ในหน้าเดียว" (แท็บ) ไม่เด้งออก/ไม่ดาวน์โหลด
+    { t: "กระทบยอดธนาคาร", c: null, href: `/chat-audit/accounting/workspace${q({ tab: "reconcile", open: openKey })}` },
+    { t: "ภาษี (ภพ.30)", c: null, href: `/chat-audit/accounting/workspace${q({ tab: "tax", open: openKey })}` },
     { t: "ปิดเดือน", c: null },
-  ];
+  ].map((s, i) => ({ ...s, active: i === curIdx, done: i < curIdx }));
 
   return (
     <ChatAuditFrame active="chat-accounting" role={navRole} authed staffOnly={staffOnly} title="โต๊ะทำงานบัญชี" subtitle="ดีไซน์ใหม่ · ตรวจเอกสารไหลลื่นในหน้าเดียว">
