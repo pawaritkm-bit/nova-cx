@@ -122,7 +122,7 @@ function TeamPicker({ leadName, cards }: { leadName: string | null; cards: TeamA
 export default async function AccountingWorkspacePage({
   searchParams,
 }: {
-  searchParams: Promise<{ accountant?: string; month?: string; open?: string }>;
+  searchParams: Promise<{ accountant?: string; month?: string; open?: string; view?: string }>;
 }) {
   const sp = await searchParams;
   if (!getSupabaseEnv()) {
@@ -186,32 +186,46 @@ export default async function AccountingWorkspacePage({
   const inMonth = selectedMonth ? all.filter((e) => monthKeyOf(e) === selectedMonth) : all;
 
   const groups = groupEntriesByCustomer(inMonth);
-  const codeMap = await fetchCodes(service, tenantId, [...new Set(inMonth.map((e) => e.customerId).filter((x): x is string => !!x))]);
+  const groupKey = (g: (typeof groups)[number]) => g.customerId ?? UNASSIGNED_CUSTOMER;
+  const pendingOf = (g: (typeof groups)[number]) => g.entries.filter(isPending).length;
+
+  // มุมมอง (ย้อนดูแต่ละขั้น flow ได้): received=ทุกใบ · drafted=ร่าง AI · review=ค้างตรวจ (ค่าเริ่ม)
+  const view = sp.view === "received" ? "received" : sp.view === "drafted" ? "drafted" : "review";
+  const matchView = (e: BillEntry) => (view === "received" ? true : view === "drafted" ? e.status === "draft" : isPending(e));
 
   // KPI + stepper counts
   const received = inMonth.length;
   const pending = inMonth.filter(isPending).length;
+  const draftCount = inMonth.filter((e) => e.status === "draft").length;
   const confirmed = received - pending;
   const purchaseBase = inMonth.filter((e) => e.entryType === "purchase").reduce((s, e) => s + summarizeEntry(e.lines).amount, 0);
   const saleBase = inMonth.filter((e) => e.entryType === "sale").reduce((s, e) => s + summarizeEntry(e.lines).amount, 0);
 
-  // คิว: ลูกค้าที่มีงานค้างตรวจก่อน
-  const queue = groups
-    .map((g) => {
-      const draft = g.entries.filter((e) => e.status === "draft").length;
-      const unspec = g.entries.filter((e) => e.entryType === "unspecified").length;
-      const conf = g.entries.filter((e) => e.status === "confirmed").length;
-      const key = g.customerId ?? UNASSIGNED_CUSTOMER;
-      return { key, name: g.name, customerId: g.customerId, draft, unspec, conf, total: g.entries.length, code: g.customerId ? codeMap.get(g.customerId) ?? null : null };
-    })
-    .sort((a, b) => b.draft + b.unspec - (a.draft + a.unspec) || b.total - a.total);
+  // เรียงกลุ่ม (ค้างตรวจก่อน) — ใช้เลือกลูกค้า default โดยไม่ต้องรอ codeMap
+  const sortedGroups = [...groups].sort((a, b) => pendingOf(b) - pendingOf(a) || b.entries.length - a.entries.length);
+  const openKey = sp.open && groups.some((g) => groupKey(g) === sp.open) ? sp.open : sortedGroups[0] ? groupKey(sortedGroups[0]) : "";
+  const openGroup = groups.find((g) => groupKey(g) === openKey) ?? null;
+  const reviewList = openGroup
+    ? openGroup.entries.filter(matchView).sort((a, b) => (isPending(b) ? 1 : 0) - (isPending(a) ? 1 : 0))
+    : [];
 
-  const openKey = sp.open && queue.some((q) => q.key === sp.open) ? sp.open : queue[0]?.key ?? "";
-  const openGroup = groups.find((g) => (g.customerId ?? UNASSIGNED_CUSTOMER) === openKey) ?? null;
-  const reviewList = openGroup ? [...openGroup.entries].sort((a, b) => (isPending(b) ? 1 : 0) - (isPending(a) ? 1 : 0)) : [];
+  // ★ perf: ยิง 2 query ที่ไม่ขึ้นต่อกัน พร้อมกัน (รหัสลูกค้า + sign รูปเฉพาะลูกค้าที่เปิด)
+  const [codeMap, signed] = await Promise.all([
+    fetchCodes(service, tenantId, [...new Set(inMonth.map((e) => e.customerId).filter((x): x is string => !!x))]),
+    signPaths(service, reviewList.map(entryPath).filter((p): p is string => !!p)),
+  ]);
 
-  // sign thumbnails เฉพาะลูกค้าที่เปิด
-  const signed = await signPaths(service, reviewList.map(entryPath).filter((p): p is string => !!p));
+  // คิว: ลูกค้าที่มีงานค้างตรวจก่อน (ใช้ sortedGroups + codeMap)
+  const queue = sortedGroups.map((g) => ({
+    key: groupKey(g),
+    name: g.name,
+    customerId: g.customerId,
+    draft: g.entries.filter((e) => e.status === "draft").length,
+    unspec: g.entries.filter((e) => e.entryType === "unspecified").length,
+    conf: g.entries.filter((e) => e.status === "confirmed").length,
+    total: g.entries.length,
+    code: g.customerId ? codeMap.get(g.customerId) ?? null : null,
+  }));
 
   const q = (extra: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
@@ -232,12 +246,15 @@ export default async function AccountingWorkspacePage({
     return `/chat-audit/accounting?${p.toString()}`;
   };
 
-  const STEPS = [
-    { t: "รับเอกสาร", c: received, done: true },
-    { t: "AI ร่างบัญชี", c: received, done: true },
-    { t: "ตรวจ/ยืนยัน", c: pending, active: true },
-    { t: "กระทบยอดธนาคาร", c: null },
-    { t: "ภาษี (ภพ.30)", c: null },
+  // ★ ขั้น flow กดย้อนดูได้ (รับเอกสาร / AI ร่างบัญชี / ตรวจ) — เปลี่ยน view · active ตาม view ที่เลือก
+  const stepHref = (v: string) => `/chat-audit/accounting/workspace${q({ view: v, open: openKey })}`;
+  const activeIdx = view === "received" ? 0 : view === "drafted" ? 1 : 2;
+  const STEPS: { t: string; c: number | null; href?: string; active?: boolean; done?: boolean }[] = [
+    { t: "รับเอกสาร", c: received, href: stepHref("received"), active: view === "received", done: activeIdx > 0 },
+    { t: "AI ร่างบัญชี", c: draftCount, href: stepHref("drafted"), active: view === "drafted", done: activeIdx > 1 },
+    { t: "ตรวจ/ยืนยัน", c: pending, href: stepHref("review"), active: view === "review" },
+    { t: "กระทบยอดธนาคาร", c: null, href: "/chat-audit/accounting/bank-reconciliation" },
+    { t: "ภาษี (ภพ.30)", c: null, href: `/chat-audit/accounting/export?month=${selectedMonth}&type=purchase${accountantParam ? `&accountant=${accountantParam}` : ""}` },
     { t: "ปิดเดือน", c: null },
   ];
 
@@ -255,13 +272,21 @@ export default async function AccountingWorkspacePage({
 
       {/* FLOW STEPPER */}
       <div className="wsp-flow">
-        {STEPS.map((s, i) => (
-          <div key={i} className={`wsp-step${s.active ? " active" : ""}${s.done ? " done" : ""}`}>
-            <span className="n">{s.done ? "✓" : i + 1}</span>
-            <span className="t">{s.t}</span>
-            {s.c != null ? <span className="b">{s.c.toLocaleString("th-TH")}</span> : null}
-          </div>
-        ))}
+        {STEPS.map((s, i) => {
+          const cls = `wsp-step${s.active ? " active" : ""}${s.done ? " done" : ""}${s.href ? " clickable" : ""}`;
+          const inner = (
+            <>
+              <span className="n">{s.done ? "✓" : i + 1}</span>
+              <span className="t">{s.t}</span>
+              {s.c != null ? <span className="b">{s.c.toLocaleString("th-TH")}</span> : null}
+            </>
+          );
+          return s.href ? (
+            <Link key={i} href={s.href} className={cls} scroll={false}>{inner}</Link>
+          ) : (
+            <div key={i} className={cls}>{inner}</div>
+          );
+        })}
       </div>
 
       <div className="wsp-layout">
@@ -305,7 +330,7 @@ export default async function AccountingWorkspacePage({
         {/* CENTER: review list ของลูกค้าที่เปิด */}
         <div className="wsp-center">
           <div className="wsp-tabs">
-            <span className="wsp-tab on">📝 ตรวจเอกสาร {openGroup ? `· ${reviewList.filter(isPending).length} ค้าง` : ""}</span>
+            <span className="wsp-tab on">{view === "received" ? "📥 เอกสารทั้งหมด" : view === "drafted" ? "🤖 ร่าง AI" : "📝 ตรวจเอกสาร"} {openGroup ? `· ${reviewList.length} ใบ` : ""}</span>
             <a className="wsp-tab" href="/chat-audit/accounting/bank-reconciliation">🏦 กระทบยอดธนาคาร</a>
             <a className="wsp-tab" href={`/chat-audit/accounting/export?month=${selectedMonth}&type=purchase${accountantParam ? `&accountant=${accountantParam}` : ""}`}>🧾 ภพ.30 ซื้อ</a>
             <a className="wsp-tab" href={`/chat-audit/accounting/export?month=${selectedMonth}&type=sale${accountantParam ? `&accountant=${accountantParam}` : ""}`}>🧾 ภพ.30 ขาย</a>
@@ -320,6 +345,11 @@ export default async function AccountingWorkspacePage({
                 <span className="muted">{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
               </div>
               <div className="wsp-reviews">
+                {reviewList.length === 0 ? (
+                  <p className="empty" style={{ padding: 24 }}>
+                    {view === "drafted" ? "ไม่มีร่าง AI ในมุมมองนี้" : view === "received" ? "ยังไม่มีเอกสาร" : "ตรวจครบแล้ว 🎉 ไม่มีรายการค้างตรวจ"}
+                  </p>
+                ) : null}
                 {reviewList.map((e) => {
                   const s = summarizeEntry(e.lines);
                   const path = entryPath(e);
