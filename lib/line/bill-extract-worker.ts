@@ -55,6 +55,8 @@ export type ExtractWorkerResult = {
   extracted: number;
   /** จำนวนที่สร้าง draft ว่าง (PDF / ไม่มี key / สกัดไม่ได้) */
   blank: number;
+  /** จำนวนบิล "ซ้ำ" ที่ข้าม (ไฟล์ไบต์เดียวกันกับบิลที่มีอยู่แล้ว — ไม่อ่าน/ไม่สร้างซ้ำ) */
+  duplicate?: number;
   /** ปิดฟีเจอร์ (ไม่มี service env) — worker เป็น no-op */
   disabled?: boolean;
 };
@@ -67,6 +69,7 @@ type QueueRow = {
   doc_kind: string | null;
   drive_file_id: string | null;
   chat_message_id: string | null;
+  sha256: string | null;
 };
 
 /** เดา mime จากนามสกุลไฟล์ (fallback image/jpeg) */
@@ -477,6 +480,39 @@ export async function collectTargetEntries<T extends { created_at: string | null
  *   2) eligible = message_attachments (stored + เอกสารการเงิน + มีไฟล์) เรียง created_at asc
  *   3) ตัด done ออก → slice(limit) · เก่าก่อน = คิวเดินหน้าไม่ค้างชุดเดิม
  */
+/**
+ * มี "บิลเดิม" (ไฟล์ไบต์เดียวกัน = sha256 ตรงกัน) ที่สร้าง bill_entry ไว้แล้ว (ยังไม่ลบ) ไหม
+ *   → ใช้กันบิลซ้ำ: ลูกค้าส่งบิลใบเดิมซ้ำหลายข้อความ → AI ไม่อ่าน/ไม่สร้าง draft ซ้ำ
+ *   ★ กันเฉพาะ "ไฟล์เดียวกันเป๊ะ" (sha256) — ถ่ายรูปบิลใบเดิมใหม่ (ไบต์ต่างกัน) ยังจับไม่ได้ (นักบัญชีลบเองได้)
+ */
+async function hasEntryForSameHash(
+  db: SupabaseClient,
+  tenantId: string,
+  sha256: string,
+  exceptAttachmentId: string
+): Promise<boolean> {
+  try {
+    const { data: sib } = await db
+      .from("message_attachments")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("sha256", sha256)
+      .neq("id", exceptAttachmentId)
+      .limit(50);
+    const ids = ((sib ?? []) as { id: string }[]).map((a) => a.id);
+    if (ids.length === 0) return false;
+    const { data: dup } = await db
+      .from("bill_entries")
+      .select("id")
+      .in("attachment_id", ids)
+      .is("deleted_at", null)
+      .limit(1);
+    return !!(dup && dup.length);
+  } catch {
+    return false; // เช็กไม่ได้ → ไม่บล็อก (ปล่อยให้สร้างตามปกติ ดีกว่าพลาดบิลจริง)
+  }
+}
+
 export async function selectExtractionCandidates(
   db: SupabaseClient,
   limit: number
@@ -503,7 +539,7 @@ export async function selectExtractionCandidates(
   // 2) eligible เรียงเก่า→ใหม่ (สแกนครอบคลุม)
   const { data, error } = await db
     .from("message_attachments")
-    .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id")
+    .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256")
     .eq("fetch_status", "stored")
     .in("attachment_type", ["image", "file"])
     .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
@@ -547,11 +583,20 @@ export async function processBillExtraction(
   let created = 0;
   let extracted = 0;
   let blank = 0;
+  let duplicate = 0;
+  const seenSha = new Set<string>(); // กันบิลไบต์เดียวกันซ้ำ "ในรอบเดียวกัน"
 
   for (const row of rows) {
     scanned++;
     const objectPath = row.drive_file_id;
     if (!objectPath) continue;
+
+    // ★ กันบิลซ้ำ: ไฟล์ไบต์เดียวกัน (sha256) กับบิลที่มีอยู่/ที่เพิ่งทำในรอบนี้ → ไม่อ่าน/ไม่สร้างซ้ำ
+    if (row.sha256) {
+      if (seenSha.has(row.sha256)) { duplicate++; continue; }
+      if (await hasEntryForSameHash(db, row.tenant_id, row.sha256, row.id)) { duplicate++; continue; }
+      seenSha.add(row.sha256);
+    }
 
     // ★ ชนิดไฟล์ (จากนามสกุลบน storage) — ตัดสินว่า AI อ่านได้ไหม
     //   - รูป (image / นามสกุลรูป): vision อ่านได้ (extractBillData, gpt-4o-mini)
@@ -715,7 +760,7 @@ export async function processBillExtraction(
     else blank++;
   }
 
-  return { scanned, created, extracted, blank };
+  return { scanned, created, extracted, blank, duplicate };
 }
 
 /**
