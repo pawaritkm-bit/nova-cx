@@ -90,6 +90,30 @@ export async function resolveSaleFolder(group: NonNullable<MirrorGroupContext>, 
   return desired;
 }
 
+/**
+ * เปลี่ยนชื่อโฟลเดอร์ลูกค้า "ทันที" ตามชื่อใหม่ (เรียกจาก action แก้ชื่อในระบบ CX)
+ *   หาโฟลเดอร์เดิมด้วยเลข "(xxxx)" ท้าย → rename เป็น "<ชื่อใหม่> (xxxx)" (คงเนื้อในครบ)
+ *   @returns true = สำเร็จ/ไม่ต้องทำ (ยังไม่มีโฟลเดอร์) · false = ล้มเหลว (ชื่อว่าง/rename ไม่ได้)
+ */
+export async function renameGroupFolderNow(
+  group: NonNullable<MirrorGroupContext>,
+  newName: string,
+  root?: string
+): Promise<boolean> {
+  const tail = refTail(group);
+  const base = sanitizeFolderName(newName || "");
+  if (!tail || !base) return false;
+  const desired = base + shortSuffix(group);
+  try {
+    const existing = (await listOneDriveChildren([], root)).find((c) => c.isFolder && c.name.includes(`(${tail})`));
+    if (!existing) return true; // ยังไม่มีโฟลเดอร์ (ยังไม่เคยมีไฟล์) → ชื่อใหม่จะถูกใช้ตอนสร้างครั้งแรก
+    if (existing.name === desired) return true;
+    return await renameOneDriveFile({ folderParts: [], fileName: existing.name, newName: desired, root });
+  } catch {
+    return false;
+  }
+}
+
 /** ชื่อโฟลเดอร์ลูกค้าใน OneDrive: ชื่อไลน์ (decrypt) > customer_code > 'ไม่ระบุ' + suffix กันซ้ำ
  *   export ให้ auto-read เซฟผลลัพธ์ลงโฟลเดอร์เดียวกับไฟล์ต้นฉบับ */
 export function resolveOneDriveFolder(group: NonNullable<MirrorGroupContext>): string {

@@ -12,6 +12,7 @@ import { monthKeyOf } from "@/lib/accounting/monthly";
 import { formatMoney } from "@/lib/accounting/calc";
 import ChatAuditFrame from "../../_Frame";
 import DeleteBillButton from "./DeleteBillButton";
+import RenameCustomerButton from "./RenameCustomerButton";
 import "../../chat-admin.css";
 import "../accounting.css";
 import "./workspace.css";
@@ -343,7 +344,8 @@ export default async function AccountingWorkspacePage({
             <>
               <div className="wsp-center-head">
                 <b>{openGroup.name ?? "ยังไม่จับคู่ลูกค้า"}</b>
-                <span className="muted">{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
+                {openGroup.customerId ? <RenameCustomerButton customerId={openGroup.customerId} currentName={openGroup.name ?? ""} /> : null}
+                <span className="muted" style={{ marginLeft: "auto" }}>{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
               </div>
               <div className="wsp-reviews">
                 {reviewList.length === 0 ? (

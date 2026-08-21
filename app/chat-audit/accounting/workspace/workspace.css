@@ -53,9 +53,13 @@
 .wsp-tabs{display:flex;gap:4px;padding:10px 12px 0;border-bottom:1px solid #e2e8f0;flex-wrap:wrap}
 .wsp-tab{padding:8px 14px;border-radius:10px 10px 0 0;font-weight:600;font-size:12.5px;color:#64748b;text-decoration:none;border:1px solid transparent;border-bottom:none}
 .wsp-tab.on{color:#2563eb;background:#fff;border-color:#e2e8f0;box-shadow:0 -2px 0 #2563eb inset}
-.wsp-center-head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e2e8f0}
+.wsp-center-head{display:flex;gap:10px;align-items:center;padding:12px 16px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap}
 .wsp-center-head b{font-size:15px}
 .wsp-center-head .muted{color:#94a3b8;font-size:12.5px}
+.wsp-rename-ic{background:#eff6ff;color:#2563eb;border:1px solid #dbeafe;border-radius:8px;font-size:12px;font-weight:700;padding:4px 10px;cursor:pointer;font-family:inherit}
+.wsp-rename-ic:hover{background:#dbeafe}
+.wsp-rename-box{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
+.wsp-rename-input{padding:6px 10px;border:1px solid #93c5fd;border-radius:8px;font-family:inherit;font-size:13.5px;min-width:200px}
 
 .wsp-reviews{padding:12px;display:flex;flex-direction:column;gap:10px}
 .wsp-card{display:flex;gap:12px;border:1px solid #e2e8f0;border-radius:12px;padding:10px;align-items:center}
