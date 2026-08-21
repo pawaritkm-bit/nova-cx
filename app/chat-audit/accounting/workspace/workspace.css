@@ -90,6 +90,11 @@
 .wsp-row2{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#64748b}
 .wsp-row2 b{color:#1e293b}
 .wsp-row2 b.net{color:#0f9d6b}
+.wsp-move{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11.5px;color:#64748b;flex-wrap:wrap}
+.wsp-move .acc-udate-input{padding:4px 8px;border:1px solid #93c5fd;border-radius:7px;font-family:inherit;font-size:12.5px}
+.wsp-move .acc-udate-msg{font-size:11px}
+.wsp-move .acc-udate-msg.ok{color:#0f9d6b}
+.wsp-move .acc-udate-msg.err{color:#dc2626}
 .wsp-act{display:flex;flex-direction:column;gap:6px;flex:none}
 .wsp-btn{text-decoration:none;text-align:center;padding:8px 14px;border-radius:9px;font-weight:700;font-size:12.5px;white-space:nowrap}
 .wsp-btn.primary{background:#0f9d6b;color:#fff}
