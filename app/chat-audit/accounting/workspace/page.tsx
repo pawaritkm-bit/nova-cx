@@ -360,10 +360,21 @@ export default async function AccountingWorkspacePage({
                     <div key={e.id} className={`wsp-card${pend ? " pend" : " done"}`}>
                       <div className="wsp-thumb">
                         {url && img ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={url} alt="บิล" loading="lazy" decoding="async" />
+                          <a href={`#zoom-${e.id}`} className="wsp-thumb-zoom" aria-label="ขยายดูบิล">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={url} alt="บิล" loading="lazy" decoding="async" />
+                            <span className="wsp-zoom-ic">🔍 ขยาย</span>
+                          </a>
                         ) : path ? <span className="ext">{(path.split(".").pop() ?? "ไฟล์").toUpperCase()}</span> : <span className="ext none">ไม่มีรูป</span>}
                       </div>
+                      {/* แว่นขยาย: คลิกรูปเล็ก → เปิดรูปใหญ่เต็มจอ (CSS :target · คลิกพื้นหลัง/รูปเพื่อปิด) */}
+                      {url && img ? (
+                        <a id={`zoom-${e.id}`} href="#" className="wsp-lightbox" aria-label="ปิดรูปขยาย">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={url} alt="บิล (ขยาย)" />
+                          <span className="wsp-lightbox-close">✕ ปิด</span>
+                        </a>
+                      ) : null}
                       <div className="wsp-fields">
                         <div className="wsp-row1">
                           <span className={`type ${e.entryType}`}>{e.entryType === "purchase" ? "ภาษีซื้อ" : e.entryType === "sale" ? "ภาษีขาย" : "รอระบุ"}</span>

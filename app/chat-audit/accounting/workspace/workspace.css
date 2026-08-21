@@ -65,6 +65,14 @@
 .wsp-thumb img{width:100%;height:100%;object-fit:cover}
 .wsp-thumb .ext{font-weight:800;font-size:12px;color:#475569}
 .wsp-thumb .ext.none{font-size:10px;color:#94a3b8;font-weight:500}
+.wsp-thumb-zoom{position:relative;display:block;width:100%;height:100%;cursor:zoom-in}
+.wsp-zoom-ic{position:absolute;left:0;right:0;bottom:0;background:rgba(15,23,42,.72);color:#fff;font-size:10px;font-weight:700;text-align:center;padding:2px 0;opacity:0;transition:opacity .12s}
+.wsp-thumb-zoom:hover .wsp-zoom-ic{opacity:1}
+/* lightbox แว่นขยาย (CSS :target — ไม่ต้องใช้ JS) */
+.wsp-lightbox{display:none;position:fixed;inset:0;z-index:1000;background:rgba(15,23,42,.92);align-items:center;justify-content:center;padding:24px;cursor:zoom-out}
+.wsp-lightbox:target{display:flex}
+.wsp-lightbox img{max-width:96vw;max-height:92vh;object-fit:contain;border-radius:8px;box-shadow:0 12px 48px rgba(0,0,0,.6)}
+.wsp-lightbox-close{position:fixed;top:18px;right:24px;color:#fff;font-size:15px;font-weight:800;background:rgba(255,255,255,.15);border-radius:10px;padding:8px 14px}
 .wsp-fields{flex:1;min-width:0}
 .wsp-row1{display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
 .wsp-row1 .type{font-size:11px;font-weight:800;border-radius:6px;padding:2px 8px}
