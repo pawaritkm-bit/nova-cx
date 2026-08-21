@@ -236,7 +236,7 @@ export default async function AccountingWorkspacePage({
 
   // มุมมอง (ย้อนดูแต่ละขั้น flow ได้): received=ทุกใบ · drafted=ร่าง AI · review=ค้างตรวจ (ค่าเริ่ม)
   const view = sp.view === "received" ? "received" : sp.view === "drafted" ? "drafted" : "review";
-  const tab = sp.tab === "tax" ? "tax" : "review"; // แท็บกลาง: ตรวจเอกสาร (default) · ภาษี ภพ.30
+  const tab = sp.tab === "tax" ? "tax" : sp.tab === "reconcile" ? "reconcile" : "review"; // ตรวจเอกสาร(default)·ภาษี·กระทบยอดธนาคาร
   const matchView = (e: BillEntry) => (view === "received" ? true : view === "drafted" ? e.status === "draft" : isPending(e));
 
   // KPI + stepper counts
@@ -379,11 +379,13 @@ export default async function AccountingWorkspacePage({
             <Link className={`wsp-tab${tab === "review" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ open: openKey })}`} scroll={false}>
               {view === "received" ? "📥 เอกสารทั้งหมด" : view === "drafted" ? "🤖 ร่าง AI" : "📝 ตรวจเอกสาร"} {tab === "review" && openGroup ? `· ${reviewList.length} ใบ` : ""}
             </Link>
-            <a className="wsp-tab" href="/chat-audit/accounting/bank-reconciliation">🏦 กระทบยอดธนาคาร</a>
+            <Link className={`wsp-tab${tab === "reconcile" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ tab: "reconcile", open: openKey })}`} scroll={false}>🏦 กระทบยอดธนาคาร</Link>
             <Link className={`wsp-tab${tab === "tax" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ tab: "tax", open: openKey })}`} scroll={false}>🧾 ภาษี ภพ.30</Link>
           </div>
 
-          {tab === "tax" ? (
+          {tab === "reconcile" ? (
+            <iframe className="wsp-embed" src={`/chat-audit/accounting/bank-reconciliation?embed=1${selectedMonth ? `&month=${selectedMonth}` : ""}`} title="กระทบยอดธนาคาร" />
+          ) : tab === "tax" ? (
             <TaxView entries={inMonth} month={selectedMonth} accParam={accountantParam} />
           ) : !openGroup ? (
             <p className="empty" style={{ padding: 40 }}>เลือกลูกค้าจากคิวด้านซ้ายเพื่อเริ่มตรวจ</p>

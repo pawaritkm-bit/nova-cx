@@ -486,3 +486,7 @@
 .kn-review-btns button.badge { cursor: pointer; border: none; }
 .kn-review .action-msg.ok { color: var(--green-600, #16a34a); }
 .kn-review .action-msg.err { color: var(--red-600, #dc2626); }
+
+/* โหมด bare (ฝังใน iframe โต๊ะทำงาน) — ตัดแถบเมนู เหลือเนื้อหา padding พอดี */
+.nova-dash-bare{padding:14px !important}
+.nova-dash-bare>header{display:none}

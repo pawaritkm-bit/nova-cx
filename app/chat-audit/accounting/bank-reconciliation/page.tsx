@@ -74,9 +74,10 @@ async function fetchScopedCustomers(
 export default async function BankReconciliationPage({
   searchParams,
 }: {
-  searchParams: Promise<{ customerId?: string; bankAccountId?: string; month?: string; draft?: string }>;
+  searchParams: Promise<{ customerId?: string; bankAccountId?: string; month?: string; draft?: string; embed?: string }>;
 }) {
   const sp = await searchParams;
+  const embed = sp.embed === "1"; // ฝังในโต๊ะทำงาน (iframe) → ซ่อนเมนู แสดงเฉพาะเนื้อหา
 
   if (!getSupabaseEnv()) {
     return (
@@ -154,6 +155,7 @@ export default async function BankReconciliationPage({
       role={navRole}
       authed
       staffOnly={staffOnly}
+      bare={embed}
       title="กระทบยอดธนาคาร"
       subtitle="เทียบยอดบัญชีเงินฝากในระบบกับ statement ธนาคารจริง (นำเข้า CSV หรือกรอกมือ)"
     >

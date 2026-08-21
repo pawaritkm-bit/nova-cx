@@ -14,6 +14,7 @@ export default function ChatAuditFrame({
   title,
   subtitle,
   staffOnly = false,
+  bare = false,
   children,
 }: {
   active: AppNavActive;
@@ -23,8 +24,13 @@ export default function ChatAuditFrame({
   subtitle: string;
   /** true = โหมด staff (นักบัญชี LINE) → เมนูจำกัดเฉพาะบัญชีของตัวเอง */
   staffOnly?: boolean;
+  /** true = ซ่อนแถบเมนู (ไว้ฝังใน iframe ของหน้าอื่น เช่น โต๊ะทำงาน → กระทบยอดธนาคารในแท็บเดียว) */
+  bare?: boolean;
   children: React.ReactNode;
 }) {
+  if (bare) {
+    return <main className="nova-dash nova-dash-bare">{children}</main>;
+  }
   return (
     <main className="nova-dash">
       <header>
