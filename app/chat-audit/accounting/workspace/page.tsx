@@ -11,6 +11,7 @@ import { groupEntriesByCustomer, UNASSIGNED_CUSTOMER } from "@/lib/accounting/gr
 import { monthKeyOf } from "@/lib/accounting/monthly";
 import { formatMoney } from "@/lib/accounting/calc";
 import ChatAuditFrame from "../../_Frame";
+import DeleteBillButton from "./DeleteBillButton";
 import "../../chat-admin.css";
 import "../accounting.css";
 import "./workspace.css";
@@ -365,6 +366,11 @@ export default async function AccountingWorkspacePage({
                             <img src={url} alt="บิล" loading="lazy" decoding="async" />
                             <span className="wsp-zoom-ic">🔍 ขยาย</span>
                           </a>
+                        ) : path && url ? (
+                          <a href={url} target="_blank" rel="noopener" className="wsp-thumb-file" title="เปิดดูไฟล์ในเบราว์เซอร์">
+                            <span className="ext">{(path.split(".").pop() ?? "ไฟล์").toUpperCase()}</span>
+                            <span className="wsp-zoom-ic">🔍 ดู</span>
+                          </a>
                         ) : path ? <span className="ext">{(path.split(".").pop() ?? "ไฟล์").toUpperCase()}</span> : <span className="ext none">ไม่มีรูป</span>}
                       </div>
                       {/* แว่นขยาย: คลิกรูปเล็ก → เปิดรูปใหญ่เต็มจอ (CSS :target · คลิกพื้นหลัง/รูปเพื่อปิด) */}
@@ -392,6 +398,7 @@ export default async function AccountingWorkspacePage({
                       <div className="wsp-act">
                         <Link href={editHref(e)} className="wsp-btn primary">ตรวจ / ยืนยัน →</Link>
                         <a href={`/chat-audit/accounting/receipt-cert?bill=${e.id}${e.customerId ? `&customer=${e.customerId}` : ""}`} target="_blank" rel="noopener" className="wsp-btn ghost">ใบรับรองฯ</a>
+                        {isPending(e) ? <DeleteBillButton entryId={e.id} /> : null}
                       </div>
                     </div>
                   );
