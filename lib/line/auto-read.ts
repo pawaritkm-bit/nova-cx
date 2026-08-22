@@ -210,6 +210,7 @@ export async function autoReadSaleAttachment(params: {
               tenantId: tId,
               customerId: cId,
               bank: cls.det.bank,
+              accountName: cls.det.accountName,
               transactions: cls.det.transactions,
               sourceFileName: params.originalName || params.fileName,
             });

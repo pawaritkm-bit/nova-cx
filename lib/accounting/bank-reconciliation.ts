@@ -28,7 +28,9 @@ import { buildJournalEntries, type JournalLine, type JournalSide } from "@/lib/a
 import { type ReportPeriod, filterEntriesForReport, validMonth } from "@/lib/accounting/report-filter";
 import { loadCombinedJournalLines, flattenCombinedJournalLines } from "@/lib/accounting/statement-inputs";
 import { EPSILON } from "@/lib/accounting/statement-config";
-import { listCustomerBankAccounts } from "@/lib/accounting/bank-accounts";
+import { listCustomerBankAccounts, type CustomerBankAccount } from "@/lib/accounting/bank-accounts";
+import { bankAccountCodesOf } from "@/lib/accounting/chart-of-accounts";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 
 type DB = SupabaseClient;
 
@@ -669,9 +671,42 @@ type ReconTxnInput = {
 };
 
 /**
+ * สร้างบัญชีเงินฝากลูกค้าอัตโนมัติจากสเตทเมนต์ (ชื่อแบงก์)
+ *   ★ parser ไม่มี "เลขบัญชี" ที่สะอาด (accountName = ชื่อเจ้าของ ไม่ใช่เลขบัญชี) → account_no = null
+ *     (จับคู่/กันซ้ำด้วยชื่อแบงก์แทน) · เลือกรหัสผังเงินฝาก (bank:true) ตัวที่ลูกค้ายังไม่ได้ใช้
+ */
+async function ensureBankAccountFromStatement(
+  db: DB,
+  tenantId: string,
+  customerId: string,
+  bank: string | null,
+  existing: CustomerBankAccount[]
+): Promise<CustomerBankAccount | null> {
+  const chart = await listChartOfAccounts(db, tenantId);
+  const codes = bankAccountCodesOf(chart);
+  if (codes.length === 0) return null;
+  const used = new Set(existing.map((a) => a.accountCode));
+  const code = codes.find((c: string) => !used.has(c)) ?? codes[0];
+  const { data } = await db
+    .from("customer_bank_accounts")
+    .insert({
+      tenant_id: tenantId,
+      customer_id: customerId,
+      account_code: code,
+      bank_name: clampText(bank, 80),
+      account_no: null,
+    })
+    .select("id, account_code, bank_name, account_no")
+    .maybeSingle();
+  if (!data) return null;
+  const r = data as { id: string; account_code: string; bank_name: string | null; account_no: string | null };
+  return { id: r.id, accountCode: r.account_code, bankName: r.bank_name, accountNo: r.account_no };
+}
+
+/**
  * ★ Auto-feed: สเตทเมนต์ที่ deterministic reconcile ผ่าน (มาทาง care OA) → insert เข้า bank_statement_lines
  *   ให้หน้ากระทบยอดมีธุรกรรมพร้อมจับคู่ทันที (ไม่ต้องอัป CSV ซ้ำ)
- *   ★ ปลอดภัย: เลือกบัญชีเงินฝากของลูกค้าเองไม่ได้ → ข้าม (ไม่เดา/ไม่สร้างบัญชีมั่ว) · dedup ด้วย file_name
+ *   ★ ลูกค้ายังไม่มีบัญชีเงินฝาก/ไม่ตรงแบงก์ → สร้างให้อัตโนมัติจากสเตทเมนต์ (ชื่อแบงก์+เลขบัญชี) · dedup ด้วย file_name
  *   ★ ยังคง "คนยืนยันจับคู่เสมอ" (ไม่ auto-confirm/auto-post) — แค่เตรียมข้อมูลให้
  */
 export async function autoImportReconciledStatement(
@@ -680,25 +715,29 @@ export async function autoImportReconciledStatement(
     tenantId: string;
     customerId: string;
     bank: string | null;
+    accountName?: string | null;
     transactions: ReconTxnInput[];
     sourceFileName: string | null;
   }
 ): Promise<{ imported: boolean; reason?: string; lineCount?: number }> {
   const { tenantId, customerId } = params;
   const accounts = await listCustomerBankAccounts(db, tenantId, customerId);
-  if (accounts.length === 0) return { imported: false, reason: "no_bank_account" };
 
-  // เลือกบัญชี: ตัวเดียว → ใช้เลย · หลายตัว → จับคู่ตามชื่อธนาคาร (ไม่ชัด → ข้าม ให้คนทำเอง)
-  let acct = accounts.length === 1 ? accounts[0] : null;
-  if (!acct && params.bank) {
+  // เลือกบัญชี: ชื่อแบงก์ตรง (มี ≥1 → ใช้ตัวแรก กันสร้างซ้ำ) > มีบัญชีเดียว > ไม่มี/ไม่ตรง → สร้างอัตโนมัติ
+  let acct: CustomerBankAccount | null = null;
+  if (params.bank) {
     const b = params.bank.toLowerCase();
     const hits = accounts.filter((a) => {
       const n = (a.bankName ?? "").toLowerCase();
       return n && (n.includes(b) || b.includes(n));
     });
-    if (hits.length === 1) acct = hits[0];
+    if (hits.length >= 1) acct = hits[0];
   }
-  if (!acct) return { imported: false, reason: "ambiguous_bank_account" };
+  if (!acct && accounts.length === 1) acct = accounts[0];
+  if (!acct) {
+    acct = await ensureBankAccountFromStatement(db, tenantId, customerId, params.bank, accounts);
+  }
+  if (!acct) return { imported: false, reason: "cannot_resolve_bank_account" };
 
   // แปลงธุรกรรม → ParsedStatementRow (amount signed: เข้า=+ / ออก=−)
   const rows: ParsedStatementRow[] = params.transactions
