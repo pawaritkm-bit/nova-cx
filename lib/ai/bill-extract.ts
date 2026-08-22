@@ -43,6 +43,12 @@ function isReasoningModel(model: string): boolean {
 
 /** โมเดล vision ของ Gemini (fallback เมื่อไม่มี OPENAI_API_KEY) — paid tier ไม่เทรนข้อมูล */
 const GEMINI_VISION_MODEL = process.env.ACCT_VISION_MODEL || "gemini-3.6-flash";
+/** โมเดล Gemini "Pro" ที่ใช้อ่านซ้ำเฉพาะบิลยาก (escalation) — แม่นกว่า flash */
+const GEMINI_PRO_MODEL = process.env.ACCT_VISION_PRO_MODEL || "gemini-3.1-pro-preview";
+/** โมเดล Claude ที่ใช้ตรวจทาน (cross-check) เฉพาะบิลยาก */
+const CLAUDE_VERIFY_MODEL = process.env.ACCT_VERIFY_MODEL || "claude-sonnet-5";
+/** เปิด/ปิด escalation (ตั้ง ACCT_ESCALATE=off เพื่อกลับไปอ่าน flash อย่างเดียว) */
+const ESCALATE_ON = process.env.ACCT_ESCALATE !== "off";
 
 /**
  * เรียก Gemini vision → คืน "เนื้อ JSON" (string) หรือ null
@@ -54,7 +60,8 @@ async function geminiExtractContent(
   imageData: Buffer,
   mime: string,
   maxTokens: number,
-  timeoutMs: number
+  timeoutMs: number,
+  modelOverride?: string
 ): Promise<string | null> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
@@ -64,7 +71,7 @@ async function geminiExtractContent(
     contents: [{ parts: [{ inline_data: { mime_type: media, data: imageData.toString("base64") } }, { text: `${system}\n\n${user}` }] }],
     generationConfig: { temperature: 0, responseMimeType: "application/json", maxOutputTokens: maxTokens },
   });
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent?key=${key}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelOverride || GEMINI_VISION_MODEL}:generateContent?key=${key}`;
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
   // ลองสูงสุด 4 ครั้ง — retry+backoff เฉพาะ error ชั่วคราว (429 rate limit / 5xx overloaded)
   const MAX = 4;
@@ -90,6 +97,54 @@ async function geminiExtractContent(
     }
   }
   return null;
+}
+
+/**
+ * เรียก Claude (Anthropic) vision → คืน "เนื้อ JSON" (string) หรือ null
+ *   ★ ใช้ system/user prompt + schema เดียวกับ Gemini/OpenAI → ผ่าน normalizeExtraction เดิมได้เลย
+ *   ★ ใช้เป็น "ตัวตรวจทาน" เฉพาะบิลยาก (escalation) เพื่อคุมต้นทุน · best-effort → null เมื่อ error/ไม่มี key
+ *   ★ PDPA: ไม่ log เนื้อบิล/ยอด
+ */
+async function claudeExtractContent(
+  system: string,
+  user: string,
+  imageData: Buffer,
+  mime: string,
+  maxTokens: number,
+  timeoutMs: number
+): Promise<string | null> {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return null;
+  const m = (mime || "").toLowerCase();
+  const isPdf = m.includes("pdf");
+  const media = m.startsWith("image/") ? mime : "image/jpeg";
+  const block = isPdf
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: imageData.toString("base64") } }
+    : { type: "image", source: { type: "base64", media_type: media, data: imageData.toString("base64") } };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: CLAUDE_VERIFY_MODEL,
+        max_tokens: maxTokens,
+        temperature: 0,
+        system,
+        messages: [{ role: "user", content: [block, { type: "text", text: user }] }],
+      }),
+    });
+    if (!res.ok) { console.warn(`[bill-extract] claude http ${res.status}`); return null; }
+    const body = (await res.json()) as { content?: { text?: string }[] };
+    return body.content?.[0]?.text ?? null;
+  } catch {
+    console.warn("[bill-extract] claude error");
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -547,20 +602,79 @@ export function normalizeExtraction(
  *     backward-compat ระดับ compile เท่านั้น (caller จริงต้องส่งผังจริงของ tenant มาเสมอ)
  *   @returns ExtractedBill (ช่องไม่มั่นใจ = null) · null เมื่อ error/timeout/ไม่มี key
  */
+/** ผลรวมยอดทุกบรรทัด (ฐาน + VAT) — ใช้เทียบว่าตัวอ่านแต่ละตัวเห็นยอดตรงกันไหม */
+function billTotal(b: ExtractedBill): number {
+  return Math.round(b.lines.reduce((s, l) => s + (l.amount ?? 0) + (l.vat_amount ?? 0), 0) * 100) / 100;
+}
+
+/** คะแนนคุณภาพการอ่าน (สูง = ดี): มั่นใจสูง · เดาน้อย · อ่านตัวเลข/ช่องสำคัญได้ครบ */
+function billScore(b: ExtractedBill): number {
+  const low = b.lines.filter((l) => l.low_confidence).length;
+  const nullAmt = b.lines.filter((l) => l.amount == null).length;
+  return b.overall_confidence - 0.1 * low - 0.15 * nullAmt - (b.seller_name ? 0 : 0.05) - (b.doc_date ? 0 : 0.05);
+}
+
+/** บิล "ยาก" ที่ควร escalate ให้ Pro + Claude ช่วยอ่าน (คุมต้นทุน — เรียกเฉพาะเคสนี้) */
+function needsEscalation(b: ExtractedBill): boolean {
+  return (
+    b.overall_confidence < 0.75 ||
+    b.lines.some((l) => l.low_confidence) ||
+    b.lines.some((l) => l.amount == null)
+  );
+}
+
+/** parse เนื้อ JSON → ExtractedBill (ผ่าน gating + VAT sanity เดิม) · null เมื่ออ่านไม่ได้ */
+function parseBill(content: string | null, chartByCode: ChartByCode): ExtractedBill | null {
+  if (!content) return null;
+  const bill = normalizeExtraction(extractJson(content), chartByCode);
+  return bill ? flagVatInconsistency(bill) : null;
+}
+
 export async function extractBillData(
   imageData: Buffer,
   mime: string,
   chart: ChartAccount[] = []
 ): Promise<ExtractedBill | null> {
-  // ★ บิลไลน์ (รูปใบเดียว) — OpenAI ก่อน (ถ้ามี key) · ไม่มี → Gemini (paid tier)
-  //   default OpenAI model = EXTRACT_MODEL (gpt-5-mini) · override ด้วย OPENAI_LINE_BILL_MODEL
+  // ★ บิลไลน์ (รูปใบเดียว) — OpenAI ก่อน (ถ้ามี key) · ไม่มี → Gemini flash (paid tier)
   const model = process.env.OPENAI_LINE_BILL_MODEL || EXTRACT_MODEL;
   // ★ ย่อรูปใหญ่ก่อน (รูปสแกน/ถ่ายบิลหลาย MB) — กัน Gemini 400 (payload/ขนาดเกิน) · PDF ไม่แตะ
   const prepped = await downscaleImageIfLarge(imageData, mime);
-  const content = await runBillVision(buildSystemPrompt(chart), USER_PROMPT, prepped.data, prepped.mime, model, 4000);
-  if (!content) return null;
-  const bill = normalizeExtraction(extractJson(content), buildChartByCode(chart));
-  return bill ? flagVatInconsistency(bill) : null;
+  const system = buildSystemPrompt(chart);
+  const chartByCode = buildChartByCode(chart);
+
+  // 1) อ่านเร็ว: flash (หรือ OpenAI ถ้ามี key)
+  const first = parseBill(
+    await runBillVision(system, USER_PROMPT, prepped.data, prepped.mime, model, 4000),
+    chartByCode
+  );
+  if (!first) return null;
+
+  // 2) บิลง่าย / ปิด escalation → คืนผลเร็ว (จ่ายแค่ค่าอ่าน flash 1 ครั้ง)
+  if (!ESCALATE_ON || !needsEscalation(first)) return first;
+
+  // 3) บิลยาก → อ่านซ้ำด้วย Gemini Pro + Claude ขนานกัน (best-effort · null ถ้าล้ม)
+  const [proContent, claudeContent] = await Promise.all([
+    geminiExtractContent(system, USER_PROMPT, prepped.data, prepped.mime, 6000, EXTRACT_TIMEOUT_MS, GEMINI_PRO_MODEL),
+    claudeExtractContent(system, USER_PROMPT, prepped.data, prepped.mime, 6000, EXTRACT_TIMEOUT_MS),
+  ]);
+  const candidates = [first, parseBill(proContent, chartByCode), parseBill(claudeContent, chartByCode)]
+    .filter((b): b is ExtractedBill => !!b);
+
+  // 4) เลือกใบที่ "คะแนนอ่านดีสุด"
+  candidates.sort((a, b) => billScore(b) - billScore(a));
+  const best = candidates[0];
+  if (candidates.length < 2) return best; // Pro/Claude ล้มทั้งคู่ → คืน best เท่าที่มี
+
+  // 5) ตัวอ่านเห็น "ยอดรวม" ไม่ตรงกัน (เกิน ±2% หรือ ±1 บาท) → ยกธงทั้งใบให้นักบัญชีตรวจ
+  const totals = candidates.map(billTotal);
+  const spread = Math.max(...totals) - Math.min(...totals);
+  const disagree = spread > Math.max(1, Math.max(...totals) * 0.02);
+  if (!disagree) return best;
+  return {
+    ...best,
+    overall_confidence: Math.min(best.overall_confidence, 0.5),
+    lines: best.lines.map((l) => ({ ...l, low_confidence: true })),
+  };
 }
 
 /**
