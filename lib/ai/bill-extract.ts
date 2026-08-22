@@ -43,8 +43,6 @@ function isReasoningModel(model: string): boolean {
 
 /** โมเดล vision ของ Gemini (fallback เมื่อไม่มี OPENAI_API_KEY) — paid tier ไม่เทรนข้อมูล */
 const GEMINI_VISION_MODEL = process.env.ACCT_VISION_MODEL || "gemini-3.6-flash";
-/** โมเดล Gemini "Pro" ที่ใช้อ่านซ้ำเฉพาะบิลยาก (escalation) — แม่นกว่า flash */
-const GEMINI_PRO_MODEL = process.env.ACCT_VISION_PRO_MODEL || "gemini-3.1-pro-preview";
 /** โมเดล Claude ที่ใช้ตรวจทาน (cross-check) เฉพาะบิลยาก */
 const CLAUDE_VERIFY_MODEL = process.env.ACCT_VERIFY_MODEL || "claude-sonnet-5";
 /** เปิด/ปิด escalation (ตั้ง ACCT_ESCALATE=off เพื่อกลับไปอ่าน flash อย่างเดียว) */
@@ -620,11 +618,10 @@ function billScore(b: ExtractedBill): number {
 
 /** บิล "ยาก" ที่ควร escalate ให้ Pro + Claude ช่วยอ่าน (คุมต้นทุน — เรียกเฉพาะเคสนี้) */
 function needsEscalation(b: ExtractedBill): boolean {
-  return (
-    b.overall_confidence < 0.75 ||
-    b.lines.some((l) => l.low_confidence) ||
-    b.lines.some((l) => l.amount == null)
-  );
+  // ★ คุมต้นทุน: escalate เฉพาะบิลที่ "ไม่มั่นใจมากจริง ๆ" (conf < 0.5) เท่านั้น
+  //   (เดิม conf<0.75 / มี null / low_conf ใด ๆ → บิลเกือบทุกใบ escalate = จ่ายแพง)
+  //   บิลทั่วไปที่ flash อ่านได้ระดับหนึ่ง → ใช้ flash พอ (นักบัญชีตรวจอยู่แล้ว)
+  return b.overall_confidence < 0.5;
 }
 
 /** parse เนื้อ JSON → ExtractedBill (ผ่าน gating + VAT sanity เดิม) · null เมื่ออ่านไม่ได้ */
@@ -656,12 +653,9 @@ export async function extractBillData(
   // 2) บิลง่าย / ปิด escalation → คืนผลเร็ว (จ่ายแค่ค่าอ่าน flash 1 ครั้ง)
   if (!ESCALATE_ON || !needsEscalation(first)) return first;
 
-  // 3) บิลยาก → อ่านซ้ำด้วย Gemini Pro + Claude ขนานกัน (best-effort · null ถ้าล้ม)
-  const [proContent, claudeContent] = await Promise.all([
-    geminiExtractContent(system, USER_PROMPT, prepped.data, prepped.mime, 6000, EXTRACT_TIMEOUT_MS, GEMINI_PRO_MODEL),
-    claudeExtractContent(system, USER_PROMPT, prepped.data, prepped.mime, 6000, EXTRACT_TIMEOUT_MS),
-  ]);
-  const candidates = [first, parseBill(proContent, chartByCode), parseBill(claudeContent, chartByCode)]
+  // 3) บิลยาก → ตรวจซ้ำด้วย "Claude อย่างเดียว" (คุมต้นทุน — ตัด Gemini Pro preview ที่แพงออก)
+  const claudeContent = await claudeExtractContent(system, USER_PROMPT, prepped.data, prepped.mime, 6000, EXTRACT_TIMEOUT_MS);
+  const candidates = [first, parseBill(claudeContent, chartByCode)]
     .filter((b): b is ExtractedBill => !!b);
 
   // 4) เลือกใบที่ "คะแนนอ่านดีสุด"
