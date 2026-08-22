@@ -70,6 +70,7 @@ type QueueRow = {
   drive_file_id: string | null;
   chat_message_id: string | null;
   sha256: string | null;
+  original_name: string | null; // ★ ชื่อไฟล์จริง — ใช้ตัดสินนามสกุล (drive_file_id เก่าเก็บ ext แบบ "_pdf")
 };
 
 /** เดา mime จากนามสกุลไฟล์ (fallback image/jpeg) */
@@ -548,7 +549,7 @@ export async function selectExtractionCandidates(
   if (chatGroupId) {
     const { data, error } = await db
       .from("message_attachments")
-      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, chat_messages!inner(chat_group_id)")
+      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, original_name, chat_messages!inner(chat_group_id)")
       .eq("fetch_status", "stored")
       .in("attachment_type", ["image", "file"])
       .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
@@ -572,7 +573,7 @@ export async function selectExtractionCandidates(
   for (let from = 0; from < CANDIDATE_SCAN_LIMIT && collected.length < limit; from += PAGE) {
     const { data, error } = await db
       .from("message_attachments")
-      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, chat_messages!inner(chat_groups!inner(customer_id))")
+      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, original_name, chat_messages!inner(chat_groups!inner(customer_id))")
       .eq("fetch_status", "stored")
       .in("attachment_type", ["image", "file"])
       .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
@@ -642,24 +643,32 @@ export async function processBillExtraction(
       seenSha.add(row.sha256);
     }
 
-    const lowerPath = objectPath.toLowerCase();
-
-    // ★ ชนิดไฟล์ (จากนามสกุลบน storage) — ตัดสินว่า AI อ่านเป็น "บิล" ได้ไหม
-    //   - รูป (image / นามสกุลรูป): vision อ่านได้
-    //   - PDF: file input อ่านได้
-    const isPdf = lowerPath.endsWith(".pdf");
-    const isImageExt = /\.(jpe?g|png|gif|webp|heic|heif)$/.test(lowerPath);
+    // ★ นามสกุลไฟล์ — ใช้ original_name เป็นหลัก (ชื่อจริง) · fallback drive_file_id
+    //   ★★ สำคัญ: drive_file_id เก่า (naming ก่อน fix) เก็บนามสกุลแบบ "_pdf" (ขีดล่าง) ไม่ใช่ ".pdf"
+    //      → regex ต้องจับทั้ง "." และ "_" นำหน้านามสกุล ไม่งั้น PDF/รูปเก่าถูกมองเป็น "ไม่ใช่บิล" ผิด
+    const nameForExt = (row.original_name || objectPath || "").toLowerCase();
+    const extMatch = nameForExt.match(/[._]([a-z0-9]{1,8})$/);
+    const ext = extMatch ? extMatch[1] : "";
+    const isPdf = ext === "pdf";
+    const isImageExt = /^(jpe?g|png|gif|webp|heic|heif|bmp)$/.test(ext);
     const isImage = row.attachment_type === "image" || isImageExt;
     const isDocumentFile = !isImage; // ไฟล์ที่ไม่ใช่รูป (PDF/Excel/doc/…)
     const aiReadable = isImage || isPdf;
-    const mime = isPdf ? "application/pdf" : mimeFromPath(objectPath);
+    const mime = isPdf
+      ? "application/pdf"
+      : ext === "png" ? "image/png"
+        : ext === "gif" ? "image/gif"
+          : ext === "webp" ? "image/webp"
+            : ext === "heic" ? "image/heic"
+              : ext === "heif" ? "image/heif"
+                : "image/jpeg";
 
     // ★ กฎ (ผู้ใช้): ไฟล์ที่ "ไม่ใช่บิล" (ไม่ใช่รูป/PDF) — เช่น Excel/doc/csv/ไฟล์บีบอัด zip/7z —
     //   ไม่ต้องดึงเข้าหน้าลงบันทึกบัญชี (สเตทเมนต์/รายงานแพลตฟอร์มมี flow อ่านแยกของตัวเอง)
     //   → มาร์กออกจากคิว (fetch_status='skipped') · ไม่สร้าง draft ว่าง · กันวนสแกนซ้ำถาวร
     //   (สอดคล้องปุ่มอัปไฟล์เองที่รับเฉพาะรูป/PDF/Excel/CSV และไม่สร้างบิลจากไฟล์ที่อ่านไม่ได้)
     if (!aiReadable) {
-      const isArchive = /\.(zip|rar|7z|tar|gz|tgz|bz2|xz|z|arj|cab|iso|lzh|ace)$/.test(lowerPath);
+      const isArchive = /^(zip|rar|7z|tar|gz|tgz|bz2|xz|z|arj|cab|iso|lzh|ace)$/.test(ext);
       await db
         .from("message_attachments")
         .update({ fetch_status: "skipped", fetch_error: isArchive ? "archive_unsupported" : "not_a_bill_file" })
