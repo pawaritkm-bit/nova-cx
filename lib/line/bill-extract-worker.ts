@@ -647,11 +647,14 @@ export async function processBillExtraction(
         const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(objectPath);
         if (dlErr || !blob) {
           console.warn("[bill-extract-worker] share download failed");
-          continue; // ดาวน์โหลดไม่ได้ → ข้ามรอบนี้ (ยังไม่สร้างบิล ลองใหม่รอบหน้า)
+          // ดาวน์โหลดไม่ได้ (ไฟล์หาย/path เพี้ยน) → มาร์กออกจากคิว กันวนสแกนซ้ำถาวร (กิน slot)
+          await db.from("message_attachments").update({ doc_kind: "share_circle" }).eq("id", row.id).eq("tenant_id", row.tenant_id);
+          continue;
         }
         preBuf = Buffer.from(await blob.arrayBuffer());
       } catch {
         console.warn("[bill-extract-worker] share download error");
+        await db.from("message_attachments").update({ doc_kind: "share_circle" }).eq("id", row.id).eq("tenant_id", row.tenant_id);
         continue;
       }
       const sc = await classifyShareCircleImage(preBuf, mime);
