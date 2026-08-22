@@ -356,15 +356,18 @@ export default async function AccountingWorkspacePage({
       accountantOptions = opts;
       currentAccountantId = byCust.get(openCustomerId) ?? null;
     }
-    shareIsFlag = await getCustomerShareCircleFlag(service, tenantId, openCustomerId);
-    try {
-      const hasShare = await customerHasShareCircle(service, tenantId, openCustomerId);
-      shareResolved = true;
-      if (shareIsFlag || hasShare) {
-        shareCircleEntries = await listShareCircleEntries(service, { tenantId, customerId: openCustomerId });
+    // ★ วงแชร์ = บุคคลธรรมดาเท่านั้น (ตามกฎหมาย) → นิติบุคคลไม่ต้องดึง/ไม่โชว์
+    if (adminFields.customerType !== "company") {
+      shareIsFlag = await getCustomerShareCircleFlag(service, tenantId, openCustomerId);
+      try {
+        const hasShare = await customerHasShareCircle(service, tenantId, openCustomerId);
+        shareResolved = true;
+        if (shareIsFlag || hasShare) {
+          shareCircleEntries = await listShareCircleEntries(service, { tenantId, customerId: openCustomerId });
+        }
+      } catch {
+        shareResolved = false; // ตาราง/คอลัมน์วงแชร์ยังไม่ apply → ไม่โชว์ (ไม่ crash)
       }
-    } catch {
-      shareResolved = false; // ตาราง/คอลัมน์วงแชร์ยังไม่ apply → ไม่โชว์ (ไม่ crash)
     }
   }
   const showShareToggle = access.mode === "admin" && shareResolved && !!openCustomerId;
