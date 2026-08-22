@@ -222,6 +222,8 @@ export type SideDecision = {
   entryType: EntryType;
   counterpartyName: string | null;
   counterpartyTaxId: string | null;
+  /** true = ตัดสินด้วย heuristic ชั้น 3 (เดา ไม่ใช่จับคู่เป๊ะ) → ต้องให้คนตรวจก่อนยืนยัน */
+  guessed?: boolean;
 };
 
 /** ตัวตนลูกค้าเรา (ใช้จับฝั่งซื้อ/ขาย) */
@@ -368,6 +370,19 @@ export function decideEntrySide(
   }
   if (buyerScore >= NAME_ACCEPT && buyerScore - sellerScore >= NAME_MARGIN) {
     return sideResult("buyer", seller, buyer);
+  }
+
+  // ---- ชั้น 3: heuristic (เดา) — บิลจาก "กลุ่มลูกค้า" ส่วนใหญ่คือ "บิลซื้อ" (ลูกค้าเก็บใบเสร็จค่าใช้จ่าย) ----
+  //   ตัดสินเป็น purchase ต่อเมื่อ: มี "ผู้ขาย" ที่ระบุตัวได้ (เลขภาษี หรือ ชื่อ) ซึ่ง "ไม่ใช่ลูกค้าเรา"
+  //   และลูกค้าเราก็ไม่ตรงกับ "ผู้ซื้อ" → คนขายเป็นบุคคลภายนอก = ลูกค้าเราคือผู้ซื้อที่บิลไม่พิมพ์ไว้
+  //   ★ flag guessed=true → ยังเป็น draft ต้องให้คนตรวจ (กันบิลขายที่ AI อ่านชื่อเราเพี้ยนหลุดมาเป็นซื้อ)
+  const sellerTaxD = digitsOnly(seller.taxId);
+  const sellerIdentified = sellerTaxD.length >= 10 || !!(seller.name && seller.name.trim().length >= 3);
+  const sellerIsUs = (custTax.length >= 10 && sellerTaxD === custTax) || sellerScore >= NAME_ACCEPT;
+  const buyerIsUs =
+    buyerScore >= NAME_ACCEPT || (custTax.length >= 10 && digitsOnly(buyer.taxId) === custTax);
+  if (sellerIdentified && !sellerIsUs && !buyerIsUs) {
+    return { ...sideResult("buyer", seller, buyer), guessed: true };
   }
   return unspecified;
 }
@@ -802,6 +817,11 @@ export async function processBillExtraction(
     const entryId = (entryIns as { id?: string } | null)?.id;
     if (!entryId) continue;
 
+    // ★ ธง "เดาฝั่งซื้อ/ขาย" (ชั้น 3 heuristic) — best-effort · คอลัมน์ side_guessed ยังไม่ apply = คืน error เงียบ (ไม่ throw)
+    if (decision.guessed) {
+      await db.from("bill_entries").update({ side_guessed: true }).eq("id", entryId).eq("tenant_id", row.tenant_id);
+    }
+
     // 7) สร้าง bill_entry_lines — ช่องที่ AI เว้น null = ไม่เติม (ค่า 0 ตาม default DB)
     //    ai_filled=true เฉพาะ line ที่ AI เติม amount/vat/บัญชี จริง (รู้ที่มา)
     // ★ เอกสารเขียนมือ/เงินสด/สลิป = ไม่ใช่ใบกำกับภาษี → บังคับ novat แน่นอน (ไม่ต้องเดา)
@@ -1063,6 +1083,10 @@ export async function redecideExistingEntries(
     if (updErr) {
       console.warn(`[bill-extract-worker] redecide update error code=${(updErr as { code?: string }).code ?? "?"}`);
       continue;
+    }
+    // ★ ธง "เดา" (ชั้น 3) — best-effort แยก update (คอลัมน์ side_guessed ยังไม่ apply = error เงียบ ไม่กระทบ entry_type)
+    if (decision.guessed) {
+      await db.from("bill_entries").update({ side_guessed: true }).eq("id", row.id).eq("tenant_id", tenantId);
     }
     updated++;
   }
