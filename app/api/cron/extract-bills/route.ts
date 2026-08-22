@@ -12,7 +12,7 @@ import { newRequestId, logServerError, isValidCronAuth } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 /**
  * POST/GET /api/cron/extract-bills
@@ -101,7 +101,7 @@ async function handle(request: NextRequest) {
     const db = createServiceRoleClient();
     const result: Record<string, unknown> = { status: "ok", mode };
     if (mode === "extract" || mode === "both") {
-      result.extract = await processBillExtraction(db, { limit: 10 });
+      result.extract = await processBillExtraction(db, { limit: 15 });
     }
     if (mode === "redecide" || mode === "both") {
       result.redecide = await redecideAllTenants(db);
