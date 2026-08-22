@@ -28,6 +28,7 @@ import { buildJournalEntries, type JournalLine, type JournalSide } from "@/lib/a
 import { type ReportPeriod, filterEntriesForReport, validMonth } from "@/lib/accounting/report-filter";
 import { loadCombinedJournalLines, flattenCombinedJournalLines } from "@/lib/accounting/statement-inputs";
 import { EPSILON } from "@/lib/accounting/statement-config";
+import { listCustomerBankAccounts } from "@/lib/accounting/bank-accounts";
 
 type DB = SupabaseClient;
 
@@ -656,6 +657,73 @@ export async function importBatchFromCsv(
   }
 
   return { ok: true, batchId, lineCount: rows.length };
+}
+
+/** ธุรกรรมดิบจาก deterministic parser (StatementTxn) — รับแบบ structural กัน import cycle */
+type ReconTxnInput = {
+  date: string | null;
+  description?: string | null;
+  counterparty_name?: string | null;
+  direction: "in" | "out" | null;
+  amount: number | null;
+};
+
+/**
+ * ★ Auto-feed: สเตทเมนต์ที่ deterministic reconcile ผ่าน (มาทาง care OA) → insert เข้า bank_statement_lines
+ *   ให้หน้ากระทบยอดมีธุรกรรมพร้อมจับคู่ทันที (ไม่ต้องอัป CSV ซ้ำ)
+ *   ★ ปลอดภัย: เลือกบัญชีเงินฝากของลูกค้าเองไม่ได้ → ข้าม (ไม่เดา/ไม่สร้างบัญชีมั่ว) · dedup ด้วย file_name
+ *   ★ ยังคง "คนยืนยันจับคู่เสมอ" (ไม่ auto-confirm/auto-post) — แค่เตรียมข้อมูลให้
+ */
+export async function autoImportReconciledStatement(
+  db: DB,
+  params: {
+    tenantId: string;
+    customerId: string;
+    bank: string | null;
+    transactions: ReconTxnInput[];
+    sourceFileName: string | null;
+  }
+): Promise<{ imported: boolean; reason?: string; lineCount?: number }> {
+  const { tenantId, customerId } = params;
+  const accounts = await listCustomerBankAccounts(db, tenantId, customerId);
+  if (accounts.length === 0) return { imported: false, reason: "no_bank_account" };
+
+  // เลือกบัญชี: ตัวเดียว → ใช้เลย · หลายตัว → จับคู่ตามชื่อธนาคาร (ไม่ชัด → ข้าม ให้คนทำเอง)
+  let acct = accounts.length === 1 ? accounts[0] : null;
+  if (!acct && params.bank) {
+    const b = params.bank.toLowerCase();
+    const hits = accounts.filter((a) => {
+      const n = (a.bankName ?? "").toLowerCase();
+      return n && (n.includes(b) || b.includes(n));
+    });
+    if (hits.length === 1) acct = hits[0];
+  }
+  if (!acct) return { imported: false, reason: "ambiguous_bank_account" };
+
+  // แปลงธุรกรรม → ParsedStatementRow (amount signed: เข้า=+ / ออก=−)
+  const rows: ParsedStatementRow[] = params.transactions
+    .filter((t) => t.date && t.amount != null && t.direction)
+    .map((t) => ({
+      date: t.date as string,
+      description: t.counterparty_name || t.description || null,
+      amount: t.direction === "out" ? -Math.abs(t.amount as number) : Math.abs(t.amount as number),
+    }));
+  if (rows.length === 0) return { imported: false, reason: "no_rows" };
+
+  // dedup: มี batch ของบัญชีนี้ที่ file_name เดียวกันแล้ว → ข้าม (กันสเตทเมนต์ใบเดิมเข้าซ้ำ)
+  const sig = clampText(params.sourceFileName || `auto-${rows.length}-${rows[0].date}-${rows[rows.length - 1].date}`, 200);
+  const { data: existing } = await db
+    .from("bank_statement_import_batches")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("customer_id", customerId)
+    .eq("bank_account_id", acct.id)
+    .eq("file_name", sig)
+    .limit(1);
+  if (existing && (existing as unknown[]).length > 0) return { imported: false, reason: "duplicate" };
+
+  const res = await importBatchFromCsv(db, tenantId, customerId, acct.id, sig, rows);
+  return res.ok ? { imported: true, lineCount: res.lineCount } : { imported: false, reason: res.message };
 }
 
 /**

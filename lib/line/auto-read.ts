@@ -14,6 +14,7 @@ import { saveRawCsvToOneDrive, saveResultCsvToOneDrive } from "@/lib/accounting/
 import { extractPlatformReportFromFile, extractPlatformReportFromText, extractPlatformReportFromTextChunks } from "@/lib/accounting/platform-report-extract";
 import { extractStatementFromFile, extractStatementFromText, extractStatementFromTextChunks } from "@/lib/accounting/statement-extract";
 import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv";
+import { autoImportReconciledStatement } from "@/lib/accounting/bank-reconciliation";
 import { buildPlatformSummaryCsv } from "@/lib/accounting/platform/parse";
 import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/locked-note";
 import { sanitizeDocName, shopNameFromFilename } from "@/lib/accounting/doc-naming";
@@ -132,6 +133,29 @@ export async function autoReadSaleAttachment(params: {
       const csv = (await purposePrefix("statement")) + buildStatementSummaryCsv(cls.det.transactions, cls.det.bank, cls.det.printedTotals);
       const docBase = cls.det.accountName ? sanitizeDocName(cls.det.accountName) : base;
       await saveRawCsvToOneDrive({ folderParts, fileName: `${docBase} - สรุป.csv`, csv, root });
+      // ★ care OA เท่านั้น (กลุ่มผูกลูกค้าแล้ว): auto-feed เข้าหน้ากระทบยอดธนาคาร (ไม่ต้องอัป CSV ซ้ำ)
+      if (oaType === "care") {
+        try {
+          const { data: g } = await params.db
+            .from("chat_groups")
+            .select("tenant_id, customer_id")
+            .eq("id", params.chatGroupId)
+            .maybeSingle();
+          const tId = (g as { tenant_id?: string | null } | null)?.tenant_id ?? null;
+          const cId = (g as { customer_id?: string | null } | null)?.customer_id ?? null;
+          if (tId && cId) {
+            await autoImportReconciledStatement(params.db, {
+              tenantId: tId,
+              customerId: cId,
+              bank: cls.det.bank,
+              transactions: cls.det.transactions,
+              sourceFileName: params.originalName || params.fileName,
+            });
+          }
+        } catch {
+          console.warn("[auto-read] auto-reconcile feed failed");
+        }
+      }
       await markSourceRead(folderParts, params.fileName, root);
       return;
     }
