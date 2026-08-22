@@ -12,6 +12,7 @@
  *   error ใด ๆ → คืนข้อความสุภาพ (ไม่หลุด internal)
  */
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { requireAdminContext, AdminAuthError } from "@/lib/admin/guard";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -73,9 +74,25 @@ export async function mapGroupAction(
     customer_id: formData.get("customer_id"),
   });
   if (!parsed.success) return { ok: false, message: firstZodError(parsed.error) };
-  const res = await withChatAdminWrite((db, tenantId, actor) =>
-    mapGroupToCustomer(db, tenantId, parsed.data, actor)
-  );
+  const res = await withChatAdminWrite(async (db, tenantId, actor) => {
+    await mapGroupToCustomer(db, tenantId, parsed.data, actor);
+    // ★ ผูกลูกค้า → ดึงบิล+สเตทเมนต์ย้อนหลังอัตโนมัติ "เบื้องหลัง" (after() = ตอบผูกทันที ไม่ค้าง UI)
+    //   สเตทเมนต์: re-import เข้ากระทบยอด · บิล: สกัด group-scoped ทันที (ที่เหลือ cron เก็บต่อ)
+    if (parsed.data.customer_id) {
+      const cid = parsed.data.customer_id;
+      const gid = parsed.data.chat_group_id;
+      after(async () => {
+        try {
+          const { reimportGroupStatementsOnLink } = await import("@/lib/accounting/reimport-on-link");
+          await reimportGroupStatementsOnLink(db, { tenantId, customerId: cid, chatGroupId: gid });
+          const { processBillExtraction } = await import("@/lib/line/bill-extract-worker");
+          await processBillExtraction(db, { chatGroupId: gid, limit: 40 });
+        } catch {
+          /* best-effort — ผูกสำเร็จแล้ว การดึงย้อนหลังพลาดไม่ควรกระทบ */
+        }
+      });
+    }
+  });
   return res.ok
     ? { ok: true, message: parsed.data.customer_id ? "จับคู่ลูกค้าแล้ว" : "ยกเลิกการจับคู่แล้ว" }
     : res;

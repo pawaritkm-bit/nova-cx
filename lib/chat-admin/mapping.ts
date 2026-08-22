@@ -204,19 +204,7 @@ export async function mapGroupToCustomer(
       note: "จับคู่ผ่านหน้าตั้งค่า (admin)",
     });
     if (mapErr) throw new Error(mapErr.message);
-
-    // 2a.1) ★ ผูกลูกค้าทีหลัง → ดึงสเตทเมนต์ย้อนหลังเข้ากระทบยอดอัตโนมัติ (best-effort · ไม่ throw)
-    //   บิล (ไฟล์/รูป) ไม่ต้องทำที่นี่ — ค้างในคิว worker อยู่แล้ว cron ดึงเองหลังผูก
-    try {
-      const { reimportGroupStatementsOnLink } = await import("@/lib/accounting/reimport-on-link");
-      await reimportGroupStatementsOnLink(db, {
-        tenantId,
-        customerId: input.customer_id,
-        chatGroupId: input.chat_group_id,
-      });
-    } catch {
-      /* best-effort — ผูกลูกค้าสำเร็จแล้ว การดึงย้อนหลังพลาดไม่ควรทำให้ action พัง */
-    }
+    // ★ ดึงบิล+สเตทเมนต์ย้อนหลังหลังผูก → ทำใน after() ที่ mapGroupAction (ไม่ block การตอบ)
   } else {
     // 2b) ★ ยกเลิกจับคู่ → audit ใน audit_logs (customer_group_mapping รับ customer_id null ไม่ได้)
     //   ให้มีร่องรอยการยกเลิกจับคู่เสมอ (M1)

@@ -515,7 +515,8 @@ async function hasEntryForSameHash(
 
 export async function selectExtractionCandidates(
   db: SupabaseClient,
-  limit: number
+  limit: number,
+  chatGroupId?: string
 ): Promise<QueueRow[]> {
   // 1) done set (ทุก tenant — cron เป็น service-role สแกนรวม)
   //    ★ นับรวม entry ที่ถูกลบ (soft-delete) ด้วย — ไม่กรอง deleted_at
@@ -535,6 +536,26 @@ export async function selectExtractionCandidates(
       .map((e) => e.attachment_id)
       .filter((x): x is string => !!x)
   );
+
+  // ★ group-scoped (ใช้ตอน "ผูกลูกค้าทีหลัง" → ดึงบิลของกลุ่มนั้นทันที): กรองด้วย inner join chat_messages
+  if (chatGroupId) {
+    const { data, error } = await db
+      .from("message_attachments")
+      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, chat_messages!inner(chat_group_id)")
+      .eq("fetch_status", "stored")
+      .in("attachment_type", ["image", "file"])
+      .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
+      .not("drive_file_id", "is", null)
+      .eq("chat_messages.chat_group_id", chatGroupId)
+      .order("created_at", { ascending: true })
+      .limit(500);
+    if (error) {
+      console.warn(`[bill-extract-worker] select group queue error code=${(error as { code?: string }).code ?? "?"}`);
+      return [];
+    }
+    const eligible = (data ?? []) as unknown as QueueRow[];
+    return eligible.filter((r) => !done.has(r.id)).slice(0, limit);
+  }
 
   // 2) eligible เรียงเก่า→ใหม่ — ★ page ทีละ 1000 จนเก็บ candidate ที่ "ยังไม่ทำ" ครบ limit
   //    (บั๊กเดิม: จำกัดหน้าต่างแค่ CANDIDATE_SCAN_LIMIT ตัวเก่าสุด — ถ้าตัวเก่าสุดทำไปหมดแล้ว
@@ -571,7 +592,7 @@ export async function selectExtractionCandidates(
  */
 export async function processBillExtraction(
   db: SupabaseClient,
-  opts: { limit?: number } = {}
+  opts: { limit?: number; chatGroupId?: string } = {}
 ): Promise<ExtractWorkerResult> {
   const limit = opts.limit ?? 10;
   const empty: ExtractWorkerResult = { scanned: 0, created: 0, extracted: 0, blank: 0 };
@@ -582,7 +603,7 @@ export async function processBillExtraction(
   //    วิธีแก้ (subtract-done): ดึง attachment_id ที่ "มี entry แล้ว" มาเป็น set ก่อน →
   //      แล้วสแกน eligible แบบเรียงเก่า→ใหม่ (ครอบคลุมพอ) → ตัด done ออก → slice(limit)
   //      เก่าก่อน = คิวเดินหน้าไปเรื่อย ๆ จนครบ (ไม่วนอยู่ชุดเดิม)
-  const rows = await selectExtractionCandidates(db, limit);
+  const rows = await selectExtractionCandidates(db, limit, opts.chatGroupId);
   if (rows.length === 0) return empty;
 
   // ★ A6: cache ผังบัญชีต่อ tenant ในรอบนี้ (cron อาจสแกนหลาย tenant) — ไม่ query ซ้ำต่อบิล
