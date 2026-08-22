@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineOa } from "@/lib/env";
 import type { LineClient } from "@/lib/line/client";
 import type { QueuedLineEvent } from "@/lib/line/webhook";
-import { encryptField, hasEncKey } from "@/lib/crypto/field";
+import { encryptField, decryptField, hasEncKey } from "@/lib/crypto/field";
 
 /**
  * Ingestion (Phase 1): เก็บข้อความจากกลุ่ม/ห้อง LINE ลง chat_* (เข้ารหัสแล้ว)
@@ -264,13 +264,29 @@ export async function ensureGroupName(
     const groupName = summary?.groupName ?? null;
     if (!groupName) return; // ดึงไม่ได้ → คงว่างไว้ (ลองใหม่รอบหน้า)
 
+    // ★ sync ชื่อ "ตามชื่อกลุ่มไลน์ปัจจุบัน" — อัปเดตเฉพาะเมื่อชื่อ "เปลี่ยน" (เขียน DB เท่าที่จำเป็น)
+    //   → โฟลเดอร์ OneDrive จะ rename ตามชื่อไลน์ล่าสุดตอนดึงไฟล์ (resolveSaleFolder) = เสิร์ชในไลน์เจอ
+    let currentName: string | null = null;
+    try {
+      const { data: cur } = await db
+        .from("chat_groups")
+        .select("display_name_enc")
+        .eq("id", chatGroupId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      const enc = (cur as { display_name_enc?: string | null } | null)?.display_name_enc;
+      if (enc) currentName = decryptField(enc);
+    } catch {
+      /* อ่าน/decrypt พลาด → ถือว่าต่าง เขียนทับด้วยชื่อไลน์ปัจจุบัน */
+    }
+    if (currentName === groupName) return; // ชื่อไม่เปลี่ยน — ไม่ต้องเขียน
+
     const displayNameEnc = encryptField(groupName);
     const { error } = await db
       .from("chat_groups")
       .update({ display_name_enc: displayNameEnc })
       .eq("id", chatGroupId)
-      .eq("tenant_id", tenantId)
-      .is("display_name_enc", null); // เขียนเฉพาะตอนยังว่าง (กันทับ + กัน race)
+      .eq("tenant_id", tenantId);
     if (error) {
       console.warn(
         `[line/ingest] set group display_name_enc failed (code=${
@@ -394,10 +410,8 @@ export async function ingestGroupMessage(
   const chatGroupId = group.id;
   const customerId = group.customerId; // resolve group→customer (source of truth)
 
-  // fetch-if-missing: ยังไม่มีชื่อกลุ่ม → ดึงจาก LINE แล้วเก็บ ciphertext (best-effort, ไม่ยิงซ้ำถ้ามีแล้ว)
-  if (!group.hasName) {
-    await ensureGroupName(db, tenantId, chatGroupId, groupRef, sourceType, deps.client ?? null);
-  }
+  // ★ sync ชื่อกลุ่มไลน์ทุกข้อความ (best-effort · เขียน DB เฉพาะเมื่อชื่อเปลี่ยน) → โฟลเดอร์ตามชื่อไลน์ล่าสุด
+  await ensureGroupName(db, tenantId, chatGroupId, groupRef, sourceType, deps.client ?? null);
 
   // --- (2) upsert chat_member (best-effort ระบุตัวตน + display_name เข้ารหัส) ---
   let chatMemberId: string | null = null;
@@ -706,10 +720,8 @@ export async function ingestGroupJoin(
   const group = await resolveOrCreateGroup(db, tenantId, groupRef, sourceType, chatChannelId);
   if (!group) return { status: "skipped", reason: "chat_group_upsert_failed" };
 
-  // ดึงชื่อทันทีถ้ายังไม่มี (best-effort — ไม่ยิงซ้ำถ้ากลุ่มเก่ามีชื่อแล้ว)
-  if (!group.hasName) {
-    await ensureGroupName(db, tenantId, group.id, groupRef, sourceType, deps.client ?? null);
-  }
+  // ★ sync ชื่อกลุ่มไลน์ทุกข้อความ (best-effort · เขียน DB เฉพาะเมื่อชื่อเปลี่ยน) → โฟลเดอร์ตามชื่อไลน์ล่าสุด
+  await ensureGroupName(db, tenantId, group.id, groupRef, sourceType, deps.client ?? null);
 
   return { status: "created", chatGroupId: group.id };
 }
