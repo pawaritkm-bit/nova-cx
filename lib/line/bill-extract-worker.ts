@@ -642,11 +642,24 @@ export async function processBillExtraction(
       seenSha.add(row.sha256);
     }
 
+    const lowerPath = objectPath.toLowerCase();
+
+    // ★ ไฟล์บีบอัด/อาร์ไคฟ์ (zip/rar/7z/tar/gz/…) — ไม่ใช่บิล + AI เปิดอ่านไม่ได้
+    //   → มาร์กออกจากคิว (fetch_status='skipped') กันสร้าง draft ว่างรกหน้าลงบันทึกบัญชี + กันวนสแกนซ้ำถาวร
+    //   (ปุ่มอัปไฟล์เองก็ปฏิเสธไฟล์พวกนี้อยู่แล้ว — ให้คิว auto สอดคล้องกัน)
+    if (/\.(zip|rar|7z|tar|gz|tgz|bz2|xz|z|arj|cab|iso|lzh|ace)$/.test(lowerPath)) {
+      await db
+        .from("message_attachments")
+        .update({ fetch_status: "skipped", fetch_error: "archive_unsupported" })
+        .eq("id", row.id)
+        .eq("tenant_id", row.tenant_id);
+      continue;
+    }
+
     // ★ ชนิดไฟล์ (จากนามสกุลบน storage) — ตัดสินว่า AI อ่านได้ไหม
     //   - รูป (image / นามสกุลรูป): vision อ่านได้ (extractBillData, gpt-4o-mini)
     //   - PDF: file input อ่านได้ (extractBillsData, gpt-5-mini อ่าน PDF ได้)
     //   - ไฟล์เอกสารอื่น (Excel/doc/csv): อ่านไม่ได้ → สร้าง draft ว่างพร้อมไฟล์แนบ
-    const lowerPath = objectPath.toLowerCase();
     const isPdf = lowerPath.endsWith(".pdf");
     const isImageExt = /\.(jpe?g|png|gif|webp|heic|heif)$/.test(lowerPath);
     const isImage = row.attachment_type === "image" || isImageExt;
