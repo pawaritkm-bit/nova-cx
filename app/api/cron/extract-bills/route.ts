@@ -101,7 +101,11 @@ async function handle(request: NextRequest) {
     const db = createServiceRoleClient();
     const result: Record<string, unknown> = { status: "ok", mode };
     if (mode === "extract" || mode === "both") {
-      result.extract = await processBillExtraction(db, { limit: 15 });
+      // ปรับจำนวนใบต่อรอบผ่าน ?limit= (clamp 1–60, default 15) — ใช้เร่งเคลียร์ backlog
+      //   maxDuration=300s · ~6s/ใบ (Gemini flash) → 60 ใบ ≈ 240s (ยังปลอดภัยใต้เพดาน)
+      const q = Number(request.nextUrl.searchParams.get("limit"));
+      const extractLimit = Number.isFinite(q) ? Math.min(60, Math.max(1, Math.trunc(q))) : 15;
+      result.extract = await processBillExtraction(db, { limit: extractLimit });
     }
     if (mode === "redecide" || mode === "both") {
       result.redecide = await redecideAllTenants(db);

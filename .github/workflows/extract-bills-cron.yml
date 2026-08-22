@@ -19,7 +19,7 @@ jobs:
         run: |
           curl -sS -m 300 \
             -H "authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://nova-cx.vercel.app/api/cron/extract-bills?mode=both" || true
+            "https://nova-cx.vercel.app/api/cron/extract-bills?mode=both&limit=40" || true
       - name: reextract empty drafts
         run: |
           curl -sS -m 300 \
