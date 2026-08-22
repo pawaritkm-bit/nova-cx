@@ -140,7 +140,8 @@
 .cust-tools>summary::-webkit-details-marker{display:none}
 .cust-tools>summary::after{content:"▾";margin-left:6px;font-size:11px}
 .cust-tools[open]>summary::after{content:"▴"}
-.cust-tools-pop{position:absolute;z-index:40;top:calc(100% + 6px);left:0;min-width:520px;max-width:min(92vw,720px);
+/* ★ ยึดขอบขวา (ปุ่มอยู่ชิดขวาของ header) — เปิดเข้าในจอ ไม่ตกขอบ */
+.cust-tools-pop{position:absolute;z-index:40;top:calc(100% + 6px);right:0;left:auto;width:max-content;max-width:min(92vw,680px);
   background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 12px 32px rgba(15,23,42,.16);
   padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px 16px}
 .cust-tools-grp-title{font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
