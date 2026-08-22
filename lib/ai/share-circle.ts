@@ -265,12 +265,48 @@ const USER_PROMPT =
 export async function extractShareCircles(
   input: ShareCircleExtractInput
 ): Promise<ParsedShareCircleEntry[]> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return []; // degrade: ไม่มี key → ข้ามการสกัด
-
   const text = typeof input.text === "string" ? input.text.trim() : "";
   const images = Array.isArray(input.images) ? input.images.filter((i) => i && i.base64) : [];
   if (!text && images.length === 0) return []; // ไม่มี input ให้อ่าน
+
+  // ★ Gemini ก่อน (ถ้ามี key) — รองรับ text + หลายรูป · เลิกพึ่ง GPT
+  const gemKey = process.env.GEMINI_API_KEY;
+  if (gemKey) {
+    const parts: Record<string, unknown>[] = [{ text: `${SYSTEM_PROMPT}\n\n${USER_PROMPT}` }];
+    if (text) parts.push({ text: `ลิสต์วงแชร์ (ข้อความ):\n${text}` });
+    for (const img of images) {
+      const m = (img.mime || "image/jpeg").toLowerCase();
+      const media = m.includes("pdf") ? "application/pdf" : m.startsWith("image/") ? (img.mime as string) : "image/jpeg";
+      parts.push({ inline_data: { mime_type: media, data: img.base64 } });
+    }
+    const model = process.env.ACCT_VISION_MODEL || "gemini-3.6-flash";
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${gemKey}`;
+    const gc = new AbortController();
+    const gt = setTimeout(() => gc.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: gc.signal,
+        body: JSON.stringify({ contents: [{ parts }], generationConfig: { temperature: 0, responseMimeType: "application/json", maxOutputTokens: 16000 } }),
+      });
+      if (res.ok) {
+        const body = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+        const content = body.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (content) return normalizeShareCircles(extractJson(content));
+      } else {
+        console.warn(`[share-circle] gemini http ${res.status}`);
+      }
+    } catch {
+      console.warn("[share-circle] gemini error");
+    } finally {
+      clearTimeout(gt);
+    }
+    // Gemini ล้ม → ตกไป OpenAI (ถ้ามี key)
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return []; // degrade: ไม่มี key → ข้ามการสกัด
 
   // ประกอบ content ของ user message: prompt + (ข้อความ) + (รูปทั้งหมด)
   const userContent: Record<string, unknown>[] = [{ type: "text", text: USER_PROMPT }];

@@ -5,6 +5,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptField } from "@/lib/crypto/field";
+import { generateTextWithGemini } from "@/lib/ai/gemini-extract";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const MODEL = process.env.ACCT_DIGITAL_MODEL || "gpt-5-mini";
@@ -50,14 +51,22 @@ export async function interpretDocPurpose(params: {
   docType: string;
   docName?: string | null;
 }): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return "";
   const label = DOCTYPE_LABEL[params.docType] || "เอกสาร";
   const prompt =
     `คุณเป็นผู้ช่วยสำนักงานบัญชี ลูกค้าส่ง "${label}" เข้ามาในแชท` +
     (params.docName ? ` (ชื่อไฟล์: ${params.docName})` : "") +
     `\n\nบทสนทนาล่าสุดในแชท:\n${params.chatText || "(ไม่มีข้อความ)"}` +
     `\n\nสรุปสั้นๆ 1 ประโยคภาษาไทยว่า "ลูกค้าส่งเอกสารนี้มาเพื่ออะไร" (เช่น ส่งให้ทำบัญชี/ปิดงบเดือน, เตรียมยื่นภาษี, ขอสินเชื่อ, ตรวจสอบรายรับ). ถ้าเดาไม่ได้จากบริบทให้ตอบว่า "ไม่ระบุ" เท่านั้น ห้ามแต่งเพิ่ม`;
+  const clean = (s: string) => {
+    const out = (s || "").replace(/\s+/g, " ").trim();
+    return !out || out === "ไม่ระบุ" ? "" : out.slice(0, 200);
+  };
+  // Gemini ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม/ไม่มี key → OpenAI
+  const g = await generateTextWithGemini({ system: "ตอบสั้น กระชับ ภาษาไทย", userPrompt: prompt, maxOutputTokens: 300, timeoutMs: TIMEOUT_MS });
+  if (g !== null) return clean(g);
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return "";
   const body: Record<string, unknown> = {
     model: MODEL,
     messages: [{ role: "user", content: prompt }],

@@ -7,6 +7,8 @@
  * ★ degrade ปลอดภัย: ไม่มี key / เรียกไม่สำเร็จ → คืน 'other' (ให้ข้าม ไม่เดามั่ว)
  * ★ PDPA: ส่งแค่ snippet สั้น ๆ · ไม่ log เนื้อ
  */
+import { generateTextWithGemini } from "@/lib/ai/gemini-extract";
+
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const CLASSIFY_MODEL = process.env.ACCT_DIGITAL_MODEL || "gpt-5-mini";
 const CLASSIFY_TIMEOUT_MS = 30_000;
@@ -37,6 +39,14 @@ function parseType(raw: string): AccountingDocType {
 export async function classifyDocTypeFromText(text: string): Promise<AccountingDocType> {
   const snippet = (text ?? "").trim().slice(0, SNIPPET_CHARS);
   if (!snippet) return "other";
+  // Gemini ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม/ไม่มี key → OpenAI
+  const g = await generateTextWithGemini({
+    system: SYSTEM,
+    userPrompt: `จัดประเภทเอกสารนี้:\n\n${snippet}`,
+    maxOutputTokens: 500,
+    timeoutMs: CLASSIFY_TIMEOUT_MS,
+  });
+  if (g !== null) return parseType(g);
   return callClassify([
     { role: "system", content: SYSTEM },
     { role: "user", content: `จัดประเภทเอกสารนี้:\n\n${snippet}` },
@@ -45,6 +55,16 @@ export async function classifyDocTypeFromText(text: string): Promise<AccountingD
 
 /** จัดประเภทจากรูป/สแกน (vision) — ใช้ตอนไม่มี text layer */
 export async function classifyDocTypeFromImage(data: Buffer, mime: string): Promise<AccountingDocType> {
+  // Gemini vision ก่อน · ล้ม/ไม่มี key → OpenAI
+  const g = await generateTextWithGemini({
+    system: SYSTEM,
+    userPrompt: "จัดประเภทเอกสารในภาพนี้ ตอบคำเดียว",
+    fileData: data,
+    mime,
+    maxOutputTokens: 500,
+    timeoutMs: CLASSIFY_TIMEOUT_MS,
+  });
+  if (g !== null) return parseType(g);
   const dataUrl = `data:${mime || "image/jpeg"};base64,${data.toString("base64")}`;
   return callClassify([
     { role: "system", content: SYSTEM },

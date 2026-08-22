@@ -159,6 +159,10 @@ async function runBillVision(
   openaiModel: string,
   maxTokens: number
 ): Promise<string | null> {
+  // ★ Gemini ก่อน (ถ้ามี key) — เลิกพึ่ง GPT ทั้งใน local และ prod
+  if (process.env.GEMINI_API_KEY) {
+    return geminiExtractContent(system, user, imageData, mime, maxTokens, EXTRACT_TIMEOUT_MS);
+  }
   const apiKey = process.env.OPENAI_API_KEY;
   if (apiKey) {
     const isPdf = (mime || "").toLowerCase().includes("pdf");

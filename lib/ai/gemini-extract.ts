@@ -57,12 +57,8 @@ function extractJson(text: string): Record<string, unknown> | null {
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * อ่านเอกสารด้วย Gemini → JSON object ที่ parse แล้ว (เช่น {transactions:[...]} / {lines:[...]})
- *   ส่ง fileData+mime (PDF/รูป) หรือ text (Excel/CSV) อย่างใดอย่างหนึ่ง
- *   คืน null = ล้มเหลว → caller ตัดสินใจ fallback หรือคืน []
- */
-export async function extractJsonWithGemini(opts: {
+/** เรียก Gemini → คืน "ข้อความดิบ" ที่โมเดลตอบ (raw) หรือ null · แกนกลางที่ทั้ง JSON/text ใช้ร่วมกัน */
+async function callGeminiRaw(opts: {
   system: string;
   userPrompt: string;
   fileData?: Buffer;
@@ -71,7 +67,8 @@ export async function extractJsonWithGemini(opts: {
   maxOutputTokens?: number;
   model?: string;
   timeoutMs?: number;
-}): Promise<Record<string, unknown> | null> {
+  jsonMode?: boolean;
+}): Promise<string | null> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
 
@@ -85,14 +82,12 @@ export async function extractJsonWithGemini(opts: {
   parts.push({ text: combined });
 
   const model = opts.model || GEMINI_MODEL;
-  const reqBody = JSON.stringify({
-    contents: [{ parts }],
-    generationConfig: {
-      temperature: 0,
-      responseMimeType: "application/json",
-      maxOutputTokens: opts.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
-    },
-  });
+  const generationConfig: Record<string, unknown> = {
+    temperature: 0,
+    maxOutputTokens: opts.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
+  };
+  if (opts.jsonMode) generationConfig.responseMimeType = "application/json";
+  const reqBody = JSON.stringify({ contents: [{ parts }], generationConfig });
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
   const timeoutMs = opts.timeoutMs ?? GEMINI_TIMEOUT_MS;
 
@@ -110,9 +105,7 @@ export async function extractJsonWithGemini(opts: {
         return null;
       }
       const body = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-      const text = body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-      if (!text) return null;
-      return extractJson(text);
+      return body.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
     } catch {
       console.warn("[gemini-extract] error");
       return null;
@@ -121,4 +114,40 @@ export async function extractJsonWithGemini(opts: {
     }
   }
   return null;
+}
+
+/**
+ * เรียก Gemini → คืน "ข้อความล้วน" (เช่น จัดประเภทตอบคำเดียว) หรือ null
+ *   ใช้กับงานจัดประเภท (classify) ที่ไม่ต้องการ JSON
+ */
+export async function generateTextWithGemini(opts: {
+  system: string;
+  userPrompt: string;
+  fileData?: Buffer;
+  mime?: string;
+  text?: string;
+  maxOutputTokens?: number;
+  model?: string;
+  timeoutMs?: number;
+}): Promise<string | null> {
+  return callGeminiRaw({ ...opts, maxOutputTokens: opts.maxOutputTokens ?? 2000, jsonMode: false });
+}
+
+/**
+ * อ่านเอกสารด้วย Gemini → JSON object ที่ parse แล้ว (เช่น {transactions:[...]} / {lines:[...]})
+ *   ส่ง fileData+mime (PDF/รูป) หรือ text (Excel/CSV) อย่างใดอย่างหนึ่ง
+ *   คืน null = ล้มเหลว → caller ตัดสินใจ fallback หรือคืน []
+ */
+export async function extractJsonWithGemini(opts: {
+  system: string;
+  userPrompt: string;
+  fileData?: Buffer;
+  mime?: string;
+  text?: string;
+  maxOutputTokens?: number;
+  model?: string;
+  timeoutMs?: number;
+}): Promise<Record<string, unknown> | null> {
+  const text = await callGeminiRaw({ ...opts, jsonMode: true });
+  return text ? extractJson(text) : null;
 }

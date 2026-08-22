@@ -12,6 +12,8 @@
  * ★ PDPA: ไม่ log เนื้อรูป/ผลละเอียด — log แค่ error สั้น ๆ ไม่มีข้อมูลอ่อนไหว
  */
 
+import { extractJsonWithGemini } from "@/lib/ai/gemini-extract";
+
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -141,6 +143,17 @@ export async function classifyShareCircleImage(
   data: Buffer,
   mime: string
 ): Promise<ShareCircleClassifyResult | null> {
+  // Gemini vision ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม/ไม่มี key → OpenAI
+  const gem = await extractJsonWithGemini({
+    system: SHARE_SYSTEM_PROMPT,
+    userPrompt: "รูปนี้เป็น 'ลิสต์วงแชร์' หรือ 'บิลจริง'? ตอบ JSON ตามรูปแบบ",
+    fileData: data,
+    mime,
+    maxOutputTokens: 500,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
+  if (gem !== null) return normalizeShareCircleClassification(gem);
+
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null; // degrade: ไม่มี key → caller ถือว่าเป็นบิล (ไม่ข้าม)
 
@@ -194,6 +207,17 @@ export async function classifyBillImage(
   data: Buffer,
   mime: string
 ): Promise<BillClassifyResult | null> {
+  // Gemini vision ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม/ไม่มี key → OpenAI
+  const gem = await extractJsonWithGemini({
+    system: SYSTEM_PROMPT,
+    userPrompt: "รูปนี้เป็นเอกสารการเงินหรือไม่? ตอบ JSON ตามรูปแบบที่กำหนด",
+    fileData: data,
+    mime,
+    maxOutputTokens: 500,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
+  if (gem !== null) return normalizeClassification(gem);
+
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null; // degrade: ไม่มี key → ข้ามการคัด (caller เก็บทุกรูป)
 

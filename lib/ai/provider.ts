@@ -1,4 +1,5 @@
 import { OpenAIProvider } from "./openai";
+import { GeminiProvider } from "./gemini";
 
 /**
  * AI Provider abstraction — สลับ provider ได้ (default OpenAI) — FR-AI-09
@@ -33,19 +34,27 @@ export interface AIProvider {
   generateJson(args: GenerateJsonArgs): Promise<string>;
 }
 
-/** เลือก provider ตาม env (AI_PROVIDER) — default openai */
+/**
+ * เลือก provider ตาม env — ★ default = Gemini เมื่อมี GEMINI_API_KEY (เลิกพึ่ง GPT)
+ *   - AI_PROVIDER=openai (บังคับ) → OpenAI
+ *   - AI_PROVIDER=gemini หรือไม่ตั้ง + มี GEMINI_API_KEY → Gemini
+ *   - ไม่มี Gemini key แต่มี OpenAI key → OpenAI (fallback)
+ *   - ไม่มี key เลย → null (degrade สุภาพ · job คง pending)
+ */
 export function getAIProvider(): AIProvider | null {
-  const provider = (process.env.AI_PROVIDER || "openai").toLowerCase();
+  const explicit = (process.env.AI_PROVIDER || "").toLowerCase();
+  const geminiKey = process.env.GEMINI_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  const geminiModel = process.env.AI_QA_MODEL || process.env.ACCT_VISION_MODEL || "gemini-3.6-flash";
 
-  switch (provider) {
-    case "openai":
-    default: {
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey) return null; // ไม่มี key → degrade สุภาพ (job คง pending)
-      const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
-      return new OpenAIProvider(apiKey, model);
-    }
+  if (explicit === "openai") {
+    if (openaiKey) return new OpenAIProvider(openaiKey, process.env.OPENAI_MODEL || "gpt-4o-mini");
+    return geminiKey ? new GeminiProvider(geminiKey, geminiModel) : null;
   }
+  // default: Gemini ก่อน (ถ้ามี key) — เลิกพึ่ง GPT
+  if (geminiKey) return new GeminiProvider(geminiKey, geminiModel);
+  if (openaiKey) return new OpenAIProvider(openaiKey, process.env.OPENAI_MODEL || "gpt-4o-mini");
+  return null;
 }
 
 /** true เมื่อพร้อมเรียก AI จริง (มี provider + key) */
