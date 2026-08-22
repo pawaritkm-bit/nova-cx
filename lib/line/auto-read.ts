@@ -20,8 +20,10 @@ import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/loc
 import { sanitizeDocName, shopNameFromFilename } from "@/lib/accounting/doc-naming";
 import { extractAndClassify, type FinanceClassification } from "@/lib/accounting/classify-finance-doc";
 import { gatherRecentChatText, interpretDocPurpose } from "@/lib/accounting/doc-purpose";
-import { isOneDriveEnabled, renameOneDriveFile } from "@/lib/storage/onedrive";
+import { isOneDriveEnabled, renameOneDriveFile, uploadOneDriveFile } from "@/lib/storage/onedrive";
 import { resolveSaleFolder, oaOneDriveRoot, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
+import { buildProspectIncomeWorkbook, aggregateBankMonthly } from "@/lib/accounting/prospect-income-analysis";
+import { upsertProspectBankSummary, loadProspectBankSummaries } from "@/lib/accounting/prospect-income-store";
 
 /** เครื่องหมาย "อ่านแล้ว" นำหน้าชื่อไฟล์ต้นฉบับใน OneDrive (ให้นักบัญชีเห็นทันทีว่าระบบอ่านแล้ว) */
 const READ_MARK = "✅ ";
@@ -33,6 +35,66 @@ async function markSourceRead(folderParts: string[], fileName: string, root?: st
     await renameOneDriveFile({ folderParts, fileName, newName: READ_MARK + fileName, root });
   } catch {
     /* best-effort — ผลอ่านถูก save แล้ว การติดธงพลาดไม่ใช่เรื่องคอขาดบาดตาย */
+  }
+}
+
+/** ป้ายธนาคาร: "ชื่อแบงก์ #เลข4ตัวท้าย" (ถ้าอ่านเลขบัญชีได้) */
+function bankLabelOf(bank: string | null, accountName: string | null): string {
+  const b = (bank || "ธนาคาร").trim();
+  const digits = (accountName || "").replace(/\D/g, "");
+  const tail = digits.length >= 4 ? digits.slice(-4) : "";
+  return tail ? `${b} #${tail}` : b;
+}
+
+type DetForIncome = {
+  transactions: { date: string | null; direction: "in" | "out" | null; amount: number | null }[];
+  bank: string | null;
+  accountName: string | null;
+};
+
+/**
+ * ★ วิเคราะห์รายรับว่าที่ลูกค้า (sales pitch): สะสมยอดเงินเข้าต่อธนาคาร/ปี (DB) →
+ *   รีเจนไฟล์ Excel รวมทุกธนาคาร (+ เตือน 1.8 ล้าน) เข้าโฟลเดอร์ลูกค้าใน OneDrive
+ *   ★ เฉพาะสเตทเมนต์ที่ deterministic reconcile ผ่าน (แม่น) · best-effort
+ *   ★ ปิดได้ด้วย ACCT_PROSPECT_ANALYSIS=off
+ */
+async function regenProspectIncome(
+  db: SupabaseClient,
+  chatGroupId: string,
+  det: DetForIncome,
+  folder: string,
+  folderParts: string[],
+  root?: string
+): Promise<void> {
+  if (process.env.ACCT_PROSPECT_ANALYSIS === "off") return;
+  const { data: g } = await db.from("chat_groups").select("tenant_id").eq("id", chatGroupId).maybeSingle();
+  const tenantId = (g as { tenant_id?: string | null } | null)?.tenant_id;
+  if (!tenantId) return;
+
+  const years = new Set<number>();
+  for (const t of det.transactions) {
+    const m = /^(\d{4})-/.exec(t.date || "");
+    if (m) years.add(parseInt(m[1], 10));
+  }
+  if (years.size === 0) return;
+
+  const bankLabel = bankLabelOf(det.bank, det.accountName);
+  const customerName = (det.accountName || folder || "ว่าที่ลูกค้า").trim();
+  const nowIso = new Date().toISOString();
+
+  for (const year of years) {
+    const monthly = aggregateBankMonthly(det.transactions, year);
+    if (monthly.length === 0) continue;
+    await upsertProspectBankSummary(db, { tenantId, chatGroupId, bankLabel, year, monthly, nowIso });
+    const banks = await loadProspectBankSummaries(db, tenantId, chatGroupId, year);
+    const wb = await buildProspectIncomeWorkbook({ customerName, year, profile: {}, banks });
+    await uploadOneDriveFile({
+      folderParts,
+      fileName: `${sanitizeDocName(customerName)} - วิเคราะห์รายรับ ${year + 543}.xlsx`,
+      mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      data: wb,
+      root,
+    });
   }
 }
 
@@ -155,6 +217,12 @@ export async function autoReadSaleAttachment(params: {
         } catch {
           console.warn("[auto-read] auto-reconcile feed failed");
         }
+      }
+      // ★ วิเคราะห์รายรับว่าที่ลูกค้า (sales pitch) — สะสมยอด + รีเจน Excel รวมทุกธนาคาร (sale + care)
+      try {
+        await regenProspectIncome(params.db, params.chatGroupId, cls.det, folder, folderParts, root);
+      } catch {
+        console.warn("[auto-read] prospect income analysis failed");
       }
       await markSourceRead(folderParts, params.fileName, root);
       return;
