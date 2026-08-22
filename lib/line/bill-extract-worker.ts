@@ -603,7 +603,12 @@ export async function processBillExtraction(
     // ★ กันบิลซ้ำ: ไฟล์ไบต์เดียวกัน (sha256) กับบิลที่มีอยู่/ที่เพิ่งทำในรอบนี้ → ไม่อ่าน/ไม่สร้างซ้ำ
     if (row.sha256) {
       if (seenSha.has(row.sha256)) { duplicate++; continue; }
-      if (await hasEntryForSameHash(db, row.tenant_id, row.sha256, row.id)) { duplicate++; continue; }
+      if (await hasEntryForSameHash(db, row.tenant_id, row.sha256, row.id)) {
+        duplicate++;
+        // ไฟล์ไบต์เดียวกันมี entry แล้ว (attachment อื่น) → มาร์กออกจากคิว กันวนสแกนซ้ำถาวร (กิน slot)
+        await db.from("message_attachments").update({ fetch_status: "skipped", fetch_error: "dup_hash" }).eq("id", row.id).eq("tenant_id", row.tenant_id);
+        continue;
+      }
       seenSha.add(row.sha256);
     }
 
@@ -621,6 +626,8 @@ export async function processBillExtraction(
 
     // 3) จับคู่ลูกค้าเราจาก chat_group (best-effort) — ทำก่อนดาวน์โหลด/AI เพื่อเช็คธงท้าวแชร์
     const customer = await resolveCustomer(db, row.chat_message_id);
+    // ★ กฎ: ดึงบิลเข้าบัญชี "เฉพาะกลุ่มที่ผูกลูกค้าแล้ว" — ยังไม่ผูก → รอผูกก่อน (ไม่สร้าง entry · คงในคิว)
+    if (!customer.id) continue;
     const shareFlag = customer.id
       ? await getCustomerShareCircleFlag(db, row.tenant_id, customer.id)
       : false;
