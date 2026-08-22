@@ -36,6 +36,7 @@ import {
   type ActionResult,
 } from "@/lib/accounting/actions-lib";
 import type { EntryType, VatType, WhtForm, PaymentMethod } from "@/lib/accounting/queries";
+import { recordAccountRules } from "@/lib/accounting/account-learning";
 import { asPaymentMethod } from "@/lib/accounting/payment";
 import { normalizeTaxId } from "@/lib/accounting/tax-id";
 import { validateUpload, sanitizeUploadName, extOf } from "@/lib/accounting/upload";
@@ -406,6 +407,24 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
         res = await addLine(service, ctx.tenantId, entryId, payload, editOpts);
       }
       if (!res.ok) return { ok: false, message: friendlyError(res.error) };
+    }
+
+    // ★ Feature B: เรียนรู้ผังบัญชี — จำ "คู่ค้า → รหัสบัญชี" ที่นักบัญชีลงไว้ (best-effort ไม่บล็อกการบันทึก)
+    {
+      const etLearn = asEntryType(input.entryType);
+      if (etLearn === "purchase" || etLearn === "sale") {
+        try {
+          await recordAccountRules(service, {
+            tenantId: ctx.tenantId,
+            entryType: etLearn,
+            counterpartyTaxId: clampText(input.counterpartyTaxId, 20),
+            counterpartyName: clampText(input.counterpartyName, 200),
+            lines: input.lines.map((l) => ({ accountCode: l.accountCode ?? null, accountName: l.accountName ?? null })),
+          });
+        } catch {
+          /* ไม่ให้กระทบการบันทึกบิล */
+        }
+      }
     }
 
     // ★ แก้บิลที่ส่งไป FlowAccount แล้ว (synced) → เตือน "ควรส่งใหม่" (flowaccount_needs_resync=true)

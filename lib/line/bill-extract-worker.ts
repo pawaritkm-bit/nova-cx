@@ -6,6 +6,7 @@ import { suggestWhtRate } from "@/lib/accounting/wht";
 import { calcVat } from "@/lib/accounting/calc";
 import { suggestPaymentMethod } from "@/lib/accounting/payment";
 import { getCustomerShareCircleFlag } from "@/lib/share-circles/queries";
+import { suggestAccountCode } from "@/lib/accounting/account-learning";
 import { classifyShareCircleImage } from "@/lib/ai/bill-classify";
 
 /**
@@ -834,6 +835,27 @@ export async function processBillExtraction(
       aiUsed: !!bill,
       chartByCode: buildChartByCode(await getChart(row.tenant_id)),
     });
+
+    // ★ Feature B: เดา account_code จาก learning map เมื่อ AI ไม่ได้เติมบัญชี (คู่ค้าเคยลงบัญชีอะไรไว้)
+    //   เติมเฉพาะบรรทัดที่ยังไม่มีบัญชี + มียอด · best-effort (ตารางยังไม่ apply = suggest คืน null)
+    if (decision.entryType === "purchase" || decision.entryType === "sale") {
+      const suggest = await suggestAccountCode(
+        db,
+        row.tenant_id,
+        decision.entryType,
+        decision.counterpartyTaxId,
+        decision.counterpartyName
+      );
+      if (suggest) {
+        for (const lr of lineRows as { account_code?: string | null; account_name?: string | null; amount?: number | null }[]) {
+          if (!lr.account_code && Number(lr.amount) > 0) {
+            lr.account_code = suggest.accountCode;
+            if (suggest.accountName && !lr.account_name) lr.account_name = suggest.accountName;
+          }
+        }
+      }
+    }
+
     const { error: lineErr } = await db.from("bill_entry_lines").insert(lineRows);
     if (lineErr) {
       console.warn(`[bill-extract-worker] insert lines error code=${(lineErr as { code?: string }).code ?? "?"}`);
