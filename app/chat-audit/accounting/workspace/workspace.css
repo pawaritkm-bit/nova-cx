@@ -161,3 +161,7 @@
 .tool-overlay-bar{display:flex;align-items:center;gap:10px;background:#fff;border-radius:12px 12px 0 0;padding:10px 14px;border-bottom:1px solid #e2e8f0}
 .tool-overlay-frame{flex:1;width:100%;border:0;background:#fff;border-radius:0 0 12px 12px}
 .cust-tools-note{grid-column:1/-1;font-size:11.5px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 10px;margin-top:4px}
+
+/* header การ์ดลูกค้าถาวร (เหนือแท็บ) — เข้าเมนูได้ทุกแท็บ */
+.wsp-head-persist{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0 10px;border-bottom:1px solid #eef2f7;margin-bottom:8px}
+.wsp-head-persist>b{font-size:15px}

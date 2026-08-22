@@ -346,8 +346,15 @@ export default async function AccountingWorkspacePage({
   let shareIsFlag = false;
   let shareResolved = false;
   let shareCircleEntries: ShareCircleEntry[] | null = null;
+  // ★ ตัดสิน "นิติบุคคล": customer_type='company' · หรือ (ยังไม่ตั้งค่า + ชื่อเข้าข่ายนิติบุคคล) เดาให้เลย
+  //   → บริษัท/ห้างหุ้นส่วน/บจก/หจก/…จำกัด/Ltd/Partnership · ลูกค้าที่ตั้ง 'individual' ชัด = ไม่ใช่นิติบุคคล
+  const nameLooksJuristic = /บริษัท|ห้างหุ้นส่วน|บจก|หจก|จำกัด|มหาชน|\bltd\b|\bco\.?,?\s*ltd|partnership|plc/i.test(openGroup?.name ?? "");
+  let custIsCompany = false;
   if (openCustomerId) {
     adminFields = await loadCustomerFields(service, tenantId, openCustomerId);
+    custIsCompany =
+      adminFields.customerType === "company" ||
+      (adminFields.customerType !== "individual" && nameLooksJuristic);
     if (access.mode === "admin") {
       const [opts, byCust] = await Promise.all([
         listAccountantEmployees(service, tenantId),
@@ -357,7 +364,7 @@ export default async function AccountingWorkspacePage({
       currentAccountantId = byCust.get(openCustomerId) ?? null;
     }
     // ★ วงแชร์ = บุคคลธรรมดาเท่านั้น (ตามกฎหมาย) → นิติบุคคลไม่ต้องดึง/ไม่โชว์
-    if (adminFields.customerType !== "company") {
+    if (!custIsCompany) {
       shareIsFlag = await getCustomerShareCircleFlag(service, tenantId, openCustomerId);
       try {
         const hasShare = await customerHasShareCircle(service, tenantId, openCustomerId);
@@ -487,6 +494,50 @@ export default async function AccountingWorkspacePage({
 
         {/* CENTER: review list ของลูกค้าที่เปิด */}
         <div className="wsp-center">
+          {/* ★ header การ์ดลูกค้า "ถาวร" — โชว์ทุกแท็บ (ตรวจ/กระทบยอด/ภาษี/ปิดเดือน) เพื่อให้เข้าเมนูได้เสมอ */}
+          {openGroup && openGroup.customerId ? (
+            <div className="wsp-center-head wsp-head-persist">
+              <b>{openGroup.name ?? "ยังไม่จับคู่ลูกค้า"}</b>
+              <RenameCustomerButton customerId={openGroup.customerId} currentName={openGroup.name ?? ""} />
+              <UploadFileButton
+                lockedCustomerId={openGroup.customerId}
+                lockedCustomerLabel={openGroup.name ?? undefined}
+                accountant={accountantParam || null}
+                label="เพิ่มไฟล์บิลเอง"
+              />
+              <CustomerToolsMenu
+                customerId={openGroup.customerId}
+                month={selectedMonth}
+                accountant={accountantParam || null}
+                customerType={custIsCompany ? "company" : adminFields?.customerType ?? null}
+              />
+              <details className="cust-tools">
+                <summary className="btn">⚙️ จัดการลูกค้า</summary>
+                <div className="cust-tools-pop" style={{ gridTemplateColumns: "1fr", minWidth: 360 }}>
+                  {showShareToggle ? (
+                    <div className="acc-scopebar" style={{ marginBottom: 8 }}>
+                      <span className="acc-scope-label">วงแชร์</span>
+                      <ShareCircleToggle customerId={openGroup.customerId} initialOn={shareIsFlag} />
+                    </div>
+                  ) : null}
+                  <CustomerAdminControls
+                    customerId={openGroup.customerId}
+                    canReassign={canReassignCustomer}
+                    currentAccountantId={currentAccountantId}
+                    accountants={accountantOptions}
+                    initialName={openGroup.name ?? null}
+                    initialCode={adminFields?.code ?? (codeMap.get(openGroup.customerId) ?? null)}
+                    initialTaxId={adminFields?.taxId ?? null}
+                    initialCustomerType={adminFields?.customerType ?? null}
+                    initialAddress={adminFields?.address ?? null}
+                    initialPhone={adminFields?.phone ?? null}
+                    initialFlowAccountClientId={adminFields?.flowClientId ?? null}
+                    hasFlowAccountCredential={!!adminFields?.flowClientId && !!adminFields?.flowHasSecret}
+                  />
+                </div>
+              </details>
+            </div>
+          ) : null}
           <div className="wsp-tabs">
             <Link className={`wsp-tab${tab === "review" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ open: openKey })}`} scroll={false}>
               {view === "received" ? "📥 เอกสารทั้งหมด" : view === "drafted" ? "🤖 ร่าง AI" : "📝 ตรวจเอกสาร"} {tab === "review" && openGroup ? `· ${reviewList.length} ใบ` : ""}
@@ -507,53 +558,7 @@ export default async function AccountingWorkspacePage({
           ) : (
             <>
               <div className="wsp-center-head">
-                <b>{openGroup.name ?? "ยังไม่จับคู่ลูกค้า"}</b>
-                {openGroup.customerId ? <RenameCustomerButton customerId={openGroup.customerId} currentName={openGroup.name ?? ""} /> : null}
-                {/* ★ ปุ่มอัปโหลดไฟล์เอง (กรณี AI ไม่ดึง/อ่านพลาด) — ล็อกลูกค้าที่กำลังเปิดอยู่ · AI อ่านให้เบื้องหลัง */}
-                <UploadFileButton
-                  lockedCustomerId={openGroup.customerId ?? null}
-                  lockedCustomerLabel={openGroup.name ?? undefined}
-                  accountant={accountantParam || null}
-                  label="เพิ่มไฟล์บิลเอง"
-                />
-                {/* ★ เครื่องมือบัญชีทั้งหมด — เปิดในหน้าเดิม (iframe) · สมุดรายวัน 5 เล่ม/งบ ฯลฯ เฉพาะนิติบุคคล */}
-                {openGroup.customerId ? (
-                  <CustomerToolsMenu
-                    customerId={openGroup.customerId}
-                    month={selectedMonth}
-                    accountant={accountantParam || null}
-                    customerType={adminFields?.customerType ?? null}
-                  />
-                ) : null}
-                {/* ★ จัดการลูกค้า: แก้ ชื่อ/รหัส/เลขภาษี/ที่อยู่/เบอร์/FlowAccount + เปลี่ยนผู้ดูแล (admin) */}
-                {openGroup.customerId ? (
-                  <details className="cust-tools">
-                    <summary className="btn">⚙️ จัดการลูกค้า</summary>
-                    <div className="cust-tools-pop" style={{ gridTemplateColumns: "1fr", minWidth: 360 }}>
-                      {showShareToggle ? (
-                        <div className="acc-scopebar" style={{ marginBottom: 8 }}>
-                          <span className="acc-scope-label">วงแชร์</span>
-                          <ShareCircleToggle customerId={openGroup.customerId} initialOn={shareIsFlag} />
-                        </div>
-                      ) : null}
-                      <CustomerAdminControls
-                        customerId={openGroup.customerId}
-                        canReassign={canReassignCustomer}
-                        currentAccountantId={currentAccountantId}
-                        accountants={accountantOptions}
-                        initialName={openGroup.name ?? null}
-                        initialCode={adminFields?.code ?? (codeMap.get(openGroup.customerId) ?? null)}
-                        initialTaxId={adminFields?.taxId ?? null}
-                        initialCustomerType={adminFields?.customerType ?? null}
-                        initialAddress={adminFields?.address ?? null}
-                        initialPhone={adminFields?.phone ?? null}
-                        initialFlowAccountClientId={adminFields?.flowClientId ?? null}
-                        hasFlowAccountCredential={!!adminFields?.flowClientId && !!adminFields?.flowHasSecret}
-                      />
-                    </div>
-                  </details>
-                ) : null}
-                <span className="muted" style={{ marginLeft: "auto" }}>{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
+                <span className="muted">{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
               </div>
               {/* ★ วงแชร์ (ท้าวแชร์) — โชว์เมื่อลูกค้าเป็นท้าวแชร์/มีวง ≥1 · ภธ.40+ภงด.90 */}
               {openGroup.customerId && shareCircleEntries ? (
