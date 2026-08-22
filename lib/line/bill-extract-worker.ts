@@ -426,7 +426,7 @@ async function resolveCustomer(
  *   เรียงเก่า→ใหม่แล้วตัด done ออก จึงเดินหน้าได้เรื่อย ๆ ตราบใดที่ eligible ≤ ค่านี้
  *   (ถ้าโตเกินนี้จริง ค่อยเพิ่ม/ทำ pagination — ตอนนี้พอสำหรับ scale ปัจจุบัน)
  */
-const CANDIDATE_SCAN_LIMIT = 2000;
+const CANDIDATE_SCAN_LIMIT = 30000;
 /** เพดานดึง done set (attachment ที่มี entry แล้ว) */
 const DONE_SCAN_LIMIT = 50000;
 
@@ -536,24 +536,33 @@ export async function selectExtractionCandidates(
       .filter((x): x is string => !!x)
   );
 
-  // 2) eligible เรียงเก่า→ใหม่ (สแกนครอบคลุม)
-  const { data, error } = await db
-    .from("message_attachments")
-    .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256")
-    .eq("fetch_status", "stored")
-    .in("attachment_type", ["image", "file"])
-    .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
-    .not("drive_file_id", "is", null)
-    .order("created_at", { ascending: true })
-    .limit(CANDIDATE_SCAN_LIMIT);
-  if (error) {
-    console.warn(`[bill-extract-worker] select queue error code=${(error as { code?: string }).code ?? "?"}`);
-    return [];
+  // 2) eligible เรียงเก่า→ใหม่ — ★ page ทีละ 1000 จนเก็บ candidate ที่ "ยังไม่ทำ" ครบ limit
+  //    (บั๊กเดิม: จำกัดหน้าต่างแค่ CANDIDATE_SCAN_LIMIT ตัวเก่าสุด — ถ้าตัวเก่าสุดทำไปหมดแล้ว
+  //     backlog ที่อยู่นอกหน้าต่างจะไม่เคยถูกเห็น → ค้างถาวร · แก้ด้วย pagination จนถึง backlog จริง)
+  const PAGE = 1000;
+  const collected: QueueRow[] = [];
+  for (let from = 0; from < CANDIDATE_SCAN_LIMIT && collected.length < limit; from += PAGE) {
+    const { data, error } = await db
+      .from("message_attachments")
+      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256")
+      .eq("fetch_status", "stored")
+      .in("attachment_type", ["image", "file"])
+      .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
+      .not("drive_file_id", "is", null)
+      .order("created_at", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) {
+      console.warn(`[bill-extract-worker] select queue error code=${(error as { code?: string }).code ?? "?"}`);
+      break;
+    }
+    const page = (data ?? []) as unknown as QueueRow[];
+    if (page.length === 0) break; // หมดกอง
+    for (const r of page) {
+      if (!done.has(r.id)) collected.push(r);
+      if (collected.length >= limit) break;
+    }
   }
-
-  // 3) ตัด done ออก → เอา limit ตัวแรก (เก่าสุดที่ยังไม่ทำ)
-  const eligible = (data ?? []) as unknown as QueueRow[];
-  return eligible.filter((r) => !done.has(r.id)).slice(0, limit);
+  return collected.slice(0, limit);
 }
 
 /**
