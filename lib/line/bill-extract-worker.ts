@@ -522,20 +522,27 @@ export async function selectExtractionCandidates(
   //    ★ นับรวม entry ที่ถูกลบ (soft-delete) ด้วย — ไม่กรอง deleted_at
   //      บิลที่นักบัญชีลบทิ้ง = "ทำแล้ว" ไม่ต้องสกัดซ้ำ (กัน cron ปลุกบิลที่ลบกลับมา)
   //      → ทำให้ "ลบ" กู้คืนได้จริง (soft-delete เฉย ๆ ไม่ต้องทำลายไฟล์/มาร์ค attachment)
-  const { data: doneData, error: doneErr } = await db
-    .from("bill_entries")
-    .select("attachment_id")
-    .not("attachment_id", "is", null)
-    .limit(DONE_SCAN_LIMIT);
-  if (doneErr) {
-    console.warn(`[bill-extract-worker] select done error code=${(doneErr as { code?: string }).code ?? "?"}`);
-    return [];
+  //    ★★ บั๊กร้ายแรง (แก้): `.limit(50000)` ไม่ได้ผล — PostgREST cap ที่ max-rows (ดีฟอลต์ 1000) ต่อ request
+  //       → doneSet ได้แค่ 1000 ตัวแรก · ถ้า "ทำแล้ว" > 1000 ตัว ที่เหลือหลุด set → ถูกหยิบเป็น candidate ซ้ำ
+  //       → insert ชน unique(attachment_id) 23505 → continue → created=0 "ถาวร" (คิวไม่เดินเลย)
+  //       วิธีแก้: page ทีละ 1000 (ordered by id เสถียร) จนครบ/ถึง DONE_SCAN_LIMIT
+  const DONE_PAGE = 1000;
+  const done = new Set<string>();
+  for (let from = 0; from < DONE_SCAN_LIMIT; from += DONE_PAGE) {
+    const { data: doneData, error: doneErr } = await db
+      .from("bill_entries")
+      .select("attachment_id")
+      .not("attachment_id", "is", null)
+      .order("attachment_id", { ascending: true })
+      .range(from, from + DONE_PAGE - 1);
+    if (doneErr) {
+      console.warn(`[bill-extract-worker] select done error code=${(doneErr as { code?: string }).code ?? "?"}`);
+      return [];
+    }
+    const rows = (doneData ?? []) as { attachment_id: string | null }[];
+    for (const e of rows) if (e.attachment_id) done.add(e.attachment_id);
+    if (rows.length < DONE_PAGE) break; // หน้าสุดท้าย
   }
-  const done = new Set(
-    ((doneData ?? []) as { attachment_id: string | null }[])
-      .map((e) => e.attachment_id)
-      .filter((x): x is string => !!x)
-  );
 
   // ★ group-scoped (ใช้ตอน "ผูกลูกค้าทีหลัง" → ดึงบิลของกลุ่มนั้นทันที): กรองด้วย inner join chat_messages
   if (chatGroupId) {
