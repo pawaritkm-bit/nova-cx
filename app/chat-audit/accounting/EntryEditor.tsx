@@ -285,7 +285,9 @@ export default function EntryEditor({
       const incl = parseAmountInput(l.amount);
       const base = incl > 0 ? Math.round((incl / 1.07) * 100) / 100 : 0;
       const vat = incl > 0 ? Math.round((incl - base) * 100) / 100 : 0;
-      patchLine(l.key, { vatType: "vat", amount: numToInput(base), vatAmount: numToInput(vat) });
+      // ★ ยอดกลายเป็นฐาน (ก่อน VAT) → คำนวณหัก ณ ที่จ่ายใหม่จากฐานทันที (กันค่าเดิมที่อิงยอดรวม)
+      const wht = calcWht(base, parseAmountInput(l.whtRate));
+      patchLine(l.key, { vatType: "vat", amount: numToInput(base), vatAmount: numToInput(vat), whtAmount: numToInput(wht) });
       return;
     }
     onVatTypeChange(l, val === "novat" ? "novat" : "vat");
