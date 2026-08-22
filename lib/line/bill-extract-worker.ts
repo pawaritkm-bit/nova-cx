@@ -1022,7 +1022,10 @@ export async function redecideExistingEntries(
     .eq("entry_type", "unspecified")
     .eq("status", "draft")
     .is("deleted_at", null)
-    .not("customer_id", "is", null);
+    .not("customer_id", "is", null)
+    // ★ กรองเฉพาะใบที่ "มีข้อมูลฝั่งใดฝั่งหนึ่ง" ที่ DB — กันหน้าต่าง limit เต็มไปด้วยใบว่าง
+    //   (บิลอ่านไม่ออก = ไม่มี seller/buyer เลย → ตัดสินไม่ได้อยู่แล้ว · ดึงมาก็เสียสล็อต = starve ใบที่เดาได้)
+    .or("seller_name.not.is.null,seller_tax_id.not.is.null,buyer_name.not.is.null,buyer_tax_id.not.is.null");
   // scope ลูกค้าเดียว (ถ้าระบุ) — index (tenant_id, customer_id) รองรับ
   if (opts.customerId) query = query.eq("customer_id", opts.customerId);
   const { data, error } = await query.limit(limit);
