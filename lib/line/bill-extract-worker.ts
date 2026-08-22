@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { extractBillData, extractBillsData, type ExtractedBill, type ExtractedLine } from "@/lib/ai/bill-extract";
 import { buildChartByCode, type ChartAccount, type ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
-import { suggestWhtRate } from "@/lib/accounting/wht";
+import { suggestWhtRate, suggestWhtForm } from "@/lib/accounting/wht";
 import { calcVat } from "@/lib/accounting/calc";
 import { suggestPaymentMethod } from "@/lib/accounting/payment";
 import { getCustomerShareCircleFlag } from "@/lib/share-circles/queries";
@@ -860,6 +860,17 @@ export async function processBillExtraction(
     if (lineErr) {
       console.warn(`[bill-extract-worker] insert lines error code=${(lineErr as { code?: string }).code ?? "?"}`);
       // entry แม่สร้างแล้ว — lines พลาดปล่อยไว้ (คนเพิ่ม line เองได้) ไม่ rollback
+    }
+
+    // ★ (ก) เดาแบบยื่น ภงด.3/53 จากเลขภาษี "ผู้ถูกหัก" (คู่ค้า) เมื่อบิลซื้อมี WHT — best-effort
+    if (
+      decision.entryType === "purchase" &&
+      (lineRows as { wht_rate?: number | null }[]).some((l) => Number(l.wht_rate) > 0)
+    ) {
+      const whtForm = suggestWhtForm(decision.counterpartyTaxId);
+      if (whtForm) {
+        await db.from("bill_entries").update({ wht_form: whtForm }).eq("id", entryId).eq("tenant_id", row.tenant_id);
+      }
     }
 
     created++;
