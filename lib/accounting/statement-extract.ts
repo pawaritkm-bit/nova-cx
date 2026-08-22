@@ -18,6 +18,7 @@ import { downscaleImageIfLarge } from "@/lib/accounting/image-prep";
 import { extractPdfMaybeSplit } from "@/lib/accounting/pdf-split";
 import type { StatementTxn, TxnDirection } from "@/lib/accounting/statement-analyze";
 import { extractJsonWithClaude } from "@/lib/ai/claude-extract";
+import { extractJsonWithGemini } from "@/lib/ai/gemini-extract";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -272,23 +273,31 @@ export async function extractStatementFromFile(fileData: Buffer, mime: string): 
 /** เรียก AI ครั้งเดียว (ไฟล์/ชิ้นเดียว ≤เพดาน) — ตัวจริงที่ extractStatementFromFile / split เรียก */
 async function extractStatementFromFileSingle(fileData: Buffer, mime: string): Promise<StatementTxn[]> {
   const source = await classifyDocSource(mime, fileData);
+  const prepped = await downscaleImageIfLarge(fileData, mime); // ย่อรูปสแกนใหญ่ (PDF ไม่แตะ)
 
-  // สแกน/รูป (OCR) → Claude Sonnet 5 (vision แม่นกว่ากับภาพยาก) · ล้มเหลว/ไม่มี key → fallback OpenAI กันงานตก
+  // สแกน/รูป (OCR) → Claude Sonnet 5 (vision แม่นกับภาพยาก/เอียง/เบลอ) ก่อน
   if (source === "scan_or_image") {
-    const preppedScan = await downscaleImageIfLarge(fileData, mime);
     const raw = await extractJsonWithClaude({
       system: SYSTEM_PROMPT,
       userPrompt: FILE_USER_PROMPT,
-      fileData: preppedScan.data,
-      mime: preppedScan.mime || mime,
+      fileData: prepped.data,
+      mime: prepped.mime || mime,
     });
     if (raw !== null) return normalizeStatementExtraction(raw);
-    // Claude ล่ม/ไม่มี key → ตกไปให้ OpenAI ลองอ่านต่อด้านล่าง
+    // Claude ล่ม/ไม่มี key → ลอง Gemini ต่อด้านล่าง
   }
 
-  // digital_pdf (มี text layer, ถูก) หรือ fallback จาก scan → OpenAI (gpt-5-mini)
+  // digital_pdf หรือ fallback จากสแกน → Gemini (ถูก + ไม่พึ่ง OpenAI) · ★ deterministic ลองไปก่อนแล้วที่ classify-finance-doc
+  const gem = await extractJsonWithGemini({
+    system: SYSTEM_PROMPT,
+    userPrompt: FILE_USER_PROMPT,
+    fileData: prepped.data,
+    mime: prepped.mime || mime,
+  });
+  if (gem !== null) return normalizeStatementExtraction(gem);
+
+  // สุดท้าย: OpenAI (เฉพาะเมื่อยังตั้ง OPENAI_API_KEY ไว้ — prod ปกติไม่ตั้ง = ข้าม) กันงานตกเป็นทางเลือกสุดท้าย
   const isPdf = (mime || "").toLowerCase().includes("pdf");
-  const prepped = await downscaleImageIfLarge(fileData, mime); // ย่อรูปสแกนใหญ่ (PDF ไม่แตะ)
   const dataUrl = `data:${prepped.mime || "image/jpeg"};base64,${prepped.data.toString("base64")}`;
   const filePart = isPdf
     ? { type: "file", file: { filename: "statement.pdf", file_data: dataUrl } }
@@ -304,6 +313,9 @@ async function extractStatementFromFileSingle(fileData: Buffer, mime: string): P
 export async function extractStatementFromText(text: string): Promise<StatementTxn[]> {
   const t = (text ?? "").trim();
   if (!t) return [];
+  // Gemini อ่านก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม → OpenAI เป็นทางเลือกสุดท้าย (ถ้าตั้ง key)
+  const gem = await extractJsonWithGemini({ system: SYSTEM_PROMPT, userPrompt: TEXT_USER_PROMPT, text: t });
+  if (gem !== null) return normalizeStatementExtraction(gem);
   const { txns } = await callExtract(TEXT_USER_PROMPT + t);
   return txns;
 }

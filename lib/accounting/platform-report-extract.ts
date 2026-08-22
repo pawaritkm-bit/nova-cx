@@ -20,6 +20,7 @@ import { extractPdfMaybeSplit } from "@/lib/accounting/pdf-split";
 import { extractJson } from "@/lib/accounting/statement-extract";
 import type { PlatformCategory, PlatformLineDirection, PlatformReportLine } from "@/lib/accounting/platform-report-analyze";
 import { extractJsonWithClaude } from "@/lib/ai/claude-extract";
+import { extractJsonWithGemini } from "@/lib/ai/gemini-extract";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -230,23 +231,31 @@ export async function extractPlatformReportFromFile(fileData: Buffer, mime: stri
 /** เรียก AI ครั้งเดียว (ไฟล์/ชิ้นเดียว ≤เพดาน) */
 async function extractPlatformReportFromFileSingle(fileData: Buffer, mime: string): Promise<PlatformReportLine[]> {
   const source = await classifyDocSource(mime, fileData);
+  const prepped = await downscaleImageIfLarge(fileData, mime); // ย่อรูปสแกนใหญ่ (PDF ไม่แตะ)
 
-  // สแกน/รูป (OCR) → Claude Sonnet 5 · ล้มเหลว/ไม่มี key → fallback OpenAI กันงานตก
+  // สแกน/รูป (OCR) → Claude Sonnet 5 ก่อน
   if (source === "scan_or_image") {
-    const preppedScan = await downscaleImageIfLarge(fileData, mime);
     const raw = await extractJsonWithClaude({
       system: SYSTEM_PROMPT,
       userPrompt: FILE_USER_PROMPT,
-      fileData: preppedScan.data,
-      mime: preppedScan.mime || mime,
+      fileData: prepped.data,
+      mime: prepped.mime || mime,
     });
     if (raw !== null) return normalizePlatformExtraction(raw);
-    // Claude ล่ม/ไม่มี key → ตกไปให้ OpenAI ลองอ่านต่อด้านล่าง
+    // Claude ล่ม/ไม่มี key → ลอง Gemini ต่อด้านล่าง
   }
 
-  // digital_pdf (มี text layer, ถูก) หรือ fallback จาก scan → OpenAI (gpt-5-mini)
+  // digital_pdf หรือ fallback จากสแกน → Gemini (ถูก + ไม่พึ่ง OpenAI)
+  const gem = await extractJsonWithGemini({
+    system: SYSTEM_PROMPT,
+    userPrompt: FILE_USER_PROMPT,
+    fileData: prepped.data,
+    mime: prepped.mime || mime,
+  });
+  if (gem !== null) return normalizePlatformExtraction(gem);
+
+  // สุดท้าย: OpenAI (เฉพาะเมื่อยังตั้ง OPENAI_API_KEY — prod ปกติไม่ตั้ง = ข้าม)
   const isPdf = (mime || "").toLowerCase().includes("pdf");
-  const prepped = await downscaleImageIfLarge(fileData, mime); // ย่อรูปสแกนใหญ่ (PDF ไม่แตะ)
   const dataUrl = `data:${prepped.mime || "image/jpeg"};base64,${prepped.data.toString("base64")}`;
   const filePart = isPdf
     ? { type: "file", file: { filename: "platform-report.pdf", file_data: dataUrl } }
@@ -259,10 +268,17 @@ async function extractPlatformReportFromFileSingle(fileData: Buffer, mime: strin
  * สกัดรายการจากข้อความก้อนเดียว (แปลงมาจาก Excel/CSV แล้ว) — เรียกครั้งเดียวจบ (ไม่ chunk)
  *   @returns PlatformReportLine[] · [] เมื่อ error/timeout/ไม่มี key/ข้อความว่าง
  */
+/** อ่านข้อความ: Gemini ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม → OpenAI เป็นทางเลือกสุดท้าย */
+async function extractTextPreferGemini(userText: string, timeoutMs?: number): Promise<ExtractCallResult> {
+  const gem = await extractJsonWithGemini({ system: SYSTEM_PROMPT, userPrompt: TEXT_USER_PROMPT, text: userText, timeoutMs });
+  if (gem !== null) return { lines: normalizePlatformExtraction(gem), failed: false };
+  return callExtract(TEXT_USER_PROMPT + userText, timeoutMs);
+}
+
 export async function extractPlatformReportFromText(text: string): Promise<PlatformReportLine[]> {
   const t = (text ?? "").trim();
   if (!t) return [];
-  const { lines } = await callExtract(TEXT_USER_PROMPT + t);
+  const { lines } = await extractTextPreferGemini(t);
   return lines;
 }
 
@@ -306,7 +322,7 @@ export type ChunkedPlatformExtractionResult = {
 export async function extractPlatformReportFromTextChunks(chunks: string[]): Promise<ChunkedPlatformExtractionResult> {
   if (chunks.length === 0) return { lines: [], chunkCount: 0, failedChunks: 0 };
   const perChunk = await mapWithConcurrency(chunks, MAX_CONCURRENT_CHUNKS, async (chunkText) => {
-    return callExtract(TEXT_USER_PROMPT + chunkText, CHUNK_EXTRACT_TIMEOUT_MS);
+    return extractTextPreferGemini(chunkText, CHUNK_EXTRACT_TIMEOUT_MS);
   });
   const lines = perChunk.flatMap((r) => r.lines);
   const failedChunks = perChunk.filter((r) => r.failed).length;
