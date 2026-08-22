@@ -644,28 +644,29 @@ export async function processBillExtraction(
 
     const lowerPath = objectPath.toLowerCase();
 
-    // ★ ไฟล์บีบอัด/อาร์ไคฟ์ (zip/rar/7z/tar/gz/…) — ไม่ใช่บิล + AI เปิดอ่านไม่ได้
-    //   → มาร์กออกจากคิว (fetch_status='skipped') กันสร้าง draft ว่างรกหน้าลงบันทึกบัญชี + กันวนสแกนซ้ำถาวร
-    //   (ปุ่มอัปไฟล์เองก็ปฏิเสธไฟล์พวกนี้อยู่แล้ว — ให้คิว auto สอดคล้องกัน)
-    if (/\.(zip|rar|7z|tar|gz|tgz|bz2|xz|z|arj|cab|iso|lzh|ace)$/.test(lowerPath)) {
-      await db
-        .from("message_attachments")
-        .update({ fetch_status: "skipped", fetch_error: "archive_unsupported" })
-        .eq("id", row.id)
-        .eq("tenant_id", row.tenant_id);
-      continue;
-    }
-
-    // ★ ชนิดไฟล์ (จากนามสกุลบน storage) — ตัดสินว่า AI อ่านได้ไหม
-    //   - รูป (image / นามสกุลรูป): vision อ่านได้ (extractBillData, gpt-4o-mini)
-    //   - PDF: file input อ่านได้ (extractBillsData, gpt-5-mini อ่าน PDF ได้)
-    //   - ไฟล์เอกสารอื่น (Excel/doc/csv): อ่านไม่ได้ → สร้าง draft ว่างพร้อมไฟล์แนบ
+    // ★ ชนิดไฟล์ (จากนามสกุลบน storage) — ตัดสินว่า AI อ่านเป็น "บิล" ได้ไหม
+    //   - รูป (image / นามสกุลรูป): vision อ่านได้
+    //   - PDF: file input อ่านได้
     const isPdf = lowerPath.endsWith(".pdf");
     const isImageExt = /\.(jpe?g|png|gif|webp|heic|heif)$/.test(lowerPath);
     const isImage = row.attachment_type === "image" || isImageExt;
     const isDocumentFile = !isImage; // ไฟล์ที่ไม่ใช่รูป (PDF/Excel/doc/…)
     const aiReadable = isImage || isPdf;
     const mime = isPdf ? "application/pdf" : mimeFromPath(objectPath);
+
+    // ★ กฎ (ผู้ใช้): ไฟล์ที่ "ไม่ใช่บิล" (ไม่ใช่รูป/PDF) — เช่น Excel/doc/csv/ไฟล์บีบอัด zip/7z —
+    //   ไม่ต้องดึงเข้าหน้าลงบันทึกบัญชี (สเตทเมนต์/รายงานแพลตฟอร์มมี flow อ่านแยกของตัวเอง)
+    //   → มาร์กออกจากคิว (fetch_status='skipped') · ไม่สร้าง draft ว่าง · กันวนสแกนซ้ำถาวร
+    //   (สอดคล้องปุ่มอัปไฟล์เองที่รับเฉพาะรูป/PDF/Excel/CSV และไม่สร้างบิลจากไฟล์ที่อ่านไม่ได้)
+    if (!aiReadable) {
+      const isArchive = /\.(zip|rar|7z|tar|gz|tgz|bz2|xz|z|arj|cab|iso|lzh|ace)$/.test(lowerPath);
+      await db
+        .from("message_attachments")
+        .update({ fetch_status: "skipped", fetch_error: isArchive ? "archive_unsupported" : "not_a_bill_file" })
+        .eq("id", row.id)
+        .eq("tenant_id", row.tenant_id);
+      continue;
+    }
 
     // 3) จับคู่ลูกค้าเราจาก chat_group (best-effort) — ทำก่อนดาวน์โหลด/AI เพื่อเช็คธงท้าวแชร์
     const customer = await resolveCustomer(db, row.chat_message_id);
