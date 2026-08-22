@@ -168,6 +168,8 @@ export type UpdateCustomerFieldsInput = {
   /** รหัสลูกค้า (customer_code) — unique ต่อ tenant */
   code?: string | null;
   taxId?: string | null;
+  /** ประเภทลูกค้า (customers.customer_type — 0037): 'company'=นิติบุคคล · 'individual'=บุคคลธรรมดา · null=ยังไม่ระบุ */
+  customerType?: "company" | "individual" | null;
   /** ที่อยู่บริษัทลูกค้า (customers.address — migration 0058) · "" = ล้าง */
   address?: string | null;
   /** เบอร์โทรติดต่อ (customers.phone — migration 0059) · "" = ล้าง */
@@ -227,6 +229,14 @@ export async function updateCustomerFieldsAction(
     // รหัสลูกค้า (ส่ง "" = ล้างเป็น null ได้)
     if (fields.code !== undefined) {
       patch.customer_code = fields.code === null ? null : clampText(fields.code, 60);
+    }
+
+    // ประเภทลูกค้า (นิติบุคคล/บุคคลธรรมดา) — null = ยังไม่ระบุ · ค่าอื่นปฏิเสธ (ตรง CHECK ใน 0037)
+    if (fields.customerType !== undefined) {
+      if (fields.customerType !== null && fields.customerType !== "company" && fields.customerType !== "individual") {
+        return { ok: false, message: "ประเภทลูกค้าไม่ถูกต้อง" };
+      }
+      patch.customer_type = fields.customerType;
     }
 
     // เลขภาษี — validate 13 หลัก; ค่าที่จะเขียน (null = ล้าง)

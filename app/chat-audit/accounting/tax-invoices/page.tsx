@@ -67,10 +67,11 @@ export default async function TaxInvoicesPage({
   searchParams: Promise<{ customerId?: string }>;
 }) {
   const sp = await searchParams;
+  const embed = (sp as { embed?: string }).embed === "1"; // ฝังในโต๊ะทำงาน (iframe) → ซ่อน nav
 
   if (!getSupabaseEnv()) {
     return (
-      <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="ใบกำกับภาษี" subtitle="เต็มรูป/อย่างย่อ — ออกจากบิลขายที่ยืนยันแล้ว">
+      <ChatAuditFrame bare={embed} active="chat-accounting" role={null} authed={false} title="ใบกำกับภาษี" subtitle="เต็มรูป/อย่างย่อ — ออกจากบิลขายที่ยืนยันแล้ว">
         <div className="card">ยังไม่ได้ตั้งค่าฐานข้อมูล (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)</div>
       </ChatAuditFrame>
     );
@@ -126,7 +127,7 @@ export default async function TaxInvoicesPage({
   }
 
   return (
-    <ChatAuditFrame
+    <ChatAuditFrame bare={embed}
       active="chat-accounting"
       role={navRole}
       authed

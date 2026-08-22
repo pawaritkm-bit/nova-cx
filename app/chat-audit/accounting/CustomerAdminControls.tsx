@@ -37,6 +37,7 @@ export default function CustomerAdminControls({
   initialName,
   initialCode,
   initialTaxId,
+  initialCustomerType,
   initialAddress,
   initialPhone,
   initialFlowAccountClientId,
@@ -50,6 +51,8 @@ export default function CustomerAdminControls({
   initialName: string | null;
   initialCode: string | null;
   initialTaxId: string | null;
+  /** ประเภทลูกค้า: 'company'=นิติบุคคล · 'individual'=บุคคลธรรมดา · null=ยังไม่ระบุ */
+  initialCustomerType?: "company" | "individual" | null;
   /** ที่อยู่บริษัทลูกค้า (customers.address) — undefined ถ้าคอลัมน์ยังไม่ apply */
   initialAddress?: string | null;
   /** เบอร์โทรติดต่อ (customers.phone) — undefined ถ้าคอลัมน์ยังไม่ apply */
@@ -72,6 +75,7 @@ export default function CustomerAdminControls({
   const [name, setName] = useState(initialName ?? "");
   const [code, setCode] = useState(initialCode ?? "");
   const [taxId, setTaxId] = useState(initialTaxId ?? "");
+  const [customerType, setCustomerType] = useState<"" | "company" | "individual">(initialCustomerType ?? "");
   const [address, setAddress] = useState(initialAddress ?? "");
   const [phone, setPhone] = useState(initialPhone ?? "");
   // FlowAccount client id — prefill ได้ (ไม่ใช่ secret) เหมือน phone/address
@@ -126,6 +130,7 @@ export default function CustomerAdminControls({
         name,
         code, // "" = ล้างรหัส
         taxId, // "" = ล้างเลขภาษี
+        customerType: customerType === "" ? null : customerType, // ประเภทลูกค้า (นิติบุคคล/บุคคลธรรมดา)
         address, // "" = ล้างที่อยู่
         phone, // "" = ล้างเบอร์โทร
         ...flowFields,
@@ -308,6 +313,22 @@ export default function CustomerAdminControls({
               maxLength={20}
               disabled={pending}
             />
+          </label>
+          <label className="acc-taxid-field" style={{ margin: 0 }}>
+            <span className="acc-taxid-label">ประเภทลูกค้า</span>
+            <select
+              className="acc-taxid-input"
+              value={customerType}
+              onChange={(e) => setCustomerType(e.target.value as "" | "company" | "individual")}
+              disabled={pending}
+            >
+              <option value="">— ยังไม่ระบุ —</option>
+              <option value="company">นิติบุคคล (บริษัท/ห้าง)</option>
+              <option value="individual">บุคคลธรรมดา</option>
+            </select>
+            <span style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+              นิติบุคคล = เปิดเมนูวงจรบัญชีคู่ (สมุดรายวัน 5 เล่ม, งบการเงิน ฯลฯ)
+            </span>
           </label>
           <label className="acc-taxid-field" style={{ margin: 0 }}>
             <span className="acc-taxid-label">เบอร์โทรติดต่อ</span>

@@ -64,10 +64,11 @@ export default async function FlowAccountMapPage({
   searchParams: Promise<{ customerId?: string }>;
 }) {
   const sp = await searchParams;
+  const embed = (sp as { embed?: string }).embed === "1"; // ฝังในโต๊ะทำงาน (iframe) → ซ่อน nav
 
   if (!getSupabaseEnv()) {
     return (
-      <ChatAuditFrame
+      <ChatAuditFrame bare={embed}
         active="chat-accounting"
         role={null}
         authed={false}
@@ -102,7 +103,7 @@ export default async function FlowAccountMapPage({
   const productMap = validCustomerId ? await listProductMap(service, access.tenantId, validCustomerId) : [];
 
   return (
-    <ChatAuditFrame
+    <ChatAuditFrame bare={embed}
       active="chat-accounting"
       role={navRole}
       authed

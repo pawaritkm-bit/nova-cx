@@ -65,10 +65,11 @@ export default async function RecurringInvoicePage({
   searchParams: Promise<{ customerId?: string }>;
 }) {
   const sp = await searchParams;
+  const embed = (sp as { embed?: string }).embed === "1"; // ฝังในโต๊ะทำงาน (iframe) → ซ่อน nav
 
   if (!getSupabaseEnv()) {
     return (
-      <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="ใบแจ้งหนี้ลูกค้าแบบวนซ้ำ" subtitle="ตั้งเทมเพลตให้สร้างใบแจ้งหนี้ซ้ำอัตโนมัติ">
+      <ChatAuditFrame bare={embed} active="chat-accounting" role={null} authed={false} title="ใบแจ้งหนี้ลูกค้าแบบวนซ้ำ" subtitle="ตั้งเทมเพลตให้สร้างใบแจ้งหนี้ซ้ำอัตโนมัติ">
         <div className="card">ยังไม่ได้ตั้งค่าฐานข้อมูล (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)</div>
       </ChatAuditFrame>
     );
@@ -103,7 +104,7 @@ export default async function RecurringInvoicePage({
   }
 
   return (
-    <ChatAuditFrame
+    <ChatAuditFrame bare={embed}
       active="chat-accounting"
       role={navRole}
       authed

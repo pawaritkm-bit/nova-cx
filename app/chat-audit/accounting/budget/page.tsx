@@ -143,10 +143,11 @@ export default async function BudgetPage({
   searchParams: Promise<{ customerId?: string; year?: string; from?: string; to?: string; draft?: string }>;
 }) {
   const sp = await searchParams;
+  const embed = (sp as { embed?: string }).embed === "1"; // ฝังในโต๊ะทำงาน (iframe) → ซ่อน nav
 
   if (!getSupabaseEnv()) {
     return (
-      <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="งบประมาณ" subtitle="ตั้งงบต่อรหัสบัญชี/เดือน/ปี เทียบกับยอดจริง">
+      <ChatAuditFrame bare={embed} active="chat-accounting" role={null} authed={false} title="งบประมาณ" subtitle="ตั้งงบต่อรหัสบัญชี/เดือน/ปี เทียบกับยอดจริง">
         <div className="card">ยังไม่ได้ตั้งค่าฐานข้อมูล (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)</div>
       </ChatAuditFrame>
     );
@@ -217,7 +218,7 @@ export default async function BudgetPage({
   };
 
   return (
-    <ChatAuditFrame
+    <ChatAuditFrame bare={embed}
       active="chat-accounting"
       role={navRole}
       authed

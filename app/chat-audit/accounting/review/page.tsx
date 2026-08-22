@@ -177,10 +177,11 @@ export default async function AccountingReviewPage({
   }>;
 }) {
   const sp = await searchParams;
+  const embed = (sp as { embed?: string }).embed === "1"; // ฝังในโต๊ะทำงาน (iframe) → ซ่อน nav
 
   if (!getSupabaseEnv()) {
     return (
-      <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="ตรวจทานก่อนออก Excel" subtitle="ภาษีซื้อ/ขาย">
+      <ChatAuditFrame bare={embed} active="chat-accounting" role={null} authed={false} title="ตรวจทานก่อนออก Excel" subtitle="ภาษีซื้อ/ขาย">
         <div className="card">ยังไม่ได้ตั้งค่าฐานข้อมูล (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)</div>
       </ChatAuditFrame>
     );
@@ -238,7 +239,7 @@ export default async function AccountingReviewPage({
 
   if (scopeDenied) {
     return (
-      <ChatAuditFrame active="chat-accounting" role={navRole} authed staffOnly={staffOnly} title="ตรวจทานก่อนออก Excel" subtitle="ภาษีซื้อ/ขาย">
+      <ChatAuditFrame bare={embed} active="chat-accounting" role={navRole} authed staffOnly={staffOnly} title="ตรวจทานก่อนออก Excel" subtitle="ภาษีซื้อ/ขาย">
         <div className="dash-views">
           <div className="card">
             ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ
@@ -257,7 +258,7 @@ export default async function AccountingReviewPage({
     review = buildReview(entries);
   } catch {
     return (
-      <ChatAuditFrame active="chat-accounting" role={navRole} authed staffOnly={staffOnly} title="ตรวจทานก่อนออก Excel" subtitle="ภาษีซื้อ/ขาย">
+      <ChatAuditFrame bare={embed} active="chat-accounting" role={navRole} authed staffOnly={staffOnly} title="ตรวจทานก่อนออก Excel" subtitle="ภาษีซื้อ/ขาย">
         <div className="card">อ่านข้อมูลไม่สำเร็จ — ตรวจว่าตั้งค่า SUPABASE_SERVICE_ROLE_KEY และ apply migration ครบ</div>
       </ChatAuditFrame>
     );
@@ -296,7 +297,7 @@ export default async function AccountingReviewPage({
   const nothingToExport = review.purchase.count === 0 && review.sale.count === 0;
 
   return (
-    <ChatAuditFrame
+    <ChatAuditFrame bare={embed}
       active="chat-accounting"
       role={navRole}
       authed

@@ -64,10 +64,11 @@ export default async function JournalEntryPage({
   searchParams: Promise<{ customerId?: string }>;
 }) {
   const sp = await searchParams;
+  const embed = (sp as { embed?: string }).embed === "1"; // ฝังในโต๊ะทำงาน (iframe) → ซ่อน nav
 
   if (!getSupabaseEnv()) {
     return (
-      <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="ลงบันทึกบัญชีเอง" subtitle="JV / PV / RV">
+      <ChatAuditFrame bare={embed} active="chat-accounting" role={null} authed={false} title="ลงบันทึกบัญชีเอง" subtitle="JV / PV / RV">
         <div className="card">ยังไม่ได้ตั้งค่าฐานข้อมูล (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)</div>
       </ChatAuditFrame>
     );
@@ -96,7 +97,7 @@ export default async function JournalEntryPage({
   const fxLockedIds = validCustomerId ? await listActiveFxJeIds(service, access.tenantId, validCustomerId) : new Set<string>();
 
   return (
-    <ChatAuditFrame
+    <ChatAuditFrame bare={embed}
       active="chat-accounting"
       role={navRole}
       authed

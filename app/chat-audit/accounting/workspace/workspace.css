@@ -155,3 +155,9 @@
 .wsp-sharecircle>summary::after{content:"▾";margin-left:6px;font-size:11px}
 .wsp-sharecircle[open]>summary::after{content:"▴"}
 .wsp-sharecircle[open]{display:block}
+
+/* overlay เปิดเครื่องมือในหน้าเดิม (iframe) */
+.tool-overlay{position:fixed;inset:0;z-index:60;background:rgba(15,23,42,.55);display:flex;flex-direction:column;padding:24px}
+.tool-overlay-bar{display:flex;align-items:center;gap:10px;background:#fff;border-radius:12px 12px 0 0;padding:10px 14px;border-bottom:1px solid #e2e8f0}
+.tool-overlay-frame{flex:1;width:100%;border:0;background:#fff;border-radius:0 0 12px 12px}
+.cust-tools-note{grid-column:1/-1;font-size:11.5px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 10px;margin-top:4px}
