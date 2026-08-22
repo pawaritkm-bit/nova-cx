@@ -511,7 +511,7 @@ export default async function AccountingWorkspacePage({
                 accountant={accountantParam || null}
                 customerType={custIsCompany ? "company" : adminFields?.customerType ?? null}
               />
-              <details className="cust-tools">
+              <details className="cust-tools" name="cust-menu">
                 <summary className="btn">⚙️ จัดการลูกค้า</summary>
                 <div className="cust-tools-pop" style={{ width: "min(90vw, 380px)" }}>
                   {showShareToggle ? (

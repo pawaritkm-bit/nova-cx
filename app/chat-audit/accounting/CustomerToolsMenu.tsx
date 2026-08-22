@@ -109,7 +109,7 @@ export default function CustomerToolsMenu({
 
   return (
     <>
-      <details className="cust-tools">
+      <details className="cust-tools" name="cust-menu">
         <summary className="btn">🧰 เครื่องมือบัญชีทั้งหมด</summary>
         <div className="cust-tools-pop">
           {groups.map((grp) => {
