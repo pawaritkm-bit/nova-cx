@@ -14,6 +14,7 @@ import ChatAuditFrame from "../../_Frame";
 import DeleteBillButton from "./DeleteBillButton";
 import RenameCustomerButton from "./RenameCustomerButton";
 import UploadFileButton from "../UploadFileButton";
+import CustomerToolsMenu from "../CustomerToolsMenu";
 import "../../chat-admin.css";
 import "../accounting.css";
 import "./workspace.css";
@@ -431,6 +432,14 @@ export default async function AccountingWorkspacePage({
                   accountant={accountantParam || null}
                   label="เพิ่มไฟล์บิลเอง"
                 />
+                {/* ★ เมนูเครื่องมือบัญชีทั้งหมด (ย้ายมาจากหน้า /accounting เดิม) — เฉพาะลูกค้าที่จับคู่แล้ว */}
+                {openGroup.customerId ? (
+                  <CustomerToolsMenu
+                    customerId={openGroup.customerId}
+                    month={selectedMonth}
+                    accountant={accountantParam || null}
+                  />
+                ) : null}
                 <span className="muted" style={{ marginLeft: "auto" }}>{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
               </div>
               <div className="wsp-reviews">
