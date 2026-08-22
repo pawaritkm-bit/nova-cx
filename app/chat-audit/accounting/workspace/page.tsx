@@ -513,7 +513,7 @@ export default async function AccountingWorkspacePage({
               />
               <details className="cust-tools">
                 <summary className="btn">⚙️ จัดการลูกค้า</summary>
-                <div className="cust-tools-pop" style={{ gridTemplateColumns: "1fr", minWidth: 360 }}>
+                <div className="cust-tools-pop" style={{ width: "min(90vw, 380px)" }}>
                   {showShareToggle ? (
                     <div className="acc-scopebar" style={{ marginBottom: 8 }}>
                       <span className="acc-scope-label">วงแชร์</span>

@@ -140,10 +140,10 @@
 .cust-tools>summary::-webkit-details-marker{display:none}
 .cust-tools>summary::after{content:"▾";margin-left:6px;font-size:11px}
 .cust-tools[open]>summary::after{content:"▴"}
-/* ★ ยึดขอบขวา (ปุ่มอยู่ชิดขวาของ header) — เปิดเข้าในจอ ไม่ตกขอบ */
-.cust-tools-pop{position:absolute;z-index:40;top:calc(100% + 6px);right:0;left:auto;width:max-content;max-width:min(92vw,680px);
+/* ★ คอลัมน์เดียว แคบ ยึดขวา + เลื่อนได้ — ไม่ตกขอบทั้งซ้าย/ขวา ไม่ว่าปุ่มจะอยู่ตรงไหน */
+.cust-tools-pop{position:absolute;z-index:40;top:calc(100% + 6px);right:0;left:auto;width:min(90vw,320px);max-height:72vh;overflow-y:auto;
   background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 12px 32px rgba(15,23,42,.16);
-  padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px 16px}
+  padding:12px;display:flex;flex-direction:column;gap:10px}
 .cust-tools-grp-title{font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
 .cust-tools-links{display:flex;flex-wrap:wrap;gap:6px}
 .cust-tools-links .btn{font-size:12.5px;padding:5px 10px}
