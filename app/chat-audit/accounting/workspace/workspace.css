@@ -147,3 +147,11 @@
 .cust-tools-links{display:flex;flex-wrap:wrap;gap:6px}
 .cust-tools-links .btn{font-size:12.5px;padding:5px 10px}
 @media (max-width:640px){.cust-tools-pop{grid-template-columns:1fr;min-width:min(92vw,360px)}}
+
+/* วงแชร์ในหน้า workspace (collapsible เต็มความกว้าง) */
+.wsp-sharecircle{margin:10px 0}
+.wsp-sharecircle>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center}
+.wsp-sharecircle>summary::-webkit-details-marker{display:none}
+.wsp-sharecircle>summary::after{content:"▾";margin-left:6px;font-size:11px}
+.wsp-sharecircle[open]>summary::after{content:"▴"}
+.wsp-sharecircle[open]{display:block}

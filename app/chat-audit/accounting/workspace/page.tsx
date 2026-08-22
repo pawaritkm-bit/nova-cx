@@ -15,6 +15,11 @@ import DeleteBillButton from "./DeleteBillButton";
 import RenameCustomerButton from "./RenameCustomerButton";
 import UploadFileButton from "../UploadFileButton";
 import CustomerToolsMenu from "../CustomerToolsMenu";
+import CustomerAdminControls from "../CustomerAdminControls";
+import ShareCircleToggle from "../ShareCircleToggle";
+import ShareCirclePanel from "../ShareCirclePanel";
+import { listAccountantEmployees, mapCustomersToAccountant, type AccountantOption } from "@/lib/accounting/accountant-scope";
+import { getCustomerShareCircleFlag, customerHasShareCircle, listShareCircleEntries, type ShareCircleEntry } from "@/lib/share-circles/queries";
 import "../../chat-admin.css";
 import "../accounting.css";
 import "./workspace.css";
@@ -70,6 +75,45 @@ async function fetchCodes(service: SupabaseClient, tenantId: string, ids: string
     /* best-effort */
   }
   return map;
+}
+
+/**
+ * โหลดข้อมูล "จัดการลูกค้า" ของลูกค้า 1 ราย (เฉพาะที่กางอยู่ = perf) — สำหรับ CustomerAdminControls
+ *   2 query: (1) code+tax_id (คอลัมน์เดิม แน่นอน) (2) address/phone/flowaccount (คอลัมน์ใหม่ best-effort—degrade ถ้ายังไม่ apply)
+ */
+type CustomerAdminFields = {
+  code: string | null;
+  taxId: string | null;
+  address: string | null;
+  phone: string | null;
+  flowClientId: string | null;
+  flowHasSecret: boolean;
+};
+async function loadCustomerFields(
+  service: SupabaseClient,
+  tenantId: string,
+  customerId: string
+): Promise<CustomerAdminFields> {
+  const out: CustomerAdminFields = { code: null, taxId: null, address: null, phone: null, flowClientId: null, flowHasSecret: false };
+  try {
+    const { data } = await service.from("customers").select("customer_code, tax_id").eq("tenant_id", tenantId).eq("id", customerId).maybeSingle();
+    const c = data as { customer_code: string | null; tax_id: string | null } | null;
+    if (c) { out.code = c.customer_code; out.taxId = c.tax_id; }
+  } catch { /* best-effort */ }
+  try {
+    const { data, error } = await service
+      .from("customers")
+      .select("address, phone, flowaccount_client_id, flowaccount_client_secret_enc")
+      .eq("tenant_id", tenantId).eq("id", customerId).maybeSingle();
+    const c = data as { address: string | null; phone: string | null; flowaccount_client_id: string | null; flowaccount_client_secret_enc: string | null } | null;
+    if (!error && c) {
+      out.address = c.address;
+      out.phone = c.phone;
+      out.flowClientId = c.flowaccount_client_id?.trim() || null;
+      out.flowHasSecret = !!(c.flowaccount_client_secret_enc && c.flowaccount_client_secret_enc.trim());
+    }
+  } catch { /* คอลัมน์ใหม่ยังไม่ apply → degrade */ }
+  return out;
 }
 
 const isPending = (e: BillEntry) => e.status !== "confirmed";
@@ -288,6 +332,38 @@ export default async function AccountingWorkspacePage({
     signPaths(service, reviewList.map(entryPath).filter((p): p is string => !!p)),
   ]);
 
+  // ---- ข้อมูล "จัดการลูกค้า" + วงแชร์ (เฉพาะลูกค้าที่กางอยู่ = perf · ย้ายจากหน้า /accounting เดิม) ----
+  const openCustomerId = openGroup?.customerId ?? null;
+  let adminFields: CustomerAdminFields | null = null;
+  let accountantOptions: AccountantOption[] = [];
+  let currentAccountantId: string | null = null;
+  const canReassignCustomer = access.mode === "admin";
+  let shareIsFlag = false;
+  let shareResolved = false;
+  let shareCircleEntries: ShareCircleEntry[] | null = null;
+  if (openCustomerId) {
+    adminFields = await loadCustomerFields(service, tenantId, openCustomerId);
+    if (access.mode === "admin") {
+      const [opts, byCust] = await Promise.all([
+        listAccountantEmployees(service, tenantId),
+        mapCustomersToAccountant(service, tenantId, [openCustomerId]),
+      ]);
+      accountantOptions = opts;
+      currentAccountantId = byCust.get(openCustomerId) ?? null;
+    }
+    shareIsFlag = await getCustomerShareCircleFlag(service, tenantId, openCustomerId);
+    try {
+      const hasShare = await customerHasShareCircle(service, tenantId, openCustomerId);
+      shareResolved = true;
+      if (shareIsFlag || hasShare) {
+        shareCircleEntries = await listShareCircleEntries(service, { tenantId, customerId: openCustomerId });
+      }
+    } catch {
+      shareResolved = false; // ตาราง/คอลัมน์วงแชร์ยังไม่ apply → ไม่โชว์ (ไม่ crash)
+    }
+  }
+  const showShareToggle = access.mode === "admin" && shareResolved && !!openCustomerId;
+
   // คิว: ลูกค้าที่มีงานค้างตรวจก่อน (ใช้ sortedGroups + codeMap)
   const queue = sortedGroups.map((g) => ({
     key: groupKey(g),
@@ -440,8 +516,46 @@ export default async function AccountingWorkspacePage({
                     accountant={accountantParam || null}
                   />
                 ) : null}
+                {/* ★ จัดการลูกค้า: แก้ ชื่อ/รหัส/เลขภาษี/ที่อยู่/เบอร์/FlowAccount + เปลี่ยนผู้ดูแล (admin) */}
+                {openGroup.customerId ? (
+                  <details className="cust-tools">
+                    <summary className="btn">⚙️ จัดการลูกค้า</summary>
+                    <div className="cust-tools-pop" style={{ gridTemplateColumns: "1fr", minWidth: 360 }}>
+                      {showShareToggle ? (
+                        <div className="acc-scopebar" style={{ marginBottom: 8 }}>
+                          <span className="acc-scope-label">วงแชร์</span>
+                          <ShareCircleToggle customerId={openGroup.customerId} initialOn={shareIsFlag} />
+                        </div>
+                      ) : null}
+                      <CustomerAdminControls
+                        customerId={openGroup.customerId}
+                        canReassign={canReassignCustomer}
+                        currentAccountantId={currentAccountantId}
+                        accountants={accountantOptions}
+                        initialName={openGroup.name ?? null}
+                        initialCode={adminFields?.code ?? (codeMap.get(openGroup.customerId) ?? null)}
+                        initialTaxId={adminFields?.taxId ?? null}
+                        initialAddress={adminFields?.address ?? null}
+                        initialPhone={adminFields?.phone ?? null}
+                        initialFlowAccountClientId={adminFields?.flowClientId ?? null}
+                        hasFlowAccountCredential={!!adminFields?.flowClientId && !!adminFields?.flowHasSecret}
+                      />
+                    </div>
+                  </details>
+                ) : null}
                 <span className="muted" style={{ marginLeft: "auto" }}>{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
               </div>
+              {/* ★ วงแชร์ (ท้าวแชร์) — โชว์เมื่อลูกค้าเป็นท้าวแชร์/มีวง ≥1 · ภธ.40+ภงด.90 */}
+              {openGroup.customerId && shareCircleEntries ? (
+                <details className="wsp-sharecircle">
+                  <summary className="btn">🔗 วงแชร์ ({shareCircleEntries.length.toLocaleString("th-TH")})</summary>
+                  <ShareCirclePanel
+                    customerId={openGroup.customerId}
+                    entries={shareCircleEntries}
+                    exportHref={`/chat-audit/accounting/share-circle-export?customerId=${openGroup.customerId}`}
+                  />
+                </details>
+              ) : null}
               <div className="wsp-reviews">
                 {reviewList.length === 0 ? (
                   <p className="empty" style={{ padding: 24 }}>
