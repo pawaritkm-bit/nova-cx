@@ -1,0 +1,27 @@
+name: extract-bills-cron
+# ★ External cron (ไม่พึ่ง Vercel cron ที่อาจจำกัดความถี่ตาม plan)
+#   ยิง endpoint /api/cron/extract-bills ทุก ~15 นาที → เคลียร์ backlog + สกัดบิลใหม่/สเตทเมนต์ต่อเนื่อง
+#   ต้องตั้ง repo secret: CRON_SECRET (ค่าเดียวกับใน Vercel env)
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: extract-bills-cron
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: extract + redecide
+        run: |
+          curl -sS -m 300 \
+            -H "authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://nova-cx.vercel.app/api/cron/extract-bills?mode=both" || true
+      - name: reextract empty drafts
+        run: |
+          curl -sS -m 300 \
+            -H "authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://nova-cx.vercel.app/api/cron/extract-bills?mode=reextract" || true

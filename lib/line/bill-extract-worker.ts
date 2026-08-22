@@ -565,11 +565,13 @@ export async function selectExtractionCandidates(
   for (let from = 0; from < CANDIDATE_SCAN_LIMIT && collected.length < limit; from += PAGE) {
     const { data, error } = await db
       .from("message_attachments")
-      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256")
+      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, chat_messages!inner(chat_groups!inner(customer_id))")
       .eq("fetch_status", "stored")
       .in("attachment_type", ["image", "file"])
       .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
       .not("drive_file_id", "is", null)
+      // ★ เฉพาะกลุ่มที่ผูกลูกค้าแล้ว — กลุ่มยังไม่ผูกไม่ให้ติดคิว (กันกินสล็อตหน้าคิว = created 0)
+      .not("chat_messages.chat_groups.customer_id", "is", null)
       .order("created_at", { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) {
