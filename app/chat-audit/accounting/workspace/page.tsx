@@ -13,6 +13,7 @@ import { formatMoney } from "@/lib/accounting/calc";
 import ChatAuditFrame from "../../_Frame";
 import DeleteBillButton from "./DeleteBillButton";
 import RenameCustomerButton from "./RenameCustomerButton";
+import UploadFileButton from "../UploadFileButton";
 import "../../chat-admin.css";
 import "../accounting.css";
 import "./workspace.css";
@@ -423,6 +424,13 @@ export default async function AccountingWorkspacePage({
               <div className="wsp-center-head">
                 <b>{openGroup.name ?? "ยังไม่จับคู่ลูกค้า"}</b>
                 {openGroup.customerId ? <RenameCustomerButton customerId={openGroup.customerId} currentName={openGroup.name ?? ""} /> : null}
+                {/* ★ ปุ่มอัปโหลดไฟล์เอง (กรณี AI ไม่ดึง/อ่านพลาด) — ล็อกลูกค้าที่กำลังเปิดอยู่ · AI อ่านให้เบื้องหลัง */}
+                <UploadFileButton
+                  lockedCustomerId={openGroup.customerId ?? null}
+                  lockedCustomerLabel={openGroup.name ?? undefined}
+                  accountant={accountantParam || null}
+                  label="เพิ่มไฟล์บิลเอง"
+                />
                 <span className="muted" style={{ marginLeft: "auto" }}>{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
               </div>
               <div className="wsp-reviews">
