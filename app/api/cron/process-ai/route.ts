@@ -54,22 +54,28 @@ async function handle(request: NextRequest) {
     // 1) survey AI worker (เดิม — ไม่แตะ)
     const summary = await processAiAnalysisJobs({ db, provider });
 
+    // ★ คุมต้นทุน: ปิด "วิเคราะห์แชท/office inbound/knowledge" ด้วย default (ยังไม่ได้ใช้ฟีเจอร์นี้)
+    //   เปิดกลับได้ด้วย env AI_CHAT_ANALYSIS=on · การเก็บรหัสสเตทเมนต์อยู่คนละ flow (classify-finance-doc) ไม่กระทบ
+    const CHAT_AI_ON = process.env.AI_CHAT_ANALYSIS === "on";
+
     // 2) chat (Phase 2 + Phase A) — additive: scan enqueue + chat worker (กลุ่ม) + office worker (1-1)
     //    scan แยก route: group/room → chat_analysis, 1-1 → office_inbound
     //    isolate ไว้: chat พังต้องไม่ทำให้ survey worker ล้ม (คืนผลแยกใน chat.error)
     let chatScan;
     let chatWorker;
     let officeWorker;
-    try {
-      chatScan = await scanChatAnalysis({ db });
-      chatWorker = await processChatAnalysisJobs({ db, provider });
-      officeWorker = await processOfficeInboundJobs({ db, provider });
-    } catch (chatErr) {
-      logServerError("cron/process-ai:chat", requestId, chatErr);
-      return NextResponse.json(
-        { status: "ok", ...summary, chat: { error: true, request_id: requestId } },
-        { status: 200 }
-      );
+    if (CHAT_AI_ON) {
+      try {
+        chatScan = await scanChatAnalysis({ db });
+        chatWorker = await processChatAnalysisJobs({ db, provider });
+        officeWorker = await processOfficeInboundJobs({ db, provider });
+      } catch (chatErr) {
+        logServerError("cron/process-ai:chat", requestId, chatErr);
+        return NextResponse.json(
+          { status: "ok", ...summary, chat: { error: true, request_id: requestId } },
+          { status: 200 }
+        );
+      }
     }
 
     // 3) reply knowledge (Phase 1) — pass ใหม่ additive แยกจากประเมิน/office โดยสิ้นเชิง
@@ -77,20 +83,22 @@ async function handle(request: NextRequest) {
     //    isolate: knowledge พังต้องไม่ทำให้ chat/office/survey ที่สำเร็จแล้วล้ม
     let knowledgeScan;
     let knowledgeWorker;
-    try {
-      knowledgeScan = await scanKnowledgeExtract({ db });
-      knowledgeWorker = await processKnowledgeExtractJobs({ db, provider });
-    } catch (kErr) {
-      logServerError("cron/process-ai:knowledge", requestId, kErr);
-      return NextResponse.json(
-        {
-          status: "ok",
-          ...summary,
-          chat: { scan: chatScan, worker: chatWorker, office: officeWorker },
-          knowledge: { error: true, request_id: requestId },
-        },
-        { status: 200 }
-      );
+    if (CHAT_AI_ON) {
+      try {
+        knowledgeScan = await scanKnowledgeExtract({ db });
+        knowledgeWorker = await processKnowledgeExtractJobs({ db, provider });
+      } catch (kErr) {
+        logServerError("cron/process-ai:knowledge", requestId, kErr);
+        return NextResponse.json(
+          {
+            status: "ok",
+            ...summary,
+            chat: { scan: chatScan, worker: chatWorker, office: officeWorker },
+            knowledge: { error: true, request_id: requestId },
+          },
+          { status: 200 }
+        );
+      }
     }
 
     return NextResponse.json(
