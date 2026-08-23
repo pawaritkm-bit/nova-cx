@@ -29,7 +29,13 @@ export const dynamic = "force-dynamic";
 const BILLS_BUCKET = "bills";
 const SIGNED_URL_TTL_SEC = 3600;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const DOC_EXT_RE = /\.(pdf|xlsx?|docx?|pptx?|csv|txt|zip)$/i;
+// ★ detect "รูป" เชิงบวก — จับทั้ง ".jpg" และ "_jpg" (naming เก่า) · ไม่ใช่รูป (รวม _pdf) = ไม่เรนเดอร์ <img> (กันรูปเสีย)
+const IMG_EXT_RE = /[._](jpe?g|png|gif|webp|heic|heif|bmp)$/i;
+/** ป้ายนามสกุลไฟล์ (จับทั้ง ".pdf"/"_pdf") — ไม่เจอ = "ไฟล์" */
+function extLabel(path: string): string {
+  const m = path.toLowerCase().match(/[._]([a-z0-9]{1,8})$/);
+  return (m ? m[1] : "ไฟล์").toUpperCase();
+}
 
 function isValidMonth(v: string | null | undefined): v is string {
   return typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v);
@@ -48,7 +54,7 @@ function entryPath(e: BillEntry): string | null {
   return e.attachmentObjectPath ?? e.uploadPath;
 }
 function entryIsImage(e: BillEntry): boolean {
-  if (e.attachmentObjectPath) return !DOC_EXT_RE.test(e.attachmentObjectPath);
+  if (e.attachmentObjectPath) return IMG_EXT_RE.test(e.attachmentObjectPath);
   return (e.uploadMime ?? "").startsWith("image/");
 }
 
@@ -594,10 +600,10 @@ export default async function AccountingWorkspacePage({
                           </a>
                         ) : path && url ? (
                           <a href={url} target="_blank" rel="noopener" className="wsp-thumb-file" title="เปิดดูไฟล์ในเบราว์เซอร์">
-                            <span className="ext">{(path.split(".").pop() ?? "ไฟล์").toUpperCase()}</span>
+                            <span className="ext">{extLabel(path)}</span>
                             <span className="wsp-zoom-ic">🔍 ดู</span>
                           </a>
-                        ) : path ? <span className="ext">{(path.split(".").pop() ?? "ไฟล์").toUpperCase()}</span> : <span className="ext none">ไม่มีรูป</span>}
+                        ) : path ? <span className="ext">{extLabel(path)}</span> : <span className="ext none">ไม่มีรูป</span>}
                       </div>
                       {/* แว่นขยาย: คลิกรูปเล็ก → เปิดรูปใหญ่เต็มจอ (CSS :target · คลิกพื้นหลัง/รูปเพื่อปิด) */}
                       {url && img ? (
