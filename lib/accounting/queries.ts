@@ -710,14 +710,18 @@ export async function listEntries(
   // object path ของไฟล์บิล (message_attachments.drive_file_id) — ให้ UI เอาไป sign
   const attachmentIds = [...new Set(rawEntries.map((e) => e.attachment_id).filter((x): x is string => !!x))];
   const pathByAttachment = new Map<string, string | null>();
+  // ★★ ต้องแบ่งก้อน (chunkIds ≤150): PostgREST cap 1000 แถว/request + กัน URL ยาวเกิน — ถ้า attachmentIds
+  //    > 1000 (บิลทั้ง scope) query ครั้งเดียวได้แค่ 1000 → ที่เหลือ path=null = thumbnail "ไม่มีรูป" ทั้งที่มีรูป
   if (attachmentIds.length > 0) {
-    const { data: attData } = await db
-      .from("message_attachments")
-      .select("id, drive_file_id")
-      .eq("tenant_id", tenantId)
-      .in("id", attachmentIds);
-    for (const a of (attData ?? []) as { id: string; drive_file_id: string | null }[]) {
-      pathByAttachment.set(a.id, a.drive_file_id);
+    const attChunks = await Promise.all(
+      chunkIds(attachmentIds).map((ids) =>
+        db.from("message_attachments").select("id, drive_file_id").eq("tenant_id", tenantId).in("id", ids)
+      )
+    );
+    for (const { data: attData } of attChunks) {
+      for (const a of (attData ?? []) as { id: string; drive_file_id: string | null }[]) {
+        pathByAttachment.set(a.id, a.drive_file_id);
+      }
     }
   }
 
