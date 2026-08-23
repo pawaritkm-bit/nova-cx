@@ -387,6 +387,8 @@ export async function processPendingAttachments(
   let stored = 0;
   let failed = 0;
   let skipped = 0;
+  // ★ real-time: กลุ่ม (ผูกลูกค้าแล้ว) ที่เพิ่งได้ "บิล" ใหม่ → หลังเก็บไฟล์เสร็จ สั่งอ่านทันที (ไม่รอ cron)
+  const billGroups = new Set<string>();
 
   // in-batch dedup: ถ้ารูป (sha256) เดียวกันโผล่หลายแถวในรอบเดียว จะอัปครั้งเดียวแล้ว reuse
   //   (DB ยังไม่เห็นแถวแรกว่ามี drive_url จนกว่าจะ commit — Map นี้อุดช่องนั้นภายในรอบ)
@@ -643,6 +645,27 @@ export async function processPendingAttachments(
       continue;
     }
     stored++;
+    // ★ เก็บกลุ่มที่ได้ "บิล" ใหม่ (ไม่ใช่สเตทเมนต์/แพลตฟอร์ม) + ผูกลูกค้าแล้ว → อ่านทันทีหลัง loop
+    if (group?.id && group.customer_id && (!classification || classification.type === "other")) {
+      billGroups.add(group.id);
+    }
+  }
+
+  // ★ real-time: อ่านบิลใหม่ของกลุ่มที่เพิ่งได้รับ "ทันที" (ไม่รอ cron 30 นาที) — group-scoped, best-effort
+  //   processBillExtraction คัดเฉพาะ eligible + linked + ยังไม่ทำ → อ่านแค่บิลใหม่ (ต้นทุนเท่า cron เดิม แต่เร็ว)
+  if (billGroups.size > 0) {
+    try {
+      const { processBillExtraction } = await import("@/lib/line/bill-extract-worker");
+      for (const chatGroupId of billGroups) {
+        try {
+          await processBillExtraction(db, { chatGroupId, limit: 10 });
+        } catch {
+          /* กลุ่มเดียวพลาด → ข้าม (best-effort) */
+        }
+      }
+    } catch {
+      console.warn("[attachments] realtime bill-extract import failed");
+    }
   }
 
   return { processed, stored, failed, skipped };
