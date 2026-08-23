@@ -1,10 +1,14 @@
 name: extract-bills-cron
 # ★ External cron (ไม่พึ่ง Vercel cron ที่อาจจำกัดความถี่ตาม plan)
-#   ยิง endpoint /api/cron/extract-bills ทุก ~15 นาที → เคลียร์ backlog + สกัดบิลใหม่/สเตทเมนต์ต่อเนื่อง
+#   ยิง endpoint /api/cron/extract-bills ทุก 30 นาที → สกัดบิลใหม่/สเตทเมนต์ + ตัดสินซื้อ/ขาย
 #   ต้องตั้ง repo secret: CRON_SECRET (ค่าเดียวกับใน Vercel env)
+#
+# ★ คุมต้นทุน Gemini: ทุก 30 นาที · limit 20 ใบ/รอบ (≈960 reads/วันตอน backlog · หลังเคลียร์ = แค่บิลใหม่)
+#   ★ ตัด mode=reextract ออกจาก auto แล้ว (re-read บิลว่าง/ไม่ครบ ด้วย AI = แพง ส่วนใหญ่อ่านไม่ออกอยู่ดี)
+#     ถ้าต้องการ reextract ให้เรียกมือ: gh workflow run / curl "...?mode=reextract" เป็นครั้งคราว
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -19,9 +23,4 @@ jobs:
         run: |
           curl -sS -m 300 \
             -H "authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://nova-cx.vercel.app/api/cron/extract-bills?mode=both&limit=40" || true
-      - name: reextract empty drafts
-        run: |
-          curl -sS -m 300 \
-            -H "authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://nova-cx.vercel.app/api/cron/extract-bills?mode=reextract" || true
+            "https://nova-cx.vercel.app/api/cron/extract-bills?mode=both&limit=20" || true
