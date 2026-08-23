@@ -297,6 +297,33 @@ async function claimAttachment(
 }
 
 /**
+ * ไฟล์ storage (drive_file_id) นี้ยังมี attachment row "อื่น" ชี้อยู่ไหม
+ *   ★ ป้องกันบั๊ก orphan: ไฟล์ที่ sha256 ซ้ำถูก dedup-reuse (หลาย row ชี้ไฟล์เดียว) → ถ้าลบไฟล์จริงตอนลบบิลใบเดียว
+ *     row อื่นที่ reuse จะกลายเป็น orphan · จึงต้องลบไฟล์จริงเฉพาะเมื่อเป็น "ref สุดท้าย" เท่านั้น
+ *   ★ เช็กไม่ได้/พลาด → คืน true (ถือว่ายังมี ref = ไม่ลบ ปลอดภัยกว่า orphan)
+ */
+export async function isFileStillReferenced(
+  db: SupabaseClient,
+  tenantId: string,
+  driveFileId: string,
+  exceptAttachmentId: string
+): Promise<boolean> {
+  try {
+    const { data, error } = await db
+      .from("message_attachments")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("drive_file_id", driveFileId)
+      .neq("id", exceptAttachmentId)
+      .limit(1);
+    if (error) return true;
+    return !!(data && data.length > 0);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * ประมวลผลรูปบิลที่ยังค้างคิว (pending/failed/processing-ค้าง) เป็น batch
  *   @returns สรุปจำนวน processed/stored/failed/skipped (หรือ {disabled:true} ถ้าปิดฟีเจอร์)
  */

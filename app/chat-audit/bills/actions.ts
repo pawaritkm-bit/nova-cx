@@ -18,6 +18,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { requireAdminContext, AdminAuthError } from "@/lib/admin/guard";
+import { isFileStillReferenced } from "@/lib/line/attachments";
 
 /** bucket รูปบิล (private) — ตรงกับ lib/storage/bill-storage.ts + page.tsx */
 const BILLS_BUCKET = "bills";
@@ -71,10 +72,13 @@ export async function deleteBillAction(
 
     const objectPath = (row as { drive_file_id: string | null }).drive_file_id;
 
-    // 3) ลบไฟล์จริงจาก bucket (ถ้ามี ref) — best-effort:
-    //    ถ้าไฟล์หายไปแล้ว/ลบไม่ได้ ยัง mark DB ต่อ เพื่อกันหน้าอื่นไป sign URL ต่อ
+    // 3) ลบไฟล์จริงจาก bucket — best-effort · ★ ลบเฉพาะเมื่อเป็น "ref สุดท้าย"
+    //    (ไฟล์ sha256 ซ้ำถูก dedup-reuse หลาย row ชี้ไฟล์เดียว — ลบทั้งที่ row อื่นยังใช้ = orphan)
     if (objectPath) {
-      await service.storage.from(BILLS_BUCKET).remove([objectPath]);
+      const shared = await isFileStillReferenced(service, ctx.tenantId, objectPath, (row as { id: string }).id);
+      if (!shared) {
+        await service.storage.from(BILLS_BUCKET).remove([objectPath]);
+      }
     }
 
     // 4) mark DB (ไม่ hard-delete แถว — เก็บ metadata ไว้ audit ว่าใครลบเมื่อไหร่)

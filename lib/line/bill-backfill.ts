@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { classifyBillImage } from "@/lib/ai/bill-classify";
+import { isFileStillReferenced } from "@/lib/line/attachments";
 
 /**
  * Bill classify backfill — คัดกรอง "ย้อนหลัง" รูปที่เก็บไปแล้วก่อนมีระบบคัดกรอง (เฟส 1 ฝั่ง CX)
@@ -29,6 +30,7 @@ export type BackfillResult = {
 /** แถวที่รอคัดย้อนหลัง */
 type BackfillRow = {
   id: string;
+  tenant_id: string;
   drive_file_id: string | null;
 };
 
@@ -56,7 +58,7 @@ export async function backfillClassify(
   // เลือกรูปที่เก็บสำเร็จแล้วแต่ยังไม่ผ่าน AI + มีไฟล์จริงบน storage
   const { data, error } = await db
     .from("message_attachments")
-    .select("id, drive_file_id")
+    .select("id, tenant_id, drive_file_id")
     .eq("attachment_type", "image")
     .eq("fetch_status", "stored")
     .eq("doc_checked", false)
@@ -97,8 +99,11 @@ export async function backfillClassify(
 
     if (classified && !classified.keep) {
       // มั่นใจว่าไม่ใช่เอกสารการเงิน → ลบไฟล์ + set skipped/not_a_bill
+      //   ★ ลบไฟล์จริงเฉพาะเมื่อไม่มี row อื่น reuse ไฟล์เดียวกัน (กัน orphan จาก dedup-reuse)
       try {
-        await db.storage.from(BILLS_BUCKET).remove([objectPath]);
+        if (!(await isFileStillReferenced(db, row.tenant_id, objectPath, row.id))) {
+          await db.storage.from(BILLS_BUCKET).remove([objectPath]);
+        }
       } catch {
         console.warn("[bill-backfill] remove error");
         // ลบไฟล์ไม่สำเร็จ ก็ยัง mark สถานะต่อ (ไฟล์อาจ orphan แต่ DB สื่อว่าไม่ใช่บิล)
