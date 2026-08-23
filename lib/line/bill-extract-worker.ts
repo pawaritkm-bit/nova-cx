@@ -444,6 +444,9 @@ async function resolveCustomer(
  *   (ถ้าโตเกินนี้จริง ค่อยเพิ่ม/ทำ pagination — ตอนนี้พอสำหรับ scale ปัจจุบัน)
  */
 const CANDIDATE_SCAN_LIMIT = 30000;
+/** ★ คุมต้นทุน: cron auto-read เฉพาะบิล "ใหม่" (≤ N วัน) — บิลเก่ากว่านี้ไม่ดูดเข้าอ่านอัตโนมัติ
+ *   (กันเคส backlog เก่าค้างเยอะแล้ว cron ไล่อ่านหมด = เผาเครดิต) · นักบัญชีอัปเก่าเองได้ · env ปรับได้ */
+const AUTO_READ_MAX_AGE_DAYS = Number(process.env.ACCT_AUTO_READ_MAX_AGE_DAYS) || 3;
 /** เพดานดึง done set (attachment ที่มี entry แล้ว) */
 const DONE_SCAN_LIMIT = 50000;
 
@@ -586,6 +589,8 @@ export async function selectExtractionCandidates(
   //     backlog ที่อยู่นอกหน้าต่างจะไม่เคยถูกเห็น → ค้างถาวร · แก้ด้วย pagination จนถึง backlog จริง)
   const PAGE = 1000;
   const collected: QueueRow[] = [];
+  // ★ อ่านเฉพาะบิลใหม่ ≤ N วัน (คุมต้นทุน) + เรียงใหม่→เก่า (บิลล่าสุดก่อน)
+  const recentCutoff = new Date(Date.now() - AUTO_READ_MAX_AGE_DAYS * 86400000).toISOString();
   for (let from = 0; from < CANDIDATE_SCAN_LIMIT && collected.length < limit; from += PAGE) {
     const { data, error } = await db
       .from("message_attachments")
@@ -596,7 +601,9 @@ export async function selectExtractionCandidates(
       .not("drive_file_id", "is", null)
       // ★ เฉพาะกลุ่มที่ผูกลูกค้าแล้ว — กลุ่มยังไม่ผูกไม่ให้ติดคิว (กันกินสล็อตหน้าคิว = created 0)
       .not("chat_messages.chat_groups.customer_id", "is", null)
-      .order("created_at", { ascending: true })
+      // ★ เฉพาะบิลใหม่ (≤ AUTO_READ_MAX_AGE_DAYS) — ไม่ดูด backlog เก่าเข้าอ่านอัตโนมัติ
+      .gte("created_at", recentCutoff)
+      .order("created_at", { ascending: false })
       .range(from, from + PAGE - 1);
     if (error) {
       console.warn(`[bill-extract-worker] select queue error code=${(error as { code?: string }).code ?? "?"}`);
