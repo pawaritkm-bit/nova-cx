@@ -310,17 +310,24 @@ export async function listVouchers(
   chartByCode: ChartByCode,
   opts: { status?: PettyCashVoucherStatus } = {}
 ): Promise<PettyCashVoucher[]> {
-  let q = db
-    .from("petty_cash_vouchers")
-    .select(VOUCHER_COLUMNS)
-    .eq("tenant_id", tenantId)
-    .eq("customer_id", customerId)
-    .eq("fund_id", fundId)
-    .is("deleted_at", null);
-  if (opts.status) q = q.eq("status", opts.status);
-  const { data, error } = await q.order("voucher_date", { ascending: false }).limit(2000);
-  if (error || !data) return [];
-  return (data as unknown as RawVoucherRow[]).map((r) => mapVoucherRow(r, chartByCode));
+  // ★ paginate ทีละ 1000 (PostgREST cap) จนครบ — ยอดคงเหลือกองเงินสดย่อยรวมจากใบเบิกทั้งหมด
+  //   กองที่มีใบเบิก > 1000 ใบ ถ้า cap จะได้ยอดผิด → ต้องดึงครบ (cap 20000 กันวนไม่จบ)
+  const rows: RawVoucherRow[] = [];
+  for (let from = 0; from < 20000; from += 1000) {
+    let q = db
+      .from("petty_cash_vouchers")
+      .select(VOUCHER_COLUMNS)
+      .eq("tenant_id", tenantId)
+      .eq("customer_id", customerId)
+      .eq("fund_id", fundId)
+      .is("deleted_at", null);
+    if (opts.status) q = q.eq("status", opts.status);
+    const { data, error } = await q.order("voucher_date", { ascending: false }).range(from, from + 999);
+    if (error || !data) break;
+    rows.push(...(data as unknown as RawVoucherRow[]));
+    if (data.length < 1000) break;
+  }
+  return rows.map((r) => mapVoucherRow(r, chartByCode));
 }
 
 /** โหลดสโคปของใบเบิก 1 ใบ (IDOR-safe — derive จาก voucher id ที่กำลังเขียนจริง) */

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { listScopedCustomers } from "@/lib/accounting/customer-options";
 import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
@@ -34,20 +35,7 @@ async function fetchScopedCustomers(
   service: SupabaseClient,
   access: AccountingAccess
 ): Promise<{ id: string; label: string }[]> {
-  let q = service
-    .from("customers")
-    .select("id, customer_code, name")
-    .eq("tenant_id", access.tenantId)
-    .is("deleted_at", null)
-    .order("customer_code", { ascending: true, nullsFirst: false })
-    .limit(5000);
-  if (access.allowedCustomerIds !== null) {
-    const ids = [...access.allowedCustomerIds];
-    if (ids.length === 0) return [];
-    q = q.in("id", ids);
-  }
-  const { data } = await q;
-  const rows = (data ?? []) as { id: string; customer_code: string | null; name: string | null }[];
+  const rows = await listScopedCustomers(service, access);
   return rows.map((c) => ({ id: c.id, label: customerLabel(c.customer_code, c.name) }));
 }
 

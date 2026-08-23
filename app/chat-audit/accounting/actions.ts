@@ -37,6 +37,7 @@ import {
 } from "@/lib/accounting/actions-lib";
 import type { EntryType, VatType, WhtForm, PaymentMethod } from "@/lib/accounting/queries";
 import { recordAccountRules } from "@/lib/accounting/account-learning";
+import { listScopedCustomers } from "@/lib/accounting/customer-options";
 import { asPaymentMethod } from "@/lib/accounting/payment";
 import { normalizeTaxId } from "@/lib/accounting/tax-id";
 import { validateUpload, sanitizeUploadName, extOf } from "@/lib/accounting/upload";
@@ -938,23 +939,8 @@ export async function listCustomerOptionsAction(): Promise<{ id: string; label: 
     const service = createServiceRoleClient();
     const ctx = await requireAccountingAccess(authed, service);
 
-    let query = service
-      .from("customers")
-      .select("id, customer_code, name")
-      .eq("tenant_id", ctx.tenantId)
-      .is("deleted_at", null)
-      .order("customer_code", { ascending: true, nullsFirst: false })
-      .limit(5000);
-
-    // นักบัญชี (allowedCustomerIds = Set) → เฉพาะลูกค้าที่ดูแล · admin/lead (null) → ทั้งหมด
-    if (ctx.allowedCustomerIds) {
-      const ids = [...ctx.allowedCustomerIds];
-      if (ids.length === 0) return [];
-      query = query.in("id", ids);
-    }
-
-    const { data } = await query;
-    const rows = (data ?? []) as { id: string; customer_code: string | null; name: string | null }[];
+    // ★ ดึงลูกค้าในสโคปแบบ paginate (แก้ PostgREST 1000-cap — ลูกค้า > 1000 เคยหายจาก dropdown)
+    const rows = await listScopedCustomers(service, ctx);
     return rows.map((c) => ({
       id: c.id,
       label:

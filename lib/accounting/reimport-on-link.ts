@@ -37,6 +37,8 @@ export async function reimportGroupStatementsOnLink(
       .from("chat_messages")
       .select("id")
       .eq("chat_group_id", chatGroupId)
+      // ★ เรียงใหม่→เก่า: กลุ่ม active > 1000 ข้อความ (PostgREST cap) → ให้ได้ "สเตทเมนต์ล่าสุด" ก่อน (ไม่ใช่เก่าสุด)
+      .order("created_at", { ascending: false })
       .limit(3000);
     const msgIds = ((msgs ?? []) as { id: string }[]).map((m) => m.id);
     if (msgIds.length === 0) return { imported: 0, scanned: 0 };
@@ -51,7 +53,8 @@ export async function reimportGroupStatementsOnLink(
         .not("drive_file_id", "is", null);
       for (const a of ((atts ?? []) as { drive_file_id: string | null }[])) {
         const p = a.drive_file_id;
-        if (p && p.toLowerCase().endsWith(".pdf")) pdfs.push(p);
+        // ★ จับทั้ง ".pdf" และ "_pdf" (naming เก่า) — ไม่งั้นสเตทเมนต์ PDF เก่าถูกข้าม
+        if (p && /[._]pdf$/.test(p.toLowerCase())) pdfs.push(p);
         if (pdfs.length >= MAX_FILES) break;
       }
     }
