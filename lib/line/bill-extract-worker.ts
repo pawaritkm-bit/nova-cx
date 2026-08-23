@@ -1361,6 +1361,8 @@ export async function reExtractIncompleteEntries(
   //    ใบเก่าสุดแล้วกรอง → ถ้าใบเก่าถูกเติมหมด = เจอ 0 (คิว 281 ใบว่างไม่ลด). เป้าหมายกระจายทั่วกอง
   //    เก็บ att (path/doc_kind) ของเป้าหมายระหว่างไล่ ใช้ต่อในลูปประมวลผล (ไม่ query ซ้ำ)
   const attById = new Map<string, { path: string | null; docKind: string | null }>();
+  // ★ คุมต้นทุน: reextract เฉพาะบิล "ใหม่" (≤ AUTO_READ_MAX_AGE_DAYS) — ไม่ re-read บิลเก่า (เหมือน cron อ่านปกติ)
+  const reextractCutoff = new Date(Date.now() - AUTO_READ_MAX_AGE_DAYS * 86400000).toISOString();
   const emptyEntries = await collectTargetEntries<ReExtractEntryRow>({
     limit,
     fetchPage: async (cursor, pageSize) => {
@@ -1373,6 +1375,7 @@ export async function reExtractIncompleteEntries(
         // ★ ข้าม entry ที่ "ลองสกัดใหม่แล้ว" (0052) — กันวนบิลหน้าคิวเดิมที่ AI อ่านไม่ออกซ้ำ
         //   เฉพาะเส้น reextract เท่านั้น (backfill ใช้ query แยก ไม่กรองคอลัมน์นี้)
         .is("reextract_attempted_at", null)
+        .gte("created_at", reextractCutoff) // ★ เฉพาะบิลใหม่ ≤3 วัน (ไม่แตะ backlog เก่า)
         .not("attachment_id", "is", null);
       if (cursor) q = q.gt("created_at", cursor); // ★ gt ต้องอยู่ก่อน order/limit (filter builder)
       const { data, error } = await q.order("created_at", { ascending: true }).limit(pageSize);
