@@ -10,9 +10,10 @@
 import sharp from "sharp";
 
 /** เกินขนาดนี้ค่อย downscale (รูปเล็กปล่อยผ่าน) */
-const IMG_MAX_BYTES = 4 * 1024 * 1024; // 4 MB
-/** ขอบยาวสุดหลังย่อ — พอสำหรับอ่านเลขบิล/สเตทเมนต์ (สอดคล้องเพดาน tiling ~2048 ของ OpenAI + เผื่อ) */
-const IMG_MAX_EDGE = 3000;
+const IMG_MAX_BYTES = 2 * 1024 * 1024; // 2 MB (เดิม 4MB) — จับรูปหนักมาย่อมากขึ้น = ประหยัด token
+/** ขอบยาวสุดหลังย่อ — ★ ลด 3000→1600px เพื่อคุมต้นทุน Gemini (image tokens ต่อใบลดครึ่ง)
+ *   1600px ยังอ่านเลขบิล/ยอด/วันที่ชัด (ตัวเลขบิลใหญ่พอ) · สเตทเมนต์ส่วนใหญ่เป็น PDF (ไม่ผ่านฟังก์ชันนี้) */
+const IMG_MAX_EDGE = 1600;
 
 function isImageMime(mime: string): boolean {
   const m = (mime || "").toLowerCase();
