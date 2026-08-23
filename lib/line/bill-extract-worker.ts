@@ -783,34 +783,46 @@ export async function processBillExtraction(
     const decision = decideEntrySide(customer, seller, buyer);
 
     // 6) สร้าง bill_entries (draft) — attachment_id unique กันซ้ำ (ถ้าชนก็ข้าม)
-    const { data: entryIns, error: entryErr } = await db
+    const entryPayload: Record<string, unknown> = {
+      tenant_id: row.tenant_id,
+      attachment_id: row.id,
+      customer_id: customer.id,
+      entry_type: decision.entryType,
+      doc_date: bill?.doc_date ?? null,
+      doc_no: bill?.doc_no ?? null,
+      counterparty_name: decision.counterpartyName,
+      counterparty_tax_id: decision.counterpartyTaxId,
+      seller_name: seller.name,
+      seller_tax_id: seller.taxId,
+      buyer_name: buyer.name,
+      buyer_tax_id: buyer.taxId,
+      // ค่าแนะนำวิธีจ่าย/รับเงิน จาก doc_kind (เงินสด/สลิป=โอน/ใบกำกับ=เชื่อ) — นักบัญชีแก้ได้
+      payment_method: suggestPaymentMethod(row.doc_kind, decision.entryType),
+      status: "draft",
+      source: "ai",
+      ai_confidence: bill?.overall_confidence ?? null,
+      // ★ กันบิลซ้ำระดับ DB (0120): ไฟล์เดียว+ลูกค้าเดียว = 1 บิล · null = ไม่บังคับ
+      dedup_key: row.sha256 ?? null,
+    };
+    let { data: entryIns, error: entryErr } = await db
       .from("bill_entries")
-      .insert({
-        tenant_id: row.tenant_id,
-        attachment_id: row.id,
-        customer_id: customer.id,
-        entry_type: decision.entryType,
-        doc_date: bill?.doc_date ?? null,
-        doc_no: bill?.doc_no ?? null,
-        counterparty_name: decision.counterpartyName,
-        counterparty_tax_id: decision.counterpartyTaxId,
-        seller_name: seller.name,
-        seller_tax_id: seller.taxId,
-        buyer_name: buyer.name,
-        buyer_tax_id: buyer.taxId,
-        // ค่าแนะนำวิธีจ่าย/รับเงิน จาก doc_kind (เงินสด/สลิป=โอน/ใบกำกับ=เชื่อ) — นักบัญชีแก้ได้
-        payment_method: suggestPaymentMethod(row.doc_kind, decision.entryType),
-        status: "draft",
-        source: "ai",
-        ai_confidence: bill?.overall_confidence ?? null,
-      })
+      .insert(entryPayload)
       .select("id")
       .maybeSingle();
 
+    // 42703 = คอลัมน์ dedup_key ยังไม่ apply (0120) → retry แบบไม่มี dedup_key (degrade กันบิลไม่เข้า)
+    if (entryErr && (entryErr as { code?: string }).code === "42703") {
+      delete entryPayload.dedup_key;
+      ({ data: entryIns, error: entryErr } = await db.from("bill_entries").insert(entryPayload).select("id").maybeSingle());
+    }
+
     if (entryErr) {
-      // 23505 = unique violation (มี entry ของ attachment นี้แล้ว จากรอบทับกัน) → ข้ามเงียบ
+      // 23505 = unique violation → มีบิลของ attachment นี้ หรือ "บิลไฟล์เดียวกัน+ลูกค้าเดียวกัน" อยู่แล้ว
+      //   (unique attachment_id หรือ uq_bill_entries_dedup) → เป็นบิลซ้ำ · มาร์กออกจากคิว กันวนสร้างซ้ำ
       const code = (entryErr as { code?: string }).code;
-      if (code !== "23505") {
+      if (code === "23505") {
+        await db.from("message_attachments").update({ fetch_status: "skipped", fetch_error: "dup_hash" }).eq("id", row.id).eq("tenant_id", row.tenant_id);
+      } else {
         console.warn(`[bill-extract-worker] insert entry error code=${code ?? "?"}`);
       }
       continue;
