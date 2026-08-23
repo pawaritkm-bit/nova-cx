@@ -119,6 +119,8 @@ export type BillEntry = {
   status: EntryStatus;
   source: EntrySource;
   aiConfidence: number | null;
+  /** true = ฝั่งซื้อ/ขายมาจาก heuristic ชั้น 3 (เดา) — โชว์ badge + กัน batch-confirm · optional (คอลัมน์ 0117) */
+  sideGuessed?: boolean;
   notes: string | null;
   /**
    * เดือนที่ใช้เครดิตภาษีซื้อ (input VAT) รูปแบบ 'YYYY-MM' (ค.ศ.) — เฉพาะบิลซื้อ
@@ -583,6 +585,24 @@ export async function listEntries(
     // คอลัมน์ยังไม่ apply → คงเป็น null ทั้งหมด
   }
 
+  // ธง "เดาฝั่งซื้อ/ขาย" (side_guessed, migration 0117) — ★ best-effort แยก query
+  const sideGuessedByEntry = new Map<string, boolean>();
+  try {
+    const sgChunks = await Promise.all(
+      chunkIds(entryIds).map((ids) =>
+        db.from("bill_entries").select("id, side_guessed").eq("tenant_id", tenantId).in("id", ids)
+      )
+    );
+    for (const { data: sgData, error: sgErr } of sgChunks) {
+      if (sgErr) continue;
+      for (const r of (sgData ?? []) as { id: string; side_guessed: boolean | null }[]) {
+        sideGuessedByEntry.set(r.id, !!r.side_guessed);
+      }
+    }
+  } catch {
+    // คอลัมน์ยังไม่ apply → false ทั้งหมด
+  }
+
   // สถานะส่งไป FlowAccount (migration 0061) — ★ best-effort เหมือน input_tax_month ข้างบน
   //   คอลัมน์ยังไม่ apply → select error → ทุก entry ได้ default (not_synced) แทน ไม่ทำ list ทั้งหน้าพัง
   const flowaccountSyncByEntry = new Map<string, FlowAccountSyncInfo>();
@@ -771,6 +791,7 @@ export async function listEntries(
     status: e.status === "confirmed" ? "confirmed" : "draft",
     source: e.source === "manual" ? "manual" : "ai",
     aiConfidence: e.ai_confidence,
+    sideGuessed: sideGuessedByEntry.get(e.id) ?? false,
     notes: e.notes,
     inputTaxMonth: inputTaxMonthByEntry.get(e.id) ?? null,
     flowaccountSync: flowaccountSyncByEntry.get(e.id) ?? defaultFlowAccountSync(),

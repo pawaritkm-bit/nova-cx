@@ -14,6 +14,7 @@ import ChatAuditFrame from "../../_Frame";
 import DeleteBillButton from "./DeleteBillButton";
 import RenameCustomerButton from "./RenameCustomerButton";
 import UploadFileButton from "../UploadFileButton";
+import BatchConfirmButton from "../BatchConfirmButton";
 import CustomerToolsMenu from "../CustomerToolsMenu";
 import CustomerAdminControls from "../CustomerAdminControls";
 import ShareCircleToggle from "../ShareCircleToggle";
@@ -565,6 +566,19 @@ export default async function AccountingWorkspacePage({
             <>
               <div className="wsp-center-head">
                 <span className="muted">{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
+                {(() => {
+                  // ★ "เขียว/พร้อมยืนยัน" = draft + ระบุซื้อ/ขาย + มียอด + ไม่ใช่ AI เดา
+                  const green = reviewList.filter((e) => {
+                    if (e.status === "confirmed") return false;
+                    if (e.entryType !== "purchase" && e.entryType !== "sale") return false;
+                    if (e.sideGuessed) return false;
+                    const s = summarizeEntry(e.lines);
+                    return s.amount > 0 || s.vat > 0;
+                  }).length;
+                  return openGroup.customerId ? (
+                    <BatchConfirmButton customerId={openGroup.customerId} count={green} />
+                  ) : null;
+                })()}
               </div>
               {/* ★ วงแชร์ (ท้าวแชร์) — โชว์เมื่อลูกค้าเป็นท้าวแชร์/มีวง ≥1 · ภธ.40+ภงด.90 */}
               {openGroup.customerId && shareCircleEntries ? (
@@ -616,6 +630,7 @@ export default async function AccountingWorkspacePage({
                       <div className="wsp-fields">
                         <div className="wsp-row1">
                           <span className={`type ${e.entryType}`}>{e.entryType === "purchase" ? "ภาษีซื้อ" : e.entryType === "sale" ? "ภาษีขาย" : "รอระบุ"}</span>
+                          {e.sideGuessed ? <span className="type-guess" title="AI เดาฝั่งซื้อ/ขาย — โปรดตรวจก่อนยืนยัน">🤖 เดา</span> : null}
                           <span className="party">{e.counterpartyName || e.sellerName || e.buyerName || "—"}</span>
                           <span className={`st ${pend ? "draft" : "ok"}`}>{pend ? "ร่าง — รอตรวจ" : "ยืนยันแล้ว"}</span>
                         </div>

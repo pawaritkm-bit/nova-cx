@@ -929,6 +929,66 @@ export async function finalizeBillUploadAction(input: {
 }
 
 /**
+ * ยืนยัน "ทั้งหมดที่เขียว" ของลูกค้า 1 ราย — batch-confirm ใบ draft ที่พร้อม (ประหยัดคลิก)
+ *   ★ "เขียว/พร้อม" = draft + ระบุซื้อ/ขายแล้ว (ไม่ unspecified) + มีมูลค่า + **ไม่ใช่ side_guessed** (เดา = ให้คนตรวจก่อน)
+ *   ★ ยืนยันทีละใบผ่าน confirmEntry (validate + race-guard ในตัว) · cap 500 ใบ/คลิก
+ *   ★ ไม่ auto-post บัญชี — แค่เปลี่ยน draft→confirmed (นักบัญชียังรีวิว badge เดา/แก้ทีหลังได้)
+ */
+export async function confirmGreenBillsAction(
+  customerId: string,
+  monthKey?: string | null
+): Promise<{ ok: boolean; confirmed: number; message?: string }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(customerId)) return { ok: false, confirmed: 0, message: "ไม่พบลูกค้าที่เลือก" };
+    assertCustomerInScope(ctx, customerId);
+
+    // หาใบ draft ซื้อ/ขาย ของลูกค้ารายนี้ (พยายามกรอง side_guessed ที่ DB · ถ้าคอลัมน์ไม่มี → retry ไม่กรอง)
+    let rows: { id: string; side_guessed?: boolean | null }[] = [];
+    const withFlag = await service
+      .from("bill_entries")
+      .select("id, side_guessed")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("customer_id", customerId)
+      .eq("status", "draft")
+      .is("deleted_at", null)
+      .in("entry_type", ["purchase", "sale"])
+      .limit(500);
+    if (withFlag.error) {
+      const noFlag = await service
+        .from("bill_entries")
+        .select("id")
+        .eq("tenant_id", ctx.tenantId)
+        .eq("customer_id", customerId)
+        .eq("status", "draft")
+        .is("deleted_at", null)
+        .in("entry_type", ["purchase", "sale"])
+        .limit(500);
+      rows = ((noFlag.data ?? []) as { id: string }[]).map((r) => ({ id: r.id }));
+    } else {
+      rows = (withFlag.data ?? []) as { id: string; side_guessed?: boolean | null }[];
+    }
+
+    // ข้ามใบที่ "เดา" (side_guessed) — ให้คนตรวจก่อน · confirmEntry จะกรองใบไม่มีมูลค่าออกเอง
+    const ids = rows.filter((r) => !r.side_guessed).map((r) => r.id);
+    let confirmed = 0;
+    for (const id of ids) {
+      const r = await confirmEntry(service, ctx.tenantId, id);
+      if (r.ok) confirmed++;
+    }
+    // ★ monthKey ไม่ได้ใช้กรอง (ยืนยันทุกเดือนของลูกค้าที่พร้อม) — รับไว้เผื่ออนาคต
+    void monthKey;
+    if (confirmed > 0) revalidatePath("/chat-audit/accounting/workspace");
+    return { ok: true, confirmed };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, confirmed: 0, message: e.message };
+    return { ok: false, confirmed: 0, message: "ยืนยันไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
  * รายชื่อลูกค้า (id + label) สำหรับ dropdown "อัปไฟล์เอง" — โหลดตอนเปิดกล่อง (on-demand)
  *   ★ perf: เดิมดึง 5,000 รายทุกครั้งที่ render หน้า → ย้ายมาโหลดเฉพาะตอนต้องใช้
  *   ★ สโคปนักบัญชี: คืนเฉพาะลูกค้าที่ตัวเองดูแล (admin/lead = ทั้งหมด)
