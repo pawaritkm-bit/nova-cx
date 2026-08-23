@@ -17,7 +17,6 @@ import {
   type ChartAccount,
   type ChartByCode,
   buildChartByCode,
-  searchChartNonBank,
 } from "@/lib/accounting/chart-of-accounts";
 import { downscaleImageIfLarge } from "@/lib/accounting/image-prep";
 import { extractPdfMaybeSplit } from "@/lib/accounting/pdf-split";
@@ -226,19 +225,6 @@ const ACCOUNT_THRESHOLD = 0.7;
  */
 const VAT_TYPE_THRESHOLD = 0.6;
 
-/**
- * รายการบัญชี (รหัส=ชื่อ) ใส่ใน prompt ให้โมเดลเลือก — ★ คำนวณต่อ call จาก chart ของ tenant นั้น
- *   (เดิมเป็น module constant คำนวณครั้งเดียวตอนโหลด — ผังบัญชีย้ายเป็น per-tenant ใน DB แล้ว จุดนี้ทำ
- *   แบบเดิมไม่ได้ ต้องรู้ tenant ก่อนถึงจะรู้ผัง (docs/06 หมวด 0.5))
- *   ★ ตัดบัญชีเงินฝาก (bank:true) ออกจาก prompt — AI ไม่ควรเดาเงินฝากธนาคาร (ให้นักบัญชีเลือกเอง)
- */
-export function buildChartPromptList(chart: ChartAccount[]): string {
-  return searchChartNonBank(chart, "")
-    .filter((a) => !a.bank)
-    .map((a) => `${a.code}=${a.name}`)
-    .join(", ");
-}
-
 /** vat_type ที่รู้จัก */
 const VAT_TYPES = new Set(["vat", "novat"]);
 
@@ -310,8 +296,8 @@ type ChatCompletionResponse = {
   error?: { message?: string };
 };
 
-/** system prompt ที่ฝัง "ผังบัญชีของ tenant นั้น" — คำนวณต่อ call (ดู buildChartPromptList) */
-function buildSystemPrompt(chart: ChartAccount[]): string {
+/** system prompt สำหรับสกัดบิล — ไม่ฝังผังบัญชีอีกต่อไป (account_code เติมด้วย Learning-map ใน worker) */
+function buildSystemPrompt(): string {
   return (
   "คุณเป็นผู้ช่วยบัญชีที่อ่านรูปบิล/ใบเสร็จ/ใบกำกับภาษี แล้วสกัดข้อมูลเพื่อลงบันทึกภาษีซื้อ/ขาย. " +
   "ตอบเป็น JSON เท่านั้น ตามรูปแบบที่กำหนด. " +
@@ -333,7 +319,7 @@ function buildSystemPrompt(chart: ChartAccount[]): string {
   "(3) ปี 2 หลัก (เช่น 69) = พ.ศ. ย่อ → 2500+เลข แล้วลบ 543 (69→2569→2026). " +
   "★ ปี ค.ศ. ที่ถูกต้องต้องอยู่ราว 2024-2027 (ยุคปัจจุบัน) — ถ้าแปลงแล้วได้ปีนอกช่วงนี้มาก แสดงว่าพลาด ให้ทบทวนใหม่. " +
   "เลขประจำตัวผู้เสียภาษีเป็นเลข 13 หลัก. " +
-  "lines = รายการในบิล แต่ละรายการ {vat_type:{value,confidence}, description:{value,confidence}, amount:{value,confidence}, vat_amount:{value,confidence}, account_code:{value,confidence}, wht_rate:{value,confidence}, wht_amount:{value,confidence}} " +
+  "lines = รายการในบิล แต่ละรายการ {vat_type:{value,confidence}, description:{value,confidence}, amount:{value,confidence}, vat_amount:{value,confidence}, wht_rate:{value,confidence}, wht_amount:{value,confidence}} " +
   "vat_type.value='vat' เฉพาะเมื่อ 'มั่นใจ' ว่าบิลเป็นใบกำกับภาษี/มีบรรทัดภาษีมูลค่าเพิ่ม (VAT) 7% ชัดเจน หรือแยกยอดก่อน+VAT ให้เห็น. " +
   "value='novat' ถ้าเป็นบิลเงินสด/บิลเขียนมือ/ใบเสร็จธรรมดาที่ไม่มี VAT/ไม่ใช่ใบกำกับภาษี. ไม่แน่ใจให้ confidence ต่ำ (จะให้คนตรวจ). " +
   "บิลที่มีทั้งของมี VAT และไม่มี VAT ให้แยกเป็นหลาย line. " +
@@ -346,13 +332,9 @@ function buildSystemPrompt(chart: ChartAccount[]): string {
   "ถ้าไม่มีสรุปแยก ให้คำนวณ amount = ยอดรวม÷1.07 และ vat_amount = ยอดรวม − amount. " +
   "สังเกตบิล VAT ใน จากคำว่า 'ราคารวมภาษี'/'ราคาไม่รวมภาษีมูลค่าเพิ่ม' ในสรุป. " +
   "vat_amount = ภาษีมูลค่าเพิ่มของรายการ (บิล VAT นอก ที่ไม่แสดง VAT แยกต่อบรรทัด → vat_amount=null ระบบคำนวณ 7% เอง). " +
-  "ถ้าบิลมียอดเดียวรวม ๆ ให้ทำเป็น 1 line. overall_confidence = ความมั่นใจรวมทั้งใบ 0..1. " +
-  // ★ ให้ AI แนะนำ "รหัสบัญชี" ต่อบรรทัดจากผังกลางเท่านั้น (non-bank) — ไม่มั่นใจ = null
-  "account_code = รหัสบัญชีที่เหมาะกับลักษณะรายการ เลือกจาก 'ผังบัญชี' ด้านล่างเท่านั้น " +
-  "(เช่น ค่าน้ำมัน→5340, ซื้อสินค้า→5010, ค่าบริการ→5342, ค่าไฟฟ้า→5320). " +
-  "ถ้าไม่มั่นใจว่าเข้าบัญชีไหน ให้ account_code value=null (ห้ามเดา — ให้นักบัญชีเลือกเอง). " +
-  "ห้ามใช้รหัสนอกรายการนี้ และห้ามเลือกหมวดเงินฝากธนาคาร. " +
-  "ผังบัญชี (รหัส=ชื่อ): " + buildChartPromptList(chart) + "."
+  "ถ้าบิลมียอดเดียวรวม ๆ ให้ทำเป็น 1 line. overall_confidence = ความมั่นใจรวมทั้งใบ 0..1."
+  // ★ ไม่ให้ AI เดา 'รหัสบัญชี' อีกต่อไป (เดิมแม่นแค่ ~35% แต่ต้องยัดผังบัญชีทั้งชุดเข้าทุก prompt = เปลือง token/ใบ)
+  //   → account_code เติมด้วย Learning-map (คู่ค้า→บัญชีที่นักบัญชีเคยลง) ใน worker + นักบัญชีเลือกเอง (ดู account-learning.ts)
   );
 }
 
@@ -640,7 +622,7 @@ export async function extractBillData(
   const model = process.env.OPENAI_LINE_BILL_MODEL || EXTRACT_MODEL;
   // ★ ย่อรูปใหญ่ก่อน (รูปสแกน/ถ่ายบิลหลาย MB) — กัน Gemini 400 (payload/ขนาดเกิน) · PDF ไม่แตะ
   const prepped = await downscaleImageIfLarge(imageData, mime);
-  const system = buildSystemPrompt(chart);
+  const system = buildSystemPrompt();
   const chartByCode = buildChartByCode(chart);
 
   // 1) อ่านเร็ว: flash (หรือ OpenAI ถ้ามี key)
@@ -734,7 +716,7 @@ async function extractBillsDataSingle(
   if (!process.env.OPENAI_API_KEY && !process.env.GEMINI_API_KEY) return [];
 
   const prepped = await downscaleImageIfLarge(imageData, mime); // ย่อรูปสแกน/ถ่ายบิลใหญ่ (PDF ไม่แตะ)
-  const content = await runBillVision(buildSystemPrompt(chart), MULTI_USER_PROMPT, prepped.data, prepped.mime, EXTRACT_MODEL, 8000);
+  const content = await runBillVision(buildSystemPrompt(), MULTI_USER_PROMPT, prepped.data, prepped.mime, EXTRACT_MODEL, 8000);
   if (!content) return [];
 
   const obj = extractJson(content);
