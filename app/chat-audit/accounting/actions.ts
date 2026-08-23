@@ -38,6 +38,8 @@ import {
 import type { EntryType, VatType, WhtForm, PaymentMethod } from "@/lib/accounting/queries";
 import { recordAccountRules } from "@/lib/accounting/account-learning";
 import { listScopedCustomers } from "@/lib/accounting/customer-options";
+import { detectAnomalies, hasErrorAnomaly } from "@/lib/accounting/anomaly";
+import { chunkIds } from "@/lib/accounting/id-chunk";
 import { asPaymentMethod } from "@/lib/accounting/payment";
 import { normalizeTaxId } from "@/lib/accounting/tax-id";
 import { validateUpload, sanitizeUploadName, extOf } from "@/lib/accounting/upload";
@@ -972,7 +974,40 @@ export async function confirmGreenBillsAction(
     }
 
     // ข้ามใบที่ "เดา" (side_guessed) — ให้คนตรวจก่อน · confirmEntry จะกรองใบไม่มีมูลค่าออกเอง
-    const ids = rows.filter((r) => !r.side_guessed).map((r) => r.id);
+    let ids = rows.filter((r) => !r.side_guessed).map((r) => r.id);
+
+    // ★ กัน anomaly ระดับ error (VAT/WHT/ยอดผิด) ออกจาก batch — ให้คนตรวจทีละใบ (ตรงกับ badge "⚠️ ตรวจยอด" ในหน้า)
+    //   best-effort: โหลด lines ของ candidate → ตรวจ · error ในการโหลด = ไม่กรอง (ไม่ทำ batch พัง)
+    if (ids.length > 0) {
+      try {
+        const linesByEntry = new Map<string, { vatType: "vat" | "novat"; amount: number; vatAmount: number; whtRate: number; whtAmount: number }[]>();
+        for (const chunk of chunkIds(ids)) {
+          const { data: lns } = await service
+            .from("bill_entry_lines")
+            .select("entry_id, vat_type, amount, vat_amount, wht_rate, wht_amount")
+            .eq("tenant_id", ctx.tenantId)
+            .in("entry_id", chunk);
+          for (const l of (lns ?? []) as { entry_id: string; vat_type: string; amount: number | string; vat_amount: number | string; wht_rate: number | string; wht_amount: number | string }[]) {
+            const arr = linesByEntry.get(l.entry_id) ?? [];
+            arr.push({
+              vatType: l.vat_type === "vat" ? "vat" : "novat",
+              amount: Number(l.amount) || 0,
+              vatAmount: Number(l.vat_amount) || 0,
+              whtRate: Number(l.wht_rate) || 0,
+              whtAmount: Number(l.wht_amount) || 0,
+            });
+            linesByEntry.set(l.entry_id, arr);
+          }
+        }
+        ids = ids.filter((id) => {
+          const anomalies = detectAnomalies({ entryType: "unspecified", docNo: null, docDate: null, lines: linesByEntry.get(id) ?? [] });
+          return !hasErrorAnomaly(anomalies);
+        });
+      } catch {
+        /* โหลด/ตรวจ anomaly พลาด → ปล่อยผ่าน (confirmEntry ยัง validate ยอดขั้นต่ำอยู่) */
+      }
+    }
+
     let confirmed = 0;
     for (const id of ids) {
       const r = await confirmEntry(service, ctx.tenantId, id);

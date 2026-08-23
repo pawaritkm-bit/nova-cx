@@ -567,11 +567,12 @@ export default async function AccountingWorkspacePage({
               <div className="wsp-center-head">
                 <span className="muted">{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
                 {(() => {
-                  // ★ "เขียว/พร้อมยืนยัน" = draft + ระบุซื้อ/ขาย + มียอด + ไม่ใช่ AI เดา
+                  // ★ "เขียว/พร้อมยืนยัน" = draft + ระบุซื้อ/ขาย + มียอด + ไม่ใช่ AI เดา + ไม่มี anomaly ระดับ error
                   const green = reviewList.filter((e) => {
                     if (e.status === "confirmed") return false;
                     if (e.entryType !== "purchase" && e.entryType !== "sale") return false;
                     if (e.sideGuessed) return false;
+                    if ((e.anomalies ?? []).some((a) => a.severity === "error")) return false;
                     const s = summarizeEntry(e.lines);
                     return s.amount > 0 || s.vat > 0;
                   }).length;
@@ -599,6 +600,9 @@ export default async function AccountingWorkspacePage({
                 ) : null}
                 {reviewList.map((e) => {
                   const s = summarizeEntry(e.lines);
+                  const anomalies = e.anomalies ?? [];
+                  const errAnoms = anomalies.filter((a) => a.severity === "error");
+                  const warnAnoms = anomalies.filter((a) => a.severity === "warn");
                   const path = entryPath(e);
                   const url = path ? signed.get(path) ?? null : null;
                   const img = entryIsImage(e);
@@ -631,6 +635,8 @@ export default async function AccountingWorkspacePage({
                         <div className="wsp-row1">
                           <span className={`type ${e.entryType}`}>{e.entryType === "purchase" ? "ภาษีซื้อ" : e.entryType === "sale" ? "ภาษีขาย" : "รอระบุ"}</span>
                           {e.sideGuessed ? <span className="type-guess" title="AI เดาฝั่งซื้อ/ขาย — โปรดตรวจก่อนยืนยัน">🤖 เดา</span> : null}
+                          {errAnoms.length > 0 ? <span className="anom-err" title={errAnoms.map((a) => a.message).join("\n")}>⚠️ ตรวจยอด</span> : null}
+                          {errAnoms.length === 0 && warnAnoms.length > 0 ? <span className="anom-warn" title={warnAnoms.map((a) => a.message).join("\n")}>📄 เอกสารขาด</span> : null}
                           <span className="party">{e.counterpartyName || e.sellerName || e.buyerName || "—"}</span>
                           <span className={`st ${pend ? "draft" : "ok"}`}>{pend ? "ร่าง — รอตรวจ" : "ยืนยันแล้ว"}</span>
                         </div>

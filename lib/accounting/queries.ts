@@ -9,6 +9,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { chunkIds } from "@/lib/accounting/id-chunk";
+import { type Anomaly, detectAnomalies } from "@/lib/accounting/anomaly";
 
 type DB = SupabaseClient;
 
@@ -148,6 +149,11 @@ export type BillEntry = {
   createdAt: string;
   confirmedAt: string | null;
   lines: BillEntryLine[];
+  /**
+   * ความผิดปกติที่ตรวจพบแบบ deterministic (VAT/WHT ไม่ตรงสูตร, ยอดติดลบ, เอกสารขาด) — เตือน "ตรวจก่อนยืนยัน"
+   *   ★ คำนวณสดตอน list (ไม่เก็บ DB) · []=ปกติ · optional เพื่อ backward-compat กับ fixture เทสต์เดิม
+   */
+  anomalies?: Anomaly[];
 };
 
 /** สถานะส่งไป FlowAccount (docs/05-flowaccount-integration.md, migration 0061) */
@@ -801,6 +807,18 @@ export async function listEntries(
     createdAt: e.created_at,
     confirmedAt: e.confirmed_at,
     lines: linesByEntry.get(e.id) ?? [],
+    anomalies: detectAnomalies({
+      entryType: e.entry_type === "sale" ? "sale" : e.entry_type === "purchase" ? "purchase" : "unspecified",
+      docNo: e.doc_no,
+      docDate: e.doc_date,
+      lines: (linesByEntry.get(e.id) ?? []).map((l) => ({
+        vatType: l.vatType,
+        amount: l.amount,
+        vatAmount: l.vatAmount,
+        whtRate: l.whtRate,
+        whtAmount: l.whtAmount,
+      })),
+    }),
   }));
 
   return { entries, summary: summarizeEntries(entries) };
