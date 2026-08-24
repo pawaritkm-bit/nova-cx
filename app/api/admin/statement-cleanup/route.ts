@@ -17,6 +17,7 @@ import {
   downloadOneDriveFile,
   uploadOneDriveFile,
   deleteOneDriveItemById,
+  uploadOneDriveFileVerbose,
 } from "@/lib/storage/onedrive";
 import { oaOneDriveRoot, lineChatUrl } from "@/lib/line/onedrive-mirror";
 import { createServiceRoleClient } from "@/lib/supabase/server";
@@ -68,6 +69,22 @@ async function handle(request: NextRequest) {
   const mode =
     modeParam === "execute" ? "execute" : modeParam === "inspect" ? "inspect" : modeParam === "rebuild" ? "rebuild"
       : modeParam === "purge-empty" ? "purge-empty" : modeParam === "linkbackfill" ? "linkbackfill" : "dryrun";
+
+  // ===== uptest: debug — สร้าง wb ของลูกค้า q แล้วอัปแบบ verbose คืน HTTP status =====
+  if (modeParam === "uptest") {
+    const q = (url.searchParams.get("q") || "").toLowerCase();
+    const saleRoot = oaOneDriveRoot("sale");
+    const cust = (await listOneDriveChildren([], saleRoot).catch(() => [])).find((c) => c.isFolder && c.name.toLowerCase().includes(q));
+    if (!cust) return NextResponse.json({ error: "not found" });
+    const files = await listOneDriveChildren([cust.name, STMT_SUBFOLDER], saleRoot).catch(() => []);
+    const existing = files.find((f) => !f.isFolder && /สรุปสเตทเมนต์\.xlsx$/i.test(f.name));
+    if (!existing) return NextResponse.json({ error: "no summary file", folder: cust.name });
+    const store = await readAlbumFromWorkbook(await downloadOneDriveFile([cust.name, STMT_SUBFOLDER], existing.name, saleRoot).catch(() => null));
+    const { store: next } = mergeProfile(store, { chatUrl: "https://chat.line.biz/x/chat/y" });
+    const wb = await buildStatementAlbumWorkbook({ customerName: cust.name, banks: next.banks, profile: next.profile });
+    const r = await uploadOneDriveFileVerbose({ folderParts: [cust.name, STMT_SUBFOLDER], fileName: existing.name, mime: XLSX_MIME, data: wb, root: saleRoot });
+    return NextResponse.json({ folder: cust.name, file: existing.name, wbBytes: wb.length, upload: r });
+  }
 
   // ===== ls: debug — list ไฟล์ในโฟลเดอร์สเตทเมนต์ของลูกค้าที่ชื่อ contains q =====
   if (modeParam === "ls") {

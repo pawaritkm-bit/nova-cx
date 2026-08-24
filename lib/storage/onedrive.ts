@@ -161,6 +161,24 @@ export async function uploadOneDriveFile(params: {
   }
 }
 
+/** debug: อัปโหลดแล้วคืน HTTP status + body (ไว้วินิจฉัยว่าทำไม upload ล้ม) */
+export async function uploadOneDriveFileVerbose(params: { folderParts: string[]; fileName: string; mime: string; data: Buffer; root?: string }): Promise<{ ok: boolean; status: number; body: string }> {
+  const cfg = getOneDriveConfig();
+  if (!cfg) return { ok: false, status: 0, body: "no cfg" };
+  const token = await getAccessToken();
+  if (!token) return { ok: false, status: 0, body: "no token" };
+  const topRoot = params.root ?? cfg.root;
+  const encodedPath = encodePath([topRoot, ...params.folderParts, params.fileName]);
+  const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.user)}/drive/root:/${encodedPath}:/content`;
+  try {
+    const res = await fetch(url, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": params.mime }, body: params.data as unknown as BodyInit });
+    const body = (await res.text().catch(() => "")).slice(0, 400);
+    return { ok: res.ok, status: res.status, body };
+  } catch (e) {
+    return { ok: false, status: -1, body: (e as Error).message?.slice(0, 200) || "fetch error" };
+  }
+}
+
 /** แปลง parentReference.path ("/drive/root:/NOVA-Bills/ลูกค้า/2026-08") → folderParts ใต้ root */
 export function folderPartsFromParentPath(parentPath: string, root: string): string[] {
   let after = "";
