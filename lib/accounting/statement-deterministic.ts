@@ -104,6 +104,14 @@ function detectBank(text: string): string {
 /** โค้ดธนาคารย่อ (ปรากฏหน้าเลขบัญชีคู่ค้า เช่น "BBL X9860") — คงตัวพิมพ์ตามที่เห็น */
 const BANK_CODE_RE = /\b(KBANK|KBNK|SCB|BBL|KTB|TTB|TMB|BAY|UOB|UOBT|GSB|KKP|CIMB|LHBK|LHBANK|TISCO|BAAC|GHB|TCRB|ICBC|CITI|KTC)\b/i;
 
+/** รหัสธนาคาร 3 หลัก (KTB Next / พร้อมเพย์) → ชื่อย่อ — ใช้ทำป้ายผู้โอนแบบเต็ม เช่น "014-2732484425 (SCB)" */
+const NUM_BANK_CODE: Record<string, string> = {
+  "002": "BBL", "004": "KBANK", "006": "KTB", "011": "TTB", "014": "SCB",
+  "017": "CITI", "020": "SCBT", "022": "CIMB", "024": "UOB", "025": "BAY",
+  "030": "GSB", "031": "HSBC", "033": "GHB", "034": "BAAC", "066": "ISBT",
+  "067": "TISCO", "069": "KKP", "070": "ICBC", "071": "TCRB", "073": "LHBK",
+};
+
 /**
  * ประกอบ "คำอธิบายมาตรฐาน" + เลขบัญชีคู่ค้า จากรายละเอียดดิบ ตามสไตล์ NOVA Sales
  *   เข้า → "รับโอนเงินจาก [CODE ]X####" · ออก → "โอนไป [CODE ]X####"
@@ -121,16 +129,20 @@ function describe(rawDetail: string, dir: TxnDirection): { description: string; 
   const codeM = clean.match(BANK_CODE_RE);
   const code = codeM ? codeM[1].toUpperCase() : null;
 
-  // เลขบัญชีคู่ค้า: X#### (masked) · KB###### · เลขยาว ≥4 (mask เป็น X+4ท้าย)
+  // เลขบัญชี/เลขอ้างอิงคู่ค้า — ★ เก็บ "เต็ม" (ไม่ mask) เพื่อจับกองผู้โอนได้ละเอียด (เช่น 014-2732484425 (SCB), TR fr 1470339064)
   let acct: string | null = null;
+  const codePref = clean.match(/\b(\d{3})[- ]?(\d{6,})\b/);           // รหัสธนาคาร 3 หลัก + เลขบัญชี (KTB Next)
+  const trRef = clean.match(/\bTR\s*fr\s*(\d{6,})\b/i);               // TR fr <เลขอ้างอิง>
   const xM = clean.match(/\bX\d{3,}\b/i);
   const kbM = clean.match(/\bKB\d{6,}\b/);
   const walletM = clean.match(/\b(?:EWALLETID|MSISDN)\s*(\d{6,})\b/i);
   const longNum = clean.match(/\b\d{9,}\b/);
-  if (xM) acct = "X" + xM[0].slice(1);
+  if (codePref && NUM_BANK_CODE[codePref[1]]) acct = `${codePref[1]}-${codePref[2]} (${NUM_BANK_CODE[codePref[1]]})`;
+  else if (trRef) acct = `TR fr ${trRef[1]}`;
+  else if (xM) acct = xM[0];                                          // X + เลขเต็ม
   else if (kbM) acct = kbM[0];
-  else if (walletM) acct = "X" + walletM[1].slice(-4);
-  else if (longNum) acct = "X" + longNum[0].slice(-4);
+  else if (walletM) acct = walletM[1];                                // เลขกระเป๋า/พร้อมเพย์ เต็ม
+  else if (longNum) acct = longNum[0];                                // เลขยาวเต็ม (ไม่ตัด 4 ท้าย)
 
   const isQr = /\bQR\b|thai qr|k shop|myqr|พร้อมเพย์.*ขาย|รับเงินจากการขาย/i.test(clean);
   const isCash = /ฝากเงินสด|เงินสด|\bCDM\b|\bATM\b.*ฝาก|deposit cash/i.test(clean);

@@ -346,6 +346,10 @@ export async function readAlbumFromWorkbook(buf: Buffer | null): Promise<AlbumSt
       });
       if (Object.keys(prof).length) profile = prof;
     }
+    // ★ นักบัญชีพิมพ์ชื่อเองในช่อง "ผู้เสียภาษี" (ชีตประวัติลูกค้า B3) → ใช้เป็นชื่อ (override) เพื่อตั้งชื่อไฟล์
+    const kyc = wb.getWorksheet("ประวัติลูกค้า");
+    const manualName = kyc ? str(kyc.getCell(3, 2).value) : null;
+    if (manualName) profile = { ...(profile ?? {}), name: manualName };
     return { v: 2, banks, profile };
   } catch {
     return emptyAlbum();
