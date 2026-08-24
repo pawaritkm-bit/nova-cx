@@ -20,8 +20,8 @@ import { sanitizeDocName, shopNameFromFilename } from "@/lib/accounting/doc-nami
 import { extractAndClassify, type FinanceClassification } from "@/lib/accounting/classify-finance-doc";
 import { gatherRecentChatText, interpretDocPurpose } from "@/lib/accounting/doc-purpose";
 import { downloadOneDriveFile, isOneDriveEnabled, renameOneDriveFile, uploadOneDriveFile } from "@/lib/storage/onedrive";
-import { albumStoreName, albumXlsxName, mergeIntoBank, parseAlbumStore, serializeAlbumStore, UNKNOWN_BANK } from "@/lib/accounting/statement-album";
-import { buildStatementAlbumWorkbook } from "@/lib/accounting/statement-album-excel";
+import { albumXlsxName, mergeIntoBank, UNKNOWN_BANK } from "@/lib/accounting/statement-album";
+import { buildStatementAlbumWorkbook, readAlbumFromWorkbook } from "@/lib/accounting/statement-album-excel";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
 import { resolveSaleFolder, oaOneDriveRoot, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 import { buildProspectIncomeWorkbook, aggregateBankMonthly } from "@/lib/accounting/prospect-income-analysis";
@@ -113,21 +113,16 @@ async function regenStatementAlbum(args: {
   txns: StatementTxn[];
 }): Promise<void> {
   if (!args.txns || args.txns.length === 0) return;
-  const albumParts = [...args.folderParts, "_album"];
-  const store = parseAlbumStore(await downloadOneDriveFile(albumParts, albumStoreName, args.root));
+  // ★ อ่านกองเดิมจาก "ชีตซ่อนในไฟล์ Excel" (ไม่มี sidecar JSON/โฟลเดอร์ _album แล้ว) → merge → เขียนทับไฟล์เดียว
+  const fileName = albumXlsxName(args.customerName);
+  const existing = await downloadOneDriveFile(args.folderParts, fileName, args.root);
+  const store = await readAlbumFromWorkbook(existing);
   const { store: next, added } = mergeIntoBank(store, args.bankLabel, args.txns);
   if (added === 0) return; // ไฟล์/รูปซ้ำ ไม่มีรายการใหม่ → ไม่ต้องรีเจน
-  await uploadOneDriveFile({
-    folderParts: albumParts,
-    fileName: albumStoreName,
-    mime: "application/json",
-    data: serializeAlbumStore(next),
-    root: args.root,
-  });
   const wb = await buildStatementAlbumWorkbook({ customerName: args.customerName, banks: next.banks });
   await uploadOneDriveFile({
     folderParts: args.folderParts,
-    fileName: albumXlsxName(args.customerName),
+    fileName,
     mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     data: wb,
     root: args.root,

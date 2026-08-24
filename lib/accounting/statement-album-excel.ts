@@ -4,6 +4,12 @@
  */
 import ExcelJS from "exceljs";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
+import type { AlbumStore } from "@/lib/accounting/statement-album";
+import { emptyAlbum } from "@/lib/accounting/statement-album";
+
+/** ชื่อชีตซ่อนที่เก็บ "ข้อมูลดิบต่อธนาคาร" ไว้ในไฟล์เดียว (แทน sidecar JSON) — อ่านกลับตอนรีเจน */
+const DATA_SHEET = "_data";
+const DATA_HEADER = ["bank", "date", "description", "counterparty", "direction", "amount"] as const;
 
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -122,6 +128,54 @@ export async function buildStatementAlbumWorkbook(input: {
     ws.getCell(row + 2, 5).value = round2(tOut);
   }
 
+  // ===== ชีตซ่อน _data: เก็บข้อมูลดิบต่อธนาคาร ไว้ในไฟล์เดียว (แทน sidecar JSON — ไม่รกโฟลเดอร์) =====
+  const d = wb.addWorksheet(DATA_SHEET, { state: "veryHidden" });
+  d.addRow(DATA_HEADER as unknown as string[]);
+  for (const label of bankLabels) {
+    for (const t of input.banks[label] ?? []) {
+      d.addRow([label, t.date ?? "", t.description ?? "", t.counterparty_name ?? "", t.direction ?? "", typeof t.amount === "number" ? t.amount : ""]);
+    }
+  }
+
   const out = await wb.xlsx.writeBuffer();
   return Buffer.from(out);
+}
+
+/** อ่านกอง AlbumStore กลับจากชีตซ่อน _data ของไฟล์ Excel เดิม · ไม่มี/พัง → กองว่าง (เริ่มใหม่) */
+export async function readAlbumFromWorkbook(buf: Buffer | null): Promise<AlbumStore> {
+  if (!buf) return emptyAlbum();
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf as unknown as ArrayBuffer);
+    const d = wb.getWorksheet(DATA_SHEET);
+    if (!d) return emptyAlbum();
+    const banks: Record<string, StatementTxn[]> = {};
+    d.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // header
+      const cell = (i: number) => row.getCell(i).value;
+      const str = (v: unknown): string | null => {
+        if (v == null) return null;
+        const s = String(typeof v === "object" && "text" in (v as object) ? (v as { text: unknown }).text : v).trim();
+        return s || null;
+      };
+      const bank = str(cell(1)) || "";
+      if (!bank) return;
+      const dirRaw = str(cell(5));
+      const direction = dirRaw === "in" ? "in" : dirRaw === "out" ? "out" : null;
+      const amtRaw = cell(6);
+      const amount = typeof amtRaw === "number" ? amtRaw : amtRaw != null && amtRaw !== "" ? Number(String(amtRaw).replace(/,/g, "")) : null;
+      const txn: StatementTxn = {
+        date: str(cell(2)),
+        description: str(cell(3)),
+        counterparty_name: str(cell(4)),
+        counterparty_account_no: null,
+        direction,
+        amount: Number.isFinite(amount as number) ? (amount as number) : null,
+      };
+      (banks[bank] ??= []).push(txn);
+    });
+    return { v: 2, banks };
+  } catch {
+    return emptyAlbum();
+  }
 }

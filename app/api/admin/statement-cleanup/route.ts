@@ -1,15 +1,13 @@
 /**
- * /api/admin/statement-cleanup — งานครั้งเดียว: รวมไฟล์สรุปสเตทเมนต์เก่า (CSV หลายไฟล์) →
- *   Excel รวมไฟล์เดียวแยกชีตตามธนาคาร แล้วลบไฟล์เก่าทิ้ง
+ * /api/admin/statement-cleanup — งานครั้งเดียว: รวม/ทำความสะอาดไฟล์สรุปสเตทเมนต์
  *
  * โหมด (query ?mode=):
  *   - dryrun (default) : เดินโฟลเดอร์ OneDrive รายงานตัวเลข — ★ ไม่เขียน/ไม่ลบอะไร
- *   - execute          : parse CSV เก่า → รีเจน Excel รวม (merge เข้ากองเดิม) → ลบ "เฉพาะ" ไฟล์สรุปเก่าที่ parse สำเร็จ
+ *   - execute          : parse CSV สรุปเก่า + absorb กองเก่า (_album JSON) → รีเจน Excel รวม (ฝังข้อมูลในชีตซ่อน)
+ *                        → ลบไฟล์ CSV เก่าที่ parse สำเร็จ + ลบโฟลเดอร์ _album (ไม่ใช้ sidecar อีก)
  *
- * ความปลอดภัย:
- *   - auth ด้วย CRON_SECRET (fail-closed) เหมือน cron อื่น
- *   - ลบเฉพาะไฟล์ที่ classifyOldSummaryFile ระบุว่าเป็น "สรุปเก่า" และ parse ได้ ≥1 รายการ (ไฟล์ต้นฉบับ/ไฟล์อื่นไม่แตะ)
- *   - ?limit= จำกัดจำนวนลูกค้า/รอบ (กัน timeout) · ?root=sale|care|both
+ * ความปลอดภัย: auth CRON_SECRET (fail-closed) · ลบเฉพาะ CSV สรุปเก่า (parse ได้) + โฟลเดอร์ _album เท่านั้น
+ *   ไฟล์ต้นฉบับ/วิเคราะห์รายรับ/ยอดขาย/ไฟล์รวมใหม่ ไม่แตะ · ?limit= จำกัดลูกค้า/รอบ · ?root=sale|care|both
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { isValidCronAuth } from "@/lib/http";
@@ -26,29 +24,29 @@ import {
   albumXlsxName,
   mergeIntoBank,
   parseAlbumStore,
-  serializeAlbumStore,
-  UNKNOWN_BANK,
   type AlbumStore,
 } from "@/lib/accounting/statement-album";
-import { buildStatementAlbumWorkbook } from "@/lib/accounting/statement-album-excel";
+import { buildStatementAlbumWorkbook, readAlbumFromWorkbook } from "@/lib/accounting/statement-album-excel";
 import { classifyOldSummaryFile, parseOldSummary } from "@/lib/accounting/statement-cleanup";
 import { normalizeBankName } from "@/lib/accounting/statement-extract";
+import { UNKNOWN_BANK } from "@/lib/accounting/statement-album";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const STMT_SUBFOLDER = "สเตทเมนต์";
+const ALBUM_SUBFOLDER = "_album";
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 type PerCustomer = {
   customer: string;
   root: string;
-  oldFiles: { det: number; image: number; albumV1: number };
-  filesWithBank: number;
-  // execute เท่านั้น
+  oldCsv: { det: number; image: number; albumV1: number };
+  hasAlbumFolder: boolean;
   rebuilt?: boolean;
   txnsMerged?: number;
-  deleted?: number;
+  csvDeleted?: number;
+  albumFolderDeleted?: boolean;
   kept?: number;
 };
 
@@ -70,7 +68,6 @@ async function handle(request: NextRequest) {
 
   const perCustomer: PerCustomer[] = [];
   let customersScanned = 0;
-  let foldersWithOld = 0;
   let truncated = false;
 
   for (const root of roots) {
@@ -83,84 +80,90 @@ async function handle(request: NextRequest) {
     for (const cust of customers) {
       if (customersScanned >= limit) { truncated = true; break; }
       customersScanned++;
-      let files: { id: string; name: string; isFolder: boolean }[] = [];
+      let entries: { id: string; name: string; isFolder: boolean }[] = [];
       try {
-        files = (await listOneDriveChildren([cust.name, STMT_SUBFOLDER], root)).filter((f) => !f.isFolder);
+        entries = await listOneDriveChildren([cust.name, STMT_SUBFOLDER], root);
       } catch {
-        continue; // ไม่มีโฟลเดอร์สเตทเมนต์ / อ่านไม่ได้
+        continue; // ไม่มีโฟลเดอร์สเตทเมนต์
       }
-      const olds = files
+      const files = entries.filter((f) => !f.isFolder);
+      const albumFolder = entries.find((f) => f.isFolder && f.name === ALBUM_SUBFOLDER) ?? null;
+      const oldCsvFiles = files
         .map((f) => ({ f, kind: classifyOldSummaryFile(f.name) }))
         .filter((x): x is { f: typeof files[number]; kind: NonNullable<ReturnType<typeof classifyOldSummaryFile>> } => x.kind !== null);
-      if (olds.length === 0) continue;
-      foldersWithOld++;
+
+      if (oldCsvFiles.length === 0 && !albumFolder) continue; // ไม่มีอะไรต้องทำ
 
       const rec: PerCustomer = {
         customer: cust.name,
         root,
-        oldFiles: { det: 0, image: 0, albumV1: 0 },
-        filesWithBank: 0,
+        oldCsv: { det: 0, image: 0, albumV1: 0 },
+        hasAlbumFolder: !!albumFolder,
       };
-      for (const o of olds) rec.oldFiles[o.kind]++;
+      for (const o of oldCsvFiles) rec.oldCsv[o.kind]++;
 
-      if (mode === "dryrun") {
-        // นับว่าไฟล์ไหน "น่าจะมีแบงก์" (det = มีคอลัมน์ธนาคาร) โดยไม่ต้องดาวน์โหลด
-        rec.filesWithBank = rec.oldFiles.det;
-        perCustomer.push(rec);
-        continue;
-      }
+      if (mode === "dryrun") { perCustomer.push(rec); continue; }
 
       // ===== execute =====
       const folderParts = [cust.name, STMT_SUBFOLDER];
-      const albumParts = [...folderParts, "_album"];
-      // เริ่มจากกองเดิม (ถ้ามี — กันทับข้อมูลที่เข้ามาหลังฟีเจอร์ album)
-      let store: AlbumStore = parseAlbumStore(await downloadOneDriveFile(albumParts, albumStoreName, root).catch(() => null));
+      const fileName = albumXlsxName(cust.name);
+      // 1) เริ่มจากกองในไฟล์ Excel เดิม (ชีตซ่อน _data)
+      let store: AlbumStore = await readAlbumFromWorkbook(await downloadOneDriveFile(folderParts, fileName, root).catch(() => null));
       let merged = 0;
-      let withBank = 0;
-      const parsedOk: { id: string; name: string }[] = [];
-      for (const o of olds) {
+      // 2) absorb กองเก่าจาก sidecar JSON (_album/statement-banks.json) ถ้ามี
+      if (albumFolder) {
+        try {
+          const legacy = await downloadOneDriveFile([...folderParts, ALBUM_SUBFOLDER], albumStoreName, root);
+          if (legacy) {
+            const lj = parseAlbumStore(legacy);
+            for (const [bank, txns] of Object.entries(lj.banks)) {
+              const r = mergeIntoBank(store, bank, txns);
+              store = r.store;
+              merged += r.added;
+            }
+          }
+        } catch { /* อ่าน legacy พลาด → ข้าม */ }
+      }
+      // 3) parse CSV สรุปเก่า (ถ้ายังเหลือ)
+      const parsedOk: { id: string }[] = [];
+      for (const o of oldCsvFiles) {
         try {
           const buf = await downloadOneDriveFile(folderParts, o.f.name, root);
           if (!buf) continue;
           const { bank, txns } = parseOldSummary(o.kind, buf.toString("utf8"));
-          if (txns.length === 0) continue; // parse ไม่ได้/ว่าง → เก็บไฟล์ไว้ (ไม่ลบ)
-          const label = normalizeBankName(bank) ?? UNKNOWN_BANK;
-          if (label !== UNKNOWN_BANK) withBank++;
-          const r = mergeIntoBank(store, label, txns);
+          if (txns.length === 0) continue;
+          const r = mergeIntoBank(store, normalizeBankName(bank) ?? UNKNOWN_BANK, txns);
           store = r.store;
           merged += r.added;
-          parsedOk.push({ id: o.f.id, name: o.f.name });
-        } catch {
-          /* ไฟล์นี้พลาด → เก็บไว้ ไม่ลบ */
-        }
+          parsedOk.push({ id: o.f.id });
+        } catch { /* ไฟล์นี้พลาด → เก็บไว้ */ }
       }
 
-      if (parsedOk.length === 0) { perCustomer.push(rec); continue; }
+      const hasData = Object.keys(store.banks).length > 0;
+      if (!hasData) { perCustomer.push(rec); continue; }
 
-      // เขียนกอง + Excel รวมใหม่
+      // 4) เขียนไฟล์ Excel รวม (ฝัง _data) — ต้องสำเร็จก่อนถึงจะลบของเก่า
       try {
-        await uploadOneDriveFile({ folderParts: albumParts, fileName: albumStoreName, mime: "application/json", data: serializeAlbumStore(store), root });
         const wb = await buildStatementAlbumWorkbook({ customerName: cust.name, banks: store.banks });
-        await uploadOneDriveFile({ folderParts, fileName: albumXlsxName(cust.name), mime: XLSX_MIME, data: wb, root });
+        await uploadOneDriveFile({ folderParts, fileName, mime: XLSX_MIME, data: wb, root });
       } catch {
-        // เขียนไฟล์รวมไม่สำเร็จ → อย่าลบไฟล์เก่า (กันข้อมูลหาย)
-        rec.filesWithBank = withBank;
         rec.rebuilt = false;
-        rec.kept = olds.length;
+        rec.kept = oldCsvFiles.length;
         perCustomer.push(rec);
         continue;
       }
 
-      // ลบเฉพาะไฟล์เก่าที่ parse สำเร็จ (รวมเข้า Excel แล้ว)
-      let deleted = 0;
-      for (const p of parsedOk) {
-        try { if (await deleteOneDriveItemById(p.id)) deleted++; } catch { /* ลบพลาด = เก็บไว้ ไม่เป็นไร */ }
-      }
-      rec.filesWithBank = withBank;
+      // 5) ลบ CSV เก่าที่รวมแล้ว + ลบโฟลเดอร์ _album (ไม่ใช้ sidecar อีก)
+      let csvDeleted = 0;
+      for (const p of parsedOk) { try { if (await deleteOneDriveItemById(p.id)) csvDeleted++; } catch { /* keep */ } }
+      let albumDeleted = false;
+      if (albumFolder) { try { albumDeleted = await deleteOneDriveItemById(albumFolder.id); } catch { /* keep */ } }
+
       rec.rebuilt = true;
       rec.txnsMerged = merged;
-      rec.deleted = deleted;
-      rec.kept = olds.length - parsedOk.length;
+      rec.csvDeleted = csvDeleted;
+      rec.albumFolderDeleted = albumDeleted;
+      rec.kept = oldCsvFiles.length - parsedOk.length;
       perCustomer.push(rec);
     }
     if (truncated) break;
@@ -168,27 +171,19 @@ async function handle(request: NextRequest) {
 
   const totals = perCustomer.reduce(
     (a, c) => ({
-      det: a.det + c.oldFiles.det,
-      image: a.image + c.oldFiles.image,
-      albumV1: a.albumV1 + c.oldFiles.albumV1,
-      withBank: a.withBank + c.filesWithBank,
-      deleted: a.deleted + (c.deleted ?? 0),
+      detCsv: a.detCsv + c.oldCsv.det,
+      imageCsv: a.imageCsv + c.oldCsv.image,
+      albumV1Csv: a.albumV1Csv + c.oldCsv.albumV1,
+      albumFolders: a.albumFolders + (c.hasAlbumFolder ? 1 : 0),
       rebuilt: a.rebuilt + (c.rebuilt ? 1 : 0),
+      csvDeleted: a.csvDeleted + (c.csvDeleted ?? 0),
+      albumFoldersDeleted: a.albumFoldersDeleted + (c.albumFolderDeleted ? 1 : 0),
       txnsMerged: a.txnsMerged + (c.txnsMerged ?? 0),
     }),
-    { det: 0, image: 0, albumV1: 0, withBank: 0, deleted: 0, rebuilt: 0, txnsMerged: 0 },
+    { detCsv: 0, imageCsv: 0, albumV1Csv: 0, albumFolders: 0, rebuilt: 0, csvDeleted: 0, albumFoldersDeleted: 0, txnsMerged: 0 },
   );
 
-  return NextResponse.json({
-    ok: true,
-    mode,
-    roots,
-    customersScanned,
-    foldersWithOldFiles: foldersWithOld,
-    truncated,
-    totals,
-    perCustomer,
-  });
+  return NextResponse.json({ ok: true, mode, roots, customersScanned, truncated, totals, perCustomer });
 }
 
 export const GET = handle;

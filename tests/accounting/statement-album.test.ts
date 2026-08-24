@@ -9,7 +9,7 @@ import {
   albumXlsxName,
   UNKNOWN_BANK,
 } from "@/lib/accounting/statement-album";
-import { buildStatementAlbumWorkbook } from "@/lib/accounting/statement-album-excel";
+import { buildStatementAlbumWorkbook, readAlbumFromWorkbook } from "@/lib/accounting/statement-album-excel";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
 
 function tx(over: Partial<StatementTxn> = {}): StatementTxn {
@@ -97,5 +97,22 @@ describe("buildStatementAlbumWorkbook", () => {
   it("ไม่มีธนาคาร (ว่าง) → ยังสร้างไฟล์ได้ (ชีตสรุปอย่างเดียว)", async () => {
     const buf = await buildStatementAlbumWorkbook({ customerName: "ว่าง", banks: {} });
     expect(buf.length).toBeGreaterThan(0);
+  });
+
+  it("★ round-trip: build → readAlbumFromWorkbook (ชีตซ่อน _data) คืนกองเดิม (ไม่ต้องมี sidecar)", async () => {
+    const banks = {
+      กสิกรไทย: [tx({ amount: 100, direction: "in", date: "2026-08-01", description: "รับโอน", counterparty_name: "เอ" })],
+      ไทยพาณิชย์: [tx({ amount: 40, direction: "out", date: "2026-08-02" }), tx({ amount: 200, direction: "in", date: "2026-08-03" })],
+    };
+    const buf = await buildStatementAlbumWorkbook({ customerName: "ทดสอบ", banks });
+    const store = await readAlbumFromWorkbook(buf);
+    expect(Object.keys(store.banks).sort()).toEqual(["กสิกรไทย", "ไทยพาณิชย์"]);
+    expect(store.banks["กสิกรไทย"]).toHaveLength(1);
+    expect(store.banks["ไทยพาณิชย์"]).toHaveLength(2);
+    expect(store.banks["กสิกรไทย"][0]).toMatchObject({ amount: 100, direction: "in", date: "2026-08-01", counterparty_name: "เอ" });
+  });
+
+  it("readAlbumFromWorkbook(null) / ไฟล์ไม่มี _data → กองว่าง", async () => {
+    expect((await readAlbumFromWorkbook(null)).banks).toEqual({});
   });
 });
