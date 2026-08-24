@@ -533,6 +533,47 @@ async function hasEntryForSameHash(
   }
 }
 
+/**
+ * normalize เลขที่เอกสารเพื่อจับคู่ (ตัดช่องว่าง/ขีดกลาง, พิมพ์ใหญ่) — INV-001 = inv 001 = INV001
+ *   คืน "" ถ้าว่าง (เรียกใช้ควรเช็ก length ก่อน)
+ */
+export function normalizeDocNo(docNo: string | null): string {
+  return (docNo ?? "").trim().toUpperCase().replace(/[\s\-_/.]+/g, "");
+}
+
+/**
+ * มี "บิลเดิมเนื้อหาเดียวกัน" อยู่แล้วไหม — กันบิลซ้ำข้าม "รูปแบบไฟล์" (บิลใบเดิมส่งทั้ง PDF และถ่ายรูป
+ *   = คนละ sha256 → hasEntryForSameHash จับไม่ได้ · แต่เนื้อหาเดียวกัน = บิลเดียว)
+ *   ★ signature = (ลูกค้าเดียวกัน + เลขที่เอกสารเดียวกัน + วันที่เดียวกัน) — เข้มพอที่บิลจริงคนละใบแทบเป็นไปไม่ได้
+ *     ที่จะชนกัน (เลขที่ใบกำกับ unique ต่อผู้ขาย) → false-positive ต่ำมาก · ถ้าเลขที่/วันที่ว่าง = ไม่ dedup (เสี่ยง)
+ *   ★ ปลอดภัย: แค่ "ไม่สร้างใบใหม่" (ของเดิมอยู่ครบ) — ไม่ลบอะไร · เช็กพลาด = ไม่บล็อก (ดีกว่าพลาดบิลจริง)
+ */
+export async function hasEntryForSameContent(
+  db: SupabaseClient,
+  tenantId: string,
+  customerId: string,
+  docNo: string,
+  docDate: string,
+  exceptAttachmentId: string
+): Promise<boolean> {
+  try {
+    const { data } = await db
+      .from("bill_entries")
+      .select("id, doc_no, attachment_id")
+      .eq("tenant_id", tenantId)
+      .eq("customer_id", customerId)
+      .eq("doc_date", docDate)
+      .is("deleted_at", null)
+      .limit(200);
+    const target = normalizeDocNo(docNo);
+    return ((data ?? []) as { doc_no: string | null; attachment_id: string | null }[]).some(
+      (r) => r.attachment_id !== exceptAttachmentId && normalizeDocNo(r.doc_no) === target
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function selectExtractionCandidates(
   db: SupabaseClient,
   limit: number,
@@ -648,6 +689,7 @@ export async function processBillExtraction(
   let blank = 0;
   let duplicate = 0;
   const seenSha = new Set<string>(); // กันบิลไบต์เดียวกันซ้ำ "ในรอบเดียวกัน"
+  const seenContent = new Set<string>(); // กันบิลเนื้อหาเดียวกัน (ลูกค้า|เลขที่|วันที่) ซ้ำ "ในรอบเดียวกัน" (ข้ามรูปแบบไฟล์)
 
   for (const row of rows) {
     scanned++;
@@ -788,6 +830,26 @@ export async function processBillExtraction(
     const seller: BillParty = { name: bill?.seller_name ?? null, taxId: bill?.seller_tax_id ?? null };
     const buyer: BillParty = { name: bill?.buyer_name ?? null, taxId: bill?.buyer_tax_id ?? null };
     const decision = decideEntrySide(customer, seller, buyer);
+
+    // 5.5) กันบิลซ้ำ "ข้ามรูปแบบไฟล์" (บิลใบเดิมส่งทั้ง PDF + ถ่ายรูป = คนละ sha แต่เนื้อหาเดียว)
+    //   → ตรวจ signature (ลูกค้า|เลขที่|วันที่) · ทำเฉพาะเมื่อมีเลขที่+วันที่ชัด (ว่าง = ไม่ dedup เสี่ยงพลาดบิลจริง)
+    //   ★ ปลอดภัย: แค่ไม่สร้างใบใหม่ (ของเดิมอยู่ครบ) ไม่ลบอะไร
+    const docNoNorm = normalizeDocNo(bill?.doc_no ?? null);
+    const docDateVal = bill?.doc_date ?? null;
+    if (customer.id && docNoNorm.length >= 3 && docDateVal) {
+      const contentKey = `${customer.id}|${docNoNorm}|${docDateVal}`;
+      if (seenContent.has(contentKey)) {
+        await db.from("message_attachments").update({ fetch_status: "skipped", fetch_error: "dup_content" }).eq("id", row.id).eq("tenant_id", row.tenant_id);
+        duplicate++;
+        continue;
+      }
+      if (await hasEntryForSameContent(db, row.tenant_id, customer.id, bill?.doc_no ?? "", docDateVal, row.id)) {
+        await db.from("message_attachments").update({ fetch_status: "skipped", fetch_error: "dup_content" }).eq("id", row.id).eq("tenant_id", row.tenant_id);
+        duplicate++;
+        continue;
+      }
+      seenContent.add(contentKey);
+    }
 
     // 6) สร้าง bill_entries (draft) — attachment_id unique กันซ้ำ (ถ้าชนก็ข้าม)
     const entryPayload: Record<string, unknown> = {
