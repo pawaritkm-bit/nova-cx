@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { classifyBillImage } from "@/lib/ai/bill-classify";
+import { isTooSmallToBeBill } from "@/lib/accounting/image-prep";
 import { isFileStillReferenced } from "@/lib/line/attachments";
 
 /**
@@ -90,6 +91,16 @@ export async function backfillClassify(
       buf = Buffer.from(await blob.arrayBuffer());
     } catch {
       console.warn("[bill-backfill] download error");
+      continue;
+    }
+
+    // 1.5) ★ ประหยัด: รูปเล็กเกินกว่าจะเป็นบิล (สติกเกอร์/emoji/ธัมบ์เนล <350px) → mark ออกจากคิว
+    //   ไม่ต้องยิง Gemini classify ทิ้ง (conservative — บิลจริง >1000px ไม่มีทางโดน)
+    if (await isTooSmallToBeBill(buf, mimeFromPath(objectPath))) {
+      await db
+        .from("message_attachments")
+        .update({ fetch_status: "skipped", fetch_error: "image_too_small", doc_kind: "other", doc_checked: true })
+        .eq("id", row.id);
       continue;
     }
 
