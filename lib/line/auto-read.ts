@@ -308,10 +308,15 @@ export async function autoReadSaleAttachment(params: {
       //   เฉพาะรูป (ไม่ใช่ PDF/Excel) · best-effort · ไม่ใช่บัตร → คืน null (ไม่ทำอะไร) · ★ ไม่เก็บรูปบัตร (PDPA)
       if ((params.mime || "").toLowerCase().startsWith("image/")) {
         try {
-          const idc = await extractIdCardData(params.data, params.mime);
-          if (idc) {
-            await regenStatementAlbum({ folderParts, root, folder, profile: idc });
-            await markSourceRead(folderParts, params.fileName, root);
+          // ★ ประหยัด token: ถ้ามีชื่อจากบัตรของลูกค้ารายนี้แล้ว → ไม่ต้อง OCR ซ้ำ (อ่านบัตรครั้งเดียวพอ)
+          const existing = await findAlbumFile(folderParts, root);
+          const known = existing ? (await readAlbumFromWorkbook(await downloadOneDriveFile(folderParts, existing.name, root))).profile?.name : null;
+          if (!known) {
+            const idc = await extractIdCardData(params.data, params.mime);
+            if (idc) {
+              await regenStatementAlbum({ folderParts, root, folder, profile: idc });
+              await markSourceRead(folderParts, params.fileName, root);
+            }
           }
         } catch {
           console.warn("[auto-read] id-card read failed");
