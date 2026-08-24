@@ -50,7 +50,8 @@ export function monthlyAgg(txns: StatementTxn[], dir: "in" | "out"): MonthAgg[] 
 
 export type PartyAgg = { party: string; count: number; amount: number };
 function partyKey(t: StatementTxn): string {
-  return (t.counterparty_name || "").trim() || (t.counterparty_account_no || "").trim() || "ไม่ระบุ";
+  // ชื่อ > เลขบัญชี > คำอธิบาย/memo (สเตทเมนต์ที่ไม่มีช่องผู้โอนแยก มักฝังผู้โอนในคำอธิบาย) > ไม่ระบุ
+  return (t.counterparty_name || "").trim() || (t.counterparty_account_no || "").trim() || (t.description || "").trim() || "ไม่ระบุ";
 }
 export function partyAgg(txns: StatementTxn[], dir: "in" | "out", minCount = 2): { groups: PartyAgg[]; others: PartyAgg | null } {
   const map = new Map<string, { count: number; amount: number }>();
