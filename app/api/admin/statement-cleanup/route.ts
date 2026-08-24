@@ -48,6 +48,7 @@ type PerCustomer = {
   csvDeleted?: number;
   albumFolderDeleted?: boolean;
   kept?: number;
+  banksInspect?: Record<string, number>;
 };
 
 async function handle(request: NextRequest) {
@@ -59,7 +60,8 @@ async function handle(request: NextRequest) {
   if (!isOneDriveEnabled()) return NextResponse.json({ error: "onedrive_disabled" }, { status: 503 });
 
   const url = new URL(request.url);
-  const mode = url.searchParams.get("mode") === "execute" ? "execute" : "dryrun";
+  const modeParam = url.searchParams.get("mode");
+  const mode = modeParam === "execute" ? "execute" : modeParam === "inspect" ? "inspect" : "dryrun";
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "50", 10) || 50, 1), 500);
   const rootParam = url.searchParams.get("root") || "both";
   const roots: string[] = [];
@@ -87,6 +89,18 @@ async function handle(request: NextRequest) {
         continue; // ไม่มีโฟลเดอร์สเตทเมนต์
       }
       const files = entries.filter((f) => !f.isFolder);
+
+      // ===== inspect: อ่านไฟล์รวม (ชีตซ่อน _data) รายงานจำนวน txns ต่อแบงก์ — read-only =====
+      if (mode === "inspect") {
+        const hasXlsx = files.some((f) => f.name === albumXlsxName(cust.name));
+        if (!hasXlsx) continue;
+        const store = await readAlbumFromWorkbook(await downloadOneDriveFile([cust.name, STMT_SUBFOLDER], albumXlsxName(cust.name), root).catch(() => null));
+        const banks = Object.fromEntries(Object.entries(store.banks).map(([b, t]) => [b, t.length]));
+        const total = Object.values(store.banks).reduce((a, t) => a + t.length, 0);
+        perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, txnsMerged: total, banksInspect: banks });
+        continue;
+      }
+
       const albumFolder = entries.find((f) => f.isFolder && f.name === ALBUM_SUBFOLDER) ?? null;
       const oldCsvFiles = files
         .map((f) => ({ f, kind: classifyOldSummaryFile(f.name) }))
