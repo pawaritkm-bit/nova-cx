@@ -12,7 +12,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { saveRawCsvToOneDrive, saveResultCsvToOneDrive } from "@/lib/accounting/onedrive-result";
 import { extractPlatformReportFromFile, extractPlatformReportFromText, extractPlatformReportFromTextChunks } from "@/lib/accounting/platform-report-extract";
-import { extractStatementFromFile, extractStatementFromText, extractStatementFromTextChunks } from "@/lib/accounting/statement-extract";
+import { detectStatementBank, extractStatementFromFile, extractStatementFromText, extractStatementFromTextChunks } from "@/lib/accounting/statement-extract";
 import { autoImportReconciledStatement } from "@/lib/accounting/bank-reconciliation";
 import { buildPlatformSummaryCsv } from "@/lib/accounting/platform/parse";
 import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/locked-note";
@@ -282,9 +282,10 @@ export async function autoReadSaleAttachment(params: {
           : await extractStatementFromFile(params.data, params.mime);
       if (txns.length === 0) return;
       // ★ รวมทุกไฟล์/รูปของลูกค้า → Excel สรุปไฟล์เดียว แยกชีตตามธนาคาร · dedup (กันรูปซ้ำ)
-      //   รูปถ่ายอ่านชื่อธนาคารไม่ได้ → ลงชีต "ไม่ระบุธนาคาร" (นักบัญชีแยกทีหลังได้)
+      //   รูป/สแกนไม่มีชื่อธนาคารจาก parser → ให้ AI เดาชื่อธนาคารจากรูป (best-effort · ไม่ได้ → "ไม่ระบุธนาคาร")
       try {
-        await regenStatementAlbum({ folderParts, root, customerName: folder, bankLabel: UNKNOWN_BANK, txns });
+        const bank = (await detectStatementBank(params.data, params.mime)) ?? UNKNOWN_BANK;
+        await regenStatementAlbum({ folderParts, root, customerName: folder, bankLabel: bank, txns });
       } catch {
         console.warn("[auto-read] statement album (image) failed");
       }

@@ -270,6 +270,58 @@ export async function extractStatementFromFile(fileData: Buffer, mime: string): 
   return extractPdfMaybeSplit(fileData, mime, extractStatementFromFileSingle);
 }
 
+/** โมเดลชื่อธนาคารที่รู้จัก — normalize คำตอบ AI ให้เป็นป้ายสั้น ๆ สม่ำเสมอ */
+const BANK_ALIASES: { re: RegExp; label: string }[] = [
+  { re: /kasikorn|kbank|กสิกร/i, label: "กสิกรไทย" },
+  { re: /siam commercial|scb|ไทยพาณิชย์/i, label: "ไทยพาณิชย์" },
+  { re: /bangkok bank|bbl|กรุงเทพ/i, label: "กรุงเทพ" },
+  { re: /krung ?thai|ktb|กรุงไทย/i, label: "กรุงไทย" },
+  { re: /krungsri|ayudhya|กรุงศรี/i, label: "กรุงศรีอยุธยา" },
+  { re: /\bttb\b|tmb|thanachart|ทหารไทย|ธนชาต/i, label: "ทหารไทยธนชาต" },
+  { re: /government savings|gsb|ออมสิน/i, label: "ออมสิน" },
+  { re: /kiatnakin|kkp|เกียรตินาคิน/i, label: "เกียรตินาคินภัทร" },
+  { re: /uob|ยูโอบี/i, label: "ยูโอบี" },
+  { re: /cimb|ซีไอเอ็มบี/i, label: "ซีไอเอ็มบี" },
+  { re: /baac|เพื่อการเกษตร|ธ\.?ก\.?ส/i, label: "ธ.ก.ส." },
+  { re: /islamic|อิสลาม/i, label: "อิสลามแห่งประเทศไทย" },
+  { re: /ghb|อาคารสงเคราะห์/i, label: "อาคารสงเคราะห์" },
+];
+
+/** map ชื่อธนาคารดิบ → ป้ายมาตรฐาน (ไม่รู้จัก = คืนค่าที่อ่านได้ ตัดคำว่า "ธนาคาร/bank" ออก) */
+export function normalizeBankName(raw: string | null | undefined): string | null {
+  const s = (raw ?? "").trim();
+  if (!s || /^(null|unknown|ไม่ทราบ|ไม่ระบุ|n\/?a|-)$/i.test(s)) return null;
+  for (const a of BANK_ALIASES) if (a.re.test(s)) return a.label;
+  const cleaned = s.replace(/ธนาคาร|bank|จำกัด|มหาชน|\(.*?\)|public company limited/gi, "").trim();
+  return cleaned.slice(0, 40) || null;
+}
+
+/** prompt สั้น ๆ ถามชื่อธนาคารจากรูป/ไฟล์สเตทเมนต์ */
+const BANK_SYSTEM_PROMPT =
+  "คุณดู 'สเตทเมนต์ธนาคาร' แล้วบอกว่าเป็นของธนาคารอะไร. ตอบ JSON เท่านั้น {\"bank\": \"<ชื่อธนาคารภาษาไทยแบบสั้น เช่น กสิกรไทย/ไทยพาณิชย์/กรุงเทพ/กรุงไทย/กรุงศรีอยุธยา/ทหารไทยธนชาต/ออมสิน/เกียรตินาคินภัทร>\"}. " +
+  "ดูจากโลโก้/หัวกระดาษ/ชื่อธนาคารบนเอกสาร. ถ้าไม่เห็นชื่อธนาคารชัดเจน ให้ bank=null (ห้ามเดามั่ว).";
+
+/**
+ * เดา "ชื่อธนาคาร" จากรูป/ไฟล์สเตทเมนต์ (สำหรับแยกชีตตามธนาคารในไฟล์สรุป) — best-effort
+ *   ★ 1 vision call (Gemini ก่อน · ถูก) · อ่านไม่ได้/ไม่มี key/ไม่ชัด → null (ลงชีต "ไม่ระบุธนาคาร")
+ *   ★ PDPA: ไม่ log เนื้อ — คืนแค่ป้ายธนาคาร
+ */
+export async function detectStatementBank(fileData: Buffer, mime: string): Promise<string | null> {
+  try {
+    const prepped = await downscaleImageIfLarge(fileData, mime);
+    const raw = await extractJsonWithGemini({
+      system: BANK_SYSTEM_PROMPT,
+      userPrompt: "ธนาคารอะไร ตอบ JSON {bank}.",
+      fileData: prepped.data,
+      mime: prepped.mime || mime,
+    });
+    const bank = raw && typeof raw === "object" ? (raw as { bank?: unknown }).bank : null;
+    return normalizeBankName(typeof bank === "string" ? bank : null);
+  } catch {
+    return null;
+  }
+}
+
 /** เรียก AI ครั้งเดียว (ไฟล์/ชิ้นเดียว ≤เพดาน) — ตัวจริงที่ extractStatementFromFile / split เรียก */
 async function extractStatementFromFileSingle(fileData: Buffer, mime: string): Promise<StatementTxn[]> {
   const source = await classifyDocSource(mime, fileData);
