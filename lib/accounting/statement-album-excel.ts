@@ -190,7 +190,29 @@ export async function buildStatementAlbumWorkbook(input: {
     }
   };
   buildMatrix("in", "รายละเอียดเงินเข้า", "เงินเข้า");
-  buildMatrix("out", "รายละเอียดเงินออก", "เงินออก");
+
+  // ===== ชีต "กองผู้โอน" — แยกบัญชีที่โอนเข้า/ออกเป็นกอง (จำนวนครั้ง + ยอดรวม) =====
+  const allTxns = bankLabels.flatMap((b) => input.banks[b] ?? []);
+  const g = wb.addWorksheet("กองผู้โอน");
+  g.columns = [{ width: 46 }, { width: 14 }, { width: 18 }];
+  let gy = 1;
+  g.getCell(gy, 1).value = `กองผู้โอน — ${input.customerName}`; g.getCell(gy, 1).font = { bold: true, size: 14 }; gy += 2;
+  const groupSection = (title: string, header: string, dir: "in" | "out") => {
+    g.getCell(gy, 1).value = title; g.getCell(gy, 1).font = { bold: true }; gy++;
+    [header, "จำนวนครั้ง", "ยอดรวม (บาท)"].forEach((h, i) => { g.getCell(gy, i + 1).value = h; g.getCell(gy, i + 1).font = { bold: true }; }); gy++;
+    const { groups, others } = partyAgg(allTxns, dir);
+    for (const gr of groups) {
+      g.getCell(gy, 1).value = gr.party; g.getCell(gy, 2).value = gr.count;
+      g.getCell(gy, 3).value = gr.amount; g.getCell(gy, 3).numFmt = "#,##0.00"; gy++;
+    }
+    if (others) { g.getCell(gy, 1).value = others.party; g.getCell(gy, 2).value = others.count; g.getCell(gy, 3).value = others.amount; g.getCell(gy, 3).numFmt = "#,##0.00"; gy++; }
+    const t = totalsOf(allTxns, dir);
+    g.getCell(gy, 1).value = "รวม"; g.getCell(gy, 1).font = { bold: true };
+    g.getCell(gy, 2).value = t.count; g.getCell(gy, 2).font = { bold: true };
+    g.getCell(gy, 3).value = t.amount; g.getCell(gy, 3).numFmt = "#,##0.00"; g.getCell(gy, 3).font = { bold: true };
+    gy += 3;
+  };
+  groupSection("เงินเข้า — แยกตามผู้โอน/บัญชี (โอนซ้ำ ≥2 ครั้ง เรียงมาก→น้อย)", "ผู้โอน/บัญชี", "in");
 
   // ===== ชีต ลดหย่อน (เว้นไว้กรอกมือ) =====
   const ded = wb.addWorksheet("ลดหย่อน");
