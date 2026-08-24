@@ -73,7 +73,7 @@ type GroupContext = {
   customer_id: string | null;
   group_ref: string | null;
   display_name_enc: string | null;
-  customers: { customer_code: string | null } | null;
+  customers: { customer_code: string | null; customer_type: string | null } | null;
   chat_channels: { oa_type: string | null } | null;
 };
 
@@ -358,7 +358,7 @@ export async function processPendingAttachments(
          sent_at,
          chat_groups!inner (
            id, customer_id, group_ref, display_name_enc,
-           customers ( customer_code ),
+           customers ( customer_code, customer_type ),
            chat_channels ( oa_type )
          )
        )`
@@ -558,8 +558,11 @@ export async function processPendingAttachments(
           originalName: row.original_name,
           mime: content.mime,
           data: content.data,
-          // ★ ประหยัด Gemini: AI จัดประเภท "รูป" เฉพาะ sale (prospect ส่งสเตทเมนต์/บัตร) · care=บิลส่วนใหญ่ → deterministic พอ (บิลไป bill-worker แยก)
-          imageAiClassify: (group?.chat_channels?.oa_type || "") === "sale",
+          // ★ ประหยัด Gemini: AI จัดประเภท "รูป" เฉพาะ sale หรือ care-บุคคลธรรมดา (ต้องการไฟล์สรุปสเตทเมนต์เหมือน sale)
+          //   care-นิติบุคคล = บิลส่วนใหญ่ → deterministic พอ (บิลไป bill-worker แยก)
+          imageAiClassify:
+            (group?.chat_channels?.oa_type || "") === "sale" ||
+            ((group?.chat_channels?.oa_type || "") === "care" && group?.customers?.customer_type === "individual"),
         });
       } catch {
         classification = undefined; // จัดประเภทพลาด → วางแบบ flat (auto-read จะจัดเองภายหลัง)

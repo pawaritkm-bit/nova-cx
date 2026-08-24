@@ -348,7 +348,8 @@ export async function autoReadSaleAttachment(params: {
       //     เรียก AI เดาแบงก์ "เฉพาะเมื่อ parser ไม่ให้ชื่อธนาคาร" เท่านั้น (ประหยัด token) · ไม่ได้ → "ไม่ระบุธนาคาร"
       try {
         let bank = normalizeBankName(cls.det?.bank ?? null);
-        if (!bank) bank = await detectStatementBank(params.data, params.mime);
+        // ★ เดาชื่อธนาคารด้วย AI เฉพาะ sale (care ไม่เดาแบงก์ ตามที่ผู้ใช้ต้องการ · ประหยัด token)
+        if (!bank && oaType === "sale") bank = await detectStatementBank(params.data, params.mime);
         await regenStatementAlbum({ folderParts, root, folder, bankLabel: bank ?? UNKNOWN_BANK, txns, chatUrl });
       } catch {
         console.warn("[auto-read] statement album (image) failed");

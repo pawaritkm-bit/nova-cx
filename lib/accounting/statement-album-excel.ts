@@ -180,12 +180,8 @@ export async function buildStatementAlbumWorkbook(input: {
   lbl(5, "เกิดวันที่", pf.dob); lbl(5, "รหัสยื่นสรรพากร", pf.idNo, 4);
   lbl(6, "วันออกบัตร", pf.cardIssue); lbl(6, "บัตรหมดอายุ", pf.cardExpiry, 4);
   lbl(7, "หมายเหตุ", null);
-  if (pf.chatUrl) {
-    p.getCell(8, 1).value = "แชทลูกค้า (LINE)"; p.getCell(8, 1).font = { bold: true };
-    const link = p.getCell(8, 2);
-    link.value = { text: "💬 เปิดแชทลูกค้า", hyperlink: pf.chatUrl };
-    link.font = { color: { argb: "FF1155CC" }, underline: true };
-  }
+  // ★ ลิงก์แชท LINE OA ปิดไว้ก่อน — chat.line.biz ของ OA บอทเปิดแชทไม่ได้ (404/ไม่มีสิทธิ์)
+  //   รอ URL แชทที่ใช้งานได้จริงของลูกค้าเราก่อนค่อยเปิด (เก็บ chatUrl ใน _profile ไว้ แต่ยังไม่แสดง)
 
   // ===== ชีต matrix เงินเข้า/ออก =====
   const buildMatrix = (dir: "in" | "out", sheetName: string, amtHead: string) => {
