@@ -67,7 +67,7 @@ export function partyAgg(txns: StatementTxn[], dir: "in" | "out", minCount = 2):
   const groups = all.filter((g) => g.count >= minCount).sort((a, b) => b.amount - a.amount);
   const rest = all.filter((g) => g.count < minCount);
   const others = rest.length
-    ? { party: `อื่นๆ (< ${minCount} ครั้ง, ${rest.length} ราย)`, count: rest.reduce((a, g) => a + g.count, 0), amount: round2(rest.reduce((a, g) => a + g.amount, 0)) }
+    ? { party: `ผู้โอนรายเดียว (โอนครั้งเดียว, ${rest.length} ราย)`, count: rest.reduce((a, g) => a + g.count, 0), amount: round2(rest.reduce((a, g) => a + g.amount, 0)) }
     : null;
   return { groups, others };
 }
