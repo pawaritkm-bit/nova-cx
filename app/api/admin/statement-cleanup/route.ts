@@ -69,6 +69,19 @@ async function handle(request: NextRequest) {
     modeParam === "execute" ? "execute" : modeParam === "inspect" ? "inspect" : modeParam === "rebuild" ? "rebuild"
       : modeParam === "purge-empty" ? "purge-empty" : modeParam === "linkbackfill" ? "linkbackfill" : "dryrun";
 
+  // ===== ls: debug — list ไฟล์ในโฟลเดอร์สเตทเมนต์ของลูกค้าที่ชื่อ contains q =====
+  if (modeParam === "ls") {
+    const q = (url.searchParams.get("q") || "").toLowerCase();
+    const saleRoot = oaOneDriveRoot("sale");
+    const custs = (await listOneDriveChildren([], saleRoot).catch(() => [])).filter((c) => c.isFolder && c.name.toLowerCase().includes(q));
+    const res: { folder: string; files: string[] }[] = [];
+    for (const c of custs.slice(0, 5)) {
+      const files = await listOneDriveChildren([c.name, STMT_SUBFOLDER], saleRoot).catch(() => []);
+      res.push({ folder: c.name, files: files.map((f) => `${f.isFolder ? "[D]" : ""}${f.name}`) });
+    }
+    return NextResponse.json({ ok: true, mode: "ls", res });
+  }
+
   // ===== linkbackfill: ใส่ลิงก์แชท LINE OA ให้ไฟล์ NOVA-Bills เดิม (จับคู่โฟลเดอร์ด้วยเลขท้าย 4 ตัวของ group_ref) =====
   if (mode === "linkbackfill") {
     const svc = createServiceRoleClient();
