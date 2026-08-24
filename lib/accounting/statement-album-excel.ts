@@ -10,7 +10,7 @@ import type { AlbumStore, AlbumProfile } from "@/lib/accounting/statement-album"
 import { emptyAlbum } from "@/lib/accounting/statement-album";
 
 const PROFILE_SHEET = "_profile";
-const PROFILE_KEYS = ["name", "idNo", "address", "dob", "cardIssue", "cardExpiry", "laserCode"] as const;
+const PROFILE_KEYS = ["name", "idNo", "address", "dob", "cardIssue", "cardExpiry", "laserCode", "chatUrl"] as const;
 
 const DATA_SHEET = "_data";
 const DATA_HEADER = ["bank", "date", "description", "counterparty", "account_no", "direction", "amount"] as const;
@@ -180,6 +180,12 @@ export async function buildStatementAlbumWorkbook(input: {
   lbl(5, "เกิดวันที่", pf.dob); lbl(5, "รหัสยื่นสรรพากร", pf.idNo, 4);
   lbl(6, "วันออกบัตร", pf.cardIssue); lbl(6, "บัตรหมดอายุ", pf.cardExpiry, 4);
   lbl(7, "หมายเหตุ", null);
+  if (pf.chatUrl) {
+    p.getCell(8, 1).value = "แชทลูกค้า (LINE)"; p.getCell(8, 1).font = { bold: true };
+    const link = p.getCell(8, 2);
+    link.value = { text: "💬 เปิดแชทลูกค้า", hyperlink: pf.chatUrl };
+    link.font = { color: { argb: "FF1155CC" }, underline: true };
+  }
 
   // ===== ชีต matrix เงินเข้า/ออก =====
   const buildMatrix = (dir: "in" | "out", sheetName: string, amtHead: string) => {

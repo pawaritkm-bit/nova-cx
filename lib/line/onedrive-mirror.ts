@@ -12,6 +12,14 @@
 import { decryptField } from "@/lib/crypto/field";
 import { isOneDriveEnabled, uploadOneDriveFile, listOneDriveChildren, getOneDriveConfig, renameOneDriveFile } from "@/lib/storage/onedrive";
 
+/** OA id สำหรับ LINE OA Manager (chat.line.biz) — sale OA · override ด้วย env LINE_OA_CHAT_ID */
+const LINE_OA_CHAT_ID = process.env.LINE_OA_CHAT_ID || "U559a20c411c93d6945fe6295adab6b4d";
+/** ลิงก์เปิดแชทลูกค้าใน LINE OA Manager · chatId = group_ref (LINE user id, Uxxx) · null ถ้าไม่มี id */
+export function lineChatUrl(chatId: string | null | undefined): string | null {
+  const id = (chatId || "").trim();
+  return /^U[0-9a-f]{20,}$/i.test(id) ? `https://chat.line.biz/${LINE_OA_CHAT_ID}/chat/${id}` : null;
+}
+
 /** โฟลเดอร์รากบน OneDrive ตามชนิด OA: care → "NOVA-Care" · อื่น (sale) → ONEDRIVE_ROOT ("NOVA-Bills") */
 export const CARE_ONEDRIVE_ROOT = "NOVA-Care";
 export function oaOneDriveRoot(oaType: string | null | undefined): string {

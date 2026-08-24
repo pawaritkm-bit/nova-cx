@@ -18,7 +18,9 @@ import {
   uploadOneDriveFile,
   deleteOneDriveItemById,
 } from "@/lib/storage/onedrive";
-import { oaOneDriveRoot } from "@/lib/line/onedrive-mirror";
+import { oaOneDriveRoot, lineChatUrl } from "@/lib/line/onedrive-mirror";
+import { createServiceRoleClient } from "@/lib/supabase/server";
+import { mergeProfile } from "@/lib/accounting/statement-album";
 import {
   albumStoreName,
   albumXlsxName,
@@ -62,7 +64,50 @@ async function handle(request: NextRequest) {
   const url = new URL(request.url);
   const modeParam = url.searchParams.get("mode");
   const mode =
-    modeParam === "execute" ? "execute" : modeParam === "inspect" ? "inspect" : modeParam === "rebuild" ? "rebuild" : modeParam === "purge-empty" ? "purge-empty" : "dryrun";
+    modeParam === "execute" ? "execute" : modeParam === "inspect" ? "inspect" : modeParam === "rebuild" ? "rebuild"
+      : modeParam === "purge-empty" ? "purge-empty" : modeParam === "linkbackfill" ? "linkbackfill" : "dryrun";
+
+  // ===== linkbackfill: ใส่ลิงก์แชท LINE OA ให้ไฟล์ NOVA-Bills เดิม (จับคู่โฟลเดอร์ด้วยเลขท้าย 4 ตัวของ group_ref) =====
+  if (mode === "linkbackfill") {
+    const svc = createServiceRoleClient();
+    const { data: groups } = await svc
+      .from("chat_groups")
+      .select("group_ref, chat_channels!inner(oa_type)")
+      .eq("chat_channels.oa_type", "sale")
+      .limit(5000);
+    const byTail = new Map<string, string>();
+    for (const g of (groups ?? []) as { group_ref: string | null }[]) {
+      const ref = (g.group_ref || "").trim();
+      if (/^U[0-9a-f]{20,}$/i.test(ref)) byTail.set(ref.slice(-4).toLowerCase(), ref);
+    }
+    const saleRoot = oaOneDriveRoot("sale");
+    const out: { customer: string; linked: boolean }[] = [];
+    let customers: { id: string; name: string; isFolder: boolean }[] = [];
+    try { customers = (await listOneDriveChildren([], saleRoot)).filter((c) => c.isFolder); } catch { /* */ }
+    for (const cust of customers) {
+      const m = cust.name.match(/\(([0-9a-f]{4})\)\s*$/i);
+      if (!m) continue;
+      const ref = byTail.get(m[1].toLowerCase());
+      if (!ref) continue;
+      const url = lineChatUrl(ref);
+      if (!url) continue;
+      let files: { id: string; name: string; isFolder: boolean }[] = [];
+      try { files = await listOneDriveChildren([cust.name, STMT_SUBFOLDER], saleRoot); } catch { continue; }
+      const existing = files.find((f) => !f.isFolder && /สรุปสเตทเมนต์\.xlsx$/i.test(f.name));
+      if (!existing) continue;
+      try {
+        const store = await readAlbumFromWorkbook(await downloadOneDriveFile([cust.name, STMT_SUBFOLDER], existing.name, saleRoot).catch(() => null));
+        const { store: next } = mergeProfile(store, { chatUrl: url });
+        const displayName = (next.profile?.name || cust.name).trim();
+        const newName = albumXlsxName(displayName);
+        const wb = await buildStatementAlbumWorkbook({ customerName: displayName, banks: next.banks, profile: next.profile });
+        await uploadOneDriveFile({ folderParts: [cust.name, STMT_SUBFOLDER], fileName: newName, mime: XLSX_MIME, data: wb, root: saleRoot });
+        if (existing.name !== newName) { try { await deleteOneDriveItemById(existing.id); } catch { /* */ } }
+        out.push({ customer: cust.name, linked: true });
+      } catch { out.push({ customer: cust.name, linked: false }); }
+    }
+    return NextResponse.json({ ok: true, mode, saleGroups: byTail.size, linked: out.filter((x) => x.linked).length, out });
+  }
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "50", 10) || 50, 1), 500);
   const rootParam = url.searchParams.get("root") || "both";
   const roots: string[] = [];

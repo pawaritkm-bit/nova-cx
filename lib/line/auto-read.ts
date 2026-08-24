@@ -26,7 +26,7 @@ import { buildPlatformAlbumWorkbook, readPlatformAlbumFromWorkbook } from "@/lib
 import { summarizePlatformReport } from "@/lib/accounting/platform-report-analyze";
 import { detectPlatformFromName } from "@/lib/accounting/platform/parse";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
-import { resolveSaleFolder, oaOneDriveRoot, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
+import { resolveSaleFolder, oaOneDriveRoot, lineChatUrl, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 import { buildProspectIncomeWorkbook, aggregateBankMonthly } from "@/lib/accounting/prospect-income-analysis";
 import { upsertProspectBankSummary, loadProspectBankSummaries } from "@/lib/accounting/prospect-income-store";
 
@@ -131,6 +131,7 @@ async function regenStatementAlbum(args: {
   bankLabel?: string | null;
   txns?: StatementTxn[];
   profile?: AlbumProfile | null;
+  chatUrl?: string | null;
 }): Promise<void> {
   const existingFile = await findAlbumFile(args.folderParts, args.root);
   const existing = existingFile ? await downloadOneDriveFile(args.folderParts, existingFile.name, args.root) : null;
@@ -143,6 +144,11 @@ async function regenStatementAlbum(args: {
   }
   if (args.profile) {
     const r = mergeProfile(store, args.profile);
+    store = r.store;
+    if (r.added) changed = true;
+  }
+  if (args.chatUrl) {
+    const r = mergeProfile(store, { chatUrl: args.chatUrl });
     store = r.store;
     if (r.added) changed = true;
   }
@@ -227,6 +233,8 @@ export async function autoReadSaleAttachment(params: {
       }));
 
     const folder = await resolveSaleFolder(group, root);
+    // ★ ลิงก์เปิดแชทลูกค้าใน LINE OA Manager — เฉพาะ sale (NOVA-Bills) ที่ลูกค้ามาจาก LINE OA
+    const chatUrl = oaType === "sale" ? lineChatUrl(group.group_ref) : null;
     const base = params.fileName.replace(/\.[^.]+$/, "");
     // เก็บผลในโฟลเดอร์ย่อยตามชนิด (ตรงกับที่ไฟล์ต้นฉบับถูกวางไว้)
     const folderParts = [folder, cls.subFolder];
@@ -252,6 +260,7 @@ export async function autoReadSaleAttachment(params: {
           folder,
           bankLabel: bankLabelOf(cls.det.bank, cls.det.accountName),
           txns: cls.det.transactions,
+          chatUrl,
         });
       } catch {
         console.warn("[auto-read] statement album (det) failed");
@@ -314,7 +323,7 @@ export async function autoReadSaleAttachment(params: {
           if (!known) {
             const idc = await extractIdCardData(params.data, params.mime);
             if (idc) {
-              await regenStatementAlbum({ folderParts, root, folder, profile: idc });
+              await regenStatementAlbum({ folderParts, root, folder, profile: idc, chatUrl });
               await markSourceRead(folderParts, params.fileName, root);
             }
           }
@@ -338,7 +347,7 @@ export async function autoReadSaleAttachment(params: {
       try {
         let bank = normalizeBankName(cls.det?.bank ?? null);
         if (!bank) bank = await detectStatementBank(params.data, params.mime);
-        await regenStatementAlbum({ folderParts, root, folder, bankLabel: bank ?? UNKNOWN_BANK, txns });
+        await regenStatementAlbum({ folderParts, root, folder, bankLabel: bank ?? UNKNOWN_BANK, txns, chatUrl });
       } catch {
         console.warn("[auto-read] statement album (image) failed");
       }

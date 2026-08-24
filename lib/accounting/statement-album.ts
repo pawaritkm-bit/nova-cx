@@ -18,6 +18,8 @@ export type AlbumProfile = {
   cardIssue?: string | null;
   cardExpiry?: string | null;
   laserCode?: string | null;
+  /** ลิงก์เปิดแชทลูกค้าใน LINE OA Manager (chat.line.biz) — เฉพาะ sale/NOVA-Bills */
+  chatUrl?: string | null;
 };
 
 /** กองสะสมสเตทเมนต์ของลูกค้า 1 ราย — แยกตามป้ายธนาคาร (+ โปรไฟล์ KYC จากบัตร ปชช.) */
@@ -28,7 +30,7 @@ export function mergeProfile(store: AlbumStore, profile: AlbumProfile | null): {
   if (!profile) return { store, added: false };
   const cur: AlbumProfile = { ...(store.profile ?? {}) };
   let added = false;
-  for (const k of ["name", "idNo", "address", "dob", "cardIssue", "cardExpiry", "laserCode"] as const) {
+  for (const k of ["name", "idNo", "address", "dob", "cardIssue", "cardExpiry", "laserCode", "chatUrl"] as const) {
     const v = profile[k];
     if (v && v !== cur[k]) { cur[k] = v; added = true; }
   }
