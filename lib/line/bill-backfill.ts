@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { classifyBillImage } from "@/lib/ai/bill-classify";
 import { isTooSmallToBeBill } from "@/lib/accounting/image-prep";
-import { isFileStillReferenced } from "@/lib/line/attachments";
 
 /**
  * Bill classify backfill — คัดกรอง "ย้อนหลัง" รูปที่เก็บไปแล้วก่อนมีระบบคัดกรอง (เฟส 1 ฝั่ง CX)
@@ -109,16 +108,8 @@ export async function backfillClassify(
     checked++;
 
     if (classified && !classified.keep) {
-      // มั่นใจว่าไม่ใช่เอกสารการเงิน → ลบไฟล์ + set skipped/not_a_bill
-      //   ★ ลบไฟล์จริงเฉพาะเมื่อไม่มี row อื่น reuse ไฟล์เดียวกัน (กัน orphan จาก dedup-reuse)
-      try {
-        if (!(await isFileStillReferenced(db, row.tenant_id, objectPath, row.id))) {
-          await db.storage.from(BILLS_BUCKET).remove([objectPath]);
-        }
-      } catch {
-        console.warn("[bill-backfill] remove error");
-        // ลบไฟล์ไม่สำเร็จ ก็ยัง mark สถานะต่อ (ไฟล์อาจ orphan แต่ DB สื่อว่าไม่ใช่บิล)
-      }
+      // ★ ไม่ใช่เอกสารการเงิน → "ไม่ลบไฟล์" (ผู้ใช้สั่ง: เก็บไฟล์ไว้) · แค่ mark ออกจากคิว
+      //   doc_kind='other' → ถูกกันออกจาก extraction (ไม่เสีย AI) · ไฟล์คงอยู่ใน bucket ตามเดิม
       const { error: updErr } = await db
         .from("message_attachments")
         .update({
@@ -127,7 +118,6 @@ export async function backfillClassify(
           doc_kind: "other",
           doc_confidence: classified.confidence,
           doc_checked: true,
-          drive_url: null,
         })
         .eq("id", row.id);
       if (updErr) {
