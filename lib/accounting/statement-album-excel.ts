@@ -112,7 +112,6 @@ export async function buildStatementAlbumWorkbook(input: {
   lbl(5, "เกิดวันที่"); lbl(5, "รหัสยื่นสรรพากร", 4);
   lbl(6, "วันออกบัตร"); lbl(6, "บัตรหมดอายุ", 4);
   lbl(7, "หมายเหตุ");
-  p.getCell(9, 1).value = "* กรอกข้อมูลบัตรประชาชน/รูปบัตร ด้วยตนเอง (ระบบยังไม่อ่านบัตรอัตโนมัติ)";
 
   // ===== ชีต matrix เงินเข้า/ออก =====
   const buildMatrix = (dir: "in" | "out", sheetName: string, amtHead: string) => {
