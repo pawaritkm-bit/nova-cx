@@ -230,6 +230,7 @@ export async function autoReadSaleAttachment(params: {
         originalName: params.originalName,
         mime: params.mime,
         data: params.data,
+        imageAiClassify: oaType === "sale", // ประหยัด: AI จัดประเภทรูปเฉพาะ sale
       }));
 
     const folder = await resolveSaleFolder(group, root);

@@ -123,6 +123,9 @@ export async function extractAndClassify(params: {
   originalName?: string | null;
   mime: string;
   data: Buffer;
+  /** false = ไม่เรียก AI จัดประเภท "รูป/สแกน" (deterministic+text เท่านั้น) — ประหยัด Gemini กับกลุ่มที่รูปส่วนใหญ่เป็นบิล (care)
+   *   default true (พฤติกรรมเดิม) · รูปที่ deterministic ไม่เข้า → "other" */
+  imageAiClassify?: boolean;
 }): Promise<FinanceClassification> {
   const mimeL = (params.mime || "").toLowerCase();
   const nameL = (params.fileName || "").toLowerCase();
@@ -218,7 +221,7 @@ export async function extractAndClassify(params: {
   let aiType: FinanceDocType = "other";
   try {
     if (text) aiType = await classifyDocTypeFromText(text);
-    else if (source === "scan_or_image") aiType = await classifyDocTypeFromImage(params.data, params.mime);
+    else if (source === "scan_or_image" && params.imageAiClassify !== false) aiType = await classifyDocTypeFromImage(params.data, params.mime);
   } catch {
     aiType = "other";
   }

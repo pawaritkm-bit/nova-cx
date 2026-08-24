@@ -558,6 +558,8 @@ export async function processPendingAttachments(
           originalName: row.original_name,
           mime: content.mime,
           data: content.data,
+          // ★ ประหยัด Gemini: AI จัดประเภท "รูป" เฉพาะ sale (prospect ส่งสเตทเมนต์/บัตร) · care=บิลส่วนใหญ่ → deterministic พอ (บิลไป bill-worker แยก)
+          imageAiClassify: (group?.chat_channels?.oa_type || "") === "sale",
         });
       } catch {
         classification = undefined; // จัดประเภทพลาด → วางแบบ flat (auto-read จะจัดเองภายหลัง)
