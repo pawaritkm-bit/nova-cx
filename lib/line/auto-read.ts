@@ -314,8 +314,9 @@ export async function autoReadSaleAttachment(params: {
     // 3) ไม่ใช่สเตทเมนต์/แพลตฟอร์มที่โค้ดอ่านได้ → อ่านด้วย AI ตามชนิดที่จัดไว้
     if (cls.type === "other") {
       // ★ อาจเป็น "บัตรประชาชน" (ว่าที่ลูกค้าส่งมาทางไลน์) → อ่าน KYC เติมชีตประวัติ + ตั้งชื่อไฟล์/หัวตามชื่อในบัตร
-      //   เฉพาะรูป (ไม่ใช่ PDF/Excel) · best-effort · ไม่ใช่บัตร → คืน null (ไม่ทำอะไร) · ★ ไม่เก็บรูปบัตร (PDPA)
-      if ((params.mime || "").toLowerCase().startsWith("image/")) {
+      //   ★★ เฉพาะ sale OA (prospect ส่งบัตร) เท่านั้น — care=บิล ไม่ต้องอ่านบัตร (กัน Gemini ยิงทุกรูปบิล = เปลือง)
+      //   เฉพาะรูป · best-effort · ไม่ใช่บัตร → null · ไม่เก็บรูปบัตร (PDPA)
+      if (oaType === "sale" && (params.mime || "").toLowerCase().startsWith("image/")) {
         try {
           // ★ ประหยัด token: ถ้ามีชื่อจากบัตรของลูกค้ารายนี้แล้ว → ไม่ต้อง OCR ซ้ำ (อ่านบัตรครั้งเดียวพอ)
           const existing = await findAlbumFile(folderParts, root);
