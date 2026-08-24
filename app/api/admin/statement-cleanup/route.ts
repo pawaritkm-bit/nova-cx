@@ -96,7 +96,7 @@ async function handle(request: NextRequest) {
       if (/^U[0-9a-f]{20,}$/i.test(ref)) byTail.set(ref.slice(-4).toLowerCase(), ref);
     }
     const saleRoot = oaOneDriveRoot("sale");
-    const out: { customer: string; linked: boolean }[] = [];
+    const out: { customer: string; linked: boolean; note?: string }[] = [];
     let customers: { id: string; name: string; isFolder: boolean }[] = [];
     try { customers = (await listOneDriveChildren([], saleRoot)).filter((c) => c.isFolder); } catch { /* */ }
     for (const cust of customers) {
@@ -116,10 +116,15 @@ async function handle(request: NextRequest) {
         const displayName = (next.profile?.name || cust.name).trim();
         const newName = albumXlsxName(displayName);
         const wb = await buildStatementAlbumWorkbook({ customerName: displayName, banks: next.banks, profile: next.profile });
-        await uploadOneDriveFile({ folderParts: [cust.name, STMT_SUBFOLDER], fileName: newName, mime: XLSX_MIME, data: wb, root: saleRoot });
-        if (existing.name !== newName) { try { await deleteOneDriveItemById(existing.id); } catch { /* */ } }
-        out.push({ customer: cust.name, linked: true });
-      } catch { out.push({ customer: cust.name, linked: false }); }
+        // ★ เขียนกลับ "ชื่อไฟล์เดิมเป๊ะ" (existing.name) — เลี่ยง unicode/normalization mismatch ของชื่อโฟลเดอร์
+        const saved = await uploadOneDriveFile({ folderParts: [cust.name, STMT_SUBFOLDER], fileName: existing.name, mime: XLSX_MIME, data: wb, root: saleRoot });
+        if (saved && existing.name !== newName) {
+          // ตั้งชื่อตามบัตร: อัปไฟล์ชื่อใหม่ + ลบเก่า (เฉพาะเมื่อ upload สำเร็จ)
+          const savedNew = await uploadOneDriveFile({ folderParts: [cust.name, STMT_SUBFOLDER], fileName: newName, mime: XLSX_MIME, data: wb, root: saleRoot });
+          if (savedNew) { try { await deleteOneDriveItemById(existing.id); } catch { /* */ } }
+        }
+        out.push({ customer: cust.name, linked: saved !== null, note: saved ? undefined : "upload_failed" });
+      } catch (e) { out.push({ customer: cust.name, linked: false, note: `err:${(e as Error).message?.slice(0, 40)}` }); }
     }
     return NextResponse.json({ ok: true, mode, saleGroups: byTail.size, linked: out.filter((x) => x.linked).length, out });
   }
