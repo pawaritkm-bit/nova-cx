@@ -51,6 +51,8 @@ type PerCustomer = {
   albumFolderDeleted?: boolean;
   kept?: number;
   banksInspect?: Record<string, number>;
+  chatUrl?: string | null;
+  name?: string | null;
 };
 
 async function handle(request: NextRequest) {
@@ -143,7 +145,7 @@ async function handle(request: NextRequest) {
         const store = await readAlbumFromWorkbook(await downloadOneDriveFile([cust.name, STMT_SUBFOLDER], albumXlsxName(cust.name), root).catch(() => null));
         const banks = Object.fromEntries(Object.entries(store.banks).map(([b, t]) => [b, t.length]));
         const total = Object.values(store.banks).reduce((a, t) => a + t.length, 0);
-        perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, txnsMerged: total, banksInspect: banks });
+        perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, txnsMerged: total, banksInspect: banks, chatUrl: store.profile?.chatUrl ?? null, name: store.profile?.name ?? null });
         continue;
       }
 
