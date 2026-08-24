@@ -1,7 +1,7 @@
 /**
- * statement-album-excel.ts — Excel "สรุปสเตทเมนต์" ของลูกค้า 1 ราย (ตามแบบฟอร์มต้นฉบับ)
- *   ชีต "รวมทุกธนาคาร" (บวกขาเข้า/ขาออกทุกแบงก์ + รายเดือนรวม) + 1 ชีต/ธนาคาร
- *   แต่ละชีตแบงก์: [1] เงินเข้ารายเดือน [2] กองคนโอนเข้า(≥2ครั้ง) [3] เงินออกรายเดือน [4] กองคนโอนออก(≥2ครั้ง)
+ * statement-album-excel.ts — Excel "รายละเอียดเงินเข้า/ออก" ของลูกค้า 1 ราย (ตามแบบฟอร์มต้นฉบับ)
+ *   ชีต: ประวัติลูกค้า (KYC กรอกมือ) · รายละเอียดเงินเข้า (matrix เดือน×ธนาคาร) · รายละเอียดเงินออก · ลดหย่อน
+ *   matrix: แถว = ม.ค.–มิ.ย. / กลางปี / ก.ค.–ธ.ค. / สิ้นปี · คอลัมน์ = [ธนาคาร: ยอด, ครั้ง] + รวม
  *   ★ pure (ไม่ log เนื้อ/ยอด — PDPA) · เก็บข้อมูลดิบในชีตซ่อน _data (ไม่มี sidecar)
  */
 import ExcelJS from "exceljs";
@@ -11,21 +11,22 @@ import { emptyAlbum } from "@/lib/accounting/statement-album";
 
 const DATA_SHEET = "_data";
 const DATA_HEADER = ["bank", "date", "description", "counterparty", "account_no", "direction", "amount"] as const;
-
-const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+const TH_SHORT = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+const VAT_THRESHOLD = 1_800_000;
 
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
-function amt(t: StatementTxn): number {
+function amtOf(t: StatementTxn): number {
   return typeof t.amount === "number" ? Math.abs(t.amount) : 0;
 }
 
 // ---------- aggregation helpers (pure, exported for tests) ----------
 
 export type MonthAgg = { key: string; label: string; count: number; amount: number };
+const TH_MONTHS_FULL = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
 
-/** รวมรายเดือน (เฉพาะทิศทางที่ระบุ) — เรียงเดือนเก่า→ใหม่ · label = "<เดือนไทย> <ค.ศ.>" */
+/** รวมรายเดือน (เฉพาะทิศทาง) เรียงเก่า→ใหม่ (คีย์ YYYY-MM) */
 export function monthlyAgg(txns: StatementTxn[], dir: "in" | "out"): MonthAgg[] {
   const map = new Map<string, { count: number; amount: number }>();
   for (const t of txns) {
@@ -35,28 +36,19 @@ export function monthlyAgg(txns: StatementTxn[], dir: "in" | "out"): MonthAgg[] 
     const key = `${m[1]}-${m[2]}`;
     const cur = map.get(key) ?? { count: 0, amount: 0 };
     cur.count++;
-    cur.amount = round2(cur.amount + amt(t));
+    cur.amount = round2(cur.amount + amtOf(t));
     map.set(key, cur);
   }
-  return [...map.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([key, v]) => {
-      const [y, mo] = key.split("-");
-      return { key, label: `${TH_MONTHS[parseInt(mo, 10) - 1] ?? mo} ${y}`, count: v.count, amount: v.amount };
-    });
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([key, v]) => {
+    const [y, mo] = key.split("-");
+    return { key, label: `${TH_MONTHS_FULL[parseInt(mo, 10) - 1] ?? mo} ${y}`, count: v.count, amount: v.amount };
+  });
 }
 
 export type PartyAgg = { party: string; count: number; amount: number };
-
-/** ป้ายคู่ค้า: ชื่อ > เลขบัญชี/อ้างอิง > "ไม่ระบุ" */
 function partyKey(t: StatementTxn): string {
   return (t.counterparty_name || "").trim() || (t.counterparty_account_no || "").trim() || "ไม่ระบุ";
 }
-
-/**
- * จับ "กอง" คู่ค้าที่ทำรายการซ้ำ ≥ minCount ครั้ง เรียงยอดมาก→น้อย
- *   + แถวรวม "อื่นๆ (< minCount ครั้ง)" ให้ยอดกระทบเต็ม (ถ้ามี)
- */
 export function partyAgg(txns: StatementTxn[], dir: "in" | "out", minCount = 2): { groups: PartyAgg[]; others: PartyAgg | null } {
   const map = new Map<string, { count: number; amount: number }>();
   for (const t of txns) {
@@ -64,7 +56,7 @@ export function partyAgg(txns: StatementTxn[], dir: "in" | "out", minCount = 2):
     const k = partyKey(t);
     const cur = map.get(k) ?? { count: 0, amount: 0 };
     cur.count++;
-    cur.amount = round2(cur.amount + amt(t));
+    cur.amount = round2(cur.amount + amtOf(t));
     map.set(k, cur);
   }
   const all = [...map.entries()].map(([party, v]) => ({ party, ...v }));
@@ -79,23 +71,24 @@ export function partyAgg(txns: StatementTxn[], dir: "in" | "out", minCount = 2):
 export function totalsOf(txns: StatementTxn[], dir: "in" | "out"): { count: number; amount: number } {
   let count = 0;
   let amount = 0;
-  for (const t of txns) if (t.direction === dir) { count++; amount += amt(t); }
+  for (const t of txns) if (t.direction === dir) { count++; amount += amtOf(t); }
   return { count, amount: round2(amount) };
 }
 
-function periodOf(txns: StatementTxn[]): string {
-  const dates = txns.map((t) => t.date).filter((d): d is string => !!d).sort();
-  if (dates.length === 0) return "–";
-  return dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} – ${dates[dates.length - 1]}`;
-}
-
-function safeSheetName(name: string, used: Set<string>): string {
-  const base = (name || "ธนาคาร").replace(/[\\/?*[\]:]+/g, " ").trim().slice(0, 28) || "ธนาคาร";
-  let n = base;
-  let i = 2;
-  while (used.has(n)) n = `${base} ${i++}`.slice(0, 31);
-  used.add(n);
-  return n;
+/** ยอด+ครั้ง ต่อเดือน(1-12) ของธนาคารหนึ่ง เฉพาะทิศทาง (รวมข้ามปีตามเลขเดือน) */
+function monthMap(txns: StatementTxn[], dir: "in" | "out"): Map<number, { amount: number; count: number }> {
+  const m = new Map<number, { amount: number; count: number }>();
+  for (const t of txns) {
+    if (t.direction !== dir) continue;
+    const mm = /^\d{4}-(\d{2})/.exec(t.date || "");
+    if (!mm) continue;
+    const mo = parseInt(mm[1], 10);
+    const cur = m.get(mo) ?? { amount: 0, count: 0 };
+    cur.amount = round2(cur.amount + amtOf(t));
+    cur.count++;
+    m.set(mo, cur);
+  }
+  return m;
 }
 
 // ---------- workbook ----------
@@ -107,84 +100,97 @@ export async function buildStatementAlbumWorkbook(input: {
   const wb = new ExcelJS.Workbook();
   wb.creator = "NOVA-CX";
   const bankLabels = Object.keys(input.banks).sort((a, b) => a.localeCompare(b, "th"));
-  const allTxns = bankLabels.flatMap((b) => input.banks[b] ?? []);
 
-  // ===== ชีต "รวมทุกธนาคาร" =====
-  const s = wb.addWorksheet("รวมทุกธนาคาร");
-  s.columns = [{ width: 28 }, { width: 14 }, { width: 16 }, { width: 14 }, { width: 16 }];
-  const bold = (row: number, col: number) => { s.getCell(row, col).font = { bold: true }; };
-  s.getCell(1, 1).value = `สรุปสเตทเมนต์ (ทุกธนาคาร) — ${input.customerName}`;
-  bold(1, 1); s.getCell(1, 1).font = { bold: true, size: 14 };
+  // ===== ชีต 1: ประวัติลูกค้า (KYC — กรอกมือ / เติมจากบัตร ปชช. ภายหลัง) =====
+  const p = wb.addWorksheet("ประวัติลูกค้า");
+  p.columns = [{ width: 22 }, { width: 34 }, { width: 4 }, { width: 22 }, { width: 34 }];
+  const lbl = (row: number, text: string, col = 1) => { p.getCell(row, col).value = text; p.getCell(row, col).font = { bold: true }; };
+  p.getCell(1, 1).value = `ประวัติลูกค้า — ${input.customerName}`;
+  p.getCell(1, 1).font = { bold: true, size: 14 };
+  lbl(3, "ผู้เสียภาษี"); lbl(3, "เลขบัตร (เลขภาษี)", 4);
+  lbl(4, "ที่อยู่"); lbl(4, "เลขหลังบัตร", 4);
+  lbl(5, "เกิดวันที่"); lbl(5, "รหัสยื่นสรรพากร", 4);
+  lbl(6, "วันออกบัตร"); lbl(6, "บัตรหมดอายุ", 4);
+  lbl(7, "หมายเหตุ");
+  p.getCell(9, 1).value = "* กรอกข้อมูลบัตรประชาชน/รูปบัตร ด้วยตนเอง (ระบบยังไม่อ่านบัตรอัตโนมัติ)";
 
-  let r = 3;
-  ["ธนาคาร", "เงินเข้า (ครั้ง)", "เงินเข้า (บาท)", "เงินออก (ครั้ง)", "เงินออก (บาท)"].forEach((h, i) => { s.getCell(r, i + 1).value = h; bold(r, i + 1); });
-  r++;
-  let tInC = 0, tInA = 0, tOutC = 0, tOutA = 0;
-  for (const label of bankLabels) {
-    const inn = totalsOf(input.banks[label] ?? [], "in");
-    const out = totalsOf(input.banks[label] ?? [], "out");
-    s.getCell(r, 1).value = label;
-    s.getCell(r, 2).value = inn.count; s.getCell(r, 3).value = inn.amount;
-    s.getCell(r, 4).value = out.count; s.getCell(r, 5).value = out.amount;
-    tInC += inn.count; tInA += inn.amount; tOutC += out.count; tOutA += out.amount;
-    r++;
-  }
-  s.getCell(r, 1).value = "รวมทุกธนาคาร"; bold(r, 1);
-  s.getCell(r, 2).value = tInC; s.getCell(r, 3).value = round2(tInA);
-  s.getCell(r, 4).value = tOutC; s.getCell(r, 5).value = round2(tOutA);
-  for (let c = 2; c <= 5; c++) bold(r, c);
+  // ===== ชีต matrix เงินเข้า/ออก =====
+  const buildMatrix = (dir: "in" | "out", sheetName: string, amtHead: string) => {
+    const ws = wb.addWorksheet(sheetName);
+    ws.getCell(1, 1).value = `${sheetName}คุณ${input.customerName}`;
+    ws.getCell(1, 1).font = { bold: true, size: 14 };
+    const maps = bankLabels.map((b) => monthMap(input.banks[b] ?? [], dir));
 
-  // รายเดือนรวม (ทุกแบงก์บวกกัน)
-  r += 3;
-  s.getCell(r, 1).value = "รายเดือนรวมทุกธนาคาร"; bold(r, 1); r++;
-  ["เดือน", "เงินเข้า (ครั้ง)", "เงินเข้า (บาท)", "เงินออก (ครั้ง)", "เงินออก (บาท)"].forEach((h, i) => { s.getCell(r, i + 1).value = h; bold(r, i + 1); });
-  r++;
-  const inMonths = monthlyAgg(allTxns, "in");
-  const outMonths = monthlyAgg(allTxns, "out");
-  const monthKeys = [...new Set([...inMonths, ...outMonths].map((m) => m.key))].sort();
-  const inByKey = new Map(inMonths.map((m) => [m.key, m]));
-  const outByKey = new Map(outMonths.map((m) => [m.key, m]));
-  for (const k of monthKeys) {
-    const im = inByKey.get(k);
-    const om = outByKey.get(k);
-    s.getCell(r, 1).value = (im ?? om)!.label;
-    s.getCell(r, 2).value = im?.count ?? 0; s.getCell(r, 3).value = im?.amount ?? 0;
-    s.getCell(r, 4).value = om?.count ?? 0; s.getCell(r, 5).value = om?.amount ?? 0;
-    r++;
-  }
+    // header (แถว 3): เดือน | [ธนาคาร, ครั้ง]... | รวม(บาท)
+    const H = 3;
+    ws.getCell(H, 1).value = "เดือน";
+    const cols: { amt: number; cnt: number }[] = [];
+    let c = 2;
+    bankLabels.forEach((b) => { ws.getCell(H, c).value = b; ws.getCell(H, c + 1).value = "ครั้ง"; cols.push({ amt: c, cnt: c + 1 }); c += 2; });
+    const totalCol = c;
+    ws.getCell(H, totalCol).value = `รวม${amtHead}(บาท)`;
+    ws.getRow(H).font = { bold: true };
+    ws.getColumn(1).width = 12;
+    cols.forEach((cc) => { ws.getColumn(cc.amt).width = 18; ws.getColumn(cc.cnt).width = 7; });
+    ws.getColumn(totalCol).width = 18;
 
-  // ===== 1 ชีต/ธนาคาร =====
-  const used = new Set<string>();
-  for (const label of bankLabels) {
-    const txns = input.banks[label] ?? [];
-    const ws = wb.addWorksheet(safeSheetName(label, used));
-    ws.columns = [{ width: 44 }, { width: 16 }, { width: 18 }];
-    const B = (row: number, col: number) => { ws.getCell(row, col).font = { bold: true }; };
-    let y = 1;
-    ws.getCell(y, 1).value = `สรุปสเตทเมนต์ — ${label}`; ws.getCell(y, 1).font = { bold: true, size: 13 }; y += 2;
+    const bankYear = bankLabels.map(() => ({ amount: 0, count: 0 }));
+    const bankHalf = bankLabels.map(() => ({ amount: 0, count: 0 }));
+    let grand = 0;
 
-    // หัว
-    const inT = totalsOf(txns, "in");
-    const outT = totalsOf(txns, "out");
-    ws.getCell(y, 1).value = "ช่วงเวลา"; B(y, 1); ws.getCell(y, 2).value = periodOf(txns); y++;
-    ws.getCell(y, 1).value = "รวมเงินเข้า"; B(y, 1); ws.getCell(y, 2).value = inT.count; ws.getCell(y, 3).value = inT.amount; y++;
-    ws.getCell(y, 1).value = "รวมเงินออก"; B(y, 1); ws.getCell(y, 2).value = outT.count; ws.getCell(y, 3).value = outT.amount; y += 2;
+    const writeMonthRow = (row: number, mo: number) => {
+      ws.getCell(row, 1).value = TH_SHORT[mo - 1];
+      let rowTotal = 0;
+      bankLabels.forEach((_, bi) => {
+        const cell = maps[bi].get(mo);
+        if (cell && cell.amount > 0) {
+          ws.getCell(row, cols[bi].amt).value = cell.amount;
+          ws.getCell(row, cols[bi].amt).numFmt = "#,##0.00";
+          ws.getCell(row, cols[bi].cnt).value = cell.count;
+          rowTotal = round2(rowTotal + cell.amount);
+          bankYear[bi].amount = round2(bankYear[bi].amount + cell.amount);
+          bankYear[bi].count += cell.count;
+          if (mo <= 6) { bankHalf[bi].amount = round2(bankHalf[bi].amount + cell.amount); bankHalf[bi].count += cell.count; }
+        }
+      });
+      if (rowTotal > 0) { ws.getCell(row, totalCol).value = rowTotal; ws.getCell(row, totalCol).numFmt = "#,##0.00"; grand = round2(grand + rowTotal); }
+    };
+    const writeSumRow = (row: number, label: string, per: { amount: number; count: number }[]) => {
+      ws.getCell(row, 1).value = label; ws.getCell(row, 1).font = { bold: true };
+      let tot = 0;
+      bankLabels.forEach((_, bi) => {
+        ws.getCell(row, cols[bi].amt).value = per[bi].amount; ws.getCell(row, cols[bi].amt).numFmt = "#,##0.00"; ws.getCell(row, cols[bi].amt).font = { bold: true };
+        ws.getCell(row, cols[bi].cnt).value = per[bi].count; ws.getCell(row, cols[bi].cnt).font = { bold: true };
+        tot = round2(tot + per[bi].amount);
+      });
+      ws.getCell(row, totalCol).value = tot; ws.getCell(row, totalCol).numFmt = "#,##0.00"; ws.getCell(row, totalCol).font = { bold: true };
+    };
 
-    // [1] เงินเข้าแยกรายเดือน
-    y = section(ws, y, "[1] เงินเข้าแยกรายเดือน", ["เดือน", "จำนวนรายการ", "เงินเข้า (บาท)"], monthlyAgg(txns, "in").map((m) => [m.label, m.count, m.amount]), ["รวม", inT.count, inT.amount]);
-    // [2] กองคนโอนเข้า
-    const pin = partyAgg(txns, "in");
-    y = section(ws, y, "[2] กองคนโอนเข้า (≥2 ครั้ง) เรียงมาก→น้อย", ["ผู้โอน/เลขอ้างอิง", "จำนวนครั้ง", "ยอดรวม (บาท)"],
-      [...pin.groups.map((g) => [g.party, g.count, g.amount] as (string | number)[]), ...(pin.others ? [[pin.others.party, pin.others.count, pin.others.amount] as (string | number)[]] : [])]);
-    // [3] เงินออกแยกรายเดือน
-    y = section(ws, y, "[3] เงินออกแยกรายเดือน", ["เดือน", "จำนวนรายการ", "เงินออก (บาท)"], monthlyAgg(txns, "out").map((m) => [m.label, m.count, m.amount]), ["รวม", outT.count, outT.amount]);
-    // [4] กองคนโอนออก
-    const pout = partyAgg(txns, "out");
-    y = section(ws, y, "[4] กองคนโอนออก (≥2 ครั้ง) เรียงมาก→น้อย", ["ผู้รับ/เลขอ้างอิง", "จำนวนครั้ง", "ยอดรวม (บาท)"],
-      [...pout.groups.map((g) => [g.party, g.count, g.amount] as (string | number)[]), ...(pout.others ? [[pout.others.party, pout.others.count, pout.others.amount] as (string | number)[]] : [])]);
-  }
+    let r = H + 1;
+    for (let mo = 1; mo <= 6; mo++) writeMonthRow(r++, mo);
+    writeSumRow(r++, "กลางปี", bankHalf.map((x) => ({ ...x })));
+    for (let mo = 7; mo <= 12; mo++) writeMonthRow(r++, mo);
+    writeSumRow(r++, "สิ้นปี", bankYear);
 
-  // ===== _data ซ่อน =====
+    // เตือน 1.8 ล้าน (เฉพาะเงินเข้า)
+    if (dir === "in") {
+      r += 1;
+      const cCell = ws.getCell(r, 1);
+      cCell.value = grand > VAT_THRESHOLD
+        ? `⚠ เงินเข้ารวม ${grand.toLocaleString("th-TH", { minimumFractionDigits: 2 })} บาท — เกิน 1,800,000 → ต้องจด VAT / ควรพิจารณาตั้งนิติบุคคล`
+        : `เงินเข้ารวม ${grand.toLocaleString("th-TH", { minimumFractionDigits: 2 })} บาท (ยังไม่ถึงเกณฑ์จด VAT 1.8 ล้าน)`;
+      cCell.font = { bold: true, color: grand > VAT_THRESHOLD ? { argb: "FFB91C1C" } : undefined };
+    }
+  };
+  buildMatrix("in", "รายละเอียดเงินเข้า", "เงินเข้า");
+  buildMatrix("out", "รายละเอียดเงินออก", "เงินออก");
+
+  // ===== ชีต ลดหย่อน (เว้นไว้กรอกมือ) =====
+  const ded = wb.addWorksheet("ลดหย่อน");
+  ded.getCell(1, 1).value = "ลดหย่อน (กรอกมือ)";
+  ded.getCell(1, 1).font = { bold: true, size: 14 };
+
+  // ===== _data ซ่อน (เก็บข้อมูลดิบไว้รีเจน — ไม่มี sidecar) =====
   const d = wb.addWorksheet(DATA_SHEET, { state: "veryHidden" });
   d.addRow(DATA_HEADER as unknown as string[]);
   for (const label of bankLabels) {
@@ -193,21 +199,10 @@ export async function buildStatementAlbumWorkbook(input: {
     }
   }
 
-  const out = await wb.xlsx.writeBuffer();
-  return Buffer.from(out);
+  return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-/** เขียน 1 เซกชัน (หัวข้อ + header + rows + แถวรวม option) → คืนเลข row ถัดไป (เว้น 1 บรรทัด) */
-function section(ws: ExcelJS.Worksheet, startRow: number, title: string, header: string[], rows: (string | number)[][], totalRow?: (string | number)[]): number {
-  let y = startRow;
-  ws.getCell(y, 1).value = title; ws.getCell(y, 1).font = { bold: true }; y++;
-  header.forEach((h, i) => { ws.getCell(y, i + 1).value = h; ws.getCell(y, i + 1).font = { bold: true }; }); y++;
-  for (const row of rows) { row.forEach((v, i) => { ws.getCell(y, i + 1).value = v; }); y++; }
-  if (totalRow) { totalRow.forEach((v, i) => { ws.getCell(y, i + 1).value = v; ws.getCell(y, i + 1).font = { bold: true }; }); y++; }
-  return y + 1;
-}
-
-/** อ่านกอง AlbumStore กลับจากชีตซ่อน _data · ไม่มี/พัง → กองว่าง */
+/** อ่านกอง AlbumStore กลับจากชีตซ่อน _data · map ตาม header (รองรับเลย์เอาต์เก่า 6 คอลัมน์) · ไม่มี/พัง → ว่าง */
 export async function readAlbumFromWorkbook(buf: Buffer | null): Promise<AlbumStore> {
   if (!buf) return emptyAlbum();
   try {
@@ -221,10 +216,8 @@ export async function readAlbumFromWorkbook(buf: Buffer | null): Promise<AlbumSt
       const s = String(typeof v === "object" && "text" in (v as object) ? (v as { text: unknown }).text : v).trim();
       return s || null;
     };
-    // map header → column index (รองรับทั้งเลย์เอาต์เก่า 6 คอลัมน์ และใหม่ 7 คอลัมน์ที่มี account_no)
     const idx: Record<string, number> = {};
-    const headerRow = d.getRow(1);
-    headerRow.eachCell({ includeEmpty: false }, (c, ci) => { const k = str(c.value); if (k) idx[k] = ci; });
+    d.getRow(1).eachCell({ includeEmpty: false }, (cc, ci) => { const k = str(cc.value); if (k) idx[k] = ci; });
     const col = (name: string) => idx[name] ?? 0;
     d.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return;
