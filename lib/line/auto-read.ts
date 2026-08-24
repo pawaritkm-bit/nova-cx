@@ -10,19 +10,21 @@
  * ★ PDPA: ไม่ log รหัส/เนื้อไฟล์/ยอด
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { saveRawCsvToOneDrive, saveResultCsvToOneDrive } from "@/lib/accounting/onedrive-result";
+import { saveRawCsvToOneDrive } from "@/lib/accounting/onedrive-result";
 import { extractPlatformReportFromFile, extractPlatformReportFromText, extractPlatformReportFromTextChunks } from "@/lib/accounting/platform-report-extract";
 import { detectStatementBank, extractStatementFromFile, extractStatementFromText, extractStatementFromTextChunks, normalizeBankName } from "@/lib/accounting/statement-extract";
 import { autoImportReconciledStatement } from "@/lib/accounting/bank-reconciliation";
-import { buildPlatformSummaryCsv } from "@/lib/accounting/platform/parse";
 import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/locked-note";
-import { sanitizeDocName, shopNameFromFilename } from "@/lib/accounting/doc-naming";
+import { sanitizeDocName } from "@/lib/accounting/doc-naming";
 import { extractAndClassify, type FinanceClassification } from "@/lib/accounting/classify-finance-doc";
-import { gatherRecentChatText, interpretDocPurpose } from "@/lib/accounting/doc-purpose";
 import { deleteOneDriveItemById, downloadOneDriveFile, isOneDriveEnabled, listOneDriveChildren, renameOneDriveFile, uploadOneDriveFile } from "@/lib/storage/onedrive";
 import { albumXlsxName, mergeIntoBank, mergeProfile, UNKNOWN_BANK, type AlbumProfile } from "@/lib/accounting/statement-album";
 import { buildStatementAlbumWorkbook, readAlbumFromWorkbook } from "@/lib/accounting/statement-album-excel";
 import { extractIdCardData } from "@/lib/accounting/id-card-extract";
+import { mergePlatformFile, toPlatformRecord } from "@/lib/accounting/platform-album";
+import { buildPlatformAlbumWorkbook, readPlatformAlbumFromWorkbook } from "@/lib/accounting/platform-album-excel";
+import { summarizePlatformReport } from "@/lib/accounting/platform-report-analyze";
+import { detectPlatformFromName } from "@/lib/accounting/platform/parse";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
 import { resolveSaleFolder, oaOneDriveRoot, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 import { buildProspectIncomeWorkbook, aggregateBankMonthly } from "@/lib/accounting/prospect-income-analysis";
@@ -162,19 +164,29 @@ async function regenStatementAlbum(args: {
   }
 }
 
-function platformCsv(lines: Record<string, unknown>[]) {
-  return {
-    headers: [
-      { key: "date", label: "วันที่" },
-      { key: "order_no", label: "เลขคำสั่งซื้อ" },
-      { key: "description", label: "รายละเอียด" },
-      { key: "category", label: "หมวด" },
-      { key: "direction", label: "ทิศทาง" },
-      { key: "amount", label: "จำนวนเงิน" },
-    ],
-    rows: lines,
-  };
+/** ★ รวมรายงานแพลตฟอร์มทุกไฟล์ของลูกค้า → Excel สรุปไฟล์เดียว (ต่อแพลตฟอร์ม + รายเดือน · dedup ไฟล์ซ้ำ) */
+async function regenPlatformAlbum(args: {
+  folderParts: string[];
+  root?: string;
+  folder: string;
+  record: ReturnType<typeof toPlatformRecord>;
+}): Promise<void> {
+  const re = /สรุปยอดขายแพลตฟอร์ม\.xlsx$/i;
+  let existing: { name: string; id: string } | null = null;
+  try {
+    const kids = await listOneDriveChildren(args.folderParts, args.root);
+    const f = kids.find((k) => !k.isFolder && re.test(k.name));
+    if (f) existing = { name: f.name, id: f.id };
+  } catch { /* ยังไม่มีไฟล์ */ }
+  const store = await readPlatformAlbumFromWorkbook(existing ? await downloadOneDriveFile(args.folderParts, existing.name, args.root) : null);
+  const { store: next, added } = mergePlatformFile(store, args.record);
+  if (!added) return; // ไฟล์ซ้ำ → ไม่รีเจน
+  const fileName = `${sanitizeDocName(args.folder || "ลูกค้า")} - สรุปยอดขายแพลตฟอร์ม.xlsx`;
+  const wb = await buildPlatformAlbumWorkbook({ customerName: args.folder, store: next });
+  await uploadOneDriveFile({ folderParts: args.folderParts, fileName, mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", data: wb, root: args.root });
+  if (existing && existing.name !== fileName) { try { await deleteOneDriveItemById(existing.id); } catch { /* keep */ } }
 }
+
 
 /**
  * อ่านไฟล์ sale/care OA อัตโนมัติ + save ผลกลับ OneDrive — เรียกจาก attachments worker (best-effort)
@@ -230,17 +242,6 @@ export async function autoReadSaleAttachment(params: {
       return;
     }
 
-    // ★ ให้ AI ตีความ "จุดประสงค์ที่ลูกค้าส่งเอกสาร" จากบริบทแชท → เติมเป็นบรรทัดบนสุดของไฟล์สรุป (best-effort)
-    const purposePrefix = async (docType: "statement" | "platform"): Promise<string> => {
-      try {
-        const chatText = await gatherRecentChatText(params.db, params.chatGroupId);
-        const p = await interpretDocPurpose({ chatText, docType, docName: params.originalName || params.fileName });
-        return p ? `จุดประสงค์ที่ลูกค้าส่ง: ${p}\r\n\r\n` : "";
-      } catch {
-        return "";
-      }
-    };
-
     // 1) สเตทเมนต์ deterministic (reconcile ผ่าน) → สรุปฟรี/เร็ว ไม่ต้องพึ่ง AI
     if (cls.det?.fullyReconciled) {
       // ★ รวมทุกไฟล์/รูปของลูกค้า → Excel สรุปไฟล์เดียว แยกชีตตามธนาคาร (PDF รู้ชื่อธนาคารจาก det)
@@ -290,11 +291,13 @@ export async function autoReadSaleAttachment(params: {
     }
 
     // 2) รายงานแพลตฟอร์ม deterministic (Excel/CSV) → 4 ตัวเลข + รายเดือน ตรง NOVA Sales
+    //    ★ รวมทุกไฟล์ของลูกค้า → Excel สรุปเดียว (ต่อแพลตฟอร์ม+รายเดือน) แทน CSV ต่อไฟล์
     if (cls.platform && (cls.platform.figures.grossSales > 0 || cls.platform.figures.platformFee > 0)) {
-      const shop = shopNameFromFilename(params.originalName);
-      const platBase = shop ? sanitizeDocName(shop) : base;
-      const csv = (await purposePrefix("platform")) + buildPlatformSummaryCsv(cls.platform);
-      await saveRawCsvToOneDrive({ folderParts, fileName: `${platBase} - ยอดขาย.csv`, csv, root });
+      try {
+        await regenPlatformAlbum({ folderParts, root, folder, record: toPlatformRecord(cls.platform.platform, cls.platform.figures) });
+      } catch {
+        console.warn("[auto-read] platform album (det) failed");
+      }
       await markSourceRead(folderParts, params.fileName, root);
       return;
     }
@@ -338,17 +341,27 @@ export async function autoReadSaleAttachment(params: {
       return;
     }
 
-    // platform report (Shopee/Lazada/TikTok — มักเป็น Excel)
+    // platform report (Shopee/Lazada/TikTok — AI อ่าน line-level) → map เป็น 4 ตัวเลข → รวมเข้าไฟล์สรุปเดียว
     const lines = cls.chunks
       ? (await extractPlatformReportFromTextChunks(cls.chunks)).lines
       : cls.text
         ? await extractPlatformReportFromText(cls.text)
         : await extractPlatformReportFromFile(params.data, params.mime);
-    const result = platformCsv(lines as unknown as Record<string, unknown>[]);
-    if (result.rows.length === 0) return;
-    const shop = shopNameFromFilename(params.originalName);
-    const platBase = shop ? sanitizeDocName(shop) : base;
-    await saveResultCsvToOneDrive({ folderParts, fileName: `${platBase} - ยอดขาย.csv`, headers: result.headers, rows: result.rows, root });
+    if (lines.length === 0) return;
+    try {
+      const sum = summarizePlatformReport(lines);
+      const dget = (c: string) => sum.deductions.find((d) => d.category === c)?.total ?? 0;
+      const figures = {
+        grossSales: sum.grossSales + sum.otherCredit,
+        platformFee: dget("commission_fee") + dget("payment_fee") + dget("ads_fee"),
+        shippingFee: dget("shipping_fee"),
+        discount: dget("penalty") + dget("refund") + dget("other"),
+      };
+      const platform = detectPlatformFromName(params.originalName || params.fileName) || "unknown";
+      await regenPlatformAlbum({ folderParts, root, folder, record: toPlatformRecord(platform, figures) });
+    } catch {
+      console.warn("[auto-read] platform album (ai) failed");
+    }
     await markSourceRead(folderParts, params.fileName, root);
   } catch {
     console.warn("[auto-read] failed");
