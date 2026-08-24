@@ -9,7 +9,7 @@ import {
   albumXlsxName,
   UNKNOWN_BANK,
 } from "@/lib/accounting/statement-album";
-import { buildStatementAlbumWorkbook, readAlbumFromWorkbook } from "@/lib/accounting/statement-album-excel";
+import { buildStatementAlbumWorkbook, readAlbumFromWorkbook, monthlyAgg, partyAgg, totalsOf } from "@/lib/accounting/statement-album-excel";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
 
 function tx(over: Partial<StatementTxn> = {}): StatementTxn {
@@ -114,5 +114,40 @@ describe("buildStatementAlbumWorkbook", () => {
 
   it("readAlbumFromWorkbook(null) / ไฟล์ไม่มี _data → กองว่าง", async () => {
     expect((await readAlbumFromWorkbook(null)).banks).toEqual({});
+  });
+
+  it("round-trip เก็บเลขบัญชีคู่ค้า (account_no) ด้วย", async () => {
+    const banks = { กสิกรไทย: [tx({ amount: 100, direction: "in", counterparty_account_no: "004-123" })] };
+    const store = await readAlbumFromWorkbook(await buildStatementAlbumWorkbook({ customerName: "x", banks }));
+    expect(store.banks["กสิกรไทย"][0].counterparty_account_no).toBe("004-123");
+  });
+});
+
+describe("monthlyAgg / partyAgg / totalsOf", () => {
+  const txns: StatementTxn[] = [
+    tx({ date: "2026-01-05", direction: "in", amount: 100, counterparty_name: "เอ" }),
+    tx({ date: "2026-01-20", direction: "in", amount: 200, counterparty_name: "เอ" }),
+    tx({ date: "2026-02-03", direction: "in", amount: 50, counterparty_name: "บี" }),
+    tx({ date: "2026-01-10", direction: "out", amount: 30, counterparty_name: "ร้านซี" }),
+  ];
+
+  it("monthlyAgg — รวมรายเดือนเฉพาะทิศทาง เรียงเก่า→ใหม่ + label ไทย", () => {
+    const inM = monthlyAgg(txns, "in");
+    expect(inM.map((m) => m.key)).toEqual(["2026-01", "2026-02"]);
+    expect(inM[0]).toMatchObject({ label: "มกราคม 2026", count: 2, amount: 300 });
+    expect(inM[1]).toMatchObject({ count: 1, amount: 50 });
+    expect(monthlyAgg(txns, "out")).toHaveLength(1);
+  });
+
+  it("partyAgg — กอง ≥2 ครั้ง เรียงยอดมาก→น้อย + others สำหรับ <2", () => {
+    const { groups, others } = partyAgg(txns, "in");
+    expect(groups).toHaveLength(1); // เอา 2 ครั้ง
+    expect(groups[0]).toMatchObject({ party: "เอ", count: 2, amount: 300 });
+    expect(others).toMatchObject({ count: 1, amount: 50 }); // บี 1 ครั้ง
+  });
+
+  it("totalsOf — นับ+รวมยอดตามทิศทาง", () => {
+    expect(totalsOf(txns, "in")).toEqual({ count: 3, amount: 350 });
+    expect(totalsOf(txns, "out")).toEqual({ count: 1, amount: 30 });
   });
 });

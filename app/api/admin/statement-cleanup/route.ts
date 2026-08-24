@@ -61,7 +61,8 @@ async function handle(request: NextRequest) {
 
   const url = new URL(request.url);
   const modeParam = url.searchParams.get("mode");
-  const mode = modeParam === "execute" ? "execute" : modeParam === "inspect" ? "inspect" : "dryrun";
+  const mode =
+    modeParam === "execute" ? "execute" : modeParam === "inspect" ? "inspect" : modeParam === "rebuild" ? "rebuild" : "dryrun";
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "50", 10) || 50, 1), 500);
   const rootParam = url.searchParams.get("root") || "both";
   const roots: string[] = [];
@@ -98,6 +99,23 @@ async function handle(request: NextRequest) {
         const banks = Object.fromEntries(Object.entries(store.banks).map(([b, t]) => [b, t.length]));
         const total = Object.values(store.banks).reduce((a, t) => a + t.length, 0);
         perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, txnsMerged: total, banksInspect: banks });
+        continue;
+      }
+
+      // ===== rebuild: regen ไฟล์รวมเดิมเป็นฟอร์แมตใหม่ (อ่าน _data → build ใหม่ → เขียนทับ) — ไม่ลบอะไร =====
+      if (mode === "rebuild") {
+        const fileName = albumXlsxName(cust.name);
+        if (!files.some((f) => f.name === fileName)) continue;
+        const store = await readAlbumFromWorkbook(await downloadOneDriveFile([cust.name, STMT_SUBFOLDER], fileName, root).catch(() => null));
+        const total = Object.values(store.banks).reduce((a, t) => a + t.length, 0);
+        if (total === 0) { perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, rebuilt: false, txnsMerged: 0 }); continue; }
+        try {
+          const wb = await buildStatementAlbumWorkbook({ customerName: cust.name, banks: store.banks });
+          await uploadOneDriveFile({ folderParts: [cust.name, STMT_SUBFOLDER], fileName, mime: XLSX_MIME, data: wb, root });
+          perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, rebuilt: true, txnsMerged: total });
+        } catch {
+          perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, rebuilt: false, txnsMerged: total });
+        }
         continue;
       }
 
