@@ -12,8 +12,8 @@
 import { decryptField } from "@/lib/crypto/field";
 import { isOneDriveEnabled, uploadOneDriveFile, listOneDriveChildren, getOneDriveConfig, renameOneDriveFile } from "@/lib/storage/onedrive";
 
-/** OA id สำหรับ LINE OA Manager (chat.line.biz) — sale OA · override ด้วย env LINE_OA_CHAT_ID */
-const LINE_OA_CHAT_ID = process.env.LINE_OA_CHAT_ID || "U559a20c411c93d6945fe6295adab6b4d";
+/** OA id สำหรับ LINE OA Manager (chat.line.biz) = channel_ref ของ sale OA (สนง.บัญชี Finovas) · override ด้วย env LINE_OA_CHAT_ID */
+const LINE_OA_CHAT_ID = process.env.LINE_OA_CHAT_ID || "Uddc05724cf745e4e56d49a90dbc9f521";
 /** ลิงก์เปิดแชทลูกค้าใน LINE OA Manager · chatId = group_ref (LINE user id, Uxxx) · null ถ้าไม่มี id */
 export function lineChatUrl(chatId: string | null | undefined): string | null {
   const id = (chatId || "").trim();
