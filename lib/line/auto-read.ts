@@ -11,7 +11,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { saveRawCsvToOneDrive } from "@/lib/accounting/onedrive-result";
-import { extractPlatformReportFromFile, extractPlatformReportFromText, extractPlatformReportFromTextChunks } from "@/lib/accounting/platform-report-extract";
+import { extractPlatformReportFromText, extractPlatformReportFromTextChunks } from "@/lib/accounting/platform-report-extract";
 import { detectStatementBank, extractStatementFromFile, extractStatementFromText, extractStatementFromTextChunks, normalizeBankName } from "@/lib/accounting/statement-extract";
 import { autoImportReconciledStatement } from "@/lib/accounting/bank-reconciliation";
 import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/locked-note";
@@ -359,12 +359,13 @@ export async function autoReadSaleAttachment(params: {
       return;
     }
 
-    // platform report (Shopee/Lazada/TikTok — AI อ่าน line-level) → map เป็น 4 ตัวเลข → รวมเข้าไฟล์สรุปเดียว
+    // platform report (Shopee/Lazada/TikTok) → map เป็น 4 ตัวเลข → รวมเข้าไฟล์สรุปเดียว
+    // ★ ประหยัดงบ: รายงานแพลตฟอร์มเป็นไฟล์ export (Excel/CSV/PDF ดิจิทัล) → อ่านด้วย Gemini text (ถูก)
+    //   "รูป/สแกน" ไม่ auto-summary แล้ว (เดิมยิง Claude Sonnet 5 vision = แพงสุด · รายงานไม่ควรเป็นรูปถ่าย)
+    if (!cls.chunks && !cls.text) return;
     const lines = cls.chunks
       ? (await extractPlatformReportFromTextChunks(cls.chunks)).lines
-      : cls.text
-        ? await extractPlatformReportFromText(cls.text)
-        : await extractPlatformReportFromFile(params.data, params.mime);
+      : await extractPlatformReportFromText(cls.text!);
     if (lines.length === 0) return;
     try {
       const sum = summarizePlatformReport(lines);
