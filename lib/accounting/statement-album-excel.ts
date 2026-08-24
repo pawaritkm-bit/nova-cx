@@ -94,6 +94,65 @@ function monthMap(txns: StatementTxn[], dir: "in" | "out"): Map<number, { amount
   return m;
 }
 
+// ---------- tax comparison block (personal vs corporate) ----------
+
+/** สูตรภาษีเงินได้บุคคลธรรมดา (ขั้นบันได 0–35%) อ้างเซลล์เงินได้สุทธิ N */
+function personalTaxFormula(N: string): string {
+  return `ROUND(0.05*MAX(0,MIN(${N},300000)-150000)+0.1*MAX(0,MIN(${N},500000)-300000)+0.15*MAX(0,MIN(${N},750000)-500000)+0.2*MAX(0,MIN(${N},1000000)-750000)+0.25*MAX(0,MIN(${N},2000000)-1000000)+0.3*MAX(0,MIN(${N},5000000)-2000000)+0.35*MAX(0,${N}-5000000),2)`;
+}
+/** สูตรภาษีนิติบุคคล SME (0% ≤3แสน · 15% 3แสน–3ล้าน · 20% >3ล้าน) อ้างเซลล์กำไรสุทธิ M */
+function corporateTaxFormula(M: string): string {
+  return `ROUND(0.15*MAX(0,MIN(${M},3000000)-300000)+0.2*MAX(0,${M}-3000000),2)`;
+}
+
+/**
+ * เขียนบล็อก "เทียบภาษี บุคคลธรรมดา vs นิติบุคคล" (ขวาของตารางเงินเข้า) พร้อมสูตร Excel
+ *   นักบัญชีกรอก: อัตราเหมา% / ค่าใช้จ่ายจริง / ค่าลดหย่อนแต่ละช่อง → กำไร/ภาษี คำนวณเอง
+ *   ★ อัตราเหมาตาม RD: 40(8) ซื้อมาขาย/รับเหมา = 60% · 40(6) วิชาชีพ 30% (แพทย์/โรคศิลปะ 60%) — ปรับที่ช่อง %
+ */
+function writeTaxBlock(ws: ExcelJS.Worksheet, startRow: number, c0: number, incomeAddr: string): void {
+  const L = (n: number) => ws.getColumn(n).letter;
+  const A = (row: number, n: number) => `${L(n)}${row}`;
+  const cLbl = c0;
+  const cVal = c0 + 1;
+  ws.getColumn(cLbl).width = 26;
+  ws.getColumn(cVal).width = 16;
+  const label = (row: number, text: string, bold = false) => { const cc = ws.getCell(row, cLbl); cc.value = text; if (bold) cc.font = { bold: true }; };
+  const money = (row: number, v: number | { formula: string }) => { const cc = ws.getCell(row, cVal); cc.value = v as ExcelJS.CellValue; cc.numFmt = "#,##0.00"; };
+
+  let y = startRow;
+  // ===== บุคคลธรรมดา =====
+  label(y, "เทียบภาษี — บุคคลธรรมดา", true); y++;
+  label(y, "รายได้ทั้งปี"); money(y, { formula: incomeAddr }); const incR = A(y, cVal); y++;
+  label(y, "อัตราหักเหมา % (กรอก)"); ws.getCell(y, cVal).value = 0.6; ws.getCell(y, cVal).numFmt = "0%"; const rateR = A(y, cVal); y++;
+  label(y, "ค่าใช้จ่าย (เหมา)"); money(y, { formula: `${incR}*${rateR}` }); const expLumpR = A(y, cVal); y++;
+  label(y, "ค่าใช้จ่ายตามจริง (กรอกถ้าใช้)"); ws.getCell(y, cVal).numFmt = "#,##0.00"; const expActR = A(y, cVal); y++;
+  label(y, "กำไร (รายได้−ค่าใช้จ่าย)"); money(y, { formula: `${incR}-IF(${expActR}>0,${expActR},${expLumpR})` }); const profitR = A(y, cVal); y++;
+  label(y, "หักลดหย่อน", true); y++;
+  const dedStart = y;
+  const deds: [string, number][] = [
+    ["ส่วนตัว", 60000], ["คู่สมรส (ไม่มีรายได้)", 0], ["บุตร", 0], ["อุปการะบิดา/มารดา", 0],
+    ["ประกันสังคม", 0], ["เบี้ยประกันชีวิต", 0], ["เบี้ยประกันสุขภาพ", 0], ["ดอกเบี้ยผ่อนบ้าน", 0], ["เงินบริจาค", 0],
+  ];
+  for (const [name, def] of deds) { label(y, `  ${name}`); ws.getCell(y, cVal).value = def; ws.getCell(y, cVal).numFmt = "#,##0.00"; y++; }
+  const dedEnd = y - 1;
+  label(y, "รวมลดหย่อน", true); money(y, { formula: `SUM(${L(cVal)}${dedStart}:${L(cVal)}${dedEnd})` }); const dedR = A(y, cVal); y++;
+  label(y, "เงินได้สุทธิ (คำนวณภาษี)", true); money(y, { formula: `MAX(0,${profitR}-${dedR})` }); const netR = A(y, cVal); y++;
+  label(y, "ภาษีบุคคลธรรมดา", true); money(y, { formula: personalTaxFormula(netR) }); const persTaxR = A(y, cVal);
+  ws.getCell(y, cVal).font = { bold: true }; y += 2;
+
+  // ===== นิติบุคคล =====
+  label(y, "เทียบภาษี — นิติบุคคล (SME)", true); y++;
+  label(y, "กำไรสุทธิ (ปรับได้)"); money(y, { formula: profitR }); const corpNetR = A(y, cVal); y++;
+  label(y, "ภาษีนิติบุคคล (0/15/20%)", true); money(y, { formula: corporateTaxFormula(corpNetR) }); const corpTaxR = A(y, cVal);
+  ws.getCell(y, cVal).font = { bold: true }; y += 2;
+
+  // ===== เปรียบเทียบ =====
+  label(y, "ส่วนต่างภาษี (บุคคล − นิติ)", true); money(y, { formula: `${persTaxR}-${corpTaxR}` });
+  ws.getCell(y, cVal).font = { bold: true }; y++;
+  label(y, "* กรอกช่องเหมา%/ค่าใช้จ่ายจริง/ลดหย่อน แล้วภาษีคำนวณอัตโนมัติ");
+}
+
 // ---------- workbook ----------
 
 export async function buildStatementAlbumWorkbook(input: {
@@ -177,6 +236,7 @@ export async function buildStatementAlbumWorkbook(input: {
     for (let mo = 1; mo <= 6; mo++) writeMonthRow(r++, mo);
     writeSumRow(r++, "กลางปี", bankHalf.map((x) => ({ ...x })));
     for (let mo = 7; mo <= 12; mo++) writeMonthRow(r++, mo);
+    const yearRow = r;
     writeSumRow(r++, "สิ้นปี", bankYear);
 
     // เตือน 1.8 ล้าน (เฉพาะเงินเข้า)
@@ -187,32 +247,35 @@ export async function buildStatementAlbumWorkbook(input: {
         ? `⚠ เงินเข้ารวม ${grand.toLocaleString("th-TH", { minimumFractionDigits: 2 })} บาท — เกิน 1,800,000 → ต้องจด VAT / ควรพิจารณาตั้งนิติบุคคล`
         : `เงินเข้ารวม ${grand.toLocaleString("th-TH", { minimumFractionDigits: 2 })} บาท (ยังไม่ถึงเกณฑ์จด VAT 1.8 ล้าน)`;
       cCell.font = { bold: true, color: grand > VAT_THRESHOLD ? { argb: "FFB91C1C" } : undefined };
+      // ★ บล็อกเทียบภาษี (บุคคลธรรมดา vs นิติบุคคล) — สูตรรันเมื่อนักบัญชีกรอกช่องมือ · income = ยอดสิ้นปีรวม
+      const incomeAddr = `${ws.getColumn(totalCol).letter}${yearRow}`;
+      writeTaxBlock(ws, H, totalCol + 2, incomeAddr);
     }
   };
   buildMatrix("in", "รายละเอียดเงินเข้า", "เงินเข้า");
 
-  // ===== ชีต "กองผู้โอน" — แยกบัญชีที่โอนเข้า/ออกเป็นกอง (จำนวนครั้ง + ยอดรวม) =====
-  const allTxns = bankLabels.flatMap((b) => input.banks[b] ?? []);
+  // ===== ชีต "กองผู้โอน" — แยกกองผู้โอนเข้า "ต่อธนาคาร" (จำนวนครั้ง + ยอดรวม) =====
   const g = wb.addWorksheet("กองผู้โอน");
   g.columns = [{ width: 46 }, { width: 14 }, { width: 18 }];
   let gy = 1;
-  g.getCell(gy, 1).value = `กองผู้โอน — ${input.customerName}`; g.getCell(gy, 1).font = { bold: true, size: 14 }; gy += 2;
-  const groupSection = (title: string, header: string, dir: "in" | "out") => {
-    g.getCell(gy, 1).value = title; g.getCell(gy, 1).font = { bold: true }; gy++;
-    [header, "จำนวนครั้ง", "ยอดรวม (บาท)"].forEach((h, i) => { g.getCell(gy, i + 1).value = h; g.getCell(gy, i + 1).font = { bold: true }; }); gy++;
-    const { groups, others } = partyAgg(allTxns, dir);
+  g.getCell(gy, 1).value = `กองผู้โอน (เงินเข้า) — ${input.customerName}`; g.getCell(gy, 1).font = { bold: true, size: 14 }; gy += 2;
+  for (const label of bankLabels) {
+    const txns = input.banks[label] ?? [];
+    const { groups, others } = partyAgg(txns, "in");
+    if (groups.length === 0 && !others) continue;
+    g.getCell(gy, 1).value = `🏦 ${label}`; g.getCell(gy, 1).font = { bold: true }; gy++;
+    ["ผู้โอน/บัญชี", "จำนวนครั้ง", "ยอดรวม (บาท)"].forEach((h, i) => { g.getCell(gy, i + 1).value = h; g.getCell(gy, i + 1).font = { bold: true }; }); gy++;
     for (const gr of groups) {
       g.getCell(gy, 1).value = gr.party; g.getCell(gy, 2).value = gr.count;
       g.getCell(gy, 3).value = gr.amount; g.getCell(gy, 3).numFmt = "#,##0.00"; gy++;
     }
     if (others) { g.getCell(gy, 1).value = others.party; g.getCell(gy, 2).value = others.count; g.getCell(gy, 3).value = others.amount; g.getCell(gy, 3).numFmt = "#,##0.00"; gy++; }
-    const t = totalsOf(allTxns, dir);
+    const t = totalsOf(txns, "in");
     g.getCell(gy, 1).value = "รวม"; g.getCell(gy, 1).font = { bold: true };
     g.getCell(gy, 2).value = t.count; g.getCell(gy, 2).font = { bold: true };
     g.getCell(gy, 3).value = t.amount; g.getCell(gy, 3).numFmt = "#,##0.00"; g.getCell(gy, 3).font = { bold: true };
-    gy += 3;
-  };
-  groupSection("เงินเข้า — แยกตามผู้โอน/บัญชี (โอนซ้ำ ≥2 ครั้ง เรียงมาก→น้อย)", "ผู้โอน/บัญชี", "in");
+    gy += 2;
+  }
 
   // ===== ชีต ลดหย่อน (เว้นไว้กรอกมือ) =====
   const ded = wb.addWorksheet("ลดหย่อน");
