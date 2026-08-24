@@ -20,7 +20,8 @@ import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/loc
 import { sanitizeDocName, shopNameFromFilename } from "@/lib/accounting/doc-naming";
 import { extractAndClassify, type FinanceClassification } from "@/lib/accounting/classify-finance-doc";
 import { gatherRecentChatText, interpretDocPurpose } from "@/lib/accounting/doc-purpose";
-import { isOneDriveEnabled, renameOneDriveFile, uploadOneDriveFile } from "@/lib/storage/onedrive";
+import { downloadOneDriveFile, isOneDriveEnabled, renameOneDriveFile, uploadOneDriveFile } from "@/lib/storage/onedrive";
+import { albumCsvName, albumJsonName, mergeTxns, parseAlbum, serializeAlbum, sessionDateKey } from "@/lib/accounting/statement-album";
 import { resolveSaleFolder, oaOneDriveRoot, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 import { buildProspectIncomeWorkbook, aggregateBankMonthly } from "@/lib/accounting/prospect-income-analysis";
 import { upsertProspectBankSummary, loadProspectBankSummaries } from "@/lib/accounting/prospect-income-store";
@@ -137,6 +138,8 @@ export async function autoReadSaleAttachment(params: {
   fileName: string;
   /** ชื่อไฟล์เดิมจากลูกค้า (มีชื่อร้าน/ไทย) — ใช้ตั้งชื่อเอกสารรายงานแพลตฟอร์ม */
   originalName?: string | null;
+  /** เวลาที่ลูกค้าส่ง (ISO) — ใช้จับ "รูปสเตทเมนต์ชุดเดียวกัน" (ส่งวันเดียวกัน = ชุดเดียว) รวมไฟล์สรุปเดียว */
+  sentAt?: string | null;
   mime: string;
   data: Buffer;
   /** ผลจัดประเภทที่ attachments worker ทำไว้แล้ว (จัดครั้งเดียว) — ไม่ส่งมา = จัดเอง */
@@ -248,9 +251,28 @@ export async function autoReadSaleAttachment(params: {
         : cls.text
           ? await extractStatementFromText(cls.text)
           : await extractStatementFromFile(params.data, params.mime);
-      const result = statementCsv(txns as unknown as Record<string, unknown>[]);
-      if (result.rows.length === 0) return;
-      await saveResultCsvToOneDrive({ folderParts, fileName: `${base}-ผลอ่าน-statement.csv`, headers: result.headers, rows: result.rows, root });
+      if (txns.length === 0) return;
+      // ★ รวม "รูปสเตทเมนต์ชุดเดียวกัน" (ส่งวันเดียวกัน) → ไฟล์สรุปเดียว · dedup รายการ (กันรูปซ้ำ)
+      //   เก็บกองสะสมเป็น JSON ในโฟลเดอร์ย่อย _album (ไม่รกโฟลเดอร์สรุป) → รีเจน CSV สรุปทุกครั้งที่มีรูปใหม่
+      const dateKey = sessionDateKey(params.sentAt);
+      const albumParts = [...folderParts, "_album"];
+      const jsonName = albumJsonName(dateKey);
+      const existing = parseAlbum(await downloadOneDriveFile(albumParts, jsonName, root));
+      const { merged, added } = mergeTxns(existing, txns);
+      if (added === 0 && existing.length > 0) {
+        // รูปซ้ำ/ไม่มีรายการใหม่ → ไม่ต้องรีเจน แค่มาร์กว่าอ่านแล้ว
+        await markSourceRead(folderParts, params.fileName, root);
+        return;
+      }
+      await uploadOneDriveFile({
+        folderParts: albumParts,
+        fileName: jsonName,
+        mime: "application/json",
+        data: serializeAlbum(merged),
+        root,
+      });
+      const result = statementCsv(merged as unknown as Record<string, unknown>[]);
+      await saveResultCsvToOneDrive({ folderParts, fileName: albumCsvName(dateKey), headers: result.headers, rows: result.rows, root });
       await markSourceRead(folderParts, params.fileName, root);
       return;
     }

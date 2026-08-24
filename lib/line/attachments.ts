@@ -598,6 +598,7 @@ export async function processPendingAttachments(
           month,
           fileName,
           originalName: row.original_name,
+          sentAt: row.chat_messages?.sent_at ?? null,
           mime: content.mime,
           data: content.data,
           classification,
