@@ -62,7 +62,7 @@ async function handle(request: NextRequest) {
   const url = new URL(request.url);
   const modeParam = url.searchParams.get("mode");
   const mode =
-    modeParam === "execute" ? "execute" : modeParam === "inspect" ? "inspect" : modeParam === "rebuild" ? "rebuild" : "dryrun";
+    modeParam === "execute" ? "execute" : modeParam === "inspect" ? "inspect" : modeParam === "rebuild" ? "rebuild" : modeParam === "purge-empty" ? "purge-empty" : "dryrun";
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "50", 10) || 50, 1), 500);
   const rootParam = url.searchParams.get("root") || "both";
   const roots: string[] = [];
@@ -99,6 +99,20 @@ async function handle(request: NextRequest) {
         const banks = Object.fromEntries(Object.entries(store.banks).map(([b, t]) => [b, t.length]));
         const total = Object.values(store.banks).reduce((a, t) => a + t.length, 0);
         perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, txnsMerged: total, banksInspect: banks });
+        continue;
+      }
+
+      // ===== purge-empty: ลบไฟล์สรุปที่ว่างเปล่า (0 รายการใน _data) — เช่น กลุ่มทดสอบ · ไม่แตะต้นฉบับ =====
+      if (mode === "purge-empty") {
+        const fileName = albumXlsxName(cust.name);
+        const file = files.find((f) => f.name === fileName);
+        if (!file) continue;
+        const store = await readAlbumFromWorkbook(await downloadOneDriveFile([cust.name, STMT_SUBFOLDER], fileName, root).catch(() => null));
+        const total = Object.values(store.banks).reduce((a, t) => a + t.length, 0);
+        if (total > 0) continue; // มีข้อมูล → ไม่ลบ
+        let deleted = false;
+        try { deleted = await deleteOneDriveItemById(file.id); } catch { /* keep */ }
+        perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, rebuilt: false, txnsMerged: 0, csvDeleted: deleted ? 1 : 0 });
         continue;
       }
 
