@@ -6,8 +6,11 @@
  */
 import ExcelJS from "exceljs";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
-import type { AlbumStore } from "@/lib/accounting/statement-album";
+import type { AlbumStore, AlbumProfile } from "@/lib/accounting/statement-album";
 import { emptyAlbum } from "@/lib/accounting/statement-album";
+
+const PROFILE_SHEET = "_profile";
+const PROFILE_KEYS = ["name", "idNo", "address", "dob", "cardIssue", "cardExpiry", "laserCode"] as const;
 
 const DATA_SHEET = "_data";
 const DATA_HEADER = ["bank", "date", "description", "counterparty", "account_no", "direction", "amount"] as const;
@@ -96,22 +99,27 @@ function monthMap(txns: StatementTxn[], dir: "in" | "out"): Map<number, { amount
 export async function buildStatementAlbumWorkbook(input: {
   customerName: string;
   banks: Record<string, StatementTxn[]>;
+  profile?: AlbumProfile;
 }): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "NOVA-CX";
   const bankLabels = Object.keys(input.banks).sort((a, b) => a.localeCompare(b, "th"));
+  const pf = input.profile ?? {};
 
-  // ===== ชีต 1: ประวัติลูกค้า (KYC — กรอกมือ / เติมจากบัตร ปชช. ภายหลัง) =====
+  // ===== ชีต 1: ประวัติลูกค้า (KYC — เติมจากบัตร ปชช. อัตโนมัติ ช่องที่ว่างกรอกมือ) =====
   const p = wb.addWorksheet("ประวัติลูกค้า");
   p.columns = [{ width: 22 }, { width: 34 }, { width: 4 }, { width: 22 }, { width: 34 }];
-  const lbl = (row: number, text: string, col = 1) => { p.getCell(row, col).value = text; p.getCell(row, col).font = { bold: true }; };
+  const lbl = (row: number, text: string, val: string | null | undefined, col = 1) => {
+    p.getCell(row, col).value = text; p.getCell(row, col).font = { bold: true };
+    if (val) p.getCell(row, col + 1).value = val;
+  };
   p.getCell(1, 1).value = `ประวัติลูกค้า — ${input.customerName}`;
   p.getCell(1, 1).font = { bold: true, size: 14 };
-  lbl(3, "ผู้เสียภาษี"); lbl(3, "เลขบัตร (เลขภาษี)", 4);
-  lbl(4, "ที่อยู่"); lbl(4, "เลขหลังบัตร", 4);
-  lbl(5, "เกิดวันที่"); lbl(5, "รหัสยื่นสรรพากร", 4);
-  lbl(6, "วันออกบัตร"); lbl(6, "บัตรหมดอายุ", 4);
-  lbl(7, "หมายเหตุ");
+  lbl(3, "ผู้เสียภาษี", pf.name); lbl(3, "เลขบัตร (เลขภาษี)", pf.idNo, 4);
+  lbl(4, "ที่อยู่", pf.address); lbl(4, "เลขหลังบัตร", pf.laserCode, 4);
+  lbl(5, "เกิดวันที่", pf.dob); lbl(5, "รหัสยื่นสรรพากร", pf.idNo, 4);
+  lbl(6, "วันออกบัตร", pf.cardIssue); lbl(6, "บัตรหมดอายุ", pf.cardExpiry, 4);
+  lbl(7, "หมายเหตุ", null);
 
   // ===== ชีต matrix เงินเข้า/ออก =====
   const buildMatrix = (dir: "in" | "out", sheetName: string, amtHead: string) => {
@@ -189,6 +197,10 @@ export async function buildStatementAlbumWorkbook(input: {
   ded.getCell(1, 1).value = "ลดหย่อน (กรอกมือ)";
   ded.getCell(1, 1).font = { bold: true, size: 14 };
 
+  // ===== _profile ซ่อน (เก็บ KYC ไว้รีเจน) =====
+  const pr = wb.addWorksheet(PROFILE_SHEET, { state: "veryHidden" });
+  for (const k of PROFILE_KEYS) pr.addRow([k, pf[k] ?? ""]);
+
   // ===== _data ซ่อน (เก็บข้อมูลดิบไว้รีเจน — ไม่มี sidecar) =====
   const d = wb.addWorksheet(DATA_SHEET, { state: "veryHidden" });
   d.addRow(DATA_HEADER as unknown as string[]);
@@ -236,7 +248,19 @@ export async function readAlbumFromWorkbook(buf: Buffer | null): Promise<AlbumSt
         amount: Number.isFinite(amount as number) ? (amount as number) : null,
       });
     });
-    return { v: 2, banks };
+    // อ่านโปรไฟล์ KYC (ถ้ามีชีต _profile)
+    let profile: AlbumProfile | undefined;
+    const pr = wb.getWorksheet(PROFILE_SHEET);
+    if (pr) {
+      const prof: AlbumProfile = {};
+      pr.eachRow((row) => {
+        const k = str(row.getCell(1).value);
+        const v = str(row.getCell(2).value);
+        if (k && v && (PROFILE_KEYS as readonly string[]).includes(k)) (prof as Record<string, string>)[k] = v;
+      });
+      if (Object.keys(prof).length) profile = prof;
+    }
+    return { v: 2, banks, profile };
   } catch {
     return emptyAlbum();
   }

@@ -116,16 +116,19 @@ async function handle(request: NextRequest) {
         continue;
       }
 
-      // ===== rebuild: regen ไฟล์รวมเดิมเป็นฟอร์แมตใหม่ (อ่าน _data → build ใหม่ → เขียนทับ) — ไม่ลบอะไร =====
+      // ===== rebuild: regen ไฟล์รวมเดิมเป็นฟอร์แมตใหม่ (อ่าน _data/_profile → build → เขียน) · ตั้งชื่อตามบัตรถ้ามี =====
       if (mode === "rebuild") {
-        const fileName = albumXlsxName(cust.name);
-        if (!files.some((f) => f.name === fileName)) continue;
-        const store = await readAlbumFromWorkbook(await downloadOneDriveFile([cust.name, STMT_SUBFOLDER], fileName, root).catch(() => null));
+        const existing = files.find((f) => /สรุปสเตทเมนต์\.xlsx$/i.test(f.name));
+        if (!existing) continue;
+        const store = await readAlbumFromWorkbook(await downloadOneDriveFile([cust.name, STMT_SUBFOLDER], existing.name, root).catch(() => null));
         const total = Object.values(store.banks).reduce((a, t) => a + t.length, 0);
         if (total === 0) { perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, rebuilt: false, txnsMerged: 0 }); continue; }
+        const displayName = (store.profile?.name || cust.name).trim();
+        const newName = albumXlsxName(displayName);
         try {
-          const wb = await buildStatementAlbumWorkbook({ customerName: cust.name, banks: store.banks });
-          await uploadOneDriveFile({ folderParts: [cust.name, STMT_SUBFOLDER], fileName, mime: XLSX_MIME, data: wb, root });
+          const wb = await buildStatementAlbumWorkbook({ customerName: displayName, banks: store.banks, profile: store.profile });
+          await uploadOneDriveFile({ folderParts: [cust.name, STMT_SUBFOLDER], fileName: newName, mime: XLSX_MIME, data: wb, root });
+          if (existing.name !== newName) { try { await deleteOneDriveItemById(existing.id); } catch { /* keep */ } }
           perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, rebuilt: true, txnsMerged: total });
         } catch {
           perCustomer.push({ customer: cust.name, root, oldCsv: { det: 0, image: 0, albumV1: 0 }, hasAlbumFolder: false, rebuilt: false, txnsMerged: total });

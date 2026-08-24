@@ -19,9 +19,10 @@ import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/loc
 import { sanitizeDocName, shopNameFromFilename } from "@/lib/accounting/doc-naming";
 import { extractAndClassify, type FinanceClassification } from "@/lib/accounting/classify-finance-doc";
 import { gatherRecentChatText, interpretDocPurpose } from "@/lib/accounting/doc-purpose";
-import { downloadOneDriveFile, isOneDriveEnabled, renameOneDriveFile, uploadOneDriveFile } from "@/lib/storage/onedrive";
-import { albumXlsxName, mergeIntoBank, UNKNOWN_BANK } from "@/lib/accounting/statement-album";
+import { deleteOneDriveItemById, downloadOneDriveFile, isOneDriveEnabled, listOneDriveChildren, renameOneDriveFile, uploadOneDriveFile } from "@/lib/storage/onedrive";
+import { albumXlsxName, mergeIntoBank, mergeProfile, UNKNOWN_BANK, type AlbumProfile } from "@/lib/accounting/statement-album";
 import { buildStatementAlbumWorkbook, readAlbumFromWorkbook } from "@/lib/accounting/statement-album-excel";
+import { extractIdCardData } from "@/lib/accounting/id-card-extract";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
 import { resolveSaleFolder, oaOneDriveRoot, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 import { buildProspectIncomeWorkbook, aggregateBankMonthly } from "@/lib/accounting/prospect-income-analysis";
@@ -105,28 +106,60 @@ async function regenProspectIncome(
  *   สะสมธุรกรรมลง store JSON (โฟลเดอร์ย่อย _album) ต่อธนาคาร → dedup (กันไฟล์/รูปซ้ำ) → รีเจน Excel
  *   ★ best-effort · added=0 (ไม่มีรายการใหม่/ไฟล์ซ้ำ) → ข้ามการรีเจน
  */
+/** หาไฟล์สรุปเดิมในโฟลเดอร์ (ชื่ออาจเป็นชื่อกลุ่ม หรือชื่อตามบัตร) → {name,id} · null=ยังไม่มี */
+async function findAlbumFile(folderParts: string[], root?: string): Promise<{ name: string; id: string } | null> {
+  try {
+    const kids = await listOneDriveChildren(folderParts, root);
+    const f = kids.find((k) => !k.isFolder && /สรุปสเตทเมนต์\.xlsx$/i.test(k.name));
+    return f ? { name: f.name, id: f.id } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ★ รวมสเตทเมนต์ทุกไฟล์/รูป + โปรไฟล์บัตร ปชช. ของลูกค้า → Excel สรุปไฟล์เดียว
+ *   อ่านกองเดิมจากชีตซ่อนในไฟล์ → merge txns/profile → รีเจน · ตั้งชื่อไฟล์/หัวไฟล์ตามชื่อในบัตร (ถ้ามี)
+ *   ★ best-effort · ไม่มีอะไรใหม่ → ข้าม · ถ้าชื่อไฟล์เปลี่ยน (ได้ชื่อบัตร) → ลบไฟล์ชื่อเก่า
+ */
 async function regenStatementAlbum(args: {
   folderParts: string[];
   root?: string;
-  customerName: string;
-  bankLabel: string | null;
-  txns: StatementTxn[];
+  folder: string;
+  bankLabel?: string | null;
+  txns?: StatementTxn[];
+  profile?: AlbumProfile | null;
 }): Promise<void> {
-  if (!args.txns || args.txns.length === 0) return;
-  // ★ อ่านกองเดิมจาก "ชีตซ่อนในไฟล์ Excel" (ไม่มี sidecar JSON/โฟลเดอร์ _album แล้ว) → merge → เขียนทับไฟล์เดียว
-  const fileName = albumXlsxName(args.customerName);
-  const existing = await downloadOneDriveFile(args.folderParts, fileName, args.root);
-  const store = await readAlbumFromWorkbook(existing);
-  const { store: next, added } = mergeIntoBank(store, args.bankLabel, args.txns);
-  if (added === 0) return; // ไฟล์/รูปซ้ำ ไม่มีรายการใหม่ → ไม่ต้องรีเจน
-  const wb = await buildStatementAlbumWorkbook({ customerName: args.customerName, banks: next.banks });
+  const existingFile = await findAlbumFile(args.folderParts, args.root);
+  const existing = existingFile ? await downloadOneDriveFile(args.folderParts, existingFile.name, args.root) : null;
+  let store = await readAlbumFromWorkbook(existing);
+  let changed = false;
+  if (args.txns && args.txns.length > 0) {
+    const r = mergeIntoBank(store, args.bankLabel ?? UNKNOWN_BANK, args.txns);
+    store = r.store;
+    if (r.added > 0) changed = true;
+  }
+  if (args.profile) {
+    const r = mergeProfile(store, args.profile);
+    store = r.store;
+    if (r.added) changed = true;
+  }
+  if (!changed) return;
+
+  const displayName = (store.profile?.name || args.folder || "ลูกค้า").trim();
+  const newName = albumXlsxName(displayName);
+  const wb = await buildStatementAlbumWorkbook({ customerName: displayName, banks: store.banks, profile: store.profile });
   await uploadOneDriveFile({
     folderParts: args.folderParts,
-    fileName,
+    fileName: newName,
     mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     data: wb,
     root: args.root,
   });
+  // ชื่อไฟล์เปลี่ยน (ได้ชื่อจากบัตร) → ลบไฟล์ชื่อเก่า
+  if (existingFile && existingFile.name !== newName) {
+    try { await deleteOneDriveItemById(existingFile.id); } catch { /* เก็บไว้ก็ไม่เป็นไร */ }
+  }
 }
 
 function platformCsv(lines: Record<string, unknown>[]) {
@@ -215,7 +248,7 @@ export async function autoReadSaleAttachment(params: {
         await regenStatementAlbum({
           folderParts,
           root,
-          customerName: folder,
+          folder,
           bankLabel: bankLabelOf(cls.det.bank, cls.det.accountName),
           txns: cls.det.transactions,
         });
@@ -267,7 +300,22 @@ export async function autoReadSaleAttachment(params: {
     }
 
     // 3) ไม่ใช่สเตทเมนต์/แพลตฟอร์มที่โค้ดอ่านได้ → อ่านด้วย AI ตามชนิดที่จัดไว้
-    if (cls.type === "other") return; // บิลอื่นๆ — เก็บไฟล์อย่างเดียว ไม่สรุป
+    if (cls.type === "other") {
+      // ★ อาจเป็น "บัตรประชาชน" (ว่าที่ลูกค้าส่งมาทางไลน์) → อ่าน KYC เติมชีตประวัติ + ตั้งชื่อไฟล์/หัวตามชื่อในบัตร
+      //   เฉพาะรูป (ไม่ใช่ PDF/Excel) · best-effort · ไม่ใช่บัตร → คืน null (ไม่ทำอะไร) · ★ ไม่เก็บรูปบัตร (PDPA)
+      if ((params.mime || "").toLowerCase().startsWith("image/")) {
+        try {
+          const idc = await extractIdCardData(params.data, params.mime);
+          if (idc) {
+            await regenStatementAlbum({ folderParts, root, folder, profile: idc });
+            await markSourceRead(folderParts, params.fileName, root);
+          }
+        } catch {
+          console.warn("[auto-read] id-card read failed");
+        }
+      }
+      return; // บิลอื่นๆ — เก็บไฟล์อย่างเดียว ไม่สรุป
+    }
 
     if (cls.type === "statement") {
       const txns = cls.chunks
@@ -282,7 +330,7 @@ export async function autoReadSaleAttachment(params: {
       try {
         let bank = normalizeBankName(cls.det?.bank ?? null);
         if (!bank) bank = await detectStatementBank(params.data, params.mime);
-        await regenStatementAlbum({ folderParts, root, customerName: folder, bankLabel: bank ?? UNKNOWN_BANK, txns });
+        await regenStatementAlbum({ folderParts, root, folder, bankLabel: bank ?? UNKNOWN_BANK, txns });
       } catch {
         console.warn("[auto-read] statement album (image) failed");
       }

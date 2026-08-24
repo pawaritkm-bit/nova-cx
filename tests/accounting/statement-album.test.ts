@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   txnKey,
   mergeIntoBank,
+  mergeProfile,
   emptyAlbum,
   parseAlbumStore,
   serializeAlbumStore,
@@ -120,6 +121,30 @@ describe("buildStatementAlbumWorkbook", () => {
     const banks = { กสิกรไทย: [tx({ amount: 100, direction: "in", counterparty_account_no: "004-123" })] };
     const store = await readAlbumFromWorkbook(await buildStatementAlbumWorkbook({ customerName: "x", banks }));
     expect(store.banks["กสิกรไทย"][0].counterparty_account_no).toBe("004-123");
+  });
+
+  it("round-trip เก็บโปรไฟล์ KYC (บัตร ปชช.) ในชีตซ่อน _profile", async () => {
+    const profile = { name: "น.ส.พรกนก อยู่ไทย", idNo: "1709700228659", address: "142 ต.ป่าซาง", laserCode: "JC4195837718" };
+    const buf = await buildStatementAlbumWorkbook({ customerName: profile.name, banks: { กสิกรไทย: [tx({ amount: 100, direction: "in" })] }, profile });
+    const store = await readAlbumFromWorkbook(buf);
+    expect(store.profile).toMatchObject({ name: "น.ส.พรกนก อยู่ไทย", idNo: "1709700228659", laserCode: "JC4195837718" });
+  });
+});
+
+describe("mergeProfile", () => {
+  it("เติมเฉพาะช่องที่มีค่าใหม่ ไม่ลบของเดิม · คืน added ถูก", () => {
+    const base = emptyAlbum();
+    const r1 = mergeProfile(base, { name: "นายเอ", idNo: "1111111111111" });
+    expect(r1.added).toBe(true);
+    expect(r1.store.profile).toMatchObject({ name: "นายเอ", idNo: "1111111111111" });
+    const r2 = mergeProfile(r1.store, { name: "นายเอ" }); // เหมือนเดิม
+    expect(r2.added).toBe(false);
+    const r3 = mergeProfile(r1.store, { address: "กทม" }); // เพิ่มช่องใหม่
+    expect(r3.added).toBe(true);
+    expect(r3.store.profile).toMatchObject({ name: "นายเอ", address: "กทม" });
+  });
+  it("profile null → ไม่เปลี่ยน", () => {
+    expect(mergeProfile(emptyAlbum(), null).added).toBe(false);
   });
 });
 

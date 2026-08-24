@@ -9,8 +9,31 @@
  */
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
 
-/** กองสะสมสเตทเมนต์ของลูกค้า 1 ราย — แยกตามป้ายธนาคาร */
-export type AlbumStore = { v: number; banks: Record<string, StatementTxn[]> };
+/** ข้อมูลบัตรประชาชน (KYC) ของลูกค้า — เติมชีต "ประวัติลูกค้า" + ตั้งชื่อไฟล์/หัวไฟล์ตามชื่อในบัตร */
+export type AlbumProfile = {
+  name?: string | null;
+  idNo?: string | null;
+  address?: string | null;
+  dob?: string | null;
+  cardIssue?: string | null;
+  cardExpiry?: string | null;
+  laserCode?: string | null;
+};
+
+/** กองสะสมสเตทเมนต์ของลูกค้า 1 ราย — แยกตามป้ายธนาคาร (+ โปรไฟล์ KYC จากบัตร ปชช.) */
+export type AlbumStore = { v: number; banks: Record<string, StatementTxn[]>; profile?: AlbumProfile };
+
+/** รวมโปรไฟล์ KYC เข้ากอง (เติมเฉพาะช่องที่มีค่าใหม่ — ไม่ลบของเดิม) · คืน added=true ถ้ามีอะไรเปลี่ยน */
+export function mergeProfile(store: AlbumStore, profile: AlbumProfile | null): { store: AlbumStore; added: boolean } {
+  if (!profile) return { store, added: false };
+  const cur: AlbumProfile = { ...(store.profile ?? {}) };
+  let added = false;
+  for (const k of ["name", "idNo", "address", "dob", "cardIssue", "cardExpiry", "laserCode"] as const) {
+    const v = profile[k];
+    if (v && v !== cur[k]) { cur[k] = v; added = true; }
+  }
+  return { store: { ...store, profile: cur }, added };
+}
 
 /** ป้ายธนาคารเริ่มต้นเมื่ออ่านชื่อธนาคารไม่ได้ (เช่นรูปถ่าย) */
 export const UNKNOWN_BANK = "ไม่ระบุธนาคาร";
@@ -37,7 +60,7 @@ export function parseAlbumStore(buf: Buffer | null): AlbumStore {
   try {
     const o = JSON.parse(buf.toString("utf8")) as Partial<AlbumStore>;
     if (o && typeof o === "object" && o.banks && typeof o.banks === "object") {
-      return { v: 2, banks: o.banks as Record<string, StatementTxn[]> };
+      return { v: 2, banks: o.banks as Record<string, StatementTxn[]>, profile: o.profile };
     }
     return emptyAlbum();
   } catch {
