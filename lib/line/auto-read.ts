@@ -13,7 +13,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { saveRawCsvToOneDrive, saveResultCsvToOneDrive } from "@/lib/accounting/onedrive-result";
 import { extractPlatformReportFromFile, extractPlatformReportFromText, extractPlatformReportFromTextChunks } from "@/lib/accounting/platform-report-extract";
 import { extractStatementFromFile, extractStatementFromText, extractStatementFromTextChunks } from "@/lib/accounting/statement-extract";
-import { buildStatementSummaryCsv } from "@/lib/accounting/statement-summary-csv";
 import { autoImportReconciledStatement } from "@/lib/accounting/bank-reconciliation";
 import { buildPlatformSummaryCsv } from "@/lib/accounting/platform/parse";
 import { lockedNoteFileName, buildLockedNoteContent } from "@/lib/accounting/locked-note";
@@ -21,7 +20,9 @@ import { sanitizeDocName, shopNameFromFilename } from "@/lib/accounting/doc-nami
 import { extractAndClassify, type FinanceClassification } from "@/lib/accounting/classify-finance-doc";
 import { gatherRecentChatText, interpretDocPurpose } from "@/lib/accounting/doc-purpose";
 import { downloadOneDriveFile, isOneDriveEnabled, renameOneDriveFile, uploadOneDriveFile } from "@/lib/storage/onedrive";
-import { albumCsvName, albumJsonName, mergeTxns, parseAlbum, serializeAlbum, sessionDateKey } from "@/lib/accounting/statement-album";
+import { albumStoreName, albumXlsxName, mergeIntoBank, parseAlbumStore, serializeAlbumStore, UNKNOWN_BANK } from "@/lib/accounting/statement-album";
+import { buildStatementAlbumWorkbook } from "@/lib/accounting/statement-album-excel";
+import type { StatementTxn } from "@/lib/accounting/statement-analyze";
 import { resolveSaleFolder, oaOneDriveRoot, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 import { buildProspectIncomeWorkbook, aggregateBankMonthly } from "@/lib/accounting/prospect-income-analysis";
 import { upsertProspectBankSummary, loadProspectBankSummaries } from "@/lib/accounting/prospect-income-store";
@@ -99,19 +100,40 @@ async function regenProspectIncome(
   }
 }
 
-/** map StatementTxn → headers/rows สำหรับ CSV (ผลอ่านด้วย AI) */
-function statementCsv(txns: Record<string, unknown>[]) {
-  return {
-    headers: [
-      { key: "date", label: "วันที่" },
-      { key: "description", label: "รายละเอียด" },
-      { key: "counterparty_name", label: "คู่ค้า" },
-      { key: "direction", label: "ทิศทาง(in/out)" },
-      { key: "amount", label: "จำนวนเงิน" },
-    ],
-    rows: txns,
-  };
+/**
+ * ★ รวมสเตทเมนต์ทุกไฟล์/รูปของลูกค้า → Excel สรุปไฟล์เดียว แยกชีตตามธนาคาร
+ *   สะสมธุรกรรมลง store JSON (โฟลเดอร์ย่อย _album) ต่อธนาคาร → dedup (กันไฟล์/รูปซ้ำ) → รีเจน Excel
+ *   ★ best-effort · added=0 (ไม่มีรายการใหม่/ไฟล์ซ้ำ) → ข้ามการรีเจน
+ */
+async function regenStatementAlbum(args: {
+  folderParts: string[];
+  root?: string;
+  customerName: string;
+  bankLabel: string | null;
+  txns: StatementTxn[];
+}): Promise<void> {
+  if (!args.txns || args.txns.length === 0) return;
+  const albumParts = [...args.folderParts, "_album"];
+  const store = parseAlbumStore(await downloadOneDriveFile(albumParts, albumStoreName, args.root));
+  const { store: next, added } = mergeIntoBank(store, args.bankLabel, args.txns);
+  if (added === 0) return; // ไฟล์/รูปซ้ำ ไม่มีรายการใหม่ → ไม่ต้องรีเจน
+  await uploadOneDriveFile({
+    folderParts: albumParts,
+    fileName: albumStoreName,
+    mime: "application/json",
+    data: serializeAlbumStore(next),
+    root: args.root,
+  });
+  const wb = await buildStatementAlbumWorkbook({ customerName: args.customerName, banks: next.banks });
+  await uploadOneDriveFile({
+    folderParts: args.folderParts,
+    fileName: albumXlsxName(args.customerName),
+    mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data: wb,
+    root: args.root,
+  });
 }
+
 function platformCsv(lines: Record<string, unknown>[]) {
   return {
     headers: [
@@ -138,8 +160,6 @@ export async function autoReadSaleAttachment(params: {
   fileName: string;
   /** ชื่อไฟล์เดิมจากลูกค้า (มีชื่อร้าน/ไทย) — ใช้ตั้งชื่อเอกสารรายงานแพลตฟอร์ม */
   originalName?: string | null;
-  /** เวลาที่ลูกค้าส่ง (ISO) — ใช้จับ "รูปสเตทเมนต์ชุดเดียวกัน" (ส่งวันเดียวกัน = ชุดเดียว) รวมไฟล์สรุปเดียว */
-  sentAt?: string | null;
   mime: string;
   data: Buffer;
   /** ผลจัดประเภทที่ attachments worker ทำไว้แล้ว (จัดครั้งเดียว) — ไม่ส่งมา = จัดเอง */
@@ -195,9 +215,18 @@ export async function autoReadSaleAttachment(params: {
 
     // 1) สเตทเมนต์ deterministic (reconcile ผ่าน) → สรุปฟรี/เร็ว ไม่ต้องพึ่ง AI
     if (cls.det?.fullyReconciled) {
-      const csv = (await purposePrefix("statement")) + buildStatementSummaryCsv(cls.det.transactions, cls.det.bank, cls.det.printedTotals);
-      const docBase = cls.det.accountName ? sanitizeDocName(cls.det.accountName) : base;
-      await saveRawCsvToOneDrive({ folderParts, fileName: `${docBase} - สรุป.csv`, csv, root });
+      // ★ รวมทุกไฟล์/รูปของลูกค้า → Excel สรุปไฟล์เดียว แยกชีตตามธนาคาร (PDF รู้ชื่อธนาคารจาก det)
+      try {
+        await regenStatementAlbum({
+          folderParts,
+          root,
+          customerName: folder,
+          bankLabel: bankLabelOf(cls.det.bank, cls.det.accountName),
+          txns: cls.det.transactions,
+        });
+      } catch {
+        console.warn("[auto-read] statement album (det) failed");
+      }
       // ★ care OA เท่านั้น (กลุ่มผูกลูกค้าแล้ว): auto-feed เข้าหน้ากระทบยอดธนาคาร (ไม่ต้องอัป CSV ซ้ำ)
       if (oaType === "care") {
         try {
@@ -252,27 +281,13 @@ export async function autoReadSaleAttachment(params: {
           ? await extractStatementFromText(cls.text)
           : await extractStatementFromFile(params.data, params.mime);
       if (txns.length === 0) return;
-      // ★ รวม "รูปสเตทเมนต์ชุดเดียวกัน" (ส่งวันเดียวกัน) → ไฟล์สรุปเดียว · dedup รายการ (กันรูปซ้ำ)
-      //   เก็บกองสะสมเป็น JSON ในโฟลเดอร์ย่อย _album (ไม่รกโฟลเดอร์สรุป) → รีเจน CSV สรุปทุกครั้งที่มีรูปใหม่
-      const dateKey = sessionDateKey(params.sentAt);
-      const albumParts = [...folderParts, "_album"];
-      const jsonName = albumJsonName(dateKey);
-      const existing = parseAlbum(await downloadOneDriveFile(albumParts, jsonName, root));
-      const { merged, added } = mergeTxns(existing, txns);
-      if (added === 0 && existing.length > 0) {
-        // รูปซ้ำ/ไม่มีรายการใหม่ → ไม่ต้องรีเจน แค่มาร์กว่าอ่านแล้ว
-        await markSourceRead(folderParts, params.fileName, root);
-        return;
+      // ★ รวมทุกไฟล์/รูปของลูกค้า → Excel สรุปไฟล์เดียว แยกชีตตามธนาคาร · dedup (กันรูปซ้ำ)
+      //   รูปถ่ายอ่านชื่อธนาคารไม่ได้ → ลงชีต "ไม่ระบุธนาคาร" (นักบัญชีแยกทีหลังได้)
+      try {
+        await regenStatementAlbum({ folderParts, root, customerName: folder, bankLabel: UNKNOWN_BANK, txns });
+      } catch {
+        console.warn("[auto-read] statement album (image) failed");
       }
-      await uploadOneDriveFile({
-        folderParts: albumParts,
-        fileName: jsonName,
-        mime: "application/json",
-        data: serializeAlbum(merged),
-        root,
-      });
-      const result = statementCsv(merged as unknown as Record<string, unknown>[]);
-      await saveResultCsvToOneDrive({ folderParts, fileName: albumCsvName(dateKey), headers: result.headers, rows: result.rows, root });
       await markSourceRead(folderParts, params.fileName, root);
       return;
     }
