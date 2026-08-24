@@ -31,6 +31,9 @@ import {
 } from "@/lib/accounting/statement-album";
 import { buildStatementAlbumWorkbook, readAlbumFromWorkbook } from "@/lib/accounting/statement-album-excel";
 import { classifyOldSummaryFile, parseOldSummary } from "@/lib/accounting/statement-cleanup";
+import { parsePlatformFile, detectPlatformFromName } from "@/lib/accounting/platform/parse";
+import { mergePlatformFile, toPlatformRecord } from "@/lib/accounting/platform-album";
+import { buildPlatformAlbumWorkbook, readPlatformAlbumFromWorkbook } from "@/lib/accounting/platform-album-excel";
 import { normalizeBankName } from "@/lib/accounting/statement-extract";
 import { UNKNOWN_BANK } from "@/lib/accounting/statement-album";
 
@@ -69,6 +72,46 @@ async function handle(request: NextRequest) {
   const mode =
     modeParam === "execute" ? "execute" : modeParam === "inspect" ? "inspect" : modeParam === "rebuild" ? "rebuild"
       : modeParam === "purge-empty" ? "purge-empty" : modeParam === "linkbackfill" ? "linkbackfill" : "dryrun";
+
+  // ===== platformbackfill: รวมไฟล์รายงานแพลตฟอร์มเดิม → สรุปยอดขายแพลตฟอร์ม.xlsx (ทั้ง NOVA-Bills + NOVA-Care) =====
+  if (modeParam === "platformbackfill") {
+    const PLAT_SUB = "รายงานแพลตฟอร์ม";
+    const roots2 = [oaOneDriveRoot("sale"), oaOneDriveRoot("care")];
+    const out: { customer: string; root: string; files: number; built: boolean }[] = [];
+    for (const root of roots2) {
+      let custs: { id: string; name: string; isFolder: boolean }[] = [];
+      try { custs = (await listOneDriveChildren([], root)).filter((c) => c.isFolder); } catch { continue; }
+      for (const cust of custs) {
+        let files: { id: string; name: string; isFolder: boolean }[] = [];
+        try { files = await listOneDriveChildren([cust.name, PLAT_SUB], root); } catch { continue; }
+        const orig = files.filter((f) => !f.isFolder && !/สรุปยอดขายแพลตฟอร์ม\.xlsx$/i.test(f.name) && /\.(xlsx|xls|csv)$/i.test(f.name));
+        if (orig.length === 0) continue;
+        const existing = files.find((f) => !f.isFolder && /สรุปยอดขายแพลตฟอร์ม\.xlsx$/i.test(f.name));
+        let store = await readPlatformAlbumFromWorkbook(existing ? await downloadOneDriveFile([cust.name, PLAT_SUB], existing.name, root).catch(() => null) : null);
+        let added = 0;
+        for (const f of orig) {
+          try {
+            const buf = await downloadOneDriveFile([cust.name, PLAT_SUB], f.name, root);
+            if (!buf) continue;
+            const ext = (f.name.match(/\.([a-z0-9]+)$/i)?.[1] || "").toLowerCase();
+            const parsed = await parsePlatformFile({ name: f.name, ext, buffer: Uint8Array.from(buf).buffer }, detectPlatformFromName(f.name));
+            if (!(parsed.figures.grossSales > 0 || parsed.figures.platformFee > 0)) continue;
+            const r = mergePlatformFile(store, toPlatformRecord(parsed.platform, parsed.figures));
+            store = r.store;
+            if (r.added) added++;
+          } catch { /* ไฟล์นี้ parse ไม่ได้ → ข้าม */ }
+        }
+        if (added === 0) { out.push({ customer: cust.name, root, files: orig.length, built: false }); continue; }
+        try {
+          const wb = await buildPlatformAlbumWorkbook({ customerName: cust.name, store });
+          const fileName = existing ? existing.name : `${cust.name.replace(/[\\/:*?"<>|]+/g, " ").slice(0, 80)} - สรุปยอดขายแพลตฟอร์ม.xlsx`;
+          const saved = await uploadOneDriveFile({ folderParts: [cust.name, PLAT_SUB], fileName, mime: XLSX_MIME, data: wb, root });
+          out.push({ customer: cust.name, root, files: orig.length, built: saved !== null });
+        } catch { out.push({ customer: cust.name, root, files: orig.length, built: false }); }
+      }
+    }
+    return NextResponse.json({ ok: true, mode: "platformbackfill", built: out.filter((x) => x.built).length, out });
+  }
 
   // ===== uptest: debug — สร้าง wb ของลูกค้า q แล้วอัปแบบ verbose คืน HTTP status =====
   if (modeParam === "uptest") {
