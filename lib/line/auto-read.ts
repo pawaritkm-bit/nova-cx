@@ -230,7 +230,7 @@ export async function autoReadSaleAttachment(params: {
         originalName: params.originalName,
         mime: params.mime,
         data: params.data,
-        imageAiClassify: oaType === "sale", // ประหยัด: AI จัดประเภทรูปเฉพาะ sale
+        imageAiClassify: false, // ประหยัดงบ: ไม่ AI จัดประเภทรูป (สเตทเมนต์รูปไม่ auto-summary แล้ว)
       }));
 
     const folder = await resolveSaleFolder(group, root);
@@ -337,11 +337,12 @@ export async function autoReadSaleAttachment(params: {
     }
 
     if (cls.type === "statement") {
+      // ★ ประหยัดงบ: สรุปเฉพาะสเตทเมนต์ "ดิจิทัล" (text/chunks = deterministic ฟรี)
+      //   สเตทเมนต์ "รูป" ไม่ auto-summary แล้ว (AI vision แพง) → ข้าม ปล่อยเป็นไฟล์ต้นทางเฉยๆ
+      if (!cls.chunks && !cls.text) return;
       const txns = cls.chunks
         ? (await extractStatementFromTextChunks(cls.chunks)).txns
-        : cls.text
-          ? await extractStatementFromText(cls.text)
-          : await extractStatementFromFile(params.data, params.mime);
+        : await extractStatementFromText(cls.text!);
       if (txns.length === 0) return;
       // ★ รวมทุกไฟล์/รูปของลูกค้า → Excel สรุปไฟล์เดียว แยกชีตตามธนาคาร · dedup (กันรูปซ้ำ)
       //   ★ ใช้ชื่อธนาคารจาก parser ก่อน (ฟรี — NOVA Sale/deterministic มักอ่านให้อยู่แล้ว)

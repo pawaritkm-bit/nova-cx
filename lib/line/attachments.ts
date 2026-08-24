@@ -558,11 +558,9 @@ export async function processPendingAttachments(
           originalName: row.original_name,
           mime: content.mime,
           data: content.data,
-          // ★ ประหยัด Gemini: AI จัดประเภท "รูป" เฉพาะ sale หรือ care-บุคคลธรรมดา (ต้องการไฟล์สรุปสเตทเมนต์เหมือน sale)
-          //   care-นิติบุคคล = บิลส่วนใหญ่ → deterministic พอ (บิลไป bill-worker แยก)
-          imageAiClassify:
-            (group?.chat_channels?.oa_type || "") === "sale" ||
-            ((group?.chat_channels?.oa_type || "") === "care" && group?.customers?.customer_type === "individual"),
+          // ★ ประหยัดงบ: ปิด AI จัดประเภท "รูป" ทั้งหมด — สเตทเมนต์/แพลตฟอร์ม "รูป" ไม่ auto-summary (ใช้ AI vision แพง)
+          //   เก็บเฉพาะดิจิทัล (PDF/Excel/CSV = deterministic ฟรี) · รูป → "other" (บิลไป bill-worker แยก)
+          imageAiClassify: false,
         });
       } catch {
         classification = undefined; // จัดประเภทพลาด → วางแบบ flat (auto-read จะจัดเองภายหลัง)
