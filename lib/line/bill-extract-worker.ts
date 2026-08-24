@@ -8,6 +8,7 @@ import { suggestPaymentMethod } from "@/lib/accounting/payment";
 import { getCustomerShareCircleFlag } from "@/lib/share-circles/queries";
 import { suggestAccountCode } from "@/lib/accounting/account-learning";
 import { classifyShareCircleImage } from "@/lib/ai/bill-classify";
+import { isTooSmallToBeBill } from "@/lib/accounting/image-prep";
 
 /**
  * Bill extract worker — ไล่บิลที่เก็บแล้วแต่ยังไม่มี bill_entries → AI สกัด → สร้าง draft
@@ -821,6 +822,16 @@ export async function processBillExtraction(
         const bills = await extractBillsData(buf, mime, chart);
         bill = bills[0] ?? null;
       } else {
+        // ★ ประหยัด: รูปเล็กเกินกว่าจะเป็นบิล (สติกเกอร์/emoji/ธัมบ์เนล) → ข้าม ไม่เสีย vision call ทิ้ง
+        //   conservative (ขอบยาว <350px) · บิลจริงขอบยาว >1000px เสมอ → ไม่มีทางพลาดบิลจริง
+        if (await isTooSmallToBeBill(buf, mime)) {
+          await db
+            .from("message_attachments")
+            .update({ fetch_status: "skipped", fetch_error: "image_too_small" })
+            .eq("id", row.id)
+            .eq("tenant_id", row.tenant_id);
+          continue;
+        }
         // รูปบิลไลน์ = gpt-4o-mini (ประหยัด · ปริมาณมากทุกวันผ่าน cron)
         bill = await extractBillData(buf, mime, chart);
       }

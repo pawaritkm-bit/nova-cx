@@ -20,6 +20,26 @@ function isImageMime(mime: string): boolean {
   return m.startsWith("image/") && !m.includes("pdf");
 }
 
+/** ขอบยาวสุดที่ "เล็กเกินกว่าจะเป็นบิลอ่านได้" — สติกเกอร์/emoji/ธัมบ์เนล LINE มัก ≤370px
+ *   บิลจริง (ถ่าย/สแกน/สกรีนช็อต) ขอบยาว >1000px เสมอ · ถ้า <350px ต่อให้ยิง vision ก็อ่านตัวเลขไม่ออก
+ *   → ปลอดภัยที่จะข้าม (ไม่เสีย flash call ทิ้งกับสติกเกอร์) */
+const IMG_MIN_BILL_EDGE = 350;
+
+/**
+ * รูปนี้ "เล็กเกินกว่าจะเป็นบิล" ไหม (สติกเกอร์/emoji/ธัมบ์เนล) — ไว้กรองก่อนยิง vision (ประหยัด)
+ * ★ conservative: true เฉพาะเมื่ออ่านขนาดได้จริง "และ" ขอบยาวสุด < เกณฑ์ · อ่านไม่ได้/PDF → false (ไม่กล้าข้าม)
+ */
+export async function isTooSmallToBeBill(data: Buffer, mime: string): Promise<boolean> {
+  if (!isImageMime(mime)) return false;
+  try {
+    const meta = await sharp(data).metadata();
+    const longEdge = Math.max(meta.width ?? 0, meta.height ?? 0);
+    return longEdge > 0 && longEdge < IMG_MIN_BILL_EDGE;
+  } catch {
+    return false; // อ่าน metadata ไม่ได้ → ไม่กล้าข้าม (ปล่อยไป vision ตามเดิม)
+  }
+}
+
 /**
  * ย่อรูปถ้าใหญ่เกินเกณฑ์ (ไม่ใช่รูป/เล็กพอ → คืนเดิม)
  * @returns { data, mime } พร้อมส่งเข้า vision
