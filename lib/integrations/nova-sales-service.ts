@@ -316,42 +316,151 @@ async function findCustomerByExternalRef(
 
 /**
  * soft-delete ลูกค้าตาม external_ref (delete-sync จาก NOVA Sales) — idempotent
- *   - หาลูกค้าด้วย external_ref + tenant (เฉพาะที่ยังไม่ถูกลบ)
- *     → ไม่เจอ (ไม่มีจริง / ลบไปแล้ว / คนละ tenant) = no-op (deleted:false) ไม่ error
- *   - เจอ → set deleted_at=now(), status='cancelled' (ค่าที่ customers.status enum รับ)
- *   - เคลียร์ chat_groups.customer_id (กลุ่ม/ห้องของลูกค้านั้นใน tenant) → null
- *     คง responsible_employee_id ไว้ (ผู้ดูแลที่แอดมินกำหนดไม่เกี่ยวกับการลบลูกค้า)
- *   - ไม่แตะ customer_assignments (การมอบหมายเก็บไว้เป็นประวัติ)
- *   - filter tenant_id ทุก query → กัน cross-tenant (ลบข้าม tenant ไม่ได้)
+ *
+ * 3 กรณี:
+ *   1) ไม่มีข้อมูลบัญชี → soft-delete ตรง ๆ
+ *   2) มีข้อมูลบัญชี + มี "ตัวซ้ำ" ชื่อเดียวกันที่ว่างเปล่า
+ *      → สลับ customer_code ให้ตัวที่มีบิลได้รหัสหลัก แล้วลบตัวว่าง
+ *   3) มีข้อมูลบัญชี + ไม่มีตัวซ้ำว่างเปล่า → ไม่ลบ (skipped)
+ *
+ *   - ไม่แตะ chat_groups / line_group_customers / customer_assignments
+ *   - filter tenant_id ทุก query → กัน cross-tenant
  */
+export type DeleteSyncResult = {
+  deleted: boolean;
+  customerId: string | null;
+  skipped?: boolean;
+  swapped?: boolean;
+  swapDetail?: { keptId: string; keptCode: string; deletedId: string; deletedCode: string };
+  reason?: string;
+  accountingRefs?: Record<string, number>;
+};
+
+const ACCOUNTING_TABLES = [
+  "bill_entries",
+  "account_opening_balances",
+  "payroll_runs",
+  "payroll_settings",
+  "tax_invoices",
+  "recurring_journal_entries",
+  "petty_cash_funds",
+  "credit_debit_notes",
+  "fx_period_revaluations",
+] as const;
+
+async function countAccountingRefs(
+  db: DB,
+  tenantId: string,
+  customerId: string
+): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  for (const table of ACCOUNTING_TABLES) {
+    const { count } = await db
+      .from(table)
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenantId)
+      .eq("customer_id", customerId)
+      .is("deleted_at", null);
+    if (count && count > 0) counts[table] = count;
+  }
+  return counts;
+}
+
+/**
+ * หา "ตัวซ้ำ" ชื่อเดียวกัน + tenant เดียวกัน + active + ไม่มีข้อมูลบัญชี
+ *   ใช้สำหรับสลับรหัสเมื่อตัวที่ Nova Sale ลบมีบิลอยู่
+ */
+async function findEmptyDuplicate(
+  db: DB,
+  tenantId: string,
+  name: string,
+  excludeId: string
+): Promise<{ id: string; customer_code: string | null } | null> {
+  const { data } = await db
+    .from("customers")
+    .select("id, customer_code")
+    .eq("tenant_id", tenantId)
+    .eq("name", name)
+    .is("deleted_at", null)
+    .not("id", "eq", excludeId);
+  const rows = (data ?? []) as { id: string; customer_code: string | null }[];
+  for (const row of rows) {
+    const refs = await countAccountingRefs(db, tenantId, row.id);
+    if (Object.keys(refs).length === 0) return row;
+  }
+  return null;
+}
+
 export async function softDeleteCustomerByExternalRef(
   db: DB,
   tenantId: string,
   externalRef: string
-): Promise<{ deleted: boolean; customerId: string | null }> {
+): Promise<DeleteSyncResult> {
   const customerId = await findCustomerByExternalRef(db, tenantId, externalRef);
   if (!customerId) {
-    // ไม่เจอลูกค้าที่ยัง active ใน tenant นี้ → idempotent no-op
     return { deleted: false, customerId: null };
   }
 
+  const refs = await countAccountingRefs(db, tenantId, customerId);
+  const hasAccounting = Object.keys(refs).length > 0;
   const now = new Date().toISOString();
 
-  // soft-delete ตัวลูกค้า (คง external_ref ไว้เพื่อ idempotency ของการยิงลบซ้ำ)
-  await db
+  // กรณี 1: ไม่มีข้อมูลบัญชี → ลบตรง ๆ
+  if (!hasAccounting) {
+    await db
+      .from("customers")
+      .update({ deleted_at: now, status: "cancelled" })
+      .eq("id", customerId)
+      .eq("tenant_id", tenantId);
+    return { deleted: true, customerId };
+  }
+
+  // กรณี 2: มีข้อมูลบัญชี → หาตัวซ้ำชื่อเดียวกันที่ว่าง แล้วสลับรหัส
+  const { data: self } = await db
     .from("customers")
-    .update({ deleted_at: now, status: "cancelled" })
+    .select("name, customer_code")
     .eq("id", customerId)
-    .eq("tenant_id", tenantId);
+    .single();
+  const selfRow = self as { name: string; customer_code: string | null } | null;
+  if (!selfRow?.name) {
+    return { deleted: false, customerId, skipped: true, reason: "has_accounting_data", accountingRefs: refs };
+  }
 
-  // เคลียร์การจับคู่กลุ่ม/ห้องแชท → customer_id = null (คง responsible_employee_id)
-  await db
-    .from("chat_groups")
-    .update({ customer_id: null })
-    .eq("tenant_id", tenantId)
-    .eq("customer_id", customerId);
+  const empty = await findEmptyDuplicate(db, tenantId, selfRow.name, customerId);
+  if (!empty) {
+    return { deleted: false, customerId, skipped: true, reason: "has_accounting_data", accountingRefs: refs };
+  }
 
-  return { deleted: true, customerId };
+  // สลับรหัส: ตัวที่มีบิลได้รหัสของตัวว่าง ตัวว่างได้รหัสเดิม แล้วลบตัวว่าง
+  const codeForKept = empty.customer_code;   // รหัสที่ Nova Sale เก็บ
+  const codeForDeleted = selfRow.customer_code; // รหัสเดิมของตัวที่มีบิล
+
+  // ปลดรหัสชั่วคราวกัน unique constraint ชน
+  await db.from("customers").update({ customer_code: null }).eq("id", customerId).eq("tenant_id", tenantId);
+  await db.from("customers").update({ customer_code: null }).eq("id", empty.id).eq("tenant_id", tenantId);
+
+  // ใส่รหัสใหม่
+  await db.from("customers").update({ customer_code: codeForKept }).eq("id", customerId).eq("tenant_id", tenantId);
+  await db.from("customers").update({ customer_code: codeForDeleted }).eq("id", empty.id).eq("tenant_id", tenantId);
+
+  // ย้าย external_ref จากตัวที่มีบิลไปตัวว่าง (ตัวว่างจะถูกลบ คง ref ไว้เพื่อ idempotency)
+  await db.from("customers").update({ external_ref: null }).eq("id", customerId).eq("tenant_id", tenantId);
+  await db.from("customers").update({ external_ref: externalRef }).eq("id", empty.id).eq("tenant_id", tenantId);
+
+  // soft-delete ตัวว่าง
+  await db.from("customers").update({ deleted_at: now, status: "cancelled" }).eq("id", empty.id).eq("tenant_id", tenantId);
+
+  return {
+    deleted: true,
+    customerId: empty.id,
+    swapped: true,
+    swapDetail: {
+      keptId: customerId,
+      keptCode: codeForKept ?? "(null)",
+      deletedId: empty.id,
+      deletedCode: codeForDeleted ?? "(null)",
+    },
+  };
 }
 
 /** upsert lead ตาม external_ref (idempotent + จับ 23505) → คืน lead id หรือ null */

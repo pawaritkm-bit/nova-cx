@@ -457,8 +457,31 @@ export async function processPendingAttachments(
       docFields = { doc_kind: "file", doc_confidence: null, doc_checked: true };
     } else {
       const classified = await classifyBillImage(content.data, content.mime);
-      if (classified && !classified.keep) {
-        // มั่นใจว่าไม่ใช่เอกสารการเงิน → ไม่ store · ปิดงานเป็น skipped ('not_a_bill')
+      // ★ รูปที่ "ไม่ใช่บิล" (kind='other' — เช่น ภ.พ.30/ภ.ธ.40/สรุปรายได้/สกรีนช็อตเอกสาร) → ไม่ทิ้งแล้ว
+      //   เก็บลง OneDrive โฟลเดอร์ "บิลอื่นๆ" ของลูกค้า ให้นักบัญชีเห็น · mark not_a_bill กันเข้า bill extraction (ไม่มีค่า AI)
+      //   ★ classify=null (error/timeout) → ถือเป็น "บิล" (keep-if-unsure) → ไปไปป์ไลน์ปกติ ไม่ route ผิด
+      if (classified && classified.kind === "other") {
+        const oaT = group?.chat_channels?.oa_type || "";
+        if (isOneDriveEnabled() && group && (oaT === "sale" || oaT === "care")) {
+          try {
+            const odRoot = oaOneDriveRoot(oaT);
+            const odFolder = await resolveSaleFolder(group, odRoot);
+            const oext = (row.original_name ? splitNameExt(row.original_name).ext : "") || extFromMime(content.mime) || "jpg";
+            const ofn = `${safeStamp(row.chat_messages?.sent_at ?? null)}_${contentId}.${oext}`;
+            await storeBillFile({
+              db,
+              tenantId: row.tenant_id,
+              folderParts: [odFolder, "บิลอื่นๆ"],
+              fileName: ofn,
+              mime: content.mime,
+              data: content.data,
+              backendOverride: "onedrive",
+              root: odRoot,
+            });
+          } catch {
+            console.warn("[line/attachments] non-bill image → OneDrive บิลอื่นๆ failed");
+          }
+        }
         await markSkippedNotBill(db, row.id, classified.confidence);
         skipped++;
         continue;

@@ -82,9 +82,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           ok: true,
-          deleted: true,
+          deleted: result.deleted,
+          skipped: result.skipped ?? false,
+          swapped: result.swapped ?? false,
+          reason: result.reason ?? null,
           external_ref: parsed.data.external_customer_id,
           customer_id: result.customerId,
+          ...(result.accountingRefs ? { accounting_refs: result.accountingRefs } : {}),
+          ...(result.swapDetail ? { swap_detail: result.swapDetail } : {}),
         },
         { status: 200 }
       );
