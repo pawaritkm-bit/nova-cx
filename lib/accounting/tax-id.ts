@@ -30,3 +30,13 @@ export function normalizeTaxId(raw: unknown): string | null {
 export function isValidTaxId(raw: unknown): boolean {
   return normalizeTaxId(raw) !== null;
 }
+
+/** ตรวจ check digit ของเลขภาษีไทย 13 หลัก (ใช้กรองค่าที่ OCR/AI อ่านเพี้ยน) */
+export function isValidThaiTaxIdChecksum(raw: unknown): boolean {
+  const digits = normalizeTaxId(raw);
+  if (!digits) return false;
+  let sum = 0;
+  for (let i = 0; i < 12; i += 1) sum += Number(digits[i]) * (13 - i);
+  const checkDigit = (11 - (sum % 11)) % 10;
+  return checkDigit === Number(digits[12]);
+}

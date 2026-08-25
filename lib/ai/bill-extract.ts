@@ -20,6 +20,7 @@ import {
 } from "@/lib/accounting/chart-of-accounts";
 import { downscaleImageIfLarge } from "@/lib/accounting/image-prep";
 import { extractPdfMaybeSplit } from "@/lib/accounting/pdf-split";
+import { isValidThaiTaxIdChecksum, taxIdDigits } from "@/lib/accounting/tax-id";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -566,11 +567,18 @@ export function normalizeExtraction(
     lines.push({ vat_type: "vat", description: null, amount: null, vat_amount: null, account_code: null, wht_rate: null, wht_amount: null, low_confidence: false });
   }
 
+  const gateExtractedTaxId = (field: ConfField | undefined): string | null => {
+    const value = gateString(field);
+    if (!value) return null;
+    const digits = taxIdDigits(value);
+    return isValidThaiTaxIdChecksum(digits) ? digits : null;
+  };
+
   return {
     // ★ doc_date / tax_id (13 หลัก): คงเกณฑ์สูง — วันที่/เลขภาษีผิด = ยุ่ง (ไม่เดาเติม)
     doc_date: fixBuddhistYear(gateString(r.doc_date)),
-    seller_tax_id: gateString(r.seller_tax_id),
-    buyer_tax_id: gateString(r.buyer_tax_id),
+    seller_tax_id: gateExtractedTaxId(r.seller_tax_id),
+    buyer_tax_id: gateExtractedTaxId(r.buyer_tax_id),
     // ★ doc_no / ชื่อผู้ขาย-ผู้ซื้อ: เติมเชิงรุก (GUESS_THRESHOLD) — string เสี่ยงน้อยกว่าตัวเลข
     doc_no: gateString(r.doc_no, GUESS_THRESHOLD),
     seller_name: gateString(r.seller_name, GUESS_THRESHOLD),

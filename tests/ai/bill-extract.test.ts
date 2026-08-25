@@ -73,9 +73,9 @@ describe("normalizeExtraction — high-confidence gating", () => {
       doc_date: { value: "2026-07-15", confidence: 0.95 },
       doc_no: { value: "INV-001", confidence: 0.9 },
       seller_name: { value: "บริษัท ก", confidence: 0.85 },
-      seller_tax_id: { value: "0105500000001", confidence: 0.9 },
+      seller_tax_id: { value: "0-1055-00000-00-3", confidence: 0.9 },
       buyer_name: { value: "บริษัท ข", confidence: 0.9 },
-      buyer_tax_id: { value: "0105500000002", confidence: 0.9 },
+      buyer_tax_id: { value: "0994000000006", confidence: 0.9 },
       lines: [{ vat_type: "vat", amount: { value: 100, confidence: 0.9 }, vat_amount: { value: 7, confidence: 0.9 } }],
       overall_confidence: 0.9,
     });
@@ -84,10 +84,21 @@ describe("normalizeExtraction — high-confidence gating", () => {
     expect(r?.doc_no).toBe("INV-001");
     expect(r?.seller_name).toBe("บริษัท ก");
     expect(r?.buyer_name).toBe("บริษัท ข");
+    expect(r?.seller_tax_id).toBe("0105500000003");
+    expect(r?.buyer_tax_id).toBe("0994000000006");
     expect(r?.lines[0].amount).toBe(100);
     expect(r?.lines[0].vat_amount).toBe(7);
     // เติมด้วยความมั่นใจสูง → ไม่ mark เดา
     expect(r?.lines[0].low_confidence).toBe(false);
+  });
+
+  it("เลขภาษีครบ 13 หลักแต่ checksum ผิด → ไม่กรอก", () => {
+    const r = normalizeExtraction({
+      seller_tax_id: { value: "0105500000001", confidence: 0.99 },
+      lines: [],
+      overall_confidence: 0.9,
+    });
+    expect(r?.seller_tax_id).toBeNull();
   });
 
   it("★ ตัวเลข conf ปานกลาง (>=0.3, <0.8) → เติมค่า + mark low_confidence (เดา)", () => {

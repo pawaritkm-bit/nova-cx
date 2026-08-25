@@ -50,6 +50,7 @@ import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import { isValidCurrencyCode, validateFxRate, deriveThbAmount } from "@/lib/accounting/currency";
 import { fetchBotReferenceRate } from "@/lib/integrations/bot-exchange-rate";
 import { getProductUnitsByIds } from "@/lib/accounting/product-units";
+import { captureAiReviewBaseline, recordAiReviewResult } from "@/lib/accounting/ai-accuracy-audit";
 
 const PATH = "/chat-audit/accounting";
 /** bucket รูปบิล (private) — ตรงกับหน้า bills / lib/storage/bill-storage.ts */
@@ -299,6 +300,11 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
     }
     assertCustomerInScope(ctx, input.customerId ?? null);
 
+    // Snapshot ก่อนคนแก้ ใช้วัด field accuracy จริง ไม่ยิง AI และไม่บล็อก save หาก migration ยังไม่ apply
+    const aiReviewBaseline = input.id
+      ? await captureAiReviewBaseline(service, ctx.tenantId, input.id)
+      : null;
+
     // ★ บัญชีธนาคารที่ใช้ (โอน) ต้องเป็นบัญชีของ "ลูกค้าเจ้าของบิล" ใน tenant นี้ (กันผูกข้ามบริษัท)
     if (paymentBankAccountId) {
       const { data: ba } = await service
@@ -455,6 +461,8 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
         // คอลัมน์ยังไม่ apply migration 0061 → ข้ามเงียบ
       }
     }
+
+    await recordAiReviewResult(service, ctx.tenantId, entryId, aiReviewBaseline);
 
     // 4) ยืนยัน (ถ้าขอ) — reject ถ้ายัง unspecified / ไม่มีมูลค่า
     if (input.confirm) {

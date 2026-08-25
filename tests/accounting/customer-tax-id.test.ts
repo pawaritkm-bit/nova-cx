@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { normalizeTaxId, isValidTaxId, taxIdDigits } from "@/lib/accounting/tax-id";
+import { normalizeTaxId, isValidTaxId, isValidThaiTaxIdChecksum, taxIdDigits } from "@/lib/accounting/tax-id";
 import { pushCustomerTaxId } from "@/lib/integrations/nova-sales-outbound";
 
 /**
@@ -29,6 +29,12 @@ describe("tax-id — normalize / validate (13 หลัก)", () => {
     expect(isValidTaxId("123")).toBe(false);
     expect(taxIdDigits("0-99a40 001")).toBe("09940001");
     expect(taxIdDigits(null)).toBe("");
+  });
+
+  it("ตรวจ check digit เพื่อกรองเลขที่ AI/OCR อ่านเพี้ยน", () => {
+    expect(isValidThaiTaxIdChecksum("0-1055-00000-00-3")).toBe(true);
+    expect(isValidThaiTaxIdChecksum("0105500000001")).toBe(false);
+    expect(isValidThaiTaxIdChecksum("123")).toBe(false);
   });
 });
 

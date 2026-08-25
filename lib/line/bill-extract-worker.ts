@@ -374,16 +374,34 @@ export function decideEntrySide(
     return sideResult("buyer", seller, buyer);
   }
 
+  // หลักฐานลูกค้าไม่พอหรือขัดกับข้อมูลบนบิล → ห้าม heuristic เดาต่อ
+  const sellerTaxD = digitsOnly(seller.taxId);
+  const buyerTaxD = digitsOnly(buyer.taxId);
+  const customerIdentified =
+    custTax.length >= 10 ||
+    normalizeName(customer.name).length >= 3 ||
+    normalizeName(customer.businessName).length >= 3;
+  if (!customerIdentified) return unspecified;
+  if (
+    custTax.length >= 10 &&
+    (sellerTaxD.length >= 10 || buyerTaxD.length >= 10) &&
+    sellerTaxD !== custTax &&
+    buyerTaxD !== custTax
+  ) return unspecified;
+  if (sellerScore >= NAME_ACCEPT && buyerScore >= NAME_ACCEPT && Math.abs(sellerScore - buyerScore) < NAME_MARGIN) {
+    return unspecified;
+  }
+
   // ---- ชั้น 3: heuristic (เดา) — บิลจาก "กลุ่มลูกค้า" ส่วนใหญ่คือ "บิลซื้อ" (ลูกค้าเก็บใบเสร็จค่าใช้จ่าย) ----
   //   ตัดสินเป็น purchase ต่อเมื่อ: มี "ผู้ขาย" ที่ระบุตัวได้ (เลขภาษี หรือ ชื่อ) ซึ่ง "ไม่ใช่ลูกค้าเรา"
   //   และลูกค้าเราก็ไม่ตรงกับ "ผู้ซื้อ" → คนขายเป็นบุคคลภายนอก = ลูกค้าเราคือผู้ซื้อที่บิลไม่พิมพ์ไว้
   //   ★ flag guessed=true → ยังเป็น draft ต้องให้คนตรวจ (กันบิลขายที่ AI อ่านชื่อเราเพี้ยนหลุดมาเป็นซื้อ)
-  const sellerTaxD = digitsOnly(seller.taxId);
   const sellerIdentified = sellerTaxD.length >= 10 || !!(seller.name && seller.name.trim().length >= 3);
+  const buyerIdentified = buyerTaxD.length >= 10 || !!(buyer.name && buyer.name.trim().length >= 3);
   const sellerIsUs = (custTax.length >= 10 && sellerTaxD === custTax) || sellerScore >= NAME_ACCEPT;
   const buyerIsUs =
     buyerScore >= NAME_ACCEPT || (custTax.length >= 10 && digitsOnly(buyer.taxId) === custTax);
-  if (sellerIdentified && !sellerIsUs && !buyerIsUs) {
+  if (sellerIdentified && !buyerIdentified && !sellerIsUs && !buyerIsUs) {
     return { ...sideResult("buyer", seller, buyer), guessed: true };
   }
   return unspecified;

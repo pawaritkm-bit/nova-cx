@@ -59,10 +59,12 @@ function makeWorkerDb(opts: {
   let entrySeq = 0;
 
   function qb(table: string) {
-    const state: { selectCols: string; mode: "select" | "insert"; rows: Record<string, unknown>[] } = {
+    const state: { selectCols: string; mode: "select" | "insert" | "update"; rows: Record<string, unknown>[]; from: number; to: number } = {
       selectCols: "",
       mode: "select",
       rows: [],
+      from: 0,
+      to: Number.MAX_SAFE_INTEGER,
     };
     const api: Record<string, unknown> = {};
     const chain = () => api;
@@ -76,6 +78,19 @@ function makeWorkerDb(opts: {
     api.not = chain;
     api.order = chain;
     api.limit = chain;
+    api.range = (from: number, to: number) => {
+      state.from = from;
+      state.to = to;
+      return api;
+    };
+    api.or = chain;
+    api.gte = chain;
+    api.gt = chain;
+    api.update = (row: Record<string, unknown>) => {
+      state.mode = "update";
+      state.rows = [row];
+      return api;
+    };
     api.insert = (rows: Record<string, unknown> | Record<string, unknown>[]) => {
       const arr = Array.isArray(rows) ? rows : [rows];
       state.mode = "insert";
@@ -101,8 +116,12 @@ function makeWorkerDb(opts: {
       return { data: null, error: null };
     }
     function resolveList(): { data: unknown; error: unknown } {
-      if (table === "message_attachments") return { data: opts.attachments, error: null };
-      if (table === "bill_entries") return { data: opts.existingEntries ?? [], error: null };
+      if (state.mode === "update") return { data: null, error: null };
+      if (table === "message_attachments") return { data: opts.attachments.slice(state.from, state.to + 1), error: null };
+      if (table === "bill_entries") {
+        const rows = state.selectCols === "attachment_id" ? (opts.existingEntries ?? []) : [];
+        return { data: rows.slice(state.from, state.to + 1), error: null };
+      }
       // ★ chart_of_accounts — mock listChartOfAccounts (A6: worker โหลดผังต่อ tenant มาเติม account_name)
       if (table === "chart_of_accounts") return { data: CHART_ROWS, error: null };
       return { data: [], error: null };
@@ -235,8 +254,10 @@ describe("processBillExtraction", () => {
     });
     const { db, inserts } = makeWorkerDb({
       attachments: [
-        { id: "att-f", tenant_id: "t1", attachment_type: "image", doc_kind: "purchase", drive_file_id: "t1/f.jpg", chat_message_id: null },
+        { id: "att-f", tenant_id: "t1", attachment_type: "image", doc_kind: "purchase", drive_file_id: "t1/f.jpg", chat_message_id: "m1" },
       ],
+      chatGroupCustomer: "cust-1",
+      customerName: "ลูกค้าเรา",
     });
     await processBillExtraction(db, { limit: 10 });
     const lineIns = inserts.find((i) => i.table === "bill_entry_lines")!;
@@ -259,8 +280,10 @@ describe("processBillExtraction", () => {
     });
     const { db, inserts } = makeWorkerDb({
       attachments: [
-        { id: "att-n", tenant_id: "t1", attachment_type: "image", doc_kind: "purchase", drive_file_id: "t1/n.jpg", chat_message_id: null },
+        { id: "att-n", tenant_id: "t1", attachment_type: "image", doc_kind: "purchase", drive_file_id: "t1/n.jpg", chat_message_id: "m1" },
       ],
+      chatGroupCustomer: "cust-1",
+      customerName: "ลูกค้าเรา",
     });
     await processBillExtraction(db, { limit: 10 });
     const lineIns = inserts.find((i) => i.table === "bill_entry_lines")!;
@@ -295,7 +318,7 @@ describe("processBillExtraction", () => {
     expect(entryIns.rows[0].counterparty_tax_id).toBe("0994000000001");
   });
 
-  it("ไม่มีข้อมูลลูกค้า → entry_type=unspecified (ไม่เดา) แต่เก็บ seller/buyer", async () => {
+  it("ยังไม่ผูกลูกค้า → ไม่สร้างรายการและไม่เสียรอบอ่านซ้ำ", async () => {
     extractMock.mockResolvedValue({
       doc_date: null,
       doc_no: "X-1",
@@ -312,11 +335,8 @@ describe("processBillExtraction", () => {
       ],
     });
     await processBillExtraction(db, { limit: 10 });
-    const entryIns = inserts.find((i) => i.table === "bill_entries")!;
-    expect(entryIns.rows[0].entry_type).toBe("unspecified");
-    expect(entryIns.rows[0].counterparty_name).toBeNull();
-    expect(entryIns.rows[0].seller_name).toBe("ร้าน ก");
-    expect(entryIns.rows[0].buyer_name).toBe("ร้าน ข");
+    expect(inserts.find((i) => i.table === "bill_entries")).toBeUndefined();
+    expect(extractMock).not.toHaveBeenCalled();
   });
 
   it("dedup — attachment ที่มี entry แล้ว → ข้าม ไม่สร้างซ้ำ", async () => {
@@ -336,8 +356,10 @@ describe("processBillExtraction", () => {
   it("PDF (attachment_type=file) → ใช้ extractBillsData (ไม่ใช่ extractBillData); อ่านไม่ได้ → draft ว่าง", async () => {
     const { db, inserts } = makeWorkerDb({
       attachments: [
-        { id: "att-pdf", tenant_id: "t1", attachment_type: "file", doc_kind: "file", drive_file_id: "t1/doc.pdf", chat_message_id: null },
+        { id: "att-pdf", tenant_id: "t1", attachment_type: "file", doc_kind: "file", drive_file_id: "t1/doc.pdf", chat_message_id: "m1" },
       ],
+      chatGroupCustomer: "cust-1",
+      customerName: "ลูกค้าเรา",
     });
     const res = await processBillExtraction(db, { limit: 10 });
     expect(res.created).toBe(1);
@@ -354,20 +376,19 @@ describe("processBillExtraction", () => {
     expect(lineIns.rows[0].ai_filled).toBe(false);
   });
 
-  it("ไฟล์เอกสาร (attachment_type=file, .xlsx) อ่านไม่ได้ → draft ว่างพร้อมไฟล์แนบ ไม่เรียก AI", async () => {
+  it("ไฟล์ที่ไม่ใช่รูป/PDF (.xlsx) → ข้าม ไม่สร้าง draft และไม่เรียก AI", async () => {
     const { db, inserts } = makeWorkerDb({
       attachments: [
         { id: "att-xlsx", tenant_id: "t1", attachment_type: "file", doc_kind: "file", drive_file_id: "t1/report.xlsx", chat_message_id: null },
       ],
     });
     const res = await processBillExtraction(db, { limit: 10 });
-    expect(res.created).toBe(1);
-    expect(res.blank).toBe(1);
+    expect(res.created).toBe(0);
+    expect(res.blank).toBe(0);
     // Excel/doc อ่านไม่ได้ → ไม่เรียก AI ทั้งสองตัว
     expect(extractBillsMock).not.toHaveBeenCalled();
     expect(extractMock).not.toHaveBeenCalled();
-    const entryIns = inserts.find((i) => i.table === "bill_entries")!;
-    expect(entryIns.rows[0].entry_type).toBe("unspecified");
+    expect(inserts.find((i) => i.table === "bill_entries")).toBeUndefined();
   });
 
   it("PDF ที่ AI อ่านได้ → เติมหัว/บรรทัดจากบิลแรกของ extractBillsData", async () => {
@@ -387,8 +408,10 @@ describe("processBillExtraction", () => {
     ]);
     const { db, inserts } = makeWorkerDb({
       attachments: [
-        { id: "att-pdf2", tenant_id: "t1", attachment_type: "file", doc_kind: "file", drive_file_id: "t1/bill.pdf", chat_message_id: null },
+        { id: "att-pdf2", tenant_id: "t1", attachment_type: "file", doc_kind: "file", drive_file_id: "t1/bill.pdf", chat_message_id: "m1" },
       ],
+      chatGroupCustomer: "cust-1",
+      customerName: "ลูกค้าเรา",
     });
     const res = await processBillExtraction(db, { limit: 10 });
     expect(res.created).toBe(1);
@@ -404,8 +427,10 @@ describe("processBillExtraction", () => {
     extractMock.mockResolvedValue(null);
     const { db, inserts } = makeWorkerDb({
       attachments: [
-        { id: "att-2", tenant_id: "t1", attachment_type: "image", doc_kind: "sale", drive_file_id: "t1/s.jpg", chat_message_id: null },
+        { id: "att-2", tenant_id: "t1", attachment_type: "image", doc_kind: "sale", drive_file_id: "t1/s.jpg", chat_message_id: "m1" },
       ],
+      chatGroupCustomer: "cust-1",
+      customerName: "ลูกค้าเรา",
     });
     await processBillExtraction(db, { limit: 10 });
     const entryIns = inserts.find((i) => i.table === "bill_entries")!;
@@ -551,6 +576,7 @@ function makeRedecideDb(opts: {
     api.is = () => api;
     api.in = () => api;
     api.not = () => api;
+    api.or = () => api;
     api.limit = () => api;
     api.update = (p: Record<string, unknown>) => {
       mode = "update";
@@ -687,6 +713,7 @@ function makeBackfillDb(opts: {
     api.is = () => api;
     api.in = () => api;
     api.not = () => api;
+    api.gte = () => api;
     api.order = () => api;
     api.limit = () => api;
     api.update = (p: Record<string, unknown>) => {
@@ -929,6 +956,7 @@ function makePaginatedDb(opts: {
     };
     api.not = () => api;
     api.order = () => api;
+    api.gte = () => api;
     api.limit = (n: number) => {
       limitVal = n;
       return api;

@@ -149,7 +149,7 @@ export async function classifyShareCircleImage(
     userPrompt: "รูปนี้เป็น 'ลิสต์วงแชร์' หรือ 'บิลจริง'? ตอบ JSON ตามรูปแบบ",
     fileData: data,
     mime,
-    maxOutputTokens: 500,
+    maxOutputTokens: 160,
     timeoutMs: REQUEST_TIMEOUT_MS,
   });
   if (gem !== null) return normalizeShareCircleClassification(gem);
@@ -213,7 +213,7 @@ export async function classifyBillImage(
     userPrompt: "รูปนี้เป็นเอกสารการเงินหรือไม่? ตอบ JSON ตามรูปแบบที่กำหนด",
     fileData: data,
     mime,
-    maxOutputTokens: 500,
+    maxOutputTokens: 160,
     timeoutMs: REQUEST_TIMEOUT_MS,
   });
   if (gem !== null) return normalizeClassification(gem);
