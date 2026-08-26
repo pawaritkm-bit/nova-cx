@@ -4,21 +4,9 @@ import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAdminContext } from "@/lib/admin/guard";
 import ChatAuditFrame from "../_Frame";
+import { listAiUsageRows, resolveUsageDateRange, type AiUsageRow } from "@/lib/ai/usage-report";
 
 export const dynamic = "force-dynamic";
-
-type UsageRow = {
-  id: number;
-  source: string;
-  provider: string;
-  model: string;
-  prompt_tokens: number | null;
-  output_tokens: number | null;
-  total_tokens: number | null;
-  estimated_cost_usd: number | string | null;
-  estimated_cost_thb: number | string | null;
-  created_at: string;
-};
 
 const SOURCE_LABELS: Record<string, string> = {
   bill_classify: "คัดประเภทรูป/บิล",
@@ -36,7 +24,7 @@ function money(v: number): string {
   return new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(v);
 }
 
-export default async function AiUsagePage({ searchParams }: { searchParams: Promise<{ days?: string }> }) {
+export default async function AiUsagePage({ searchParams }: { searchParams: Promise<{ days?: string; from?: string; to?: string }> }) {
   if (!getSupabaseEnv()) redirect("/login?redirect=/chat-audit/ai-usage");
   const auth = await createClient();
   const ctx = await resolveAdminContext(auth);
@@ -48,14 +36,12 @@ export default async function AiUsagePage({ searchParams }: { searchParams: Prom
   const sp = await searchParams;
   const requested = Number(sp.days || 7);
   const days = [1, 7, 30, 90].includes(requested) ? requested : 7;
-  const since = new Date(Date.now() - days * 86_400_000).toISOString();
-  let rows: UsageRow[] = [];
+  const range = resolveUsageDateRange(sp.from, sp.to, days);
+  let rows: AiUsageRow[] = [];
   let loadError = false;
   try {
     const db = createServiceRoleClient();
-    const { data, error } = await db.from("ai_usage_logs").select("id,source,provider,model,prompt_tokens,output_tokens,total_tokens,estimated_cost_usd,estimated_cost_thb,created_at").gte("created_at", since).order("created_at", { ascending: false }).limit(2000);
-    if (error) throw error;
-    rows = (data ?? []) as UsageRow[];
+    rows = await listAiUsageRows(db, range.fromIso, range.untilIso);
   } catch {
     loadError = true;
   }
@@ -77,9 +63,16 @@ export default async function AiUsagePage({ searchParams }: { searchParams: Prom
       <section style={{ display: "grid", gap: 16 }}>
         <div className="card" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <strong>ช่วงเวลา:</strong>
-          {[1, 7, 30, 90].map((d) => <Link key={d} className={`btn${days === d ? " primary" : ""}`} href={`/chat-audit/ai-usage?days=${d}`}>{d} วัน</Link>)}
+          {[1, 7, 30, 90].map((d) => <Link key={d} className={`btn${!sp.from && !sp.to && days === d ? " primary" : ""}`} href={`/chat-audit/ai-usage?days=${d}`}>{d} วัน</Link>)}
           <span className="muted" style={{ marginLeft: "auto" }}>ค่าใช้จ่ายเป็นค่าประมาณและไม่เก็บเนื้อหาเอกสาร</span>
         </div>
+        <form method="get" className="card" style={{ display: "flex", gap: 12, alignItems: "end", flexWrap: "wrap" }}>
+          <label style={{ display: "grid", gap: 5 }}><span style={{ fontWeight: 700 }}>ตั้งแต่วันที่</span><input className="input" type="date" name="from" defaultValue={range.from} required /></label>
+          <label style={{ display: "grid", gap: 5 }}><span style={{ fontWeight: 700 }}>ถึงวันที่</span><input className="input" type="date" name="to" defaultValue={range.to} required /></label>
+          <button className="btn primary" type="submit">แสดงรายงาน</button>
+          <a className="btn" href={`/chat-audit/ai-usage/export?from=${range.from}&to=${range.to}`}>Export Excel</a>
+          <span className="muted">เวลาอ้างอิงประเทศไทย (GMT+7)</span>
+        </form>
         {loadError ? <div className="card">ยังอ่านประวัติไม่ได้ — กรุณา apply migration 0122_ai_usage_logs.sql</div> : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 12 }}>
           <div className="card"><div className="muted">เรียก AI</div><div style={{ fontSize: 28, fontWeight: 800 }}>{rows.length.toLocaleString("th-TH")} ครั้ง</div></div>
