@@ -57,6 +57,12 @@ export default async function AiUsagePage({ searchParams }: { searchParams: Prom
     bySource.set(row.source, item);
   }
   const ranked = [...bySource.entries()].sort((a, b) => b[1].thb - a[1].thb);
+  const byProvider = new Map<string, { calls: number; tokens: number; thb: number }>();
+  for (const row of rows) {
+    const item = byProvider.get(row.provider) ?? { calls: 0, tokens: 0, thb: 0 };
+    item.calls++; item.tokens += row.total_tokens ?? 0; item.thb += effectiveAiCost(row).thb;
+    byProvider.set(row.provider, item);
+  }
 
   return (
     <ChatAuditFrame active="ai-usage" role={ctx.role} authed={true} title="การใช้ AI" subtitle="ดูโมเดล · ฟังก์ชัน · Token · ค่าใช้จ่ายโดยประมาณ">
@@ -79,6 +85,11 @@ export default async function AiUsagePage({ searchParams }: { searchParams: Prom
           <div className="card"><div className="muted">Token รวม</div><div style={{ fontSize: 28, fontWeight: 800 }}>{totalTokens.toLocaleString("th-TH")}</div></div>
           <div className="card"><div className="muted">ค่าใช้จ่ายประมาณ</div><div style={{ fontSize: 28, fontWeight: 800 }}>฿{money(totalThb)}</div></div>
           <div className="card"><div className="muted">เฉลี่ยต่อครั้ง</div><div style={{ fontSize: 28, fontWeight: 800 }}>฿{money(rows.length ? totalThb / rows.length : 0)}</div></div>
+        </div>
+        <div className="card" style={{ overflowX: "auto" }}>
+          <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>ค่าใช้จ่ายแยกตามผู้ให้บริการ</h2>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">AI Provider</th><th align="right">ครั้ง</th><th align="right">Token</th><th align="right">ประมาณ</th></tr></thead>
+            <tbody>{[...byProvider.entries()].sort((a, b) => b[1].thb - a[1].thb).map(([provider, v]) => <tr key={provider}><td>{provider === "anthropic" ? "Claude (Anthropic)" : provider === "gemini" ? "Gemini (Google)" : provider}</td><td align="right">{v.calls.toLocaleString("th-TH")}</td><td align="right">{v.tokens.toLocaleString("th-TH")}</td><td align="right">฿{money(v.thb)}</td></tr>)}</tbody></table>
         </div>
         <div className="card" style={{ overflowX: "auto" }}>
           <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>ค่าใช้จ่ายแยกตามฟังก์ชัน</h2>

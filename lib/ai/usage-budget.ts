@@ -41,6 +41,9 @@ export async function logAiUsage(source: string, provider: string, model: string
   } else if (provider === "gemini" && /gemini-2\.5-flash/i.test(model)) {
     inputPerMillion = Number(process.env.GEMINI_FLASH_INPUT_USD_PER_MILLION || 0.30);
     outputPerMillion = Number(process.env.GEMINI_FLASH_OUTPUT_USD_PER_MILLION || 2.50);
+  } else if (provider === "anthropic" && /claude-sonnet-5/i.test(model)) {
+    inputPerMillion = Number(process.env.CLAUDE_SONNET_INPUT_USD_PER_MILLION || 2);
+    outputPerMillion = Number(process.env.CLAUDE_SONNET_OUTPUT_USD_PER_MILLION || 10);
   }
   const hasPrice = inputPerMillion > 0 || outputPerMillion > 0;
   const billedOutputTokens = provider === "gemini" ? outputTokens + thinkingTokens : outputTokens;

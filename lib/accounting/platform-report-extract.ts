@@ -236,6 +236,7 @@ async function extractPlatformReportFromFileSingle(fileData: Buffer, mime: strin
   // สแกน/รูป (OCR) → Claude Sonnet 5 ก่อน
   if (source === "scan_or_image") {
     const raw = await extractJsonWithClaude({
+      source: "platform_report_extract",
       system: SYSTEM_PROMPT,
       userPrompt: FILE_USER_PROMPT,
       fileData: prepped.data,

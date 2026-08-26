@@ -331,6 +331,7 @@ async function extractStatementFromFileSingle(fileData: Buffer, mime: string): P
   // สแกน/รูป (OCR) → Claude Sonnet 5 (vision แม่นกับภาพยาก/เอียง/เบลอ) ก่อน
   if (source === "scan_or_image") {
     const raw = await extractJsonWithClaude({
+      source: "statement_extract",
       system: SYSTEM_PROMPT,
       userPrompt: FILE_USER_PROMPT,
       fileData: prepped.data,

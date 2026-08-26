@@ -7,6 +7,7 @@
  *   ★ PDPA: ไม่ log เนื้อไฟล์/base64/ยอด/ชื่อ — log แค่ error สั้น ๆ ไม่มีข้อมูลอ่อนไหว
  */
 import Anthropic from "@anthropic-ai/sdk";
+import { logAiUsage, reserveAiCall } from "@/lib/ai/usage-budget";
 
 /** โมเดลอ่านสแกน (vision) — ตั้งผ่าน env ปรับได้โดยไม่แก้โค้ด */
 const SCAN_MODEL = process.env.ACCT_SCAN_MODEL || "claude-sonnet-5";
@@ -76,9 +77,12 @@ export async function extractJsonWithClaude(opts: {
   fileData: Buffer;
   mime: string;
   timeoutMs?: number;
+  source?: string;
 }): Promise<Record<string, unknown> | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
+  const source = opts.source || "document_scan_extract";
+  if (!reserveAiCall(source, SCAN_MODEL)) return null;
 
   const isPdf = (opts.mime || "").toLowerCase().includes("pdf");
   const b64 = opts.fileData.toString("base64");
@@ -100,6 +104,11 @@ export async function extractJsonWithClaude(opts: {
       max_tokens: MAX_OUTPUT_TOKENS,
       system: opts.system,
       messages: [{ role: "user", content }],
+    });
+    await logAiUsage(source, "anthropic", SCAN_MODEL, {
+      promptTokens: msg.usage.input_tokens,
+      outputTokens: msg.usage.output_tokens,
+      totalTokens: msg.usage.input_tokens + msg.usage.output_tokens,
     });
     const text = (msg.content || [])
       .map((b) => (b.type === "text" ? b.text : ""))
