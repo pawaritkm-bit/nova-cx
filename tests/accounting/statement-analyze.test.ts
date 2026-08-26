@@ -8,7 +8,7 @@ import {
   MIN_REPEAT,
   type StatementTxn,
 } from "@/lib/accounting/statement-analyze";
-import { normalizeStatementExtraction } from "@/lib/accounting/statement-extract";
+import { isUsableStatementExtraction, normalizeStatementExtraction } from "@/lib/accounting/statement-extract";
 
 /**
  * เทสต์ helper pure ของฟีเจอร์ "AI แยกสเตทเมนต์ ขาเข้า-ขาออก" (Phase 1):
@@ -269,5 +269,14 @@ describe("normalizeStatementExtraction (ผลดิบจากโมเดล)
   it("แถวที่มีแค่เลขบัญชี (ไม่มีวันที่/ยอด/ชื่อ) → ไม่ถูกข้ามเป็นแถวขยะ", () => {
     const out = normalizeStatementExtraction({ transactions: [{ counterparty_account_no: "1-2345-67890-1" }] });
     expect(out.length).toBe(1);
+  });
+
+  it("quality gate รับผลที่ช่องหลักครบ และปฏิเสธผล OCR ที่ขาดข้อมูล", () => {
+    expect(isUsableStatementExtraction([
+      { date: "2026-07-01", description: null, counterparty_name: null, counterparty_account_no: null, direction: "in", amount: 100 },
+    ])).toBe(true);
+    expect(isUsableStatementExtraction([
+      { date: "2026-07-01", description: null, counterparty_name: null, counterparty_account_no: null, direction: null, amount: 100 },
+    ])).toBe(false);
   });
 });

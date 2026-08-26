@@ -91,6 +91,11 @@ async function callGeminiRaw(opts: {
     temperature: 0,
     maxOutputTokens: opts.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
   };
+  // งาน OCR/สกัดข้อมูลไม่ต้องใช้ reasoning ยาว ๆ — ปิด thinking ของ Gemini 2.5
+  // เพื่อตัด output/thinking tokens โดยไม่กระทบข้อความที่โมเดลต้องคืน
+  if (/gemini-2\.5-flash(?:-lite)?$/i.test(model)) {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
   if (opts.jsonMode) generationConfig.responseMimeType = "application/json";
   const reqBody = JSON.stringify({ contents: [{ parts }], generationConfig });
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;

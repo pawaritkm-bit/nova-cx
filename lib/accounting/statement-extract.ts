@@ -25,6 +25,9 @@ const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 /** โมเดลอ่านสเตทเมนต์ (PDF/ตารางยาว) — ใช้ตัวเดียวกับอ่านไฟล์บิลอัปเอง */
 const EXTRACT_MODEL = process.env.ACCT_DIGITAL_MODEL || process.env.OPENAI_EXTRACT_MODEL || "gpt-5-mini";
 
+/** ด่านอ่านเอกสารราคาประหยัด — ถูกกว่า Gemini 3.x มากและปิด thinking ได้ */
+const ECONOMY_MODEL = process.env.ACCT_ECONOMY_MODEL || "gemini-2.5-flash-lite";
+
 /** timeout — เรียกครั้งเดียวจบ (PDF/รูป, ไม่ chunk) — reasoning model + เอกสารหลายหน้า ช้ากว่าปกติ */
 const EXTRACT_TIMEOUT_MS = 110_000;
 
@@ -328,28 +331,30 @@ async function extractStatementFromFileSingle(fileData: Buffer, mime: string): P
   const source = await classifyDocSource(mime, fileData);
   const prepped = await downscaleImageIfLarge(fileData, mime); // ย่อรูปสแกนใหญ่ (PDF ไม่แตะ)
 
-  // สแกน/รูป (OCR) → Claude Sonnet 5 (vision แม่นกับภาพยาก/เอียง/เบลอ) ก่อน
-  if (source === "scan_or_image") {
-    const raw = await extractJsonWithClaude({
-      source: "statement_extract",
-      system: SYSTEM_PROMPT,
-      userPrompt: FILE_USER_PROMPT,
-      fileData: prepped.data,
-      mime: prepped.mime || mime,
-    });
-    if (raw !== null) return normalizeStatementExtraction(raw);
-    // Claude ล่ม/ไม่มี key → ลอง Gemini ต่อด้านล่าง
-  }
-
-  // digital_pdf หรือ fallback จากสแกน → Gemini (ถูก + ไม่พึ่ง OpenAI) · ★ deterministic ลองไปก่อนแล้วที่ classify-finance-doc
+  // ด่านแรก: Gemini Flash-Lite ราคาประหยัด อ่านทั้งรูป/PDF และตรวจความครบถ้วนก่อนรับผล
   const gem = await extractJsonWithGemini({
-    source: "statement_extract",
+    source: "statement_extract_economy",
+    model: ECONOMY_MODEL,
     system: SYSTEM_PROMPT,
     userPrompt: FILE_USER_PROMPT,
     fileData: prepped.data,
     mime: prepped.mime || mime,
   });
-  if (gem !== null) return normalizeStatementExtraction(gem);
+  const economyTxns = normalizeStatementExtraction(gem);
+  if (isUsableStatementExtraction(economyTxns)) return economyTxns;
+
+  // ด่านสองเฉพาะสแกนที่ผลราคาประหยัดไม่ผ่าน: Claude สำหรับภาพยาก/เอียง/เบลอ
+  if (source === "scan_or_image") {
+    const raw = await extractJsonWithClaude({
+      source: "statement_extract_fallback",
+      system: SYSTEM_PROMPT,
+      userPrompt: FILE_USER_PROMPT,
+      fileData: prepped.data,
+      mime: prepped.mime || mime,
+    });
+    const claudeTxns = normalizeStatementExtraction(raw);
+    if (claudeTxns.length > 0) return claudeTxns;
+  }
 
   // สุดท้าย: OpenAI (เฉพาะเมื่อยังตั้ง OPENAI_API_KEY ไว้ — prod ปกติไม่ตั้ง = ข้าม) กันงานตกเป็นทางเลือกสุดท้าย
   const isPdf = (mime || "").toLowerCase().includes("pdf");
@@ -369,10 +374,17 @@ export async function extractStatementFromText(text: string): Promise<StatementT
   const t = (text ?? "").trim();
   if (!t) return [];
   // Gemini อ่านก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม → OpenAI เป็นทางเลือกสุดท้าย (ถ้าตั้ง key)
-  const gem = await extractJsonWithGemini({ source: "statement_extract", system: SYSTEM_PROMPT, userPrompt: TEXT_USER_PROMPT, text: t });
+  const gem = await extractJsonWithGemini({ source: "statement_extract_economy", model: ECONOMY_MODEL, system: SYSTEM_PROMPT, userPrompt: TEXT_USER_PROMPT, text: t });
   if (gem !== null) return normalizeStatementExtraction(gem);
   const { txns } = await callExtract(TEXT_USER_PROMPT + t);
   return txns;
+}
+
+/** กันรับผล OCR ที่ดูเหมือนสำเร็จแต่ขาดช่องหลักจำนวนมาก */
+export function isUsableStatementExtraction(txns: StatementTxn[]): boolean {
+  if (txns.length === 0) return false;
+  const complete = txns.filter((t) => Boolean(t.date) && t.amount !== null && Boolean(t.direction)).length;
+  return complete / txns.length >= 0.8;
 }
 
 /**

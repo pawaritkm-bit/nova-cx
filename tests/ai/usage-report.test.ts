@@ -22,6 +22,12 @@ describe("AI usage date range", () => {
     expect(cost.thinking).toBe(500);
     expect(cost.usd).toBeCloseTo((1000 * 0.75 + 600 * 3.75) / 1_000_000, 10);
   });
+
+  it("คิดราคา Gemini 2.5 Flash-Lite ด้วยเรตประหยัด", () => {
+    const row: AiUsageRow = { id: 2, source: "statement_extract_economy", provider: "gemini", model: "gemini-2.5-flash-lite", prompt_tokens: 100_000, output_tokens: 10_000, thinking_tokens: 0, total_tokens: 110_000, estimated_cost_usd: 0, estimated_cost_thb: 0, created_at: "2026-08-26T00:00:00Z" };
+    const cost = effectiveAiCost(row);
+    expect(cost.usd).toBeCloseTo((100_000 * 0.10 + 10_000 * 0.40) / 1_000_000, 10);
+  });
 });
 
 describe("AI usage Excel", () => {

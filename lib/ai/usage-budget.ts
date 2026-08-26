@@ -38,6 +38,9 @@ export async function logAiUsage(source: string, provider: string, model: string
   if (provider === "gemini" && /gemini-3\.[67]-flash/i.test(model)) {
     inputPerMillion = Number(process.env.GEMINI_FLASH_INPUT_USD_PER_MILLION || 0.75);
     outputPerMillion = Number(process.env.GEMINI_FLASH_OUTPUT_USD_PER_MILLION || 3.75);
+  } else if (provider === "gemini" && /gemini-2\.5-flash-lite/i.test(model)) {
+    inputPerMillion = Number(process.env.GEMINI_FLASH_LITE_INPUT_USD_PER_MILLION || 0.10);
+    outputPerMillion = Number(process.env.GEMINI_FLASH_LITE_OUTPUT_USD_PER_MILLION || 0.40);
   } else if (provider === "gemini" && /gemini-2\.5-flash/i.test(model)) {
     inputPerMillion = Number(process.env.GEMINI_FLASH_INPUT_USD_PER_MILLION || 0.30);
     outputPerMillion = Number(process.env.GEMINI_FLASH_OUTPUT_USD_PER_MILLION || 2.50);

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   extractPlatformReportFromTextChunks,
   extractPlatformReportFromText,
+  isUsablePlatformExtraction,
   normalizePlatformExtraction,
 } from "@/lib/accounting/platform-report-extract";
 
@@ -184,5 +185,10 @@ describe("normalizePlatformExtraction (ผลดิบจากโมเดล)"
   it("รับ order_no จากหลาย alias (orderNo/order_id/reference)", () => {
     const out = normalizePlatformExtraction({ lines: [{ order_id: "ORD-1", amount: 5, category: "sales" }] });
     expect(out[0].order_no).toBe("ORD-1");
+  });
+
+  it("quality gate ปฏิเสธผลที่ไม่มี direction", () => {
+    expect(isUsablePlatformExtraction([{ date: "2026-07-01", order_no: null, description: null, category: "sales", direction: "credit", amount: 100 }])).toBe(true);
+    expect(isUsablePlatformExtraction([{ date: "2026-07-01", order_no: null, description: null, category: null, direction: null, amount: 100 }])).toBe(false);
   });
 });

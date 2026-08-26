@@ -26,6 +26,7 @@ const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
 /** โมเดลอ่านรายงาน (PDF/ตารางยาว) — ใช้ตัวเดียวกับอ่านสเตทเมนต์/บิล */
 const EXTRACT_MODEL = process.env.ACCT_DIGITAL_MODEL || process.env.OPENAI_EXTRACT_MODEL || "gpt-5-mini";
+const ECONOMY_MODEL = process.env.ACCT_ECONOMY_MODEL || "gemini-2.5-flash-lite";
 
 /** timeout — เรียกครั้งเดียวจบ (PDF/รูป, ไม่ chunk) */
 const EXTRACT_TIMEOUT_MS = 110_000;
@@ -233,28 +234,30 @@ async function extractPlatformReportFromFileSingle(fileData: Buffer, mime: strin
   const source = await classifyDocSource(mime, fileData);
   const prepped = await downscaleImageIfLarge(fileData, mime); // ย่อรูปสแกนใหญ่ (PDF ไม่แตะ)
 
-  // สแกน/รูป (OCR) → Claude Sonnet 5 ก่อน
-  if (source === "scan_or_image") {
-    const raw = await extractJsonWithClaude({
-      source: "platform_report_extract",
-      system: SYSTEM_PROMPT,
-      userPrompt: FILE_USER_PROMPT,
-      fileData: prepped.data,
-      mime: prepped.mime || mime,
-    });
-    if (raw !== null) return normalizePlatformExtraction(raw);
-    // Claude ล่ม/ไม่มี key → ลอง Gemini ต่อด้านล่าง
-  }
-
-  // digital_pdf หรือ fallback จากสแกน → Gemini (ถูก + ไม่พึ่ง OpenAI)
+  // ด่านแรก: โมเดลราคาประหยัด + quality gate
   const gem = await extractJsonWithGemini({
-    source: "platform_report_extract",
+    source: "platform_report_extract_economy",
+    model: ECONOMY_MODEL,
     system: SYSTEM_PROMPT,
     userPrompt: FILE_USER_PROMPT,
     fileData: prepped.data,
     mime: prepped.mime || mime,
   });
-  if (gem !== null) return normalizePlatformExtraction(gem);
+  const economyLines = normalizePlatformExtraction(gem);
+  if (isUsablePlatformExtraction(economyLines)) return economyLines;
+
+  // ด่านสองเฉพาะภาพสแกนยาก: Claude
+  if (source === "scan_or_image") {
+    const raw = await extractJsonWithClaude({
+      source: "platform_report_extract_fallback",
+      system: SYSTEM_PROMPT,
+      userPrompt: FILE_USER_PROMPT,
+      fileData: prepped.data,
+      mime: prepped.mime || mime,
+    });
+    const claudeLines = normalizePlatformExtraction(raw);
+    if (claudeLines.length > 0) return claudeLines;
+  }
 
   // สุดท้าย: OpenAI (เฉพาะเมื่อยังตั้ง OPENAI_API_KEY — prod ปกติไม่ตั้ง = ข้าม)
   const isPdf = (mime || "").toLowerCase().includes("pdf");
@@ -272,9 +275,15 @@ async function extractPlatformReportFromFileSingle(fileData: Buffer, mime: strin
  */
 /** อ่านข้อความ: Gemini ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม → OpenAI เป็นทางเลือกสุดท้าย */
 async function extractTextPreferGemini(userText: string, timeoutMs?: number): Promise<ExtractCallResult> {
-  const gem = await extractJsonWithGemini({ source: "platform_report_extract", system: SYSTEM_PROMPT, userPrompt: TEXT_USER_PROMPT, text: userText, timeoutMs });
+  const gem = await extractJsonWithGemini({ source: "platform_report_extract_economy", model: ECONOMY_MODEL, system: SYSTEM_PROMPT, userPrompt: TEXT_USER_PROMPT, text: userText, timeoutMs });
   if (gem !== null) return { lines: normalizePlatformExtraction(gem), failed: false };
   return callExtract(TEXT_USER_PROMPT + userText, timeoutMs);
+}
+
+export function isUsablePlatformExtraction(lines: PlatformReportLine[]): boolean {
+  if (lines.length === 0) return false;
+  const complete = lines.filter((line) => Boolean(line.date) && line.amount !== null && Boolean(line.direction)).length;
+  return complete / lines.length >= 0.75;
 }
 
 export async function extractPlatformReportFromText(text: string): Promise<PlatformReportLine[]> {
