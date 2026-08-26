@@ -62,7 +62,7 @@ export class OpenAIProvider implements AIProvider {
       }
 
       const data = (await res.json()) as ChatCompletionResponse;
-      logAiUsage(source, "openai", this.model, {
+      await logAiUsage(source, "openai", this.model, {
         promptTokens: data.usage?.prompt_tokens,
         outputTokens: data.usage?.completion_tokens,
         totalTokens: data.usage?.total_tokens,

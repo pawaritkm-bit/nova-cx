@@ -65,7 +65,8 @@ export type AppNavActive =
   | "reports"
   | "surveys"
   | "admin"
-  | "settings";
+  | "settings"
+  | "ai-usage";
 
 /** นิยามลิงก์เมนูหนึ่งอัน + เงื่อนไขบทบาทที่เห็นได้ */
 type NavItem = {
@@ -135,6 +136,7 @@ const NAV_GROUPS: NavGroup[] = [
       { key: "chat-admin", href: "/chat-audit/admin", label: "ตั้งค่าตรวจแชต", canSee: isAdminRole },
       // จัดการข้อมูล — admin/executive
       { key: "admin", href: "/admin", label: "จัดการข้อมูล", canSee: isAdminRole },
+      { key: "ai-usage", href: "/chat-audit/ai-usage", label: "การใช้ AI", canSee: isAdminRole },
     ],
   },
   // ===== ส่วน B · แบบประเมินลูกค้า (CSAT) — คนละระบบ แยกท้ายสุด =====

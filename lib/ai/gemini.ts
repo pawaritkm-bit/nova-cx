@@ -47,7 +47,7 @@ export class GeminiProvider implements AIProvider {
         candidates?: { content?: { parts?: { text?: string }[] } }[];
         usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
       };
-      logAiUsage(source, "gemini", this.model, {
+      await logAiUsage(source, "gemini", this.model, {
         promptTokens: body.usageMetadata?.promptTokenCount,
         outputTokens: body.usageMetadata?.candidatesTokenCount,
         totalTokens: body.usageMetadata?.totalTokenCount,

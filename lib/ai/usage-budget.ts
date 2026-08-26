@@ -27,7 +27,7 @@ export function reserveAiCall(source: string, model: string): boolean {
 }
 
 /** Content-free usage log for identifying cost by feature/model in Vercel logs. */
-export function logAiUsage(source: string, provider: string, model: string, usage?: Usage): void {
+export async function logAiUsage(source: string, provider: string, model: string, usage?: Usage): Promise<void> {
   const promptTokens = usage?.promptTokens ?? 0;
   const outputTokens = usage?.outputTokens ?? 0;
   const usdToThb = Number(process.env.AI_USD_TO_THB || 35);
@@ -44,11 +44,39 @@ export function logAiUsage(source: string, provider: string, model: string, usag
   const hasPrice = inputPerMillion > 0 || outputPerMillion > 0;
   const estimatedCostUsd = hasPrice ? (promptTokens * inputPerMillion + outputTokens * outputPerMillion) / 1_000_000 : null;
   const estimatedCostThb = estimatedCostUsd == null ? null : estimatedCostUsd * usdToThb;
-  console.info(JSON.stringify({ event: "ai_usage", source, provider, model,
+  const record = { event: "ai_usage", source, provider, model,
     promptTokens: usage?.promptTokens ?? null,
     outputTokens: usage?.outputTokens ?? null,
     totalTokens: usage?.totalTokens ?? null,
     estimatedCostUsd: estimatedCostUsd == null ? null : Number(estimatedCostUsd.toFixed(8)),
     estimatedCostThb: estimatedCostThb == null ? null : Number(estimatedCostThb.toFixed(6)),
-    priceIsEstimate: true }));
+    priceIsEstimate: true };
+  console.info(JSON.stringify(record));
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const res = await fetch(`${url}/rest/v1/ai_usage_logs`, {
+      method: "POST",
+      headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({
+        source, provider, model,
+        prompt_tokens: record.promptTokens,
+        output_tokens: record.outputTokens,
+        total_tokens: record.totalTokens,
+        estimated_cost_usd: record.estimatedCostUsd,
+        estimated_cost_thb: record.estimatedCostThb,
+        price_is_estimate: true,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) console.warn(`[ai-usage] persist http ${res.status}`);
+  } catch {
+    console.warn("[ai-usage] persist error");
+  } finally {
+    clearTimeout(timer);
+  }
 }

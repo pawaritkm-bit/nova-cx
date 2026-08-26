@@ -92,7 +92,7 @@ async function geminiExtractContent(
         candidates?: { content?: { parts?: { text?: string }[] } }[];
         usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
       };
-      logAiUsage("bill_extract", "gemini", model, {
+      await logAiUsage("bill_extract", "gemini", model, {
         promptTokens: body.usageMetadata?.promptTokenCount,
         outputTokens: body.usageMetadata?.candidatesTokenCount,
         totalTokens: body.usageMetadata?.totalTokenCount,
@@ -148,7 +148,7 @@ async function claudeExtractContent(
     });
     if (!res.ok) { console.warn(`[bill-extract] claude http ${res.status}`); return null; }
     const body = (await res.json()) as { content?: { text?: string }[]; usage?: { input_tokens?: number; output_tokens?: number } };
-    logAiUsage("bill_verify", "anthropic", CLAUDE_VERIFY_MODEL, {
+    await logAiUsage("bill_verify", "anthropic", CLAUDE_VERIFY_MODEL, {
       promptTokens: body.usage?.input_tokens,
       outputTokens: body.usage?.output_tokens,
       totalTokens: (body.usage?.input_tokens ?? 0) + (body.usage?.output_tokens ?? 0),
@@ -210,7 +210,7 @@ async function runBillVision(
         return null;
       }
       const body = (await res.json()) as ChatCompletionResponse;
-      logAiUsage("bill_extract", "openai", openaiModel, {
+      await logAiUsage("bill_extract", "openai", openaiModel, {
         promptTokens: body.usage?.prompt_tokens,
         outputTokens: body.usage?.completion_tokens,
         totalTokens: body.usage?.total_tokens,

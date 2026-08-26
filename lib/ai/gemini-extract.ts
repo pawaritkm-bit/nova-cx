@@ -113,7 +113,7 @@ async function callGeminiRaw(opts: {
         candidates?: { content?: { parts?: { text?: string }[] } }[];
         usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
       };
-      logAiUsage(source, "gemini", model, {
+      await logAiUsage(source, "gemini", model, {
         promptTokens: body.usageMetadata?.promptTokenCount,
         outputTokens: body.usageMetadata?.candidatesTokenCount,
         totalTokens: body.usageMetadata?.totalTokenCount,
