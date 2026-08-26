@@ -41,6 +41,7 @@ export async function classifyDocTypeFromText(text: string): Promise<AccountingD
   if (!snippet) return "other";
   // Gemini ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม/ไม่มี key → OpenAI
   const g = await generateTextWithGemini({
+    source: "finance_document_classify",
     system: SYSTEM,
     userPrompt: `จัดประเภทเอกสารนี้:\n\n${snippet}`,
     maxOutputTokens: 500,
@@ -57,6 +58,7 @@ export async function classifyDocTypeFromText(text: string): Promise<AccountingD
 export async function classifyDocTypeFromImage(data: Buffer, mime: string): Promise<AccountingDocType> {
   // Gemini vision ก่อน · ล้ม/ไม่มี key → OpenAI
   const g = await generateTextWithGemini({
+    source: "finance_document_classify",
     system: SYSTEM,
     userPrompt: "จัดประเภทเอกสารในภาพนี้ ตอบคำเดียว",
     fileData: data,

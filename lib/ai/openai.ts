@@ -1,4 +1,5 @@
 import type { AIProvider, GenerateJsonArgs } from "./provider";
+import { logAiUsage, reserveAiCall } from "./usage-budget";
 
 /**
  * OpenAI adapter — ใช้ Chat Completions + Structured Outputs (response_format=json_schema)
@@ -13,6 +14,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
 type ChatCompletionResponse = {
   choices?: { message?: { content?: string | null } }[];
   error?: { message?: string };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 };
 
 export class OpenAIProvider implements AIProvider {
@@ -26,6 +28,8 @@ export class OpenAIProvider implements AIProvider {
   }
 
   async generateJson(args: GenerateJsonArgs): Promise<string> {
+    const source = `structured_${args.jsonSchema.name}`;
+    if (!reserveAiCall(source, this.model)) throw new Error("ai_budget_block");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -58,6 +62,11 @@ export class OpenAIProvider implements AIProvider {
       }
 
       const data = (await res.json()) as ChatCompletionResponse;
+      logAiUsage(source, "openai", this.model, {
+        promptTokens: data.usage?.prompt_tokens,
+        outputTokens: data.usage?.completion_tokens,
+        totalTokens: data.usage?.total_tokens,
+      });
       const content = data.choices?.[0]?.message?.content;
       if (!content) throw new Error("openai_empty_response");
       return content;

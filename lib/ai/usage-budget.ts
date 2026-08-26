@@ -28,8 +28,27 @@ export function reserveAiCall(source: string, model: string): boolean {
 
 /** Content-free usage log for identifying cost by feature/model in Vercel logs. */
 export function logAiUsage(source: string, provider: string, model: string, usage?: Usage): void {
+  const promptTokens = usage?.promptTokens ?? 0;
+  const outputTokens = usage?.outputTokens ?? 0;
+  const usdToThb = Number(process.env.AI_USD_TO_THB || 35);
+  // Override ได้จาก Vercel env เมื่อผู้ให้บริการเปลี่ยนราคา
+  let inputPerMillion = Number(process.env.AI_INPUT_USD_PER_MILLION || 0);
+  let outputPerMillion = Number(process.env.AI_OUTPUT_USD_PER_MILLION || 0);
+  if (provider === "gemini" && /gemini-3\.[67]-flash/i.test(model)) {
+    inputPerMillion = Number(process.env.GEMINI_FLASH_INPUT_USD_PER_MILLION || 0.75);
+    outputPerMillion = Number(process.env.GEMINI_FLASH_OUTPUT_USD_PER_MILLION || 3.75);
+  } else if (provider === "gemini" && /gemini-2\.5-flash/i.test(model)) {
+    inputPerMillion = Number(process.env.GEMINI_FLASH_INPUT_USD_PER_MILLION || 0.30);
+    outputPerMillion = Number(process.env.GEMINI_FLASH_OUTPUT_USD_PER_MILLION || 2.50);
+  }
+  const hasPrice = inputPerMillion > 0 || outputPerMillion > 0;
+  const estimatedCostUsd = hasPrice ? (promptTokens * inputPerMillion + outputTokens * outputPerMillion) / 1_000_000 : null;
+  const estimatedCostThb = estimatedCostUsd == null ? null : estimatedCostUsd * usdToThb;
   console.info(JSON.stringify({ event: "ai_usage", source, provider, model,
     promptTokens: usage?.promptTokens ?? null,
     outputTokens: usage?.outputTokens ?? null,
-    totalTokens: usage?.totalTokens ?? null }));
+    totalTokens: usage?.totalTokens ?? null,
+    estimatedCostUsd: estimatedCostUsd == null ? null : Number(estimatedCostUsd.toFixed(8)),
+    estimatedCostThb: estimatedCostThb == null ? null : Number(estimatedCostThb.toFixed(6)),
+    priceIsEstimate: true }));
 }

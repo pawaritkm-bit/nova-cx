@@ -124,6 +124,7 @@ async function claudeExtractContent(
 ): Promise<string | null> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return null;
+  if (!reserveAiCall("bill_verify", CLAUDE_VERIFY_MODEL)) return null;
   const m = (mime || "").toLowerCase();
   const isPdf = m.includes("pdf");
   const media = m.startsWith("image/") ? mime : "image/jpeg";
@@ -146,7 +147,12 @@ async function claudeExtractContent(
       }),
     });
     if (!res.ok) { console.warn(`[bill-extract] claude http ${res.status}`); return null; }
-    const body = (await res.json()) as { content?: { text?: string }[] };
+    const body = (await res.json()) as { content?: { text?: string }[]; usage?: { input_tokens?: number; output_tokens?: number } };
+    logAiUsage("bill_verify", "anthropic", CLAUDE_VERIFY_MODEL, {
+      promptTokens: body.usage?.input_tokens,
+      outputTokens: body.usage?.output_tokens,
+      totalTokens: (body.usage?.input_tokens ?? 0) + (body.usage?.output_tokens ?? 0),
+    });
     return body.content?.[0]?.text ?? null;
   } catch {
     console.warn("[bill-extract] claude error");
@@ -174,6 +180,7 @@ async function runBillVision(
   }
   const apiKey = process.env.OPENAI_API_KEY;
   if (apiKey) {
+    if (!reserveAiCall("bill_extract", openaiModel)) return null;
     const isPdf = (mime || "").toLowerCase().includes("pdf");
     const dataUrl = `data:${mime || "image/jpeg"};base64,${imageData.toString("base64")}`;
     const filePart = isPdf
@@ -203,6 +210,11 @@ async function runBillVision(
         return null;
       }
       const body = (await res.json()) as ChatCompletionResponse;
+      logAiUsage("bill_extract", "openai", openaiModel, {
+        promptTokens: body.usage?.prompt_tokens,
+        outputTokens: body.usage?.completion_tokens,
+        totalTokens: body.usage?.total_tokens,
+      });
       return body.choices?.[0]?.message?.content ?? null;
     } catch {
       console.warn("[bill-extract] openai error");
@@ -306,6 +318,7 @@ type RawExtract = {
 type ChatCompletionResponse = {
   choices?: { message?: { content?: string | null } }[];
   error?: { message?: string };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 };
 
 /** system prompt สำหรับสกัดบิล — ไม่ฝังผังบัญชีอีกต่อไป (account_code เติมด้วย Learning-map ใน worker) */

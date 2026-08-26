@@ -1,4 +1,5 @@
 import type { AIProvider, GenerateJsonArgs } from "./provider";
+import { logAiUsage, reserveAiCall } from "./usage-budget";
 
 /**
  * GeminiProvider — AIProvider ที่ใช้ Gemini (generateContent) แทน OpenAI
@@ -19,6 +20,8 @@ export class GeminiProvider implements AIProvider {
   }
 
   async generateJson(args: GenerateJsonArgs): Promise<string> {
+    const source = `structured_${args.jsonSchema.name}`;
+    if (!reserveAiCall(source, this.model)) throw new Error("ai_budget_block");
     const prompt =
       `${args.system}\n\n${args.user}\n\n` +
       `ตอบเป็น JSON เท่านั้น (ไม่มีข้อความอื่น ไม่มี markdown) ให้ตรงกับ schema ชื่อ "${args.jsonSchema.name}" โครงสร้าง:\n` +
@@ -40,7 +43,15 @@ export class GeminiProvider implements AIProvider {
         console.warn(`[gemini-provider] http ${res.status}`);
         throw new Error(`gemini http ${res.status}`);
       }
-      const body = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const body = (await res.json()) as {
+        candidates?: { content?: { parts?: { text?: string }[] } }[];
+        usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+      };
+      logAiUsage(source, "gemini", this.model, {
+        promptTokens: body.usageMetadata?.promptTokenCount,
+        outputTokens: body.usageMetadata?.candidatesTokenCount,
+        totalTokens: body.usageMetadata?.totalTokenCount,
+      });
       const text = body.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) throw new Error("gemini empty response");
       return text;

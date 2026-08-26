@@ -62,7 +62,7 @@ export async function interpretDocPurpose(params: {
     return !out || out === "ไม่ระบุ" ? "" : out.slice(0, 200);
   };
   // Gemini ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม/ไม่มี key → OpenAI
-  const g = await generateTextWithGemini({ system: "ตอบสั้น กระชับ ภาษาไทย", userPrompt: prompt, maxOutputTokens: 300, timeoutMs: TIMEOUT_MS });
+  const g = await generateTextWithGemini({ source: "document_purpose", system: "ตอบสั้น กระชับ ภาษาไทย", userPrompt: prompt, maxOutputTokens: 300, timeoutMs: TIMEOUT_MS });
   if (g !== null) return clean(g);
 
   const apiKey = process.env.OPENAI_API_KEY;

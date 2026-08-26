@@ -247,6 +247,7 @@ async function extractPlatformReportFromFileSingle(fileData: Buffer, mime: strin
 
   // digital_pdf หรือ fallback จากสแกน → Gemini (ถูก + ไม่พึ่ง OpenAI)
   const gem = await extractJsonWithGemini({
+    source: "platform_report_extract",
     system: SYSTEM_PROMPT,
     userPrompt: FILE_USER_PROMPT,
     fileData: prepped.data,
@@ -270,7 +271,7 @@ async function extractPlatformReportFromFileSingle(fileData: Buffer, mime: strin
  */
 /** อ่านข้อความ: Gemini ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม → OpenAI เป็นทางเลือกสุดท้าย */
 async function extractTextPreferGemini(userText: string, timeoutMs?: number): Promise<ExtractCallResult> {
-  const gem = await extractJsonWithGemini({ system: SYSTEM_PROMPT, userPrompt: TEXT_USER_PROMPT, text: userText, timeoutMs });
+  const gem = await extractJsonWithGemini({ source: "platform_report_extract", system: SYSTEM_PROMPT, userPrompt: TEXT_USER_PROMPT, text: userText, timeoutMs });
   if (gem !== null) return { lines: normalizePlatformExtraction(gem), failed: false };
   return callExtract(TEXT_USER_PROMPT + userText, timeoutMs);
 }

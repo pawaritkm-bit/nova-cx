@@ -48,6 +48,7 @@ export async function extractIdCardData(fileData: Buffer, mime: string): Promise
   try {
     const prepped = await downscaleImageIfLarge(fileData, mime);
     const raw = await extractJsonWithGemini({
+      source: "id_card_extract",
       system: SYSTEM_PROMPT,
       userPrompt: "อ่านบัตรประชาชนนี้ ตอบ JSON.",
       fileData: prepped.data,

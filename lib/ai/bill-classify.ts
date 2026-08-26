@@ -153,6 +153,7 @@ export async function classifyShareCircleImage(
     mime: prepared.mime,
     maxOutputTokens: 160,
     timeoutMs: REQUEST_TIMEOUT_MS,
+    source: "share_circle_classify",
   });
   if (gem !== null) return normalizeShareCircleClassification(gem);
 
@@ -218,6 +219,7 @@ export async function classifyBillImage(
     mime: prepared.mime,
     maxOutputTokens: 160,
     timeoutMs: REQUEST_TIMEOUT_MS,
+    source: "bill_classify",
   });
   if (gem !== null) return normalizeClassification(gem);
 

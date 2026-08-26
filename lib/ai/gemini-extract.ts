@@ -70,6 +70,7 @@ async function callGeminiRaw(opts: {
   model?: string;
   timeoutMs?: number;
   jsonMode?: boolean;
+  source?: string;
 }): Promise<string | null> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
@@ -84,7 +85,8 @@ async function callGeminiRaw(opts: {
   parts.push({ text: combined });
 
   const model = opts.model || GEMINI_MODEL;
-  if (!reserveAiCall("document_extract", model)) return null;
+  const source = opts.source || "document_extract";
+  if (!reserveAiCall(source, model)) return null;
   const generationConfig: Record<string, unknown> = {
     temperature: 0,
     maxOutputTokens: opts.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
@@ -111,7 +113,7 @@ async function callGeminiRaw(opts: {
         candidates?: { content?: { parts?: { text?: string }[] } }[];
         usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
       };
-      logAiUsage("document_extract", "gemini", model, {
+      logAiUsage(source, "gemini", model, {
         promptTokens: body.usageMetadata?.promptTokenCount,
         outputTokens: body.usageMetadata?.candidatesTokenCount,
         totalTokens: body.usageMetadata?.totalTokenCount,
@@ -140,6 +142,7 @@ export async function generateTextWithGemini(opts: {
   maxOutputTokens?: number;
   model?: string;
   timeoutMs?: number;
+  source?: string;
 }): Promise<string | null> {
   return callGeminiRaw({ ...opts, maxOutputTokens: opts.maxOutputTokens ?? 2000, jsonMode: false });
 }
@@ -158,6 +161,7 @@ export async function extractJsonWithGemini(opts: {
   maxOutputTokens?: number;
   model?: string;
   timeoutMs?: number;
+  source?: string;
 }): Promise<Record<string, unknown> | null> {
   const text = await callGeminiRaw({ ...opts, jsonMode: true });
   return text ? extractJson(text) : null;

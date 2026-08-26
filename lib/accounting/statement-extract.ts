@@ -310,6 +310,7 @@ export async function detectStatementBank(fileData: Buffer, mime: string): Promi
   try {
     const prepped = await downscaleImageIfLarge(fileData, mime);
     const raw = await extractJsonWithGemini({
+      source: "statement_extract",
       system: BANK_SYSTEM_PROMPT,
       userPrompt: "ธนาคารอะไร ตอบ JSON {bank}.",
       fileData: prepped.data,
@@ -341,6 +342,7 @@ async function extractStatementFromFileSingle(fileData: Buffer, mime: string): P
 
   // digital_pdf หรือ fallback จากสแกน → Gemini (ถูก + ไม่พึ่ง OpenAI) · ★ deterministic ลองไปก่อนแล้วที่ classify-finance-doc
   const gem = await extractJsonWithGemini({
+    source: "statement_extract",
     system: SYSTEM_PROMPT,
     userPrompt: FILE_USER_PROMPT,
     fileData: prepped.data,
@@ -366,7 +368,7 @@ export async function extractStatementFromText(text: string): Promise<StatementT
   const t = (text ?? "").trim();
   if (!t) return [];
   // Gemini อ่านก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม → OpenAI เป็นทางเลือกสุดท้าย (ถ้าตั้ง key)
-  const gem = await extractJsonWithGemini({ system: SYSTEM_PROMPT, userPrompt: TEXT_USER_PROMPT, text: t });
+  const gem = await extractJsonWithGemini({ source: "statement_extract", system: SYSTEM_PROMPT, userPrompt: TEXT_USER_PROMPT, text: t });
   if (gem !== null) return normalizeStatementExtraction(gem);
   const { txns } = await callExtract(TEXT_USER_PROMPT + t);
   return txns;
