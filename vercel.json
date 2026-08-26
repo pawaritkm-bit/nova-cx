@@ -31,10 +31,6 @@
       "schedule": "*/10 * * * *"
     },
     {
-      "path": "/api/cron/backfill-bill-classify",
-      "schedule": "*/10 * * * *"
-    },
-    {
       "path": "/api/cron/generate-recurring-je",
       "schedule": "0 2 * * *"
     },
