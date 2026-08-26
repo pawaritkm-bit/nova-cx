@@ -4,7 +4,7 @@ import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAdminContext } from "@/lib/admin/guard";
 import ChatAuditFrame from "../_Frame";
-import { listAiUsageRows, resolveUsageDateRange, type AiUsageRow } from "@/lib/ai/usage-report";
+import { effectiveAiCost, listAiUsageRows, resolveUsageDateRange, type AiUsageRow } from "@/lib/ai/usage-report";
 
 export const dynamic = "force-dynamic";
 
@@ -47,13 +47,13 @@ export default async function AiUsagePage({ searchParams }: { searchParams: Prom
   }
 
   const totalTokens = rows.reduce((s, r) => s + (r.total_tokens ?? 0), 0);
-  const totalThb = rows.reduce((s, r) => s + Number(r.estimated_cost_thb ?? 0), 0);
+  const totalThb = rows.reduce((s, r) => s + effectiveAiCost(r).thb, 0);
   const bySource = new Map<string, { calls: number; tokens: number; thb: number }>();
   for (const row of rows) {
     const item = bySource.get(row.source) ?? { calls: 0, tokens: 0, thb: 0 };
     item.calls++;
     item.tokens += row.total_tokens ?? 0;
-    item.thb += Number(row.estimated_cost_thb ?? 0);
+    item.thb += effectiveAiCost(row).thb;
     bySource.set(row.source, item);
   }
   const ranked = [...bySource.entries()].sort((a, b) => b[1].thb - a[1].thb);
@@ -64,7 +64,7 @@ export default async function AiUsagePage({ searchParams }: { searchParams: Prom
         <div className="card" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <strong>ช่วงเวลา:</strong>
           {[1, 7, 30, 90].map((d) => <Link key={d} className={`btn${!sp.from && !sp.to && days === d ? " primary" : ""}`} href={`/chat-audit/ai-usage?days=${d}`}>{d} วัน</Link>)}
-          <span className="muted" style={{ marginLeft: "auto" }}>ค่าใช้จ่ายเป็นค่าประมาณและไม่เก็บเนื้อหาเอกสาร</span>
+          <span className="muted" style={{ marginLeft: "auto" }}>เริ่มเก็บข้อมูลใน CX วันที่ 26/08/2569 · ไม่รวมยอดก่อนติดตั้ง</span>
         </div>
         <form method="get" className="card" style={{ display: "flex", gap: 12, alignItems: "end", flexWrap: "wrap" }}>
           <label style={{ display: "grid", gap: 5 }}><span style={{ fontWeight: 700 }}>ตั้งแต่วันที่</span><input className="input" type="date" name="from" defaultValue={range.from} required /></label>
@@ -87,8 +87,8 @@ export default async function AiUsagePage({ searchParams }: { searchParams: Prom
         </div>
         <div className="card" style={{ overflowX: "auto" }}>
           <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>รายการล่าสุด</h2>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr><th align="left">เวลา</th><th align="left">ฟังก์ชัน</th><th align="left">โมเดล</th><th align="right">Input</th><th align="right">Output</th><th align="right">รวม</th><th align="right">ประมาณ</th></tr></thead>
-            <tbody>{rows.slice(0, 200).map((r) => <tr key={r.id}><td>{new Date(r.created_at).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</td><td>{SOURCE_LABELS[r.source] ?? r.source}</td><td>{r.provider} / {r.model}</td><td align="right">{r.prompt_tokens?.toLocaleString("th-TH") ?? "-"}</td><td align="right">{r.output_tokens?.toLocaleString("th-TH") ?? "-"}</td><td align="right">{r.total_tokens?.toLocaleString("th-TH") ?? "-"}</td><td align="right">฿{money(Number(r.estimated_cost_thb ?? 0))}</td></tr>)}</tbody></table>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr><th align="left">เวลา</th><th align="left">ฟังก์ชัน</th><th align="left">โมเดล</th><th align="right">Input</th><th align="right">Output</th><th align="right">Thinking</th><th align="right">รวม</th><th align="right">ประมาณ</th></tr></thead>
+            <tbody>{rows.slice(0, 200).map((r) => { const cost = effectiveAiCost(r); return <tr key={r.id}><td>{new Date(r.created_at).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</td><td>{SOURCE_LABELS[r.source] ?? r.source}</td><td>{r.provider} / {r.model}</td><td align="right">{r.prompt_tokens?.toLocaleString("th-TH") ?? "-"}</td><td align="right">{r.output_tokens?.toLocaleString("th-TH") ?? "-"}</td><td align="right">{cost.thinking.toLocaleString("th-TH")}</td><td align="right">{r.total_tokens?.toLocaleString("th-TH") ?? "-"}</td><td align="right">฿{money(cost.thb)}</td></tr>; })}</tbody></table>
           {!loadError && rows.length === 0 ? <p className="muted" style={{ marginTop: 12 }}>ยังไม่มีการเรียก AI ในช่วงเวลานี้</p> : null}
         </div>
       </section>

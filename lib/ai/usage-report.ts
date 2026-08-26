@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export type AiUsageRow = {
   id: number; source: string; provider: string; model: string;
   prompt_tokens: number | null; output_tokens: number | null; total_tokens: number | null;
+  thinking_tokens: number | null;
   estimated_cost_usd: number | string | null; estimated_cost_thb: number | string | null;
   created_at: string;
 };
@@ -31,7 +32,7 @@ export async function listAiUsageRows(db: SupabaseClient, fromIso: string, until
   const pageSize = 1000;
   for (let offset = 0; offset < maxRows; offset += pageSize) {
     const { data, error } = await db.from("ai_usage_logs")
-      .select("id,source,provider,model,prompt_tokens,output_tokens,total_tokens,estimated_cost_usd,estimated_cost_thb,created_at")
+      .select("id,source,provider,model,prompt_tokens,output_tokens,thinking_tokens,total_tokens,estimated_cost_usd,estimated_cost_thb,created_at")
       .gte("created_at", fromIso).lt("created_at", untilIso)
       .order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
     if (error) throw error;
@@ -40,4 +41,18 @@ export async function listAiUsageRows(db: SupabaseClient, fromIso: string, until
     if (page.length < pageSize) break;
   }
   return rows;
+}
+
+/** คำนวณใหม่จาก token จริง รวม thinking; ใช้ได้กับแถวเก่าที่ไม่มี thinking โดยหา gap จาก total */
+export function effectiveAiCost(row: AiUsageRow, usdToThb = 35): { usd: number; thb: number; thinking: number } {
+  if (row.provider !== "gemini") return { usd: Number(row.estimated_cost_usd ?? 0), thb: Number(row.estimated_cost_thb ?? 0), thinking: row.thinking_tokens ?? 0 };
+  const input = row.prompt_tokens ?? 0;
+  const output = row.output_tokens ?? 0;
+  const thinking = row.thinking_tokens ?? Math.max(0, (row.total_tokens ?? 0) - input - output);
+  const is36Or37 = /gemini-3\.[67]-flash/i.test(row.model);
+  const inputRate = is36Or37 ? 0.75 : /gemini-2\.5-flash/i.test(row.model) ? 0.30 : 0;
+  const outputRate = is36Or37 ? 3.75 : /gemini-2\.5-flash/i.test(row.model) ? 2.50 : 0;
+  if (!inputRate && !outputRate) return { usd: Number(row.estimated_cost_usd ?? 0), thb: Number(row.estimated_cost_thb ?? 0), thinking };
+  const usd = (input * inputRate + (output + thinking) * outputRate) / 1_000_000;
+  return { usd, thb: usd * usdToThb, thinking };
 }

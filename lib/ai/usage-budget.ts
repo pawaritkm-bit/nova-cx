@@ -1,4 +1,4 @@
-type Usage = { promptTokens?: number; outputTokens?: number; totalTokens?: number };
+type Usage = { promptTokens?: number; outputTokens?: number; thinkingTokens?: number; totalTokens?: number };
 type WindowState = { hour: string; day: string; hourCalls: number; dayCalls: number };
 const shared = globalThis as typeof globalThis & { __novaAiWindow?: WindowState };
 
@@ -30,6 +30,7 @@ export function reserveAiCall(source: string, model: string): boolean {
 export async function logAiUsage(source: string, provider: string, model: string, usage?: Usage): Promise<void> {
   const promptTokens = usage?.promptTokens ?? 0;
   const outputTokens = usage?.outputTokens ?? 0;
+  const thinkingTokens = usage?.thinkingTokens ?? Math.max(0, (usage?.totalTokens ?? 0) - promptTokens - outputTokens);
   const usdToThb = Number(process.env.AI_USD_TO_THB || 35);
   // Override ได้จาก Vercel env เมื่อผู้ให้บริการเปลี่ยนราคา
   let inputPerMillion = Number(process.env.AI_INPUT_USD_PER_MILLION || 0);
@@ -42,11 +43,13 @@ export async function logAiUsage(source: string, provider: string, model: string
     outputPerMillion = Number(process.env.GEMINI_FLASH_OUTPUT_USD_PER_MILLION || 2.50);
   }
   const hasPrice = inputPerMillion > 0 || outputPerMillion > 0;
-  const estimatedCostUsd = hasPrice ? (promptTokens * inputPerMillion + outputTokens * outputPerMillion) / 1_000_000 : null;
+  const billedOutputTokens = provider === "gemini" ? outputTokens + thinkingTokens : outputTokens;
+  const estimatedCostUsd = hasPrice ? (promptTokens * inputPerMillion + billedOutputTokens * outputPerMillion) / 1_000_000 : null;
   const estimatedCostThb = estimatedCostUsd == null ? null : estimatedCostUsd * usdToThb;
   const record = { event: "ai_usage", source, provider, model,
     promptTokens: usage?.promptTokens ?? null,
     outputTokens: usage?.outputTokens ?? null,
+    thinkingTokens,
     totalTokens: usage?.totalTokens ?? null,
     estimatedCostUsd: estimatedCostUsd == null ? null : Number(estimatedCostUsd.toFixed(8)),
     estimatedCostThb: estimatedCostThb == null ? null : Number(estimatedCostThb.toFixed(6)),
@@ -66,6 +69,7 @@ export async function logAiUsage(source: string, provider: string, model: string
         source, provider, model,
         prompt_tokens: record.promptTokens,
         output_tokens: record.outputTokens,
+        thinking_tokens: record.thinkingTokens,
         total_tokens: record.totalTokens,
         estimated_cost_usd: record.estimatedCostUsd,
         estimated_cost_thb: record.estimatedCostThb,

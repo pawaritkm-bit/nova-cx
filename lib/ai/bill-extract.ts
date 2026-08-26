@@ -90,11 +90,12 @@ async function geminiExtractContent(
       }
       const body = (await res.json()) as {
         candidates?: { content?: { parts?: { text?: string }[] } }[];
-        usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+        usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; totalTokenCount?: number };
       };
       await logAiUsage("bill_extract", "gemini", model, {
         promptTokens: body.usageMetadata?.promptTokenCount,
         outputTokens: body.usageMetadata?.candidatesTokenCount,
+        thinkingTokens: body.usageMetadata?.thoughtsTokenCount,
         totalTokens: body.usageMetadata?.totalTokenCount,
       });
       return body.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
