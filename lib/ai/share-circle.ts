@@ -258,6 +258,9 @@ const USER_PROMPT =
 // สกัดจริง
 // ---------------------------------------------------------------------
 
+/** ปิดตามคำสั่งเจ้าของระบบ 26/08/2569 — กันค่า AI จากทั้ง LINE worker และหน้า CX */
+export const SHARE_CIRCLE_AI_DISABLED = true;
+
 /**
  * สกัดวงแชร์จากข้อความ และ/หรือ รูป (หลายรูปได้) → รายการวง
  *   ★ degrade: ไม่มี key / ไม่มี input / อ่านไม่ได้ → [] (ให้คนคีย์เอง)
@@ -265,6 +268,10 @@ const USER_PROMPT =
 export async function extractShareCircles(
   input: ShareCircleExtractInput
 ): Promise<ParsedShareCircleEntry[]> {
+  if (SHARE_CIRCLE_AI_DISABLED) {
+    console.info(JSON.stringify({ event: "ai_feature_disabled", source: "share_circle_extract" }));
+    return [];
+  }
   const text = typeof input.text === "string" ? input.text.trim() : "";
   const images = Array.isArray(input.images) ? input.images.filter((i) => i && i.base64) : [];
   if (!text && images.length === 0) return []; // ไม่มี input ให้อ่าน

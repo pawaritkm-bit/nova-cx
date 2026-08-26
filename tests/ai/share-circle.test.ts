@@ -1,5 +1,15 @@
-import { describe, it, expect } from "vitest";
-import { normalizeCircle, normalizeShareCircles } from "@/lib/ai/share-circle";
+import { describe, it, expect, vi } from "vitest";
+import { extractShareCircles, normalizeCircle, normalizeShareCircles, SHARE_CIRCLE_AI_DISABLED } from "@/lib/ai/share-circle";
+
+describe("ปิด AI อ่านวงแชร์", () => {
+  it("คืนค่าว่างและไม่เรียก API ทุกกรณี", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    expect(SHARE_CIRCLE_AI_DISABLED).toBe(true);
+    await expect(extractShareCircles({ text: "วงแชร์ 100,000" })).resolves.toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+});
 
 describe("normalizeCircle — สกัด 1 วง (ระดับวง/เดือน)", () => {
   it("แปลงครบทุกช่อง (G/H/I/J/K + สมาชิก/ต้น/รอบ)", () => {
