@@ -13,6 +13,7 @@
  */
 
 import { extractJsonWithGemini } from "@/lib/ai/gemini-extract";
+import { prepareImageForClassification } from "@/lib/accounting/image-prep";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -144,11 +145,12 @@ export async function classifyShareCircleImage(
   mime: string
 ): Promise<ShareCircleClassifyResult | null> {
   // Gemini vision ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม/ไม่มี key → OpenAI
+  const prepared = await prepareImageForClassification(data, mime);
   const gem = await extractJsonWithGemini({
     system: SHARE_SYSTEM_PROMPT,
     userPrompt: "รูปนี้เป็น 'ลิสต์วงแชร์' หรือ 'บิลจริง'? ตอบ JSON ตามรูปแบบ",
-    fileData: data,
-    mime,
+    fileData: prepared.data,
+    mime: prepared.mime,
     maxOutputTokens: 160,
     timeoutMs: REQUEST_TIMEOUT_MS,
   });
@@ -208,11 +210,12 @@ export async function classifyBillImage(
   mime: string
 ): Promise<BillClassifyResult | null> {
   // Gemini vision ก่อน (ถูก + ไม่พึ่ง OpenAI) · ล้ม/ไม่มี key → OpenAI
+  const prepared = await prepareImageForClassification(data, mime);
   const gem = await extractJsonWithGemini({
     system: SYSTEM_PROMPT,
     userPrompt: "รูปนี้เป็นเอกสารการเงินหรือไม่? ตอบ JSON ตามรูปแบบที่กำหนด",
-    fileData: data,
-    mime,
+    fileData: prepared.data,
+    mime: prepared.mime,
     maxOutputTokens: 160,
     timeoutMs: REQUEST_TIMEOUT_MS,
   });

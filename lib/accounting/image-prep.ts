@@ -14,6 +14,7 @@ const IMG_MAX_BYTES = 2 * 1024 * 1024; // 2 MB (เดิม 4MB) — จับ�
 /** ขอบยาวสุดหลังย่อ — ★ ลด 3000→1600px เพื่อคุมต้นทุน Gemini (image tokens ต่อใบลดครึ่ง)
  *   1600px ยังอ่านเลขบิล/ยอด/วันที่ชัด (ตัวเลขบิลใหญ่พอ) · สเตทเมนต์ส่วนใหญ่เป็น PDF (ไม่ผ่านฟังก์ชันนี้) */
 const IMG_MAX_EDGE = 1600;
+const CLASSIFY_MAX_EDGE = 768;
 
 function isImageMime(mime: string): boolean {
   const m = (mime || "").toLowerCase();
@@ -63,5 +64,21 @@ export async function downscaleImageIfLarge(
     return { data: out, mime: "image/jpeg" };
   } catch {
     return { data, mime }; // sharp พัง → ใช้ต้นฉบับ
+  }
+}
+
+/** รอบคัดประเภทต้องเห็นเพียงหัวเอกสาร/รูปแบบ จึงส่งภาพเล็กกว่ารอบอ่านตัวเลขมาก */
+export async function prepareImageForClassification(
+  data: Buffer,
+  mime: string,
+): Promise<{ data: Buffer; mime: string }> {
+  if (!isImageMime(mime)) return { data, mime };
+  try {
+    const out = await sharp(data).rotate()
+      .resize({ width: CLASSIFY_MAX_EDGE, height: CLASSIFY_MAX_EDGE, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 72 }).toBuffer();
+    return { data: out, mime: "image/jpeg" };
+  } catch {
+    return { data, mime };
   }
 }

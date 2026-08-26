@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import sharp from "sharp";
 
-import { downscaleImageIfLarge } from "@/lib/accounting/image-prep";
+import { downscaleImageIfLarge, prepareImageForClassification } from "@/lib/accounting/image-prep";
 
 async function makeImage(w: number, h: number): Promise<Buffer> {
   return sharp({ create: { width: w, height: h, channels: 3, background: "#ffffff" } })
@@ -10,11 +10,11 @@ async function makeImage(w: number, h: number): Promise<Buffer> {
 }
 
 describe("downscaleImageIfLarge", () => {
-  it("รูปใหญ่เกินขอบ (4000px) → ย่อ ≤3000px + แปลงเป็น jpeg", async () => {
+  it("รูปใหญ่เกินขอบ (4000px) → ย่อ ≤1600px + แปลงเป็น jpeg", async () => {
     const big = await makeImage(4000, 2000);
     const out = await downscaleImageIfLarge(big, "image/png");
     const meta = await sharp(out.data).metadata();
-    expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBeLessThanOrEqual(3000);
+    expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBeLessThanOrEqual(1600);
     expect(out.mime).toBe("image/jpeg");
   });
 
@@ -36,5 +36,22 @@ describe("downscaleImageIfLarge", () => {
     const buf = Buffer.from("not an image");
     const out = await downscaleImageIfLarge(buf, "image/png");
     expect(out.data).toBe(buf);
+  });
+});
+
+describe("prepareImageForClassification", () => {
+  it("ย่อสำเนาสำหรับคัดประเภทเหลือไม่เกิน 768px", async () => {
+    const image = await makeImage(2400, 1200);
+    const out = await prepareImageForClassification(image, "image/png");
+    const meta = await sharp(out.data).metadata();
+    expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBeLessThanOrEqual(768);
+    expect(out.mime).toBe("image/jpeg");
+  });
+
+  it("ไม่แปลง PDF", async () => {
+    const pdf = Buffer.from("%PDF-1.4 dummy");
+    const out = await prepareImageForClassification(pdf, "application/pdf");
+    expect(out.data).toBe(pdf);
+    expect(out.mime).toBe("application/pdf");
   });
 });

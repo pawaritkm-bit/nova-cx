@@ -8,11 +8,13 @@
  *   ★ PDPA: ไม่ log เนื้อไฟล์/base64/ยอด/ชื่อ — log แค่ error สั้น ๆ
  */
 
+import { logAiUsage, reserveAiCall } from "@/lib/ai/usage-budget";
+
 /** โมเดลอ่านของ Gemini — ใช้ตัวเดียวกับ vision หลัก (ตั้งผ่าน env) */
 const GEMINI_MODEL = process.env.ACCT_VISION_MODEL || "gemini-3.6-flash";
 const GEMINI_TIMEOUT_MS = 110_000;
 /** เพดาน output — สเตทเมนต์ยาวหลายร้อยรายการ (ไฟล์ใหญ่ถูกตัด chunk มาก่อนแล้ว) */
-const MAX_OUTPUT_TOKENS = 32000;
+const MAX_OUTPUT_TOKENS = 12000;
 
 function repairJsonNumbers(s: string): string {
   return s.replace(/(?<=\d),(?=\d)/g, "");
@@ -82,6 +84,7 @@ async function callGeminiRaw(opts: {
   parts.push({ text: combined });
 
   const model = opts.model || GEMINI_MODEL;
+  if (!reserveAiCall("document_extract", model)) return null;
   const generationConfig: Record<string, unknown> = {
     temperature: 0,
     maxOutputTokens: opts.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
@@ -91,7 +94,7 @@ async function callGeminiRaw(opts: {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
   const timeoutMs = opts.timeoutMs ?? GEMINI_TIMEOUT_MS;
 
-  const MAX = 4;
+  const MAX = 2;
   for (let attempt = 0; attempt < MAX; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -104,7 +107,15 @@ async function callGeminiRaw(opts: {
         if (willRetry) { clearTimeout(timer); await delay(2000 * (attempt + 1) + Math.floor(Math.random() * 500)); continue; }
         return null;
       }
-      const body = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const body = (await res.json()) as {
+        candidates?: { content?: { parts?: { text?: string }[] } }[];
+        usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+      };
+      logAiUsage("document_extract", "gemini", model, {
+        promptTokens: body.usageMetadata?.promptTokenCount,
+        outputTokens: body.usageMetadata?.candidatesTokenCount,
+        totalTokens: body.usageMetadata?.totalTokenCount,
+      });
       return body.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
     } catch {
       console.warn("[gemini-extract] error");

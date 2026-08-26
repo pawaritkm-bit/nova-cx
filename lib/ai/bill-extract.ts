@@ -21,6 +21,7 @@ import {
 import { downscaleImageIfLarge } from "@/lib/accounting/image-prep";
 import { extractPdfMaybeSplit } from "@/lib/accounting/pdf-split";
 import { isValidThaiTaxIdChecksum, taxIdDigits } from "@/lib/accounting/tax-id";
+import { logAiUsage, reserveAiCall } from "@/lib/ai/usage-budget";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -63,16 +64,18 @@ async function geminiExtractContent(
 ): Promise<string | null> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
+  const model = modelOverride || GEMINI_VISION_MODEL;
+  if (!reserveAiCall("bill_extract", model)) return null;
   const m = (mime || "").toLowerCase();
   const media = m.includes("pdf") ? "application/pdf" : m.startsWith("image/") ? mime : "image/jpeg";
   const reqBody = JSON.stringify({
     contents: [{ parts: [{ inline_data: { mime_type: media, data: imageData.toString("base64") } }, { text: `${system}\n\n${user}` }] }],
     generationConfig: { temperature: 0, responseMimeType: "application/json", maxOutputTokens: maxTokens },
   });
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelOverride || GEMINI_VISION_MODEL}:generateContent?key=${key}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
   // ลองสูงสุด 4 ครั้ง — retry+backoff เฉพาะ error ชั่วคราว (429 rate limit / 5xx overloaded)
-  const MAX = 4;
+  const MAX = 2;
   for (let attempt = 0; attempt < MAX; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -85,7 +88,15 @@ async function geminiExtractContent(
         if (willRetry) { clearTimeout(timer); await delay(2000 * (attempt + 1) + Math.floor(Math.random() * 500)); continue; }
         return null;
       }
-      const body = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const body = (await res.json()) as {
+        candidates?: { content?: { parts?: { text?: string }[] } }[];
+        usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+      };
+      logAiUsage("bill_extract", "gemini", model, {
+        promptTokens: body.usageMetadata?.promptTokenCount,
+        outputTokens: body.usageMetadata?.candidatesTokenCount,
+        totalTokens: body.usageMetadata?.totalTokenCount,
+      });
       return body.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
     } catch {
       console.warn("[bill-extract] gemini error");
@@ -438,9 +449,15 @@ function gateString(field: ConfField | undefined, threshold = FIELD_THRESHOLD): 
 function fixBuddhistYear(d: string | null): string | null {
   if (!d) return d;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
-  if (!m) return d;
-  const y = parseInt(m[1], 10);
-  return y >= 2500 ? `${y - 543}-${m[2]}-${m[3]}` : d;
+  if (!m) return null;
+  const rawYear = parseInt(m[1], 10);
+  const y = rawYear >= 2500 ? rawYear - 543 : rawYear;
+  const month = parseInt(m[2], 10);
+  const day = parseInt(m[3], 10);
+  const date = new Date(Date.UTC(y, month - 1, day));
+  const valid = y >= 2000 && y <= new Date().getUTCFullYear() + 1 &&
+    date.getUTCFullYear() === y && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+  return valid ? `${String(y).padStart(4, "0")}-${m[2]}-${m[3]}` : null;
 }
 
 /**
@@ -528,6 +545,13 @@ function normalizeLine(raw: unknown, chartByCode: ChartByCode): ExtractedLine | 
   // low_confidence ของบรรทัด = มีช่องเสี่ยง (amount/vat/บัญชี) ที่เติมแบบ "เดา" อย่างน้อย 1 ช่อง
   const lowConfidence = amount.low || vatAmount.low || account.low;
 
+  let whtRate = gateNumber(o.wht_rate as ConfField);
+  let whtAmount = gateNumber(o.wht_amount as ConfField);
+  // อัตราเกิน 100% หรือยอดหักสูงกว่าฐานเป็นผลอ่านผิดแน่นอน — เว้นไว้ให้คนตรวจ
+  const invalidWht = (whtRate != null && whtRate > 100) ||
+    (whtAmount != null && amount.value != null && whtAmount > amount.value);
+  if (invalidWht) { whtRate = null; whtAmount = null; }
+
   return {
     vat_type: vatType,
     // string เสี่ยงน้อยกว่าตัวเลข → เติมเชิงรุก (GUESS_THRESHOLD) แต่ไม่ mark เดา
@@ -536,9 +560,9 @@ function normalizeLine(raw: unknown, chartByCode: ChartByCode): ExtractedLine | 
     vat_amount: vatAmount.value,
     account_code: account.value,
     // ★ WHT: คงเกณฑ์สูง (FIELD_THRESHOLD) — ไม่ชัด = null (ให้ worker แนะนำจากบัญชี) ไม่เดาเติม
-    wht_rate: gateNumber(o.wht_rate as ConfField),
-    wht_amount: gateNumber(o.wht_amount as ConfField),
-    low_confidence: lowConfidence,
+    wht_rate: whtRate,
+    wht_amount: whtAmount,
+    low_confidence: lowConfidence || invalidWht,
   };
 }
 
@@ -635,7 +659,7 @@ export async function extractBillData(
 
   // 1) อ่านเร็ว: flash (หรือ OpenAI ถ้ามี key)
   const first = parseBill(
-    await runBillVision(system, USER_PROMPT, prepped.data, prepped.mime, model, 4000),
+    await runBillVision(system, USER_PROMPT, prepped.data, prepped.mime, model, 2200),
     chartByCode
   );
   if (!first) return null;
@@ -644,7 +668,7 @@ export async function extractBillData(
   if (!ESCALATE_ON || !needsEscalation(first)) return first;
 
   // 3) บิลยาก → ตรวจซ้ำด้วย "Claude อย่างเดียว" (คุมต้นทุน — ตัด Gemini Pro preview ที่แพงออก)
-  const claudeContent = await claudeExtractContent(system, USER_PROMPT, prepped.data, prepped.mime, 6000, EXTRACT_TIMEOUT_MS);
+  const claudeContent = await claudeExtractContent(system, USER_PROMPT, prepped.data, prepped.mime, 2600, EXTRACT_TIMEOUT_MS);
   const candidates = [first, parseBill(claudeContent, chartByCode)]
     .filter((b): b is ExtractedBill => !!b);
 
@@ -724,7 +748,7 @@ async function extractBillsDataSingle(
   if (!process.env.OPENAI_API_KEY && !process.env.GEMINI_API_KEY) return [];
 
   const prepped = await downscaleImageIfLarge(imageData, mime); // ย่อรูปสแกน/ถ่ายบิลใหญ่ (PDF ไม่แตะ)
-  const content = await runBillVision(buildSystemPrompt(), MULTI_USER_PROMPT, prepped.data, prepped.mime, EXTRACT_MODEL, 8000);
+  const content = await runBillVision(buildSystemPrompt(), MULTI_USER_PROMPT, prepped.data, prepped.mime, EXTRACT_MODEL, 5000);
   if (!content) return [];
 
   const obj = extractJson(content);

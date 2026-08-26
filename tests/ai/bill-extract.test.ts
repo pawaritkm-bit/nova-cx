@@ -338,6 +338,27 @@ describe("normalizeExtraction — wht_rate / wht_amount (หัก ณ ที่
     });
     expect(r?.lines[0].wht_rate).toBeNull();
   });
+
+  it("WHT เกินฐานหรืออัตราเกิน 100% → ล้างค่าและติดธงตรวจ", () => {
+    const r = normalizeExtraction({ lines: [{
+      vat_type: "vat",
+      amount: { value: 100, confidence: 0.99 },
+      wht_rate: { value: 150, confidence: 0.99 },
+      wht_amount: { value: 120, confidence: 0.99 },
+    }] });
+    expect(r?.lines[0].wht_rate).toBeNull();
+    expect(r?.lines[0].wht_amount).toBeNull();
+    expect(r?.lines[0].low_confidence).toBe(true);
+  });
+});
+
+describe("normalizeExtraction — date sanity", () => {
+  it("วันที่ไม่มีจริงหรือปีไกลผิดปกติ → null", () => {
+    const invalidDay = normalizeExtraction({ doc_date: { value: "2026-02-31", confidence: 0.99 }, lines: [] });
+    const invalidYear = normalizeExtraction({ doc_date: { value: "2099-01-01", confidence: 0.99 }, lines: [] });
+    expect(invalidDay?.doc_date).toBeNull();
+    expect(invalidYear?.doc_date).toBeNull();
+  });
 });
 
 describe("extractBillData — degrade & error → null", () => {
