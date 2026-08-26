@@ -15,6 +15,13 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 /**
+ * ปิด AI แบบสแกนคิวตามเวลา/ย้อนหลังถาวร
+ * การอ่านบิลใหม่แบบทันทียังเรียก processBillExtraction ภายใน attachments worker โดยตรง
+ * และไม่ผ่าน endpoint cron นี้
+ */
+const SCHEDULED_AI_EXTRACTION_DISABLED = true;
+
+/**
  * POST/GET /api/cron/extract-bills
  *   Bill Extract Worker — Vercel Cron: AI สกัดข้อมูลบิลที่เก็บแล้ว → สร้าง draft
  *   ในตาราง bill_entries/bill_entry_lines (หน้า "ลงบันทึกบัญชี ภาษีซื้อ/ขาย")
@@ -96,6 +103,15 @@ async function handle(request: NextRequest) {
     modeRaw === "reextract"
       ? modeRaw
       : "both";
+
+  // อนุญาตเฉพาะ redecide ซึ่งเป็น deterministic และไม่เรียก AI
+  // modes extract/both/accounts/reextract ต้องไม่อ่านไฟล์ย้อนหลัง แม้ถูก cron หรือคนเรียก URL เอง
+  if (SCHEDULED_AI_EXTRACTION_DISABLED && mode !== "redecide") {
+    return NextResponse.json(
+      { status: "skipped", mode, reason: "scheduled_ai_extraction_disabled" },
+      { status: 200 }
+    );
+  }
 
   try {
     const db = createServiceRoleClient();

@@ -9,6 +9,12 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 /**
+ * ปิดถาวรตามนโยบายธุรกิจ: ห้าม AI ไล่อ่าน/จำแนกรูปย้อนหลัง
+ * คง endpoint ไว้ให้ cron เก่าหรือ URL ที่ถูกเรียกอยู่ตอบแบบปลอดภัยโดยไม่แตะ AI
+ */
+const HISTORICAL_AI_DISABLED = true;
+
+/**
  * POST/GET /api/cron/backfill-bill-classify
  *   Bill Classify Backfill Worker — Vercel Cron ทยอยคัดกรองรูปที่เก็บไปแล้ว
  *   (ก่อนมีระบบคัดกรอง) ด้วย AI vision → เก็บเฉพาะเอกสารการเงิน ลบรูปอื่นออกจาก bucket
@@ -32,6 +38,13 @@ async function handle(request: NextRequest) {
   const auth = request.headers.get("authorization");
   if (!isValidCronAuth(auth, secret)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  if (HISTORICAL_AI_DISABLED) {
+    return NextResponse.json(
+      { status: "skipped", reason: "historical_ai_disabled" },
+      { status: 200 }
+    );
   }
 
   const env = getSupabaseEnv();
