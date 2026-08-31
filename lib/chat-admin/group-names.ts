@@ -66,6 +66,7 @@ export async function backfillGroupNames(
     .from("chat_groups")
     .select("id, group_ref, group_kind, chat_channels(oa_type)")
     .eq("tenant_id", tenantId)
+    .eq("provider", "line") // ★ กลุ่ม manual (ลูกค้าบิลกระดาษ ไม่มีกลุ่มไลน์จริง) ไม่มีชื่อให้ดึงจาก LINE
     .eq("group_kind", "group") // room ไม่มี summary API
     .is("display_name_enc", null)
     .is("deleted_at", null)
