@@ -442,13 +442,14 @@ describe("ingestGroupMessage — fetch-if-missing ชื่อกลุ่ม (d
     expect(decryptField(enc)).toBe("บจ.นอร่า299 [สนง.บัญชี Finovas]");
   });
 
-  it("กลุ่มมีชื่อแล้ว (display_name_enc ไม่ null) → skip ไม่ยิง getGroupSummary (ไม่ยิงซ้ำทุกข้อความ)", async () => {
+  it("กลุ่มมีชื่อแล้ว → ดึงชื่อปัจจุบันและอัปเดตเมื่อ LINE เปลี่ยนชื่อ", async () => {
     const store = baseStore({ chat_groups: { id: "g-1", customer_id: null, display_name_enc: "v1:existing.abc.def" } });
     const client = clientWithSummary("ชื่อใหม่");
     await ingestGroupMessage({ db: makeDb(store), client, now: NOW }, "t-1", "care", groupTextEvent());
-    expect(client.summaryCalls).toBe(0);
+    expect(client.summaryCalls).toBe(1);
     const upd = store.updates.find((u) => u.table === "chat_groups" && "display_name_enc" in u.payload);
-    expect(upd).toBeUndefined();
+    expect(upd).toBeDefined();
+    expect(decryptField(upd!.payload.display_name_enc as string)).toBe("ชื่อใหม่");
   });
 
   it("ไม่มีคีย์เข้ารหัส → ไม่ดึง/ไม่เก็บชื่อกลุ่ม (ตาม pattern เดิม)", async () => {
@@ -515,12 +516,15 @@ describe("ingestGroupJoin — บอทถูกเชิญเข้ากล�
     expect(decryptField(upd!.payload.display_name_enc as string)).toBe("บจ.ทดสอบ");
   });
 
-  it("กลุ่มเก่าที่มีชื่ออยู่แล้ว → ไม่ยิง getGroupSummary ซ้ำ", async () => {
+  it("กลุ่มเก่าที่มีชื่ออยู่แล้ว → sync ชื่อปัจจุบันจาก LINE", async () => {
     const store = baseStore({ chat_groups: { id: "g-1", customer_id: null, display_name_enc: "v1:x.y.z" } });
     const client = clientWithSummary("ชื่อใหม่");
     const res = await ingestGroupJoin({ db: makeDb(store), client, now: NOW }, "t-1", "care", joinEvent());
     expect(res.status).toBe("created");
-    expect(client.summaryCalls).toBe(0);
+    expect(client.summaryCalls).toBe(1);
+    const upd = store.updates.find((u) => u.table === "chat_groups" && "display_name_enc" in u.payload);
+    expect(upd).toBeDefined();
+    expect(decryptField(upd!.payload.display_name_enc as string)).toBe("ชื่อใหม่");
   });
 
   it("ไม่ใช่กลุ่ม/ห้อง (source.type=user) → skip", async () => {

@@ -72,8 +72,8 @@ export default function CustomerToolsMenu({
     {
       title: "รายงาน / งบ",
       items: [
-        { label: "รายงานบัญชี / งบทดลอง", href: `/chat-audit/accounting/reports?customerId=${cid}`, scope: "company_closing" },
-        { label: "ปิดงบ / งบการเงินทางการ", href: `/chat-audit/accounting/financial-statements?customerId=${cid}`, scope: "company_closing" },
+        { label: "งบการเงิน", href: `/chat-audit/accounting/reports?customerId=${cid}`, scope: "company_closing" },
+        { label: "งบการเงินฉบับทางการ", href: `/chat-audit/accounting/financial-statements?customerId=${cid}`, scope: "company_closing" },
         { label: "ลูกหนี้/เจ้าหนี้ค้างชำระ", href: `/chat-audit/accounting/ar-ap-aging?customer=${cid}` },
         { label: "งบประมาณ", href: `/chat-audit/accounting/budget?customerId=${cid}` },
       ],

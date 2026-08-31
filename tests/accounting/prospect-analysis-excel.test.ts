@@ -54,4 +54,3 @@ describe("prospect analysis workbook", () => {
     expect(prospectAnalysisXlsxName("ร้าน A/B:*?")).toBe("ร้าน A B - สรุปวิเคราะห์ก่อนเริ่มบริการ.xlsx");
   });
 });
-

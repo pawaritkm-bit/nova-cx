@@ -21,6 +21,7 @@ import { resolveEntryNav } from "@/lib/accounting/entry-nav";
 import { contraAccountFor, paymentMethodLabel } from "@/lib/accounting/payment";
 import { taxMonthOptions, taxMonthLabel } from "@/lib/accounting/tax-month";
 import { validateFxRate, fxRatePlausibilityWarning, deriveThbAmount } from "@/lib/accounting/currency";
+import { joinOcrWords } from "@/lib/accounting/ocr-text";
 
 /**
  * EntryEditor — หน้าต่างตรวจ/แก้บิล (verify panel)
@@ -107,7 +108,7 @@ function splitOcrLineIntoCells(line: {
   }
 
   return groups.map((group) => ({
-    text: group.map((word) => word.text.trim()).join(" "),
+    text: joinOcrWords(group, medianHeight),
     bbox: {
       x0: Math.min(...group.map((word) => word.bbox.x0)),
       y0: Math.min(...group.map((word) => word.bbox.y0)),

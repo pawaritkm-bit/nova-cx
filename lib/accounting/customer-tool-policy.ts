@@ -13,4 +13,3 @@ export function canUseAccountingTool(
   if (scope === "monthly") return customerType === "company" || customerType === "individual";
   return customerType === "company";
 }
-

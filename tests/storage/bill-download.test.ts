@@ -42,4 +42,3 @@ describe("bill download backend routing", () => {
     expect(from).toHaveBeenCalledWith("bills");
   });
 });
-
