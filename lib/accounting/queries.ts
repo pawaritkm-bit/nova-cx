@@ -25,6 +25,19 @@ export type WhtForm = "pnd3" | "pnd53";
 /** วิธีจ่าย/รับเงิน (บัญชีคู่ฝั่งเครดิต) — เงินสด/เช็ค/เงินโอน/ลูกหนี้-เจ้าหนี้ */
 export type PaymentMethod = "cash" | "cheque" | "transfer" | "credit";
 
+/** สถานะเดิมของ FlowAccount — เก็บ API type ไว้เพื่อให้เปิด integration กลับมาได้ภายหลัง */
+export type FlowAccountSyncStatus = "not_synced" | "syncing" | "synced" | "failed";
+export type FlowAccountDocTypeDb = "tax_invoice" | "cash_sale";
+export type FlowAccountSyncInfo = {
+  status: FlowAccountSyncStatus;
+  docType: FlowAccountDocTypeDb | null;
+  docId: string | null;
+  docNo: string | null;
+  syncedAt: string | null;
+  lastError: string | null;
+  needsResync: boolean;
+};
+
 /** บรรทัดรายการ (ตรงกับ bill_entry_lines) */
 export type BillEntryLine = {
   id: string;
