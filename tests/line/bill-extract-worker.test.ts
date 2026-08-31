@@ -85,7 +85,9 @@ function makeWorkerDb(opts: {
     };
     api.or = chain;
     api.gte = chain;
+    api.lte = chain;
     api.gt = chain;
+    api.lt = chain;
     api.update = (row: Record<string, unknown>) => {
       state.mode = "update";
       state.rows = [row];

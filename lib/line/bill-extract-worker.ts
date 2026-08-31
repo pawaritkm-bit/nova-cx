@@ -9,6 +9,7 @@ import { getCustomerShareCircleFlag } from "@/lib/share-circles/queries";
 import { suggestAccountCode } from "@/lib/accounting/account-learning";
 import { classifyShareCircleImage } from "@/lib/ai/bill-classify";
 import { isTooSmallToBeBill } from "@/lib/accounting/image-prep";
+import { downloadStoredBillFile } from "@/lib/storage/bill-download";
 
 /**
  * Bill extract worker — ไล่บิลที่เก็บแล้วแต่ยังไม่มี bill_entries → AI สกัด → สร้าง draft
@@ -819,18 +820,10 @@ export async function processBillExtraction(
     if (aiReadable) {
       let buf: Buffer | null = preBuf; // ★ reuse ถ้าดาวน์โหลดไปแล้ว (share-circle image branch)
       if (!buf) {
-        try {
-          const { data: blob, error: dlErr } = await db.storage
-            .from(BILLS_BUCKET)
-            .download(objectPath);
-          if (dlErr || !blob) {
-            console.warn("[bill-extract-worker] download failed");
-            continue; // ดาวน์โหลดไม่ได้ → ข้าม (รอบหน้าลองใหม่ ไม่สร้าง entry)
-          }
-          buf = Buffer.from(await blob.arrayBuffer());
-        } catch {
-          console.warn("[bill-extract-worker] download error");
-          continue;
+        buf = await downloadStoredBillFile(db, objectPath);
+        if (!buf) {
+          console.warn("[bill-extract-worker] download failed");
+          continue; // ดาวน์โหลดไม่ได้ → ข้าม (รอบหน้าลองใหม่ ไม่สร้าง entry)
         }
       }
       const chart = await getChart(row.tenant_id);
@@ -1353,14 +1346,8 @@ export async function backfillEntryAccounts(
     scanned++;
 
     // ดาวน์โหลด + สกัดใหม่ (เอาเฉพาะ account_code)
-    let buf: Buffer;
-    try {
-      const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(objectPath);
-      if (dlErr || !blob) continue;
-      buf = Buffer.from(await blob.arrayBuffer());
-    } catch {
-      continue;
-    }
+    const buf = await downloadStoredBillFile(db, objectPath);
+    if (!buf) continue;
     const chart = await getChart(e.tenant_id);
     const bill = await extractBillData(buf, mime, chart);
     if (!bill) continue;
@@ -1547,14 +1534,8 @@ export async function reExtractIncompleteEntries(
     scanned++;
 
     // ดาวน์โหลด + สกัดใหม่
-    let buf: Buffer;
-    try {
-      const { data: blob, error: dlErr } = await db.storage.from(BILLS_BUCKET).download(objectPath);
-      if (dlErr || !blob) continue;
-      buf = Buffer.from(await blob.arrayBuffer());
-    } catch {
-      continue;
-    }
+    const buf = await downloadStoredBillFile(db, objectPath);
+    if (!buf) continue;
     const chart = await getChart(e.tenant_id);
     const bill = await extractBillData(buf, mime, chart);
     // ★ mark "ลองสกัดใหม่แล้ว" ทันทีหลังยิง AI จริง (ครอบทุกผล: null/stillEmpty/updated)

@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import {
   calcSbt,
   defaultSbtBase,
@@ -27,8 +26,7 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     dueDate: p.dueDate ?? null,
     status: "confirmed", source: "ai", aiConfidence: null, notes: null,
     createdAt: "2026-07-01T00:00:00Z", confirmedAt: null,
-    inputTaxMonth: null, flowaccountSync: defaultFlowAccountSync(),
-    lines: p.lines ?? [],
+    inputTaxMonth: null,    lines: p.lines ?? [],
   };
 }
 

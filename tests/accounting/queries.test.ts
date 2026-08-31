@@ -12,7 +12,6 @@ import {
   listEntries,
   type BillEntry,
   type BillEntryLine,
-  type FlowAccountSyncInfo,
 } from "@/lib/accounting/queries";
 
 describe("effectiveTaxMonth — เดือนที่ใช้ภาษีซื้อ", () => {
@@ -87,17 +86,6 @@ function entry(p: Partial<BillEntry>): BillEntry {
     // เฟส 10 ส่วน Z — optional-safe (undefined = ไม่กระทบ fixture เดิมจำนวนมากที่ยังไม่รู้จักฟิลด์นี้)
     currency: p.currency,
     fxRate: p.fxRate,
-    flowaccountSync:
-      p.flowaccountSync ??
-      ({
-        status: "not_synced",
-        docType: null,
-        docId: null,
-        docNo: null,
-        syncedAt: null,
-        lastError: null,
-        needsResync: false,
-      } as FlowAccountSyncInfo),
     createdAt: p.createdAt ?? "2026-07-01T00:00:00Z",
     confirmedAt: p.confirmedAt ?? null,
     lines: p.lines ?? [],
@@ -223,9 +211,8 @@ describe("dateRange — ช่วงวันที่ inclusive (from/to)", () 
 });
 
 /**
- * listEntries — flowaccountSync (T7)
- *   mock db: bill_entries ถูก query 3 รอบตามลำดับจริงใน queries.ts
- *     (1) list หลัก (2) input_tax_month best-effort (3) flowaccount best-effort
+ * listEntries — best-effort columns (input_tax_month / stockSync / fx)
+ *   mock db: route ผลลัพธ์ตาม select string (ไม่นับลำดับ call)
  *   ★ ทดสอบ: mapping คอลัมน์ถูกต้อง + fallback ถ้าคอลัมน์ยังไม่ apply migration (ไม่ทำ list พัง)
  */
 type RawEntryRow = Record<string, unknown>;
@@ -263,7 +250,6 @@ function rawEntryRow(p: Partial<RawEntryRow> = {}): RawEntryRow {
 
 function makeListEntriesDb(spec: {
   entries: RawEntryRow[];
-  flowaccount?: Record<string, unknown>[] | "error";
   inputTaxMonth?: Record<string, unknown>[] | "error";
   /** แถวดิบ stock sync (เฟส 8 ส่วน Y, 0.9 — คอลัมน์ bill_entries 4) — ไม่ส่ง = [] (ยังไม่มีข้อมูล) */
   stockSync?: Record<string, unknown>[] | "error";
@@ -272,40 +258,31 @@ function makeListEntriesDb(spec: {
   /** แถวดิบ bill_entry_lines (เฟส 1 ส่วน B: ทดสอบ mapping product_id) — ไม่ส่ง = [] (ไม่มี line) */
   lines?: Record<string, unknown>[];
 }): SupabaseClient {
-  const callCount: Record<string, number> = {};
+  // ★ route ตาม select string (ไม่นับลำดับ call) — queries.ts เพิ่ม best-effort query ใหม่ได้
+  //   โดยไม่ทำ mock นี้เหลื่อม (เคยพังเมื่อเพิ่ม side_guessed แทรกกลางลำดับ)
+  const pick = (v: Record<string, unknown>[] | "error" | undefined): { data: unknown; error: unknown } =>
+    v === "error" ? { data: null, error: { code: "42703" } } : { data: v ?? [], error: null };
   function qb(table: string) {
+    let cols = "";
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const api: any = {};
-    api.select = () => api;
+    api.select = (c?: string) => {
+      cols = c ?? "";
+      return api;
+    };
     api.eq = () => api;
     api.is = () => api;
     api.in = () => api;
     api.order = () => api;
     api.limit = () => api;
     api.then = (onFulfilled: (v: { data: unknown; error: unknown }) => unknown) => {
-      const idx = (callCount[table] = (callCount[table] ?? 0) + 1);
       let result: { data: unknown; error: unknown } = { data: [], error: null };
       if (table === "bill_entries") {
-        if (idx === 1) result = { data: spec.entries, error: null };
-        else if (idx === 2) {
-          result =
-            spec.inputTaxMonth === "error"
-              ? { data: null, error: { code: "42703" } }
-              : { data: spec.inputTaxMonth ?? [], error: null };
-        } else if (idx === 3) {
-          result =
-            spec.flowaccount === "error"
-              ? { data: null, error: { code: "42703" } }
-              : { data: spec.flowaccount ?? [], error: null };
-        } else if (idx === 4) {
-          result =
-            spec.stockSync === "error"
-              ? { data: null, error: { code: "42703" } }
-              : { data: spec.stockSync ?? [], error: null };
-        } else if (idx === 5) {
-          result =
-            spec.fx === "error" ? { data: null, error: { code: "42703" } } : { data: spec.fx ?? [], error: null };
-        }
+        if (cols.includes("input_tax_month")) result = pick(spec.inputTaxMonth);
+        else if (cols.includes("stock_synced_at")) result = pick(spec.stockSync);
+        else if (cols.includes("currency")) result = pick(spec.fx);
+        else if (cols.includes("side_guessed") || cols.includes("counterparty_address")) result = pick(undefined);
+        else result = { data: spec.entries, error: null }; // list หลัก
       } else if (table === "bill_entry_lines") {
         result = { data: spec.lines ?? [], error: null };
       }
@@ -315,88 +292,6 @@ function makeListEntriesDb(spec: {
   }
   return { from: (t: string) => qb(t) } as unknown as SupabaseClient;
 }
-
-describe("listEntries — flowaccountSync (T7)", () => {
-  it("คอลัมน์มีข้อมูล → map flowaccountSync ถูกต้องครบ", async () => {
-    const db = makeListEntriesDb({
-      entries: [rawEntryRow({ id: "e1" })],
-      flowaccount: [
-        {
-          id: "e1",
-          flowaccount_sync_status: "synced",
-          flowaccount_doc_type: "tax_invoice",
-          flowaccount_doc_id: "12345",
-          flowaccount_doc_no: "IV-0001",
-          flowaccount_synced_at: "2026-07-02T10:00:00Z",
-          flowaccount_last_error: null,
-          flowaccount_needs_resync: true,
-        },
-      ],
-    });
-    const res = await listEntries(db, "t1", {});
-    expect(res.entries).toHaveLength(1);
-    expect(res.entries[0]!.flowaccountSync).toEqual({
-      status: "synced",
-      docType: "tax_invoice",
-      docId: "12345",
-      docNo: "IV-0001",
-      syncedAt: "2026-07-02T10:00:00Z",
-      lastError: null,
-      needsResync: true,
-    });
-  });
-
-  it("ไม่มีแถวสถานะ (entry ยังไม่มีข้อมูล sync) → default not_synced", async () => {
-    const db = makeListEntriesDb({
-      entries: [rawEntryRow({ id: "e1" })],
-      flowaccount: [],
-    });
-    const res = await listEntries(db, "t1", {});
-    expect(res.entries[0]!.flowaccountSync).toEqual({
-      status: "not_synced",
-      docType: null,
-      docId: null,
-      docNo: null,
-      syncedAt: null,
-      lastError: null,
-      needsResync: false,
-    });
-  });
-
-  it("คอลัมน์ยังไม่ apply migration (select error) → ไม่ทำ list พัง, flowaccountSync = default", async () => {
-    const db = makeListEntriesDb({
-      entries: [rawEntryRow({ id: "e1" }), rawEntryRow({ id: "e2" })],
-      flowaccount: "error",
-    });
-    const res = await listEntries(db, "t1", {});
-    expect(res.entries).toHaveLength(2);
-    for (const e of res.entries) {
-      expect(e.flowaccountSync.status).toBe("not_synced");
-      expect(e.flowaccountSync.docId).toBeNull();
-    }
-  });
-
-  it("สถานะ failed + มี lastError → map ตรง", async () => {
-    const db = makeListEntriesDb({
-      entries: [rawEntryRow({ id: "e1" })],
-      flowaccount: [
-        {
-          id: "e1",
-          flowaccount_sync_status: "failed",
-          flowaccount_doc_type: null,
-          flowaccount_doc_id: null,
-          flowaccount_doc_no: null,
-          flowaccount_synced_at: null,
-          flowaccount_last_error: "เชื่อมต่อ FlowAccount หมดเวลา",
-          flowaccount_needs_resync: false,
-        },
-      ],
-    });
-    const res = await listEntries(db, "t1", {});
-    expect(res.entries[0]!.flowaccountSync.status).toBe("failed");
-    expect(res.entries[0]!.flowaccountSync.lastError).toBe("เชื่อมต่อ FlowAccount หมดเวลา");
-  });
-});
 
 describe("listEntries — stockSync (เฟส 8 ส่วน Y, 0.9, migration 0078)", () => {
   it("ยังไม่เคยบันทึกสต็อก → default syncedAt=null, needsResync=false", async () => {
@@ -513,7 +408,7 @@ describe("listEntries — chunkIds (กัน .in() ยาวเกิน limit 
             error: null,
           };
         } else if (table === "bill_entries" && inCol === "id") {
-          // best-effort queries (input_tax_month/flowaccount/stockSync) — ไม่ทดสอบละเอียด แค่ไม่พัง
+          // best-effort queries (input_tax_month/stockSync/fx) — ไม่ทดสอบละเอียด แค่ไม่พัง
           result = { data: (inIds ?? []).map((id) => ({ id })), error: null };
         } else if (table === "bill_entry_lines") {
           if (!inIds || inIds.length > 150) {

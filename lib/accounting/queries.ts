@@ -129,8 +129,6 @@ export type BillEntry = {
    *   ★ degrade: ถ้าคอลัมน์ input_tax_month ยังไม่ apply (migration 0060) → null เสมอ
    */
   inputTaxMonth: string | null;
-  /** ผลส่งไป FlowAccount ล่าสุด (M1 — บิลขาย confirmed เท่านั้น) */
-  flowaccountSync: FlowAccountSyncInfo;
   /**
    * ผลบันทึกสต็อกล่าสุดจากบิลนี้ (เฟส 8 ส่วน Y, 0.9, migration 0078)
    *   needsResync=true = เคยบันทึกสต็อกแล้ว แต่บิลถูกแก้ไขทีหลัง → ตัวเลขสต็อกอาจไม่ตรงกับบิลอีกต่อไป
@@ -155,36 +153,6 @@ export type BillEntry = {
    */
   anomalies?: Anomaly[];
 };
-
-/** สถานะส่งไป FlowAccount (docs/05-flowaccount-integration.md, migration 0061) */
-export type FlowAccountSyncStatus = "not_synced" | "syncing" | "synced" | "failed";
-export type FlowAccountDocTypeDb = "tax_invoice" | "cash_sale";
-
-/** ผลส่งไป FlowAccount ล่าสุดของบิล — ★ degrade: คอลัมน์ยังไม่ apply migration → not_synced เสมอ (ไม่พัง) */
-export type FlowAccountSyncInfo = {
-  status: FlowAccountSyncStatus;
-  docType: FlowAccountDocTypeDb | null;
-  docId: string | null;
-  docNo: string | null;
-  syncedAt: string | null;
-  /** ข้อความ error สั้น ๆ ครั้งล่าสุด (ไม่มี payload/PII) */
-  lastError: string | null;
-  /** true = ส่งไปแล้วแต่บิลถูกแก้ทีหลัง (ควรส่งใหม่) */
-  needsResync: boolean;
-};
-
-/** ค่าเริ่มต้น (ยังไม่เคยส่ง/คอลัมน์ยังไม่ apply migration) — export ไว้ให้เทสต์สร้าง BillEntry fixture ใช้ร่วมกันได้ */
-export function defaultFlowAccountSync(): FlowAccountSyncInfo {
-  return {
-    status: "not_synced",
-    docType: null,
-    docId: null,
-    docNo: null,
-    syncedAt: null,
-    lastError: null,
-    needsResync: false,
-  };
-}
 
 /** ผลบันทึกสต็อกล่าสุดของบิล (เฟส 8 ส่วน Y, 0.9) */
 export type StockSyncInfo = {
@@ -415,40 +383,6 @@ function mapStockSync(r: RawStockSync): StockSyncInfo {
 /** แถวเดือนที่ใช้ภาษี (best-effort — คอลัมน์ input_tax_month เพิ่ง add ใน 0060) */
 type RawInputTaxMonth = { id: string; input_tax_month: string | null };
 
-/** แถวสถานะ FlowAccount (best-effort — คอลัมน์เพิ่ง add ใน migration 0061) */
-type RawFlowAccountSync = {
-  id: string;
-  flowaccount_sync_status: string | null;
-  flowaccount_doc_type: string | null;
-  flowaccount_doc_id: string | null;
-  flowaccount_doc_no: string | null;
-  flowaccount_synced_at: string | null;
-  flowaccount_last_error: string | null;
-  flowaccount_needs_resync: boolean | null;
-};
-
-function mapFlowAccountSync(r: RawFlowAccountSync): FlowAccountSyncInfo {
-  const status: FlowAccountSyncStatus =
-    r.flowaccount_sync_status === "syncing" ||
-    r.flowaccount_sync_status === "synced" ||
-    r.flowaccount_sync_status === "failed"
-      ? r.flowaccount_sync_status
-      : "not_synced";
-  const docType: FlowAccountDocTypeDb | null =
-    r.flowaccount_doc_type === "tax_invoice" || r.flowaccount_doc_type === "cash_sale"
-      ? r.flowaccount_doc_type
-      : null;
-  return {
-    status,
-    docType,
-    docId: r.flowaccount_doc_id ?? null,
-    docNo: r.flowaccount_doc_no ?? null,
-    syncedAt: r.flowaccount_synced_at ?? null,
-    lastError: r.flowaccount_last_error ?? null,
-    needsResync: !!r.flowaccount_needs_resync,
-  };
-}
-
 /** cast string ดิบจาก DB → PaymentMethod | null */
 function asPaymentMethodDb(v: string | null): PaymentMethod | null {
   return v === "cash" || v === "cheque" || v === "transfer" || v === "credit" ? v : null;
@@ -609,32 +543,7 @@ export async function listEntries(
     // คอลัมน์ยังไม่ apply → false ทั้งหมด
   }
 
-  // สถานะส่งไป FlowAccount (migration 0061) — ★ best-effort เหมือน input_tax_month ข้างบน
-  //   คอลัมน์ยังไม่ apply → select error → ทุก entry ได้ default (not_synced) แทน ไม่ทำ list ทั้งหน้าพัง
-  const flowaccountSyncByEntry = new Map<string, FlowAccountSyncInfo>();
-  try {
-    const faChunks = await Promise.all(
-      chunkIds(entryIds).map((ids) =>
-        db
-          .from("bill_entries")
-          .select(
-            "id, flowaccount_sync_status, flowaccount_doc_type, flowaccount_doc_id, flowaccount_doc_no, flowaccount_synced_at, flowaccount_last_error, flowaccount_needs_resync"
-          )
-          .eq("tenant_id", tenantId)
-          .in("id", ids)
-      )
-    );
-    for (const { data: faData, error: faErr } of faChunks) {
-      if (faErr) continue;
-      for (const r of (faData ?? []) as unknown as RawFlowAccountSync[]) {
-        flowaccountSyncByEntry.set(r.id, mapFlowAccountSync(r));
-      }
-    }
-  } catch {
-    // คอลัมน์ยังไม่ apply → คงเป็น default (not_synced) ทั้งหมด
-  }
-
-  // สถานะบันทึกสต็อก (migration 0078, เฟส 8 ส่วน Y 0.9) — ★ best-effort เหมือน flowaccountSync ข้างบน
+  // สถานะบันทึกสต็อก (migration 0078, เฟส 8 ส่วน Y 0.9) — ★ best-effort เหมือน input_tax_month ข้างบน
   //   คอลัมน์ยังไม่ apply → select error → ทุก entry ได้ default (ยังไม่บันทึก) แทน ไม่ทำ list ทั้งหน้าพัง
   const stockSyncByEntry = new Map<string, StockSyncInfo>();
   try {
@@ -800,7 +709,6 @@ export async function listEntries(
     sideGuessed: sideGuessedByEntry.get(e.id) ?? false,
     notes: e.notes,
     inputTaxMonth: inputTaxMonthByEntry.get(e.id) ?? null,
-    flowaccountSync: flowaccountSyncByEntry.get(e.id) ?? defaultFlowAccountSync(),
     stockSync: stockSyncByEntry.get(e.id) ?? defaultStockSync(),
     currency: fxByEntry.get(e.id)?.currency ?? null,
     fxRate: fxByEntry.get(e.id)?.fxRate ?? null,

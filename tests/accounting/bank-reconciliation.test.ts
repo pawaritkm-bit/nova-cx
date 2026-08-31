@@ -3,7 +3,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { TEST_CHART } from "./fixtures/chart";
 import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import type { JournalLine } from "@/lib/accounting/journal";
 
 /**
@@ -825,7 +824,6 @@ describe("listBookLines", () => {
       createdAt: "2026-07-01T00:00:00Z",
       confirmedAt: null,
       inputTaxMonth: null,
-      flowaccountSync: defaultFlowAccountSync(),
       lines: p.lines ?? [],
     };
   }

@@ -4,7 +4,6 @@ import { buildStatements } from "@/lib/accounting/statements";
 import { buildStatementsWorkbook, buildFormalStatementsWorkbook } from "@/lib/accounting/statements-excel";
 import { buildFormalStatements } from "@/lib/accounting/formal-statements";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import type { OpeningBalance } from "@/lib/accounting/opening-balance";
 
 /** เทสต์ว่า export .xlsx สร้างไฟล์จริงได้ (ไม่ throw) + มีชีทครบ + อ่านกลับได้ */
@@ -27,8 +26,7 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     dueDate: p.dueDate ?? null,
     status: "confirmed", source: "ai", aiConfidence: null, notes: null,
     createdAt: "2026-07-01T00:00:00Z", confirmedAt: null,
-    inputTaxMonth: null, flowaccountSync: defaultFlowAccountSync(),
-    lines: p.lines ?? [],
+    inputTaxMonth: null,    lines: p.lines ?? [],
   };
 }
 

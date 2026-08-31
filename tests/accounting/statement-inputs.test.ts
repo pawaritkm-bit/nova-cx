@@ -7,7 +7,6 @@ import { toJournalLines as toNoteJournalLines } from "@/lib/accounting/credit-de
 import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { TEST_CHART } from "./fixtures/chart";
 import type { BillEntry } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 
 /**
  * statement-inputs.ts — เฟส 4 ส่วน M2 (docs/06-accounting-features-roadmap.md, หมวด 0.13)
@@ -49,7 +48,6 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     createdAt: "2026-07-01T00:00:00Z",
     confirmedAt: null,
     inputTaxMonth: null,
-    flowaccountSync: defaultFlowAccountSync(),
     lines: p.lines ?? [],
   };
 }

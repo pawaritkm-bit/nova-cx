@@ -250,6 +250,16 @@ export async function downloadOneDriveFile(folderParts: string[], fileName: stri
   }
 }
 
+/** โหลดจาก objectPath ที่ uploadOneDriveFile คืนมา (`NOVA-Bills/...` หรือ `NOVA-Care/...`) */
+export async function downloadOneDriveObjectPath(objectPath: string): Promise<Buffer | null> {
+  const parts = (objectPath || "").split("/").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const [root, ...rest] = parts;
+  const fileName = rest.pop();
+  if (!fileName || (root !== "NOVA-Bills" && root !== "NOVA-Care")) return null;
+  return downloadOneDriveFile(rest, fileName, root);
+}
+
 /** อ่านไฟล์ข้อความตาม id → string หรือ null (ตัด BOM) */
 export async function getOneDriveTextById(id: string): Promise<string | null> {
   const cfg = getOneDriveConfig();

@@ -3,10 +3,8 @@
 /**
  * Server actions "จัดการลูกค้า" ของหน้าลงบันทึกบัญชี
  *   1) reassignCustomerAction  — เปลี่ยนนักบัญชี/ทีมงานที่ดูแลลูกค้ารายนั้น (★ admin เท่านั้น)
- *   2) updateCustomerFieldsAction — แก้ ชื่อ / รหัสลูกค้า / เลขภาษี / ที่อยู่ / credential FlowAccount
+ *   2) updateCustomerFieldsAction — แก้ ชื่อ / รหัสลูกค้า / เลขภาษี / ที่อยู่
  *      (★ admin หรือ นักบัญชี/หัวหน้าที่ดูแลลูกค้ารายนั้น — assertCustomerInScope)
- *   3) clearFlowAccountCredentialAction — ล้างรหัสลับ FlowAccount ของลูกค้าทันที (แยกจาก (2)
- *      โดยตั้งใจ — กันนักบัญชีเผลอลบ credential ตอนแก้ field อื่น ดู docs/05-flowaccount-integration.md 0.7)
  *
  * flow ความปลอดภัย (ยึดมาตรฐาน write path เดียวกับ actions.ts/share-circle-actions.ts):
  *   1) requireAccountingAccess (สิทธิ์จาก session จริง) + tenantId จาก session
@@ -18,7 +16,7 @@
  *
  * ★ ไม่แตะ scope logic เดิม: reassign เขียนที่ chat_groups.responsible_employee_id
  *   (source of truth เดียวกับที่ customerIdsForAccountant/สโคปนักบัญชีใช้)
- * ★ PDPA: ไม่ log ชื่อ/รหัส/เลขภาษีลูกค้า/client_secret (plaintext หรือ ciphertext) — ไม่มี console.* ที่นี่
+ * ★ PDPA: ไม่ log ชื่อ/รหัส/เลขภาษีลูกค้า — ไม่มี console.* ที่นี่
  */
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
@@ -38,7 +36,6 @@ import {
   fetchCustomerFromNovaSales,
   type NovaSalesCustomerInfo,
 } from "@/lib/integrations/nova-sales-query";
-import { encryptField, hasEncKey } from "@/lib/crypto/field";
 
 const PATH = "/chat-audit/accounting";
 
@@ -174,29 +171,13 @@ export type UpdateCustomerFieldsInput = {
   address?: string | null;
   /** เบอร์โทรติดต่อ (customers.phone — migration 0059) · "" = ล้าง */
   phone?: string | null;
-  /**
-   * FlowAccount OAuth client_id ของลูกค้ารายนี้ (customers.flowaccount_client_id — migration 0062)
-   *   plain text (ไม่ใช่ secret) · "" = ล้าง · undefined = ไม่แตะ
-   */
-  flowaccountClientId?: string | null;
-  /**
-   * FlowAccount OAuth client_secret — เข้ารหัสด้วย encryptField() ก่อนเขียนเสมอ (ห้าม plaintext ลง DB)
-   *   "" = ล้างรหัสลับ (null) · undefined = ไม่แตะ (★ ต่างจาก address/phone: client ต้อง"ไม่ส่ง key นี้เลย"
-   *   เมื่อผู้ใช้เว้นว่างช่องกรอกไว้เฉย ๆ — ไม่ใช่ส่ง "" — ดู CustomerAdminControls.tsx)
-   *   ค่าไม่ว่าง = ต้องมี CREDENTIAL_ENC_KEY ก่อนถึงจะเข้ารหัส/เขียนได้ (ไม่มี → ปฏิเสธทั้ง action)
-   */
-  flowaccountClientSecret?: string | null;
 };
 
 /**
- * แก้ไขข้อมูลลูกค้า (admin หรือ นักบัญชี/หัวหน้าที่ดูแลลูกค้ารายนั้น): ชื่อ / รหัสลูกค้า / เลขภาษี / ที่อยู่ /
- * credential FlowAccount (client id/secret)
+ * แก้ไขข้อมูลลูกค้า (admin หรือ นักบัญชี/หัวหน้าที่ดูแลลูกค้ารายนั้น): ชื่อ / รหัสลูกค้า / เลขภาษี / ที่อยู่
  *   - name: ห้ามว่าง (คอลัมน์ NOT NULL)
  *   - code: unique (tenant_id, customer_code) — ชนซ้ำ → แจ้งสุภาพ (จับ error 23505)
  *   - taxId: 13 หลัก (strip ตัวคั่น) — เปลี่ยนแล้ว re-decide บิล 'รอระบุ' + ส่งกลับ NOVA Sale (best-effort)
- *   - flowaccountClientId: plain text, best-effort เหมือน address/phone
- *   - flowaccountClientSecret: เข้ารหัสก่อนเขียนเสมอ — ไม่มี CREDENTIAL_ENC_KEY → ปฏิเสธทั้ง action
- *     ก่อนแตะ DB (กัน fallback เขียน plaintext เด็ดขาด)
  *   ★ อัปเดตเฉพาะช่องที่ส่งมา (undefined = ไม่แตะ)
  *   ★ สิทธิ์: admin เห็นทุกลูกค้า · นักบัญชี/หัวหน้าแก้ได้เฉพาะลูกค้าที่ตัวเองดูแล (assertCustomerInScope)
  *     — reassign ผู้ดูแล ยังเป็น admin เท่านั้น (แยก action)
@@ -271,45 +252,7 @@ export async function updateCustomerFieldsAction(
       phoneToWrite = fields.phone === null ? null : clampText(fields.phone, 60);
     }
 
-    // FlowAccount client id (customers.flowaccount_client_id) — best-effort เหมือน address/phone
-    //   ส่ง "" = ล้างเป็น null · undefined = ไม่แตะ
-    let flowaccountClientIdProvided = false;
-    let flowaccountClientIdToWrite: string | null = null;
-    if (fields.flowaccountClientId !== undefined) {
-      flowaccountClientIdProvided = true;
-      flowaccountClientIdToWrite =
-        fields.flowaccountClientId === null ? null : clampText(fields.flowaccountClientId, 200);
-    }
-
-    // FlowAccount client secret (customers.flowaccount_client_secret_enc) — ★ ห้าม plaintext ลง DB เด็ดขาด
-    //   ส่ง "" = ล้างเป็น null · undefined = ไม่แตะ · ค่าไม่ว่าง = ต้องเข้ารหัสก่อน (ต้องมี CREDENTIAL_ENC_KEY)
-    //   ★ validate ก่อนแตะ DB ใด ๆ (เหมือน taxId/name) — ไม่มีคีย์เข้ารหัส → ปฏิเสธทั้ง action ทันที
-    let flowaccountSecretProvided = false;
-    let flowaccountSecretToWrite: string | null = null;
-    if (fields.flowaccountClientSecret !== undefined) {
-      flowaccountSecretProvided = true;
-      const raw =
-        typeof fields.flowaccountClientSecret === "string" ? fields.flowaccountClientSecret.trim() : "";
-      if (raw === "") {
-        flowaccountSecretToWrite = null; // ล้างรหัสลับ
-      } else if (!hasEncKey()) {
-        return {
-          ok: false,
-          message:
-            "ยังไม่ได้ตั้งค่าการเข้ารหัส (CREDENTIAL_ENC_KEY) — บันทึกรหัสลับ FlowAccount ไม่ได้ โปรดแจ้งผู้ดูแลระบบ",
-        };
-      } else {
-        flowaccountSecretToWrite = encryptField(raw);
-      }
-    }
-
-    if (
-      Object.keys(patch).length === 0 &&
-      !addressProvided &&
-      !phoneProvided &&
-      !flowaccountClientIdProvided &&
-      !flowaccountSecretProvided
-    ) {
+    if (Object.keys(patch).length === 0 && !addressProvided && !phoneProvided) {
       return { ok: false, message: "ไม่มีข้อมูลที่ต้องบันทึก" };
     }
 
@@ -370,39 +313,6 @@ export async function updateCustomerFieldsAction(
       }
     }
 
-    // ---- อัปเดต FlowAccount client id (best-effort — คอลัมน์ยังไม่ apply migration 0062 → จับ error เงียบ) ----
-    let flowaccountClientIdFailed = false;
-    if (flowaccountClientIdProvided) {
-      try {
-        const { error } = await service
-          .from("customers")
-          .update({ flowaccount_client_id: flowaccountClientIdToWrite })
-          .eq("id", customerId)
-          .eq("tenant_id", ctx.tenantId)
-          .is("deleted_at", null);
-        if (error) flowaccountClientIdFailed = true;
-      } catch {
-        flowaccountClientIdFailed = true; // คอลัมน์ยังไม่มี (ยังไม่ apply 0062)
-      }
-    }
-
-    // ---- อัปเดต FlowAccount client secret (เข้ารหัสแล้วเท่านั้น — best-effort เหมือนกัน) ----
-    //   ★ PDPA: ไม่ log ค่าที่เขียน (plaintext หรือ ciphertext) ที่ใดเลย
-    let flowaccountSecretFailed = false;
-    if (flowaccountSecretProvided) {
-      try {
-        const { error } = await service
-          .from("customers")
-          .update({ flowaccount_client_secret_enc: flowaccountSecretToWrite })
-          .eq("id", customerId)
-          .eq("tenant_id", ctx.tenantId)
-          .is("deleted_at", null);
-        if (error) flowaccountSecretFailed = true;
-      } catch {
-        flowaccountSecretFailed = true; // คอลัมน์ยังไม่มี (ยังไม่ apply 0062)
-      }
-    }
-
     // เลขภาษีเปลี่ยน → รักษา loop เดิม: re-decide บิล 'รอระบุ' + ส่งกลับ NOVA Sale (best-effort)
     let redecided = 0;
     if (taxIdToWrite && cust) {
@@ -424,13 +334,9 @@ export async function updateCustomerFieldsAction(
     // ที่อยู่/เบอร์บันทึกไม่สำเร็จ (คอลัมน์ยังไม่ apply) → แจ้งเตือน แต่ช่องอื่นบันทึกแล้ว
     const addrNote = addressFailed ? " (ยังบันทึกที่อยู่ไม่ได้ — โปรด apply migration 0058)" : "";
     const phoneNote = phoneFailed ? " (ยังบันทึกเบอร์โทรไม่ได้ — โปรด apply migration 0059)" : "";
-    const flowaccountNote =
-      flowaccountClientIdFailed || flowaccountSecretFailed
-        ? " (ยังบันทึกการเชื่อมต่อ FlowAccount ไม่ได้ — โปรด apply migration 0062)"
-        : "";
     return {
       ok: true,
-      message: `บันทึกข้อมูลลูกค้าแล้ว${suffix}${addrNote}${phoneNote}${flowaccountNote}`,
+      message: `บันทึกข้อมูลลูกค้าแล้ว${suffix}${addrNote}${phoneNote}`,
       id: customerId,
     };
   } catch (e) {
@@ -440,52 +346,7 @@ export async function updateCustomerFieldsAction(
 }
 
 // ---------------------------------------------------------------------
-// (3) ล้างรหัสลับ FlowAccount ของลูกค้า (แยกจาก updateCustomerFieldsAction โดยตั้งใจ)
-// ---------------------------------------------------------------------
-
-/**
- * ล้างรหัสลับ FlowAccount ของลูกค้ารายนี้ทันที — ตั้ง `flowaccount_client_id` +
- * `flowaccount_client_secret_enc` เป็น null ทั้งคู่
- *   ★ แยกเป็น action ต่างหากจาก updateCustomerFieldsAction โดยตั้งใจ (docs/05-flowaccount-integration.md 0.7):
- *     "เว้นว่างช่องกรอกตอนแก้ข้อมูลทั่วไป" ต้องไม่แตะคอลัมน์นี้เลย — ต้องกดปุ่มนี้ (มี confirm ฝั่ง UI) ชัดเจน
- *     ถึงจะล้างค่าจริง กันนักบัญชีเผลอลบ credential ของลูกค้าโดยไม่ตั้งใจ
- *   ★ สิทธิ์เดียวกับ updateCustomerFieldsAction (admin หรือ นักบัญชี/หัวหน้าที่ดูแลลูกค้ารายนั้น)
- *   ★ PDPA: ไม่ log ค่าเดิม/ค่าใหม่ใด ๆ
- */
-export async function clearFlowAccountCredentialAction(customerId: string): Promise<SaveResult> {
-  try {
-    const authed = await createClient();
-    const service = createServiceRoleClient();
-    const ctx = await requireAccountingAccess(authed, service);
-
-    if (!isUuid(customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
-    if (!(await customerBelongsToTenant(service, ctx.tenantId, customerId))) {
-      return { ok: false, message: "ไม่พบลูกค้าในสำนักงานนี้" };
-    }
-    // ★ สโคปเดียวกับการแก้ลูกค้า: นักบัญชี/หัวหน้าล้างได้เฉพาะลูกค้าที่ตัวเองดูแล (admin ผ่านทุกราย)
-    assertCustomerInScope(ctx, customerId);
-
-    const { error } = await service
-      .from("customers")
-      .update({ flowaccount_client_id: null, flowaccount_client_secret_enc: null })
-      .eq("id", customerId)
-      .eq("tenant_id", ctx.tenantId)
-      .is("deleted_at", null);
-
-    if (error) {
-      return { ok: false, message: "ล้างรหัสลับ FlowAccount ไม่สำเร็จ กรุณาลองใหม่ (อาจยังไม่ apply migration 0062)" };
-    }
-
-    revalidatePath(PATH);
-    return { ok: true, message: "ล้างรหัสลับ FlowAccount แล้ว", id: customerId };
-  } catch (e) {
-    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
-    return { ok: false, message: "ล้างรหัสลับ FlowAccount ไม่สำเร็จ กรุณาลองใหม่" };
-  }
-}
-
-// ---------------------------------------------------------------------
-// (4) ดึงข้อมูลลูกค้าจาก NOVA Sales (ที่อยู่/เบอร์/ชื่อ) ด้วยเลขภาษี
+// (3) ดึงข้อมูลลูกค้าจาก NOVA Sales (ที่อยู่/เบอร์/ชื่อ) ด้วยเลขภาษี
 // ---------------------------------------------------------------------
 
 export type PullFromNovaSalesResult = {

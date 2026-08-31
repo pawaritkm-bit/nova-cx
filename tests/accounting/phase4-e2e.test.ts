@@ -13,7 +13,6 @@ import { aggregateCashFlowLines } from "@/lib/accounting/cash-flow";
 import { buildChartByCode, type ChartAccount } from "@/lib/accounting/chart-of-accounts";
 import { customerInScope, type AccountingAccess } from "@/lib/accounting/access";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import type { OpeningBalance } from "@/lib/accounting/opening-balance";
 import { TEST_CHART } from "@/tests/accounting/fixtures/chart";
 
@@ -87,7 +86,6 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     createdAt: "2026-01-01T00:00:00Z",
     confirmedAt: null,
     inputTaxMonth: null,
-    flowaccountSync: defaultFlowAccountSync(),
     lines: p.lines ?? [],
   };
 }

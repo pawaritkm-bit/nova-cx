@@ -360,9 +360,12 @@ function EmployeesTab({
     if (state?.ok) formRef.current?.reset();
   }, [state]);
 
+  // ผู้ใช้ที่ปิดใช้งานถือว่าออกจากระบบแล้ว: เก็บประวัติใน DB แต่ไม่แสดงในรายชื่อ
+  const activeEmployees = employees.filter((employee) => employee.is_active);
+
   // พนักงานที่กำลังเปิดแผงแก้ไข — เก็บเป็น id แล้ว lookup จาก list ล่าสุด (ค่า fresh หลัง revalidate)
   const [editingId, setEditingId] = useState<string | null>(null);
-  const editing = employees.find((e) => e.id === editingId) ?? null;
+  const editing = activeEmployees.find((e) => e.id === editingId) ?? null;
 
   return (
     <div className="admin-grid">
@@ -411,12 +414,12 @@ function EmployeesTab({
       </form>
 
       <div className="card">
-        <h3>รายชื่อพนักงาน ({employees.length})</h3>
+        <h3>รายชื่อพนักงาน ({activeEmployees.length})</h3>
         <p className="admin-hint">
           กด “แก้ไข” เพื่อเปิดแผงจัดการพนักงานรายคน — แก้ชื่อ/ชื่อเล่น/ตำแหน่ง/ประเภท,
           ย้ายทีม และปิด/เปิดใช้งาน รวมไว้ที่เดียว
         </p>
-        {employees.length === 0 ? (
+        {activeEmployees.length === 0 ? (
           <p className="admin-empty">ยังไม่มีพนักงาน</p>
         ) : (
           <table className="admin-table">
@@ -430,8 +433,8 @@ function EmployeesTab({
               </tr>
             </thead>
             <tbody>
-              {employees.map((e) => (
-                <tr key={e.id} className={e.is_active ? "" : "row-off"}>
+              {activeEmployees.map((e) => (
+                <tr key={e.id}>
                   <td>
                     {e.first_name}
                     {e.nickname ? ` (${e.nickname})` : ""}
@@ -439,9 +442,7 @@ function EmployeesTab({
                   <td>{EMPLOYEE_TYPE_LABEL[e.employee_type] ?? e.employee_type}</td>
                   <td>{e.position ?? "—"}</td>
                   <td>
-                    <span className={`admin-badge ${e.is_active ? "on" : "off"}`}>
-                      {e.is_active ? "ใช้งาน" : "ปิด"}
-                    </span>
+                    <span className="admin-badge on">ใช้งาน</span>
                   </td>
                   <td>
                     <button

@@ -1,17 +1,21 @@
 "use client";
 
 import { useState } from "react";
+import {
+  canUseAccountingTool,
+  type AccountingToolScope,
+} from "@/lib/accounting/customer-tool-policy";
 
 /**
  * เมนู "เครื่องมือบัญชีทั้งหมด" ต่อลูกค้า — รวมทุกฟีเจอร์ที่เคยมีในหน้า /accounting (CustomerTabs)
  *   ★ เปิด "ในหน้าเดิม" (iframe overlay + ?embed=1) — ไม่เด้งออกไปหน้าอื่น (ตามที่ผู้ใช้ต้องการ)
- *   ★ ฟีเจอร์วงจรบัญชีคู่ (สมุดรายวัน 5 เล่ม / งบการเงิน / ยอดยกมา / ปิดงบ ฯลฯ) = companyOnly
- *     → โผล่เฉพาะลูกค้า "นิติบุคคล" (customer_type='company') เท่านั้น
+ *   ★ วงจรบัญชีรายเดือนใช้ร่วมกันทั้งบุคคลธรรมดาและนิติบุคคล
+ *   ★ จำกัดเฉพาะงานปิดงบ/งบทางการปลายปีไว้สำหรับนิติบุคคล
  *
  * param ต่อ route ต่างกัน (คงไว้ตามของเดิมเป๊ะ):
  *   ส่วนใหญ่ ?customerId=  ·  vat-report/ar-ap-aging/journal-books/sbt/receipt-cert/wht-cert ใช้ ?customer=
  */
-type Tool = { label: string; href: string; companyOnly?: boolean };
+type Tool = { label: string; href: string; scope?: AccountingToolScope };
 type Group = { title: string; items: Tool[] };
 
 export default function CustomerToolsMenu({
@@ -32,19 +36,17 @@ export default function CustomerToolsMenu({
   const cid = encodeURIComponent(customerId);
   const m = month ? `&month=${encodeURIComponent(month)}` : "";
   const reviewMonth = month ? `?month=${encodeURIComponent(month)}&` : "?";
-  const isCompany = customerType === "company";
-
   const groups: Group[] = [
     {
       title: "บันทึก / รายการ",
       items: [
         { label: "ตรวจทาน / ออก Excel", href: `/chat-audit/accounting/review${reviewMonth}customerId=${cid}` },
-        { label: "ยอดยกมา", href: `/chat-audit/accounting/opening?customerId=${cid}`, companyOnly: true },
-        { label: "ลงบันทึกบัญชีเอง", href: `/chat-audit/accounting/journal-entry?customerId=${cid}`, companyOnly: true },
-        { label: "รายการบันทึกซ้ำ", href: `/chat-audit/accounting/recurring-journal?customerId=${cid}`, companyOnly: true },
+        { label: "ยอดยกมา", href: `/chat-audit/accounting/opening?customerId=${cid}` },
+        { label: "ลงบันทึกบัญชีเอง", href: `/chat-audit/accounting/journal-entry?customerId=${cid}` },
+        { label: "รายการบันทึกซ้ำ", href: `/chat-audit/accounting/recurring-journal?customerId=${cid}` },
         { label: "รับ/จ่ายเงิน", href: `/chat-audit/accounting/payments?customerId=${cid}` },
         { label: "เงินสดย่อย", href: `/chat-audit/accounting/petty-cash?customerId=${cid}` },
-        { label: "ปรับปรุงอัตราแลกเปลี่ยนปลายงวด", href: `/chat-audit/accounting/fx-revaluation?customerId=${cid}`, companyOnly: true },
+        { label: "ปรับปรุงอัตราแลกเปลี่ยนปลายงวด", href: `/chat-audit/accounting/fx-revaluation?customerId=${cid}` },
       ],
     },
     {
@@ -63,17 +65,17 @@ export default function CustomerToolsMenu({
       items: [
         { label: "รายงานภาษีซื้อ", href: `/chat-audit/accounting/vat-report?customer=${cid}&type=purchase${m}` },
         { label: "รายงานภาษีขาย", href: `/chat-audit/accounting/vat-report?customer=${cid}&type=sale${m}` },
-        { label: "สมุดรายวัน 5 เล่ม (ซื้อ/ขาย/รับ/จ่าย/ทั่วไป)", href: `/chat-audit/accounting/journal-books?customer=${cid}${m}`, companyOnly: true },
+        { label: "สมุดรายวัน 5 เล่ม (ซื้อ/ขาย/รับ/จ่าย/ทั่วไป)", href: `/chat-audit/accounting/journal-books?customer=${cid}${m}` },
         { label: "ภธ.40", href: `/chat-audit/accounting/sbt-report?customer=${cid}${m}` },
       ],
     },
     {
       title: "รายงาน / งบ",
       items: [
-        { label: "งบการเงิน", href: `/chat-audit/accounting/reports?customerId=${cid}`, companyOnly: true },
-        { label: "งบการเงินฉบับทางการ", href: `/chat-audit/accounting/financial-statements?customerId=${cid}`, companyOnly: true },
+        { label: "งบการเงิน", href: `/chat-audit/accounting/reports?customerId=${cid}`, scope: "company_closing" },
+        { label: "งบการเงินฉบับทางการ", href: `/chat-audit/accounting/financial-statements?customerId=${cid}`, scope: "company_closing" },
         { label: "ลูกหนี้/เจ้าหนี้ค้างชำระ", href: `/chat-audit/accounting/ar-ap-aging?customer=${cid}` },
-        { label: "งบประมาณ", href: `/chat-audit/accounting/budget?customerId=${cid}`, companyOnly: true },
+        { label: "งบประมาณ", href: `/chat-audit/accounting/budget?customerId=${cid}` },
       ],
     },
     {
@@ -81,14 +83,13 @@ export default function CustomerToolsMenu({
       items: [
         { label: "กระทบยอดธนาคาร", href: `/chat-audit/accounting/bank-reconciliation?customerId=${cid}` },
         { label: "แยกสเตทเมนต์/รายงานแพลตฟอร์ม", href: `/chat-audit/accounting/statement?customerId=${cid}` },
-        { label: "mapping FlowAccount", href: `/chat-audit/accounting/flowaccount-map?customerId=${cid}` },
       ],
     },
     {
       title: "ทรัพย์สิน / สต็อก / เงินเดือน",
       items: [
-        { label: "ทรัพย์สินถาวร", href: `/chat-audit/accounting/fixed-assets?customerId=${cid}`, companyOnly: true },
-        { label: "สต็อกสินค้า", href: `/chat-audit/accounting/inventory?customerId=${cid}`, companyOnly: true },
+        { label: "ทรัพย์สินถาวร", href: `/chat-audit/accounting/fixed-assets?customerId=${cid}` },
+        { label: "สต็อกสินค้า", href: `/chat-audit/accounting/inventory?customerId=${cid}` },
         { label: "ทะเบียนพนักงาน", href: `/chat-audit/accounting/payroll-employees?customerId=${cid}` },
         { label: "เงินเดือน", href: `/chat-audit/accounting/payroll?customerId=${cid}` },
       ],
@@ -113,7 +114,7 @@ export default function CustomerToolsMenu({
         <summary className="btn">🧰 เครื่องมือบัญชีทั้งหมด</summary>
         <div className="cust-tools-pop">
           {groups.map((grp) => {
-            const items = grp.items.filter((it) => !it.companyOnly || isCompany);
+            const items = grp.items.filter((it) => canUseAccountingTool(customerType ?? null, it.scope));
             if (items.length === 0) return null;
             return (
               <div key={grp.title} className="cust-tools-grp">
@@ -128,11 +129,12 @@ export default function CustomerToolsMenu({
               </div>
             );
           })}
-          {!isCompany ? (
+          {customerType === "individual" ? (
             <div className="cust-tools-note">
-              * เมนูวงจรบัญชีคู่ (สมุดรายวัน 5 เล่ม, งบการเงิน, ยอดยกมา ฯลฯ) แสดงเฉพาะลูกค้า <b>นิติบุคคล</b> —
-              ตั้งประเภทลูกค้าได้ที่ปุ่ม “จัดการลูกค้า”
+              * บุคคลธรรมดาใช้วงจรบัญชีรายเดือนได้ครบเหมือนนิติบุคคล แต่ไม่แสดงงานปิดงบและงบการเงินทางการปลายปี
             </div>
+          ) : customerType === null ? (
+            <div className="cust-tools-note">* กรุณาตั้งประเภทลูกค้าที่ปุ่ม “จัดการลูกค้า” ก่อนใช้เครื่องมือบัญชี</div>
           ) : null}
         </div>
       </details>

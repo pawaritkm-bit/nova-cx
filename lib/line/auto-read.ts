@@ -21,14 +21,17 @@ import { deleteOneDriveItemById, downloadOneDriveFile, isOneDriveEnabled, listOn
 import { albumXlsxName, mergeIntoBank, mergeProfile, UNKNOWN_BANK, type AlbumProfile } from "@/lib/accounting/statement-album";
 import { buildStatementAlbumWorkbook, readAlbumFromWorkbook } from "@/lib/accounting/statement-album-excel";
 import { extractIdCardData } from "@/lib/accounting/id-card-extract";
-import { mergePlatformFile, toPlatformRecord } from "@/lib/accounting/platform-album";
+import { emptyPlatformAlbum, mergePlatformFile, toPlatformRecord } from "@/lib/accounting/platform-album";
 import { buildPlatformAlbumWorkbook, readPlatformAlbumFromWorkbook } from "@/lib/accounting/platform-album-excel";
+import {
+  buildProspectAnalysisWorkbook,
+  PROSPECT_ANALYSIS_SUFFIX,
+  prospectAnalysisXlsxName,
+} from "@/lib/accounting/prospect-analysis-excel";
 import { summarizePlatformReport } from "@/lib/accounting/platform-report-analyze";
 import { detectPlatformFromName } from "@/lib/accounting/platform/parse";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
 import { resolveSaleFolder, oaOneDriveRoot, lineChatUrl, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
-import { buildProspectIncomeWorkbook, aggregateBankMonthly } from "@/lib/accounting/prospect-income-analysis";
-import { upsertProspectBankSummary, loadProspectBankSummaries } from "@/lib/accounting/prospect-income-store";
 
 /** เครื่องหมาย "อ่านแล้ว" นำหน้าชื่อไฟล์ต้นฉบับใน OneDrive (ให้นักบัญชีเห็นทันทีว่าระบบอ่านแล้ว) */
 const READ_MARK = "✅ ";
@@ -51,58 +54,6 @@ function bankLabelOf(bank: string | null, accountName: string | null): string {
   return tail ? `${b} #${tail}` : b;
 }
 
-type DetForIncome = {
-  transactions: { date: string | null; direction: "in" | "out" | null; amount: number | null }[];
-  bank: string | null;
-  accountName: string | null;
-};
-
-/**
- * ★ วิเคราะห์รายรับว่าที่ลูกค้า (sales pitch): สะสมยอดเงินเข้าต่อธนาคาร/ปี (DB) →
- *   รีเจนไฟล์ Excel รวมทุกธนาคาร (+ เตือน 1.8 ล้าน) เข้าโฟลเดอร์ลูกค้าใน OneDrive
- *   ★ เฉพาะสเตทเมนต์ที่ deterministic reconcile ผ่าน (แม่น) · best-effort
- *   ★ ปิดได้ด้วย ACCT_PROSPECT_ANALYSIS=off
- */
-async function regenProspectIncome(
-  db: SupabaseClient,
-  chatGroupId: string,
-  det: DetForIncome,
-  folder: string,
-  folderParts: string[],
-  root?: string
-): Promise<void> {
-  if (process.env.ACCT_PROSPECT_ANALYSIS === "off") return;
-  const { data: g } = await db.from("chat_groups").select("tenant_id").eq("id", chatGroupId).maybeSingle();
-  const tenantId = (g as { tenant_id?: string | null } | null)?.tenant_id;
-  if (!tenantId) return;
-
-  const years = new Set<number>();
-  for (const t of det.transactions) {
-    const m = /^(\d{4})-/.exec(t.date || "");
-    if (m) years.add(parseInt(m[1], 10));
-  }
-  if (years.size === 0) return;
-
-  const bankLabel = bankLabelOf(det.bank, det.accountName);
-  const customerName = (det.accountName || folder || "ว่าที่ลูกค้า").trim();
-  const nowIso = new Date().toISOString();
-
-  for (const year of years) {
-    const monthly = aggregateBankMonthly(det.transactions, year);
-    if (monthly.length === 0) continue;
-    await upsertProspectBankSummary(db, { tenantId, chatGroupId, bankLabel, year, monthly, nowIso });
-    const banks = await loadProspectBankSummaries(db, tenantId, chatGroupId, year);
-    const wb = await buildProspectIncomeWorkbook({ customerName, year, profile: {}, banks });
-    await uploadOneDriveFile({
-      folderParts,
-      fileName: `${sanitizeDocName(customerName)} - วิเคราะห์รายรับ ${year + 543}.xlsx`,
-      mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      data: wb,
-      root,
-    });
-  }
-}
-
 /**
  * ★ รวมสเตทเมนต์ทุกไฟล์/รูปของลูกค้า → Excel สรุปไฟล์เดียว แยกชีตตามธนาคาร
  *   สะสมธุรกรรมลง store JSON (โฟลเดอร์ย่อย _album) ต่อธนาคาร → dedup (กันไฟล์/รูปซ้ำ) → รีเจน Excel
@@ -116,6 +67,106 @@ async function findAlbumFile(folderParts: string[], root?: string): Promise<{ na
     return f ? { name: f.name, id: f.id } : null;
   } catch {
     return null;
+  }
+}
+
+async function findPlatformAlbumFile(folderParts: string[], root?: string): Promise<{ name: string; id: string } | null> {
+  try {
+    const kids = await listOneDriveChildren(folderParts, root);
+    const f = kids.find((k) => !k.isFolder && /สรุปยอดขายแพลตฟอร์ม\.xlsx$/i.test(k.name));
+    return f ? { name: f.name, id: f.id } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function findProspectAnalysisFile(folder: string, root?: string): Promise<{ name: string; id: string } | null> {
+  try {
+    const kids = await listOneDriveChildren([folder], root);
+    const f = kids.find((k) => !k.isFolder && k.name.endsWith(PROSPECT_ANALYSIS_SUFFIX));
+    return f ? { name: f.name, id: f.id } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * NOVA-Bills สรุป Statement + Platform ลง workbook เดียวที่รากโฟลเดอร์ลูกค้า
+ * ถ้ายังไม่มีไฟล์รวม จะอ่านกองจากไฟล์สรุป legacy ในสองโฟลเดอร์ย่อยเพื่อย้ายข้อมูลโดยไม่ยิง AI ซ้ำ
+ */
+async function regenProspectAnalysis(args: {
+  root?: string;
+  folder: string;
+  bankLabel?: string | null;
+  txns?: StatementTxn[];
+  profile?: AlbumProfile | null;
+  chatUrl?: string | null;
+  platformRecord?: ReturnType<typeof toPlatformRecord>;
+}): Promise<void> {
+  const existingFile = await findProspectAnalysisFile(args.folder, args.root);
+  const existing = existingFile
+    ? await downloadOneDriveFile([args.folder], existingFile.name, args.root)
+    : null;
+
+  let statementStore = existing ? await readAlbumFromWorkbook(existing) : await readAlbumFromWorkbook(null);
+  let platformStore = existing ? await readPlatformAlbumFromWorkbook(existing) : emptyPlatformAlbum();
+
+  // migration แบบอ่านอย่างเดียวจากไฟล์สรุปเดิม — ไม่ลบไฟล์เดิมอัตโนมัติ
+  if (!existing) {
+    const oldStatement = await findAlbumFile([args.folder, "สเตทเมนต์"], args.root);
+    if (oldStatement) {
+      statementStore = await readAlbumFromWorkbook(
+        await downloadOneDriveFile([args.folder, "สเตทเมนต์"], oldStatement.name, args.root)
+      );
+    }
+    const oldPlatform = await findPlatformAlbumFile([args.folder, "รายงานแพลตฟอร์ม"], args.root);
+    if (oldPlatform) {
+      platformStore = await readPlatformAlbumFromWorkbook(
+        await downloadOneDriveFile([args.folder, "รายงานแพลตฟอร์ม"], oldPlatform.name, args.root)
+      );
+    }
+  }
+
+  let changed = !existing;
+  if (args.txns && args.txns.length > 0) {
+    const merged = mergeIntoBank(statementStore, args.bankLabel ?? UNKNOWN_BANK, args.txns);
+    statementStore = merged.store;
+    if (merged.added > 0) changed = true;
+  }
+  if (args.profile) {
+    const merged = mergeProfile(statementStore, args.profile);
+    statementStore = merged.store;
+    if (merged.added) changed = true;
+  }
+  if (args.chatUrl) {
+    const merged = mergeProfile(statementStore, { chatUrl: args.chatUrl });
+    statementStore = merged.store;
+    if (merged.added) changed = true;
+  }
+  if (args.platformRecord) {
+    const merged = mergePlatformFile(platformStore, args.platformRecord);
+    platformStore = merged.store;
+    if (merged.added) changed = true;
+  }
+  if (!changed) return;
+
+  const displayName = (statementStore.profile?.name || args.folder || "ลูกค้า").trim();
+  const fileName = prospectAnalysisXlsxName(displayName);
+  const wb = await buildProspectAnalysisWorkbook({
+    customerName: displayName,
+    banks: statementStore.banks,
+    profile: statementStore.profile,
+    platformStore,
+  });
+  await uploadOneDriveFile({
+    folderParts: [args.folder],
+    fileName,
+    mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data: wb,
+    root: args.root,
+  });
+  if (existingFile && existingFile.name !== fileName) {
+    try { await deleteOneDriveItemById(existingFile.id); } catch { /* keep */ }
   }
 }
 
@@ -255,14 +306,15 @@ export async function autoReadSaleAttachment(params: {
     if (cls.det?.fullyReconciled) {
       // ★ รวมทุกไฟล์/รูปของลูกค้า → Excel สรุปไฟล์เดียว แยกชีตตามธนาคาร (PDF รู้ชื่อธนาคารจาก det)
       try {
-        await regenStatementAlbum({
-          folderParts,
+        const common = {
           root,
           folder,
           bankLabel: bankLabelOf(cls.det.bank, cls.det.accountName),
           txns: cls.det.transactions,
           chatUrl,
-        });
+        };
+        if (oaType === "sale") await regenProspectAnalysis(common);
+        else await regenStatementAlbum({ ...common, folderParts });
       } catch {
         console.warn("[auto-read] statement album (det) failed");
       }
@@ -290,12 +342,6 @@ export async function autoReadSaleAttachment(params: {
           console.warn("[auto-read] auto-reconcile feed failed");
         }
       }
-      // ★ วิเคราะห์รายรับว่าที่ลูกค้า (sales pitch) — สะสมยอด + รีเจน Excel รวมทุกธนาคาร (sale + care)
-      try {
-        await regenProspectIncome(params.db, params.chatGroupId, cls.det, folder, folderParts, root);
-      } catch {
-        console.warn("[auto-read] prospect income analysis failed");
-      }
       await markSourceRead(folderParts, params.fileName, root);
       return;
     }
@@ -304,7 +350,9 @@ export async function autoReadSaleAttachment(params: {
     //    ★ รวมทุกไฟล์ของลูกค้า → Excel สรุปเดียว (ต่อแพลตฟอร์ม+รายเดือน) แทน CSV ต่อไฟล์
     if (cls.platform && (cls.platform.figures.grossSales > 0 || cls.platform.figures.platformFee > 0)) {
       try {
-        await regenPlatformAlbum({ folderParts, root, folder, record: toPlatformRecord(cls.platform.platform, cls.platform.figures) });
+        const record = toPlatformRecord(cls.platform.platform, cls.platform.figures);
+        if (oaType === "sale") await regenProspectAnalysis({ root, folder, platformRecord: record });
+        else await regenPlatformAlbum({ folderParts, root, folder, record });
       } catch {
         console.warn("[auto-read] platform album (det) failed");
       }
@@ -320,12 +368,14 @@ export async function autoReadSaleAttachment(params: {
       if (oaType === "sale" && (params.mime || "").toLowerCase().startsWith("image/")) {
         try {
           // ★ ประหยัด token: ถ้ามีชื่อจากบัตรของลูกค้ารายนี้แล้ว → ไม่ต้อง OCR ซ้ำ (อ่านบัตรครั้งเดียวพอ)
-          const existing = await findAlbumFile(folderParts, root);
-          const known = existing ? (await readAlbumFromWorkbook(await downloadOneDriveFile(folderParts, existing.name, root))).profile?.name : null;
+          const existing = await findProspectAnalysisFile(folder, root);
+          const known = existing
+            ? (await readAlbumFromWorkbook(await downloadOneDriveFile([folder], existing.name, root))).profile?.name
+            : null;
           if (!known) {
             const idc = await extractIdCardData(params.data, params.mime);
             if (idc) {
-              await regenStatementAlbum({ folderParts, root, folder, profile: idc, chatUrl });
+              await regenProspectAnalysis({ root, folder, profile: idc, chatUrl });
               await markSourceRead(folderParts, params.fileName, root);
             }
           }
@@ -351,7 +401,9 @@ export async function autoReadSaleAttachment(params: {
         let bank = normalizeBankName(cls.det?.bank ?? null);
         // ★ เดาชื่อธนาคารด้วย AI เฉพาะ sale (care ไม่เดาแบงก์ ตามที่ผู้ใช้ต้องการ · ประหยัด token)
         if (!bank && oaType === "sale") bank = await detectStatementBank(params.data, params.mime);
-        await regenStatementAlbum({ folderParts, root, folder, bankLabel: bank ?? UNKNOWN_BANK, txns, chatUrl });
+        const common = { root, folder, bankLabel: bank ?? UNKNOWN_BANK, txns, chatUrl };
+        if (oaType === "sale") await regenProspectAnalysis(common);
+        else await regenStatementAlbum({ ...common, folderParts });
       } catch {
         console.warn("[auto-read] statement album (image) failed");
       }
@@ -377,7 +429,9 @@ export async function autoReadSaleAttachment(params: {
         discount: dget("penalty") + dget("refund") + dget("other"),
       };
       const platform = detectPlatformFromName(params.originalName || params.fileName) || "unknown";
-      await regenPlatformAlbum({ folderParts, root, folder, record: toPlatformRecord(platform, figures) });
+      const record = toPlatformRecord(platform, figures);
+      if (oaType === "sale") await regenProspectAnalysis({ root, folder, platformRecord: record });
+      else await regenPlatformAlbum({ folderParts, root, folder, record });
     } catch {
       console.warn("[auto-read] platform album (ai) failed");
     }

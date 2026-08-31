@@ -3,6 +3,7 @@ import type { ChartAccount } from "@/lib/accounting/chart-of-accounts";
 /**
  * TEST_CHART -- mirror ของผังบัญชี 75 รายการเดิม (seed migration 0063) ใช้ร่วมทุกเทสต์
  *   ต้องตรงกับ VALUES ใน supabase/migrations/0063_chart_of_accounts_table.sql เป๊ะ
+ *   + รายการที่ migration หลังเพิ่มให้ทุก tenant (0119: 5346 ค่าเช่า, 5347 ค่าธรรมเนียมวิชาชีพ)
  *   (แหล่งเดียวกัน -- ถ้าแก้ผังเริ่มต้น ต้องแก้ทั้งคู่ให้ตรงกัน)
  */
 export const TEST_CHART: ChartAccount[] = [
@@ -69,6 +70,8 @@ export const TEST_CHART: ChartAccount[] = [
   { code: "5343", name: "ค่าบริการเครื่องถ่ายเอกสาร", category: "ค่าใช้จ่าย" },
   { code: "5344", name: "ค่าบริการแพลตฟอร์ม", category: "ค่าใช้จ่าย" },
   { code: "5345", name: "ค่าบำรุงรักษายานพาหนะ", category: "ค่าใช้จ่าย" },
+  { code: "5346", name: "ค่าเช่า", category: "ค่าใช้จ่าย" },
+  { code: "5347", name: "ค่าธรรมเนียมวิชาชีพ", category: "ค่าใช้จ่าย" },
   { code: "5350", name: "วัสดุอุปกรณ์สำนักงานสิ้นเปลือง", category: "ค่าใช้จ่าย" },
   { code: "5351", name: "ค่าปรับปรุงต่อเติมสำนักงาน", category: "ค่าใช้จ่าย" },
   { code: "5352", name: "ค่าซ่อมแซม", category: "ค่าใช้จ่าย" },
