@@ -9,7 +9,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AccountingAccess } from "@/lib/accounting/access";
 import { chunkIds } from "@/lib/accounting/id-chunk";
 
-export type ScopedCustomerRow = { id: string; customer_code: string | null; name: string | null };
+export type ScopedCustomerRow = {
+  id: string;
+  customer_code: string | null;
+  name: string | null;
+  customer_type: "company" | "individual" | null;
+};
 
 const PAGE = 1000;
 const SCAN_CAP = 20000;
@@ -27,7 +32,7 @@ export async function listScopedCustomers(
       chunkIds(ids).map((c) =>
         service
           .from("customers")
-          .select("id, customer_code, name")
+          .select("id, customer_code, name, customer_type")
           .eq("tenant_id", access.tenantId)
           .is("deleted_at", null)
           .in("id", c)
@@ -43,7 +48,7 @@ export async function listScopedCustomers(
   for (let from = 0; from < SCAN_CAP; from += PAGE) {
     const { data } = await service
       .from("customers")
-      .select("id, customer_code, name")
+      .select("id, customer_code, name, customer_type")
       .eq("tenant_id", access.tenantId)
       .is("deleted_at", null)
       .order("customer_code", { ascending: true, nullsFirst: false })

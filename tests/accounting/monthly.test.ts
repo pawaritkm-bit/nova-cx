@@ -7,7 +7,6 @@ import {
   thaiMonthLabel,
 } from "@/lib/accounting/monthly";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 
 /**
  * accounting/monthly — ตัดงานรายเดือน (จัดกลุ่มเดือน + undated, KPI เดือน, คอลัมน์ซื้อ/ขายรายลูกค้า)
@@ -63,7 +62,6 @@ function entry(p: Partial<BillEntry>): BillEntry {
     createdAt: p.createdAt ?? "2026-07-01T00:00:00Z",
     confirmedAt: null,
     inputTaxMonth: null,
-    flowaccountSync: defaultFlowAccountSync(),
     lines: p.lines ?? [],
   };
 }

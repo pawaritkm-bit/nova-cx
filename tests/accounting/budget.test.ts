@@ -6,7 +6,6 @@ import { buildLedger } from "@/lib/accounting/ledger";
 import { buildTrialBalance, type TrialBalanceRow } from "@/lib/accounting/trial-balance";
 import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import { loadCombinedJournalLines } from "@/lib/accounting/statement-inputs";
 import {
   validateBudgetRowInput,
@@ -204,7 +203,6 @@ describe("buildBudgetComparison — regression-style: ต้องตรงก�
       createdAt: "2026-07-01T00:00:00Z",
       confirmedAt: null,
       inputTaxMonth: null,
-      flowaccountSync: defaultFlowAccountSync(),
       lines: p.lines ?? [],
     };
   }
@@ -357,7 +355,6 @@ describe("★★ [tester] buildBudgetComparison — regression เต็ม: บ
         createdAt: "2026-07-01T00:00:00Z",
         confirmedAt: null,
         inputTaxMonth: null,
-        flowaccountSync: defaultFlowAccountSync(),
         lines: p.lines ?? [],
       };
     }

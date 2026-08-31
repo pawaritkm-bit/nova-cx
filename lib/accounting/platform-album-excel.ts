@@ -21,9 +21,11 @@ function platformLabel(p: string): string {
   return PLATFORM_LABELS[p as Platform] ?? p;
 }
 
-export async function buildPlatformAlbumWorkbook(input: { customerName: string; store: PlatformAlbumStore }): Promise<Buffer> {
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "NOVA-CX";
+export function appendPlatformAlbumSheets(
+  wb: ExcelJS.Workbook,
+  input: { customerName: string; store: PlatformAlbumStore },
+  names: { summary: string; monthly: string } = { summary: "สรุปยอดขาย", monthly: "รายเดือน" }
+): void {
   const { store } = input;
 
   const money = (ws: ExcelJS.Worksheet, row: number, startCol: number, vals: number[]) => {
@@ -31,7 +33,7 @@ export async function buildPlatformAlbumWorkbook(input: { customerName: string; 
   };
 
   // ===== ชีต 1: สรุปยอดขาย (ต่อแพลตฟอร์ม) =====
-  const s = wb.addWorksheet("สรุปยอดขาย");
+  const s = wb.addWorksheet(names.summary);
   s.columns = [{ width: 20 }, { width: 15 }, { width: 15 }, { width: 13 }, { width: 13 }, { width: 15 }];
   s.getCell(1, 1).value = `สรุปยอดขายแพลตฟอร์ม — ${input.customerName}`;
   s.getCell(1, 1).font = { bold: true, size: 14 };
@@ -48,7 +50,7 @@ export async function buildPlatformAlbumWorkbook(input: { customerName: string; 
   for (let c = 2; c <= 6; c++) s.getCell(r, c).font = { bold: true };
 
   // ===== ชีต 2: รายเดือน =====
-  const m = wb.addWorksheet("รายเดือน");
+  const m = wb.addWorksheet(names.monthly);
   m.columns = [{ width: 14 }, { width: 15 }, { width: 15 }, { width: 13 }, { width: 13 }, { width: 15 }];
   m.getCell(1, 1).value = `ยอดขายแพลตฟอร์มรายเดือน — ${input.customerName}`;
   m.getCell(1, 1).font = { bold: true, size: 14 };
@@ -69,6 +71,12 @@ export async function buildPlatformAlbumWorkbook(input: { customerName: string; 
   for (const f of store.files) {
     for (const mo of f.months) d.addRow([f.sig, f.platform, mo.month, mo.grossSales, mo.platformFee, mo.shippingFee, mo.discount]);
   }
+}
+
+export async function buildPlatformAlbumWorkbook(input: { customerName: string; store: PlatformAlbumStore }): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "NOVA-CX";
+  appendPlatformAlbumSheets(wb, input);
 
   return Buffer.from(await wb.xlsx.writeBuffer());
 }

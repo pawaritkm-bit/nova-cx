@@ -71,6 +71,52 @@ type LineRow = {
   aiLowConfidence: boolean;
 };
 
+type OcrOverlayLine = {
+  text: string;
+  bbox: { x0: number; y0: number; x1: number; y1: number };
+};
+
+/**
+ * Tesseract มักรวมตารางทั้งแถวเป็น line เดียว ทำให้กดคัดลอกแล้วได้หลายคอลัมน์ติดกัน
+ * แยกเป็น cell จากช่องว่างแนวนอนที่กว้างกว่าช่องว่างระหว่างคำปกติ
+ */
+function splitOcrLineIntoCells(line: {
+  text: string;
+  bbox: OcrOverlayLine["bbox"];
+  words: Array<{ text: string; bbox: OcrOverlayLine["bbox"] }>;
+}): OcrOverlayLine[] {
+  const words = (line.words ?? [])
+    .filter((word) => word.text.trim())
+    .sort((a, b) => a.bbox.x0 - b.bbox.x0);
+  if (words.length < 2) {
+    const text = line.text.trim();
+    return text ? [{ text, bbox: line.bbox }] : [];
+  }
+
+  const heights = words.map((word) => word.bbox.y1 - word.bbox.y0).sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || 10;
+  // ภาษาไทยจาก OCR อาจแตกเป็นหลายคำ/หลายพยางค์ จึงต้องเว้นระยะให้กว้างพอ
+  // จะแยกเมื่อเห็นช่องว่างระดับคอลัมน์จริงๆ เท่านั้น
+  const columnGap = Math.max(8, medianHeight * 1.8);
+  const groups: typeof words[] = [[words[0]]];
+  for (const word of words.slice(1)) {
+    const group = groups[groups.length - 1];
+    const previous = group[group.length - 1];
+    if (word.bbox.x0 - previous.bbox.x1 > columnGap) groups.push([word]);
+    else group.push(word);
+  }
+
+  return groups.map((group) => ({
+    text: group.map((word) => word.text.trim()).join(" "),
+    bbox: {
+      x0: Math.min(...group.map((word) => word.bbox.x0)),
+      y0: Math.min(...group.map((word) => word.bbox.y0)),
+      x1: Math.max(...group.map((word) => word.bbox.x1)),
+      y1: Math.max(...group.map((word) => word.bbox.y1)),
+    },
+  }));
+}
+
 let keySeq = 0;
 function newKey(): string {
   keySeq += 1;
@@ -231,7 +277,80 @@ export default function EntryEditor({
   const [deletedLineIds, setDeletedLineIds] = useState<string[]>([]);
   const [zoom, setZoom] = useState(false);
   const [rotation, setRotation] = useState(0); // องศาหมุนรูปบิล (0/90/180/270) — บิลถ่ายตะแคง
+  const [ocrRunning, setOcrRunning] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrError, setOcrError] = useState<string | null>(null);
+  const [ocrCopiedLine, setOcrCopiedLine] = useState<number | null>(null);
+  const [ocrLines, setOcrLines] = useState<OcrOverlayLine[]>([]);
+  const [billImageSize, setBillImageSize] = useState({ width: 0, height: 0 });
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // เปลี่ยนไปบิลอีกใบต้องไม่ค้างข้อความ OCR ของใบก่อน
+  useEffect(() => {
+    setOcrRunning(false);
+    setOcrProgress(0);
+    setOcrError(null);
+    setOcrCopiedLine(null);
+    setOcrLines([]);
+    setBillImageSize({ width: 0, height: 0 });
+  }, [entry.id]);
+
+  async function readBillText() {
+    if (!viewUrl || !viewIsImage || ocrRunning) return;
+
+    setOcrRunning(true);
+    setOcrProgress(0);
+    setOcrError(null);
+    let worker: Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>> | null = null;
+    try {
+      // OCR ทำใน browser ทันทีที่เปิดบิล — ไม่เรียก AI และไม่เสีย token
+      const { createWorker } = await import("tesseract.js");
+      worker = await createWorker(["tha", "eng"], 1, {
+        logger: (event) => {
+          if (typeof event.progress === "number") {
+            setOcrProgress(Math.round(event.progress * 100));
+          }
+        },
+      });
+      const result = await worker.recognize(viewUrl, {}, { blocks: true });
+      const text = result.data.text.trim();
+      if (!text) {
+        setOcrError("ไม่พบข้อความในรูป ลองเปิดรูปเต็มหรือใช้รูปที่ชัดขึ้น");
+      } else {
+        setOcrLines(
+          (result.data.blocks ?? []).flatMap((block) =>
+            block.paragraphs.flatMap((paragraph) =>
+              paragraph.lines.flatMap((line) => splitOcrLineIntoCells(line))
+            )
+          )
+        );
+      }
+    } catch {
+      setOcrError("อ่านข้อความไม่ได้ กรุณาลองใหม่ หรือตรวจการเชื่อมต่ออินเทอร์เน็ต");
+    } finally {
+      await worker?.terminate().catch(() => undefined);
+      setOcrRunning(false);
+    }
+  }
+
+  // เปิดบิลแล้วเตรียมจุดคัดลอกให้อัตโนมัติ ไม่ต้องกดปุ่มก่อน
+  useEffect(() => {
+    if (!viewUrl || !viewIsImage) return;
+    const timer = window.setTimeout(() => void readBillText(), 0);
+    return () => window.clearTimeout(timer);
+    // entry.id ทำให้อ่านใหม่เมื่อเลื่อนบิลใน modal เดิม
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry.id, viewUrl, viewIsImage]);
+
+  async function copyOcrLine(text: string, index: number) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setOcrCopiedLine(index);
+      window.setTimeout(() => setOcrCopiedLine((current) => current === index ? null : current), 1600);
+    } catch {
+      setOcrError("คัดลอกอัตโนมัติไม่ได้ กรุณาลากเลือกข้อความแล้วกดคัดลอก");
+    }
+  }
 
   // สแนปช็อตค่าเริ่มต้น (ครั้งแรกที่ mount) — ใช้เช็ค "แก้ไขหรือยัง"
   //   ★ เลื่อนบิล (ก่อนหน้า/ถัดไป) ถ้ายังไม่ได้แก้ → ข้าม auto-save (ไม่ยิง DB) = เลื่อนเร็วขึ้นมาก
@@ -561,18 +680,60 @@ export default function EntryEditor({
                   </button>
                   <a href={viewUrl} target="_blank" rel="noopener noreferrer" className="btn btn-ghost">เปิดรูปเต็ม</a>
                 </div>
+                {ocrRunning || ocrError ? (
+                  <div className="acc-bill-ocr" aria-live="polite">
+                    {ocrRunning ? (
+                      <div className="acc-bill-ocr-status">กำลังเตรียมข้อความบนบิล… {ocrProgress}%</div>
+                    ) : (
+                      <div className="acc-bill-ocr-error">{ocrError}</div>
+                    )}
+                  </div>
+                ) : null}
                 <div className={`acc-bill-stage${rotation % 180 ? " rot" : ""}`}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={viewUrl}
-                    alt="รูปบิล"
-                    // ★ perf: โหลดรูปบิลก่อนสิ่งอื่น (priority สูง) + decode แบบ async — เลื่อนเปลี่ยนบิลเห็นรูปไวขึ้น
-                    fetchPriority="high"
-                    decoding="async"
-                    className={`acc-bill-img${zoom ? " zoom" : ""}`}
+                  <div
+                    className={`acc-bill-image-wrap${zoom ? " zoom" : ""}`}
                     style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
-                    onClick={() => setZoom((z) => !z)}
-                  />
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={viewUrl}
+                      alt="รูปบิล"
+                      // ★ perf: โหลดรูปบิลก่อนสิ่งอื่น (priority สูง) + decode แบบ async — เลื่อนเปลี่ยนบิลเห็นรูปไวขึ้น
+                      fetchPriority="high"
+                      decoding="async"
+                      className="acc-bill-img"
+                      onLoad={(event) => setBillImageSize({
+                        width: event.currentTarget.naturalWidth,
+                        height: event.currentTarget.naturalHeight,
+                      })}
+                      onClick={() => setZoom((z) => !z)}
+                    />
+                    {ocrLines.length > 0 && billImageSize.width > 0 && billImageSize.height > 0 ? (
+                      <div className="acc-bill-ocr-overlay" aria-label="ข้อความบนรูปบิล">
+                        {ocrLines.map((line, index) => (
+                          <button
+                            type="button"
+                            key={`${index}-${line.text}`}
+                            className={`acc-bill-ocr-hit${ocrCopiedLine === index ? " copied" : ""}`}
+                            style={{
+                              left: `${(line.bbox.x0 / billImageSize.width) * 100}%`,
+                              top: `${(line.bbox.y0 / billImageSize.height) * 100}%`,
+                              width: `${((line.bbox.x1 - line.bbox.x0) / billImageSize.width) * 100}%`,
+                              height: `${((line.bbox.y1 - line.bbox.y0) / billImageSize.height) * 100}%`,
+                            }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              copyOcrLine(line.text, index);
+                            }}
+                            title={`คลิกเพื่อคัดลอก: ${line.text}`}
+                            aria-label={`คัดลอกบรรทัด: ${line.text}`}
+                          >
+                            <span>{ocrCopiedLine === index ? "✓ คัดลอกแล้ว" : line.text}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </>
             ) : viewUrl ? (

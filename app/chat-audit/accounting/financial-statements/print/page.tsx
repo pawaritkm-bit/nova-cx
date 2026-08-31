@@ -65,7 +65,7 @@ export default async function FinancialStatementsPrintPage({
   // หัวกระดาษ = ข้อมูลลูกค้า (business_name/tax_id, mirror wht-cert)
   const { data: custRow } = await service
     .from("customers")
-    .select("id, name, business_name, tax_id, customer_code")
+    .select("id, name, business_name, tax_id, customer_code, customer_type")
     .eq("id", customerId)
     .eq("tenant_id", access.tenantId)
     .is("deleted_at", null)
@@ -73,12 +73,16 @@ export default async function FinancialStatementsPrintPage({
   if (!custRow) {
     return <ErrorShell message="ไม่พบลูกค้า (อาจถูกลบไปแล้ว)" />;
   }
+  if ((custRow as { customer_type?: string }).customer_type !== "company") {
+    return <ErrorShell message="การปิดงบใช้ได้เฉพาะลูกค้านิติบุคคล" />;
+  }
   const cust = custRow as {
     id: string;
     name: string | null;
     business_name: string | null;
     tax_id: string | null;
     customer_code: string | null;
+    customer_type: "company";
   };
   const businessName = (cust.business_name || cust.name || "").trim();
 

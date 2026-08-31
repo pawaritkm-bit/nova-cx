@@ -87,36 +87,6 @@ export function getNovaSalesBaseUrl(): string | undefined {
   return v ? v.replace(/\/+$/, "") : undefined;
 }
 
-export type FlowAccountSharedConfig = {
-  /** endpoint ขอ token (OAuth2 client_credentials) เช่น https://openapi.flowaccount.com/test/token */
-  tokenUrl: string;
-  /** base URL ของ resource API (ไม่มี / ปิดท้าย) เช่น https://openapi.flowaccount.com/test */
-  apiBaseUrl: string;
-  scope: string;
-};
-
-/**
- * config FlowAccount OpenAPI ระดับ "กลาง" (docs/05-flowaccount-integration.md หมวด M2) — เหมือนกันทุกบริษัท
- * ลูกค้า (tokenUrl/apiBaseUrl/scope ไม่ผูกกับบริษัทไหน) — คืน null ถ้าตั้งไม่ครบสักตัว → ปิดปุ่ม
- * "ส่งไป FlowAccount" แบบนุ่มนวล (เหมือน nova-sales-query — ไม่ throw, ไม่ error หน้าเว็บ)
- *
- * ★ M2: client_id/client_secret ย้ายไปเก็บเข้ารหัสต่อลูกค้าใน DB แล้ว (customers.flowaccount_client_id /
- *   flowaccount_client_secret_enc) — ไม่ใช่ env กลางอีกต่อไป ดู `FlowAccountCredential` ใน
- *   `lib/integrations/flowaccount.ts`
- */
-export function getFlowAccountSharedConfig(): FlowAccountSharedConfig | null {
-  const tokenUrl = process.env.FLOWACCOUNT_TOKEN_URL;
-  const apiBaseUrl = process.env.FLOWACCOUNT_API_BASE_URL;
-  const scope = process.env.FLOWACCOUNT_SCOPE;
-  if (!tokenUrl || !apiBaseUrl || !scope) return null;
-
-  return {
-    tokenUrl: tokenUrl.replace(/\/+$/, ""),
-    apiBaseUrl: apiBaseUrl.replace(/\/+$/, ""),
-    scope,
-  };
-}
-
 export type LineOa = "care" | "sale";
 
 /**

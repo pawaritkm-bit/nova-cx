@@ -86,7 +86,7 @@ async function fetchCodes(service: SupabaseClient, tenantId: string, ids: string
 
 /**
  * โหลดข้อมูล "จัดการลูกค้า" + ประเภทลูกค้า ของลูกค้า 1 ราย (เฉพาะที่กางอยู่ = perf)
- *   2 query: (1) code+tax_id+customer_type (คอลัมน์เดิม) (2) address/phone/flowaccount (คอลัมน์ใหม่ best-effort)
+ *   2 query: (1) code+tax_id+customer_type (คอลัมน์เดิม) (2) address/phone (คอลัมน์ใหม่ best-effort)
  */
 type CustomerAdminFields = {
   code: string | null;
@@ -94,15 +94,13 @@ type CustomerAdminFields = {
   customerType: "company" | "individual" | null;
   address: string | null;
   phone: string | null;
-  flowClientId: string | null;
-  flowHasSecret: boolean;
 };
 async function loadCustomerFields(
   service: SupabaseClient,
   tenantId: string,
   customerId: string
 ): Promise<CustomerAdminFields> {
-  const out: CustomerAdminFields = { code: null, taxId: null, customerType: null, address: null, phone: null, flowClientId: null, flowHasSecret: false };
+  const out: CustomerAdminFields = { code: null, taxId: null, customerType: null, address: null, phone: null };
   try {
     const { data } = await service.from("customers").select("customer_code, tax_id, customer_type").eq("tenant_id", tenantId).eq("id", customerId).maybeSingle();
     const c = data as { customer_code: string | null; tax_id: string | null; customer_type: string | null } | null;
@@ -115,14 +113,12 @@ async function loadCustomerFields(
   try {
     const { data, error } = await service
       .from("customers")
-      .select("address, phone, flowaccount_client_id, flowaccount_client_secret_enc")
+      .select("address, phone")
       .eq("tenant_id", tenantId).eq("id", customerId).maybeSingle();
-    const c = data as { address: string | null; phone: string | null; flowaccount_client_id: string | null; flowaccount_client_secret_enc: string | null } | null;
+    const c = data as { address: string | null; phone: string | null } | null;
     if (!error && c) {
       out.address = c.address;
       out.phone = c.phone;
-      out.flowClientId = c.flowaccount_client_id?.trim() || null;
-      out.flowHasSecret = !!(c.flowaccount_client_secret_enc && c.flowaccount_client_secret_enc.trim());
     }
   } catch { /* คอลัมน์ใหม่ยังไม่ apply → degrade */ }
   return out;
@@ -439,6 +435,9 @@ export default async function AccountingWorkspacePage({
           <Link href="/chat-audit/accounting/workspace" className="wsp-switch-link">👤 เปลี่ยนนักบัญชี</Link>
         ) : null}
         {selectedAccountantLabel ? <span className="muted" style={{ fontSize: 13 }}>· {selectedAccountantLabel}</span> : null}
+        {/* ★ อัปโหลดไฟล์บิลได้เสมอ (เลือกลูกค้าในกล่อง) — จำเป็นสำหรับลูกค้าบิลกระดาษ 100%
+            ที่ยังไม่มีบิลในระบบ (ไม่โผล่ในคิวซ้าย → ไม่มีการ์ดให้กดอัปโหลด) เช่น สแกนบิลใบแรกของเดือน */}
+        <UploadFileButton accountant={accountantParam || null} label="＋ อัปโหลดไฟล์เอง" />
         <span className="wsp-badge-new">โต๊ะทำงานบัญชี</span>
       </div>
 
@@ -538,8 +537,6 @@ export default async function AccountingWorkspacePage({
                     initialCustomerType={adminFields?.customerType ?? null}
                     initialAddress={adminFields?.address ?? null}
                     initialPhone={adminFields?.phone ?? null}
-                    initialFlowAccountClientId={adminFields?.flowClientId ?? null}
-                    hasFlowAccountCredential={!!adminFields?.flowClientId && !!adminFields?.flowHasSecret}
                   />
                 </div>
               </details>
@@ -561,7 +558,7 @@ export default async function AccountingWorkspacePage({
           ) : tab === "tax" ? (
             <TaxView entries={inMonth} month={selectedMonth} accParam={accountantParam} />
           ) : !openGroup ? (
-            <p className="empty" style={{ padding: 40 }}>เลือกลูกค้าจากคิวด้านซ้ายเพื่อเริ่มตรวจ</p>
+            <p className="empty" style={{ padding: 40 }}>เลือกลูกค้าจากคิวด้านซ้ายเพื่อเริ่มตรวจ — ลูกค้าใหม่/บิลกระดาษที่ยังไม่มีบิลในระบบ ใช้ปุ่ม “อัปโหลดไฟล์เอง” ด้านบนได้เลย</p>
           ) : (
             <>
               <div className="wsp-center-head">

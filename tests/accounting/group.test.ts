@@ -6,7 +6,6 @@ import {
   countOfType,
 } from "@/lib/accounting/group";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 
 /**
  * accounting/group — จัดกลุ่มตามลูกค้า + สรุปยอดแยกประเภท (pure)
@@ -62,7 +61,6 @@ function entry(p: Partial<BillEntry>): BillEntry {
     createdAt: p.createdAt ?? "2026-07-01T00:00:00Z",
     confirmedAt: null,
     inputTaxMonth: null,
-    flowaccountSync: defaultFlowAccountSync(),
     lines: p.lines ?? [],
   };
 }

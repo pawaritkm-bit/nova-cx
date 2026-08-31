@@ -546,11 +546,6 @@ export default function AdminConfig({
   const [tab, setTab] = useState<"mapping" | "weights" | "sla">("mapping");
   return (
     <div className="dash-views">
-      <p style={{ marginBottom: 8 }}>
-        <Link href="/chat-audit/admin/chart-of-accounts" className="underline">จัดการผังบัญชี →</Link>
-        {" · "}
-        <Link href="/chat-audit/admin/products" className="underline">จัดการสินค้า/บริการ →</Link>
-      </p>
       <div className="ca-tabs">
         <button className={`ca-tab${tab === "mapping" ? " active" : ""}`} onClick={() => setTab("mapping")}>จับคู่กลุ่ม→ลูกค้า</button>
         <button className={`ca-tab${tab === "weights" ? " active" : ""}`} onClick={() => setTab("weights")}>น้ำหนักคะแนน 8 มิติ</button>

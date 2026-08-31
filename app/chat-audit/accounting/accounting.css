@@ -300,19 +300,127 @@
   place-items: center;
   width: 100%;
 }
+.nova-dash .acc-bill-image-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  max-height: 68vh;
+  line-height: 0;
+  transform-origin: center;
+  transition: transform .15s ease;
+}
 .nova-dash .acc-bill-img {
+  display: block;
   max-width: 100%;
   max-height: 68vh;
   border-radius: 8px;
   cursor: zoom-in;
   background: #fff;
-  transition: transform .15s ease;
 }
 /* หมุนตั้ง (90/270): ด้าน "กว้างเดิม" กลายเป็นสูง → จำกัดด้วยความสูงเวทีให้พอดี ไม่ล้น */
+.nova-dash .acc-bill-stage.rot .acc-bill-image-wrap,
 .nova-dash .acc-bill-stage.rot .acc-bill-img { max-width: 68vh; max-height: 100%; }
-.nova-dash .acc-bill-img.zoom { cursor: zoom-out; max-width: none; max-height: none; width: auto; }
-.nova-dash .acc-bill-stage.rot .acc-bill-img.zoom { max-width: none; max-height: none; }
-.nova-dash .acc-bill-tools { display: flex; gap: 8px; flex: none; }
+.nova-dash .acc-bill-image-wrap.zoom { max-width: none; max-height: none; }
+.nova-dash .acc-bill-image-wrap.zoom .acc-bill-img { cursor: zoom-out; max-width: none; max-height: none; width: auto; }
+.nova-dash .acc-bill-stage.rot .acc-bill-image-wrap.zoom,
+.nova-dash .acc-bill-stage.rot .acc-bill-image-wrap.zoom .acc-bill-img { max-width: none; max-height: none; }
+.nova-dash .acc-bill-ocr-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.nova-dash .acc-bill-ocr-hit {
+  position: absolute;
+  pointer-events: auto;
+  min-width: 10px;
+  min-height: 10px;
+  padding: 0;
+  overflow: visible;
+  border: 1.5px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  cursor: copy;
+}
+.nova-dash .acc-bill-ocr-hit:hover,
+.nova-dash .acc-bill-ocr-hit:focus-visible {
+  z-index: 2;
+  border-color: #16a34a;
+  background: rgba(187, 247, 208, .42);
+  outline: none;
+}
+.nova-dash .acc-bill-ocr-hit > span {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  display: none;
+  max-width: 280px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: #0f172a;
+  color: #fff;
+  font: 11px/1.35 system-ui, sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nova-dash .acc-bill-ocr-hit:hover > span,
+.nova-dash .acc-bill-ocr-hit:focus-visible > span,
+.nova-dash .acc-bill-ocr-hit.copied > span { display: block; }
+.nova-dash .acc-bill-ocr-hit.copied { border-color: #16a34a; background: rgba(187, 247, 208, .6); }
+.nova-dash .acc-bill-tools { display: flex; gap: 8px; flex: none; flex-wrap: wrap; }
+.nova-dash .acc-bill-ocr {
+  flex: 0 0 auto;
+  padding: 10px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+}
+.nova-dash .acc-bill-ocr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.nova-dash .acc-bill-ocr-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 80px;
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 3px;
+  user-select: text;
+}
+.nova-dash .acc-bill-ocr-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #0f172a;
+  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.nova-dash .acc-bill-ocr-line > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+.nova-dash .acc-bill-ocr-line > button { flex: 0 0 auto; }
+.nova-dash .acc-bill-ocr-status,
+.nova-dash .acc-bill-ocr-error {
+  padding: 12px 4px;
+  font-size: 12.5px;
+}
+.nova-dash .acc-bill-ocr-status { color: #475569; }
+.nova-dash .acc-bill-ocr-error { color: #b91c1c; }
 .nova-dash .acc-bill-empty {
   color: #cbd5e1;
   font-size: 13px;

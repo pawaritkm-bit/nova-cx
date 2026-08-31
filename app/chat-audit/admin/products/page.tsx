@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 export default async function ProductsAdminPage() {
   if (!getSupabaseEnv()) {
     return (
-      <ChatAuditFrame active="chat-admin" role={null} authed={false} title="สินค้า/บริการ" subtitle="จัดการสินค้า/บริการกลาง">
+      <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="สินค้า/บริการ" subtitle="จัดการสินค้า/บริการกลาง">
         <div className="card">ยังไม่ได้ตั้งค่าฐานข้อมูล</div>
       </ChatAuditFrame>
     );
@@ -33,7 +33,7 @@ export default async function ProductsAdminPage() {
   if (!ctx.hasSession) redirect("/login?redirect=/chat-audit/admin/products");
   if (!ctx.isAdmin || !ctx.tenantId) {
     return (
-      <ChatAuditFrame active="chat-admin" role={ctx.role} authed={ctx.hasSession && !!ctx.role} title="สินค้า/บริการ" subtitle="จัดการสินค้า/บริการกลาง">
+      <ChatAuditFrame active="chat-accounting" role={ctx.role} authed={ctx.hasSession && !!ctx.role} title="สินค้า/บริการ" subtitle="จัดการสินค้า/บริการกลาง">
         <div className="card"><p style={{ fontWeight: 700 }}>คุณไม่มีสิทธิ์เข้าถึงหน้านี้</p></div>
       </ChatAuditFrame>
     );
@@ -50,21 +50,21 @@ export default async function ProductsAdminPage() {
 
     return (
       <ChatAuditFrame
-        active="chat-admin"
+        active="chat-accounting"
         role={ctx.role}
         authed
         title="สินค้า/บริการ"
         subtitle="จัดการสินค้า/บริการกลาง (ใช้ร่วมทุกลูกค้าในสำนักงานของคุณ) — เลือกในบรรทัดบิลได้"
       >
         <div className="dash-views">
-          <p><Link href="/chat-audit/admin" className="underline">← กลับหน้าตั้งค่า</Link></p>
+          <p><Link href="/chat-audit/accounting" className="underline">← กลับหน้าลงบันทึกบัญชี</Link></p>
           <ProductsPanel products={products} chart={chart} productUnits={productUnits} />
         </div>
       </ChatAuditFrame>
     );
   } catch {
     return (
-      <ChatAuditFrame active="chat-admin" role={ctx.role} authed title="สินค้า/บริการ" subtitle="จัดการสินค้า/บริการกลาง">
+      <ChatAuditFrame active="chat-accounting" role={ctx.role} authed title="สินค้า/บริการ" subtitle="จัดการสินค้า/บริการกลาง">
         <div className="card">อ่านข้อมูลไม่สำเร็จ — ตรวจว่า apply migration ครบ (ถึง 0064)</div>
       </ChatAuditFrame>
     );

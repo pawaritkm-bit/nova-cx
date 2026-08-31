@@ -8,7 +8,6 @@ import {
   validMonth,
 } from "@/lib/accounting/report-filter";
 import type { BillEntry } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import type { ManualJournalEntry } from "@/lib/accounting/manual-journal";
 import type { BillPayment } from "@/lib/accounting/bill-payments";
 import type { CreditDebitNote } from "@/lib/accounting/credit-debit-notes";
@@ -46,7 +45,6 @@ function e(id: string, docDate: string | null, status: "draft" | "confirmed"): B
     createdAt: "2026-07-01T00:00:00Z",
     confirmedAt: null,
     inputTaxMonth: null,
-    flowaccountSync: defaultFlowAccountSync(),
     lines: [],
   };
 }

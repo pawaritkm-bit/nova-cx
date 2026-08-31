@@ -7,7 +7,6 @@ import {
   buildBalanceSheet,
 } from "@/lib/accounting/financial-statements";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import type { OpeningBalance } from "@/lib/accounting/opening-balance";
 import { buildStatements } from "@/lib/accounting/statements";
 import { toJournalLines, type ManualJournalEntry } from "@/lib/accounting/manual-journal";
@@ -73,7 +72,6 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     createdAt: "2026-07-01T00:00:00Z",
     confirmedAt: null,
     inputTaxMonth: null,
-    flowaccountSync: defaultFlowAccountSync(),
     lines: p.lines ?? [],
   };
 }

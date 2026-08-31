@@ -43,7 +43,6 @@ export default function CustomerTabs({
   taxInvoicesHref,
   askAiHref,
   statementHref,
-  flowaccountMapHref,
   recurringJournalHref,
   recurringInvoiceHref,
   pettyCashHref,
@@ -99,8 +98,6 @@ export default function CustomerTabs({
   askAiHref?: string;
   /** AI แยกสเตทเมนต์ เข้า-ออก */
   statementHref?: string;
-  /** mapping ผังบัญชี/สินค้า nova-cx ↔ FlowAccount ต่อลูกค้า (เฟส 5 ส่วน Q) */
-  flowaccountMapHref?: string;
   /** งบประมาณ — ตั้งงบต่อรหัสบัญชี/เดือน/ปี เทียบกับยอดจริง (เฟส 6 ส่วน S) */
   budgetHref?: string;
   /** กระทบยอดธนาคาร — เทียบยอดบัญชีเงินฝากกับ statement ธนาคารจริง (เฟส 6 ส่วน T) */
@@ -262,18 +259,14 @@ export default function CustomerTabs({
               </a>
             ) : null}
             {reportsHref ? (
-              <a href={reportsHref} className="btn btn-ghost">งบการเงิน</a>
+              <a href={reportsHref} className="btn btn-ghost">รายงานบัญชี / งบทดลอง</a>
             ) : null}
             {/* งบการเงินฉบับทางการ (เฟส 4 ส่วน N) — คนละหน้ากับ "งบการเงิน" ด้านบน (ป้ายต่างกันชัดเจน) */}
             {financialStatementsHref ? (
-              <a href={financialStatementsHref} className="btn btn-ghost">งบการเงินฉบับทางการ</a>
+              <a href={financialStatementsHref} className="btn">ปิดงบ / งบการเงินทางการ</a>
             ) : null}
             {statementHref ? (
               <a href={statementHref} className="btn btn-ghost">แยกสเตทเมนต์/รายงานแพลตฟอร์ม</a>
-            ) : null}
-            {/* mapping ผังบัญชี/สินค้า nova-cx ↔ FlowAccount ต่อลูกค้า (เฟส 5 ส่วน Q) */}
-            {flowaccountMapHref ? (
-              <a href={flowaccountMapHref} className="btn btn-ghost">mapping FlowAccount</a>
             ) : null}
             {/* งบประมาณ — ตั้งงบต่อรหัสบัญชี/เดือน/ปี เทียบกับยอดจริง (เฟส 6 ส่วน S) */}
             {budgetHref ? (

@@ -53,7 +53,6 @@ import { listProductUnitsForProducts } from "@/lib/accounting/product-units";
 import ChatAuditFrame from "../_Frame";
 import EntryEditor from "./EntryEditor";
 import RowActions from "./RowActions";
-import FlowAccountSyncButton from "./FlowAccountSyncButton";
 import InputTaxMonthCell from "./InputTaxMonthCell";
 import CustomerTaxIdField from "./CustomerTaxIdField";
 import EntryDateField from "./EntryDateField";
@@ -333,6 +332,31 @@ async function fetchCustomerCodes(
   return map;
 }
 
+/** ประเภทลูกค้า — ใช้ซ่อนงานปิดงบสำหรับบุคคลธรรมดา (ปิดงบเฉพาะนิติบุคคล) */
+async function fetchCustomerTypes(
+  service: SupabaseClient,
+  tenantId: string,
+  ids: string[]
+): Promise<Map<string, "company" | "individual" | null>> {
+  const map = new Map<string, "company" | "individual" | null>();
+  if (ids.length === 0) return map;
+  try {
+    const chunks = await Promise.all(
+      chunkIds(ids).map((chunk) =>
+        service.from("customers").select("id, customer_type").eq("tenant_id", tenantId).in("id", chunk)
+      )
+    );
+    for (const { data } of chunks) {
+      for (const c of (data ?? []) as { id: string; customer_type: "company" | "individual" | null }[]) {
+        map.set(c.id, c.customer_type);
+      }
+    }
+  } catch {
+    // อ่านประเภทไม่ได้ = default deny งานปิดงบ (ไม่แสดงปุ่ม)
+  }
+  return map;
+}
+
 /** ดึงเลขภาษี (tax_id) ของ customerIds — สำหรับช่องกรอก/แก้เลขภาษีต่อลูกค้า (loop เก็บเลขภาษี) */
 async function fetchCustomerTaxIds(
   service: SupabaseClient,
@@ -417,53 +441,6 @@ async function fetchCustomerPhones(
   return map;
 }
 
-/** สถานะการเชื่อม FlowAccount ของลูกค้า 1 ราย (M2) — clientId ไม่ใช่ secret ส่งไปให้ client prefill ได้ */
-type FlowAccountCustomerStatus = { clientId: string | null; hasSecret: boolean };
-
-/**
- * ลูกค้ารายไหน "เปิดใช้การเชื่อมต่อ FlowAccount" แล้วบ้าง (M2 — credential ต่อลูกค้า)
- *   ★ best-effort: คอลัมน์เพิ่งเพิ่ม (migration 0062) — ยังไม่ apply → คืน map ว่าง
- *   ★ ความปลอดภัย: select เฉพาะ flowaccount_client_id (public identifier ไม่ใช่ secret) +
- *     เช็คแค่ว่า flowaccount_client_secret_enc "มีค่าไหม" (ไม่ select ค่าจริงของ ciphertext ออกมาที่ตัวแปร
- *     ที่ return เลย — ใช้ `select("... , flowaccount_client_secret_enc")` แล้วคัดเหลือ boolean ก่อนคืนค่า
- *     ต้อง"เชื่อมต่อสำเร็จจริง"ต้องมีครบทั้ง 2 ค่า ไม่ใช่แค่ client_id (ไม่งั้นโชว์ "เชื่อมแล้ว" ทั้งที่กดส่งจริง
- *     จะเจอ customer_not_configured — ตามที่ reviewer ชี้ไว้)
- */
-async function fetchCustomerFlowAccountStatus(
-  service: SupabaseClient,
-  tenantId: string,
-  ids: string[]
-): Promise<Map<string, FlowAccountCustomerStatus>> {
-  const map = new Map<string, FlowAccountCustomerStatus>();
-  if (ids.length === 0) return map;
-  try {
-    const chunks = await Promise.all(
-      chunkIds(ids).map((chunk) =>
-        service
-          .from("customers")
-          .select("id, flowaccount_client_id, flowaccount_client_secret_enc")
-          .eq("tenant_id", tenantId)
-          .in("id", chunk)
-      )
-    );
-    for (const { data, error } of chunks) {
-      if (error) continue; // คอลัมน์ยังไม่มี → ข้ามก้อนนี้
-      for (const c of (data ?? []) as {
-        id: string;
-        flowaccount_client_id: string | null;
-        flowaccount_client_secret_enc: string | null;
-      }[]) {
-        const clientId = c.flowaccount_client_id?.trim() || null;
-        const hasSecret = !!(c.flowaccount_client_secret_enc && c.flowaccount_client_secret_enc.trim());
-        map.set(c.id, { clientId, hasSecret });
-      }
-    }
-  } catch {
-    // คอลัมน์ยังไม่ apply / blip → คืน map ว่าง (ถือว่ายังไม่ตั้งค่า)
-  }
-  return map;
-}
-
 /**
  * สร้าง signed URL (batch — 1 call) ให้ thumbnail ที่ต้องโชว์ (PDPA/perf)
  *   ★ perf: batch เดียว = ไม่บล็อก SSR render นาน (ต่างจาก sign ทีละใบ 100+ ครั้ง)
@@ -542,10 +519,6 @@ function EntryTable({
     return <p className="empty">ยังไม่มีรายการในประเภทนี้</p>;
   }
 
-  // คอลัมน์ FlowAccount มีผลแค่บิลขาย/บิลซื้อ (เฟส 5 ส่วน P) — FlowAccountSyncButton ก็ self-gate เหมือนกัน —
-  // ซ่อนคอลัมน์ทั้งเส้นในตารางรอระบุ กัน column เปล่าโล่ง ๆ ทั้งตาราง
-  const showFlowAccountCol = entries.some((e) => e.entryType === "sale" || e.entryType === "purchase");
-
   // ยอดรวมท้ายตาราง
   let tAmount = 0;
   let tVat = 0;
@@ -568,7 +541,6 @@ function EntryTable({
             <th className="num">รวมจ่ายจริง</th>
             <th className="center">สถานะ</th>
             <th className="center">จัดการ</th>
-            {showFlowAccountCol ? <th className="center">FlowAccount</th> : null}
           </tr>
         </thead>
         {/* หมายเหตุ: 1 entry = 1 <tbody> (docrow + sub-lines) — table มีหลาย tbody ได้ */}
@@ -690,17 +662,6 @@ function EntryTable({
                       stockSync={e.stockSync}
                     />
                   </td>
-                  {showFlowAccountCol ? (
-                    <td className="center">
-                      <FlowAccountSyncButton
-                        entryId={e.id}
-                        entryType={e.entryType}
-                        status={e.status}
-                        customerId={e.customerId}
-                        sync={e.flowaccountSync}
-                      />
-                    </td>
-                  ) : null}
                 </tr>
 
                 {/* ---- sub-lines (บิลผสม) ---- */}
@@ -720,7 +681,7 @@ function EntryTable({
                         <td className="num">{formatMoney(l.vatAmount)}</td>
                         <td className="num">{formatMoney(l.whtAmount)}</td>
                         <td className="num">{formatMoney(lineNet(l))}</td>
-                        <td colSpan={showFlowAccountCol ? 3 : 2} />
+                        <td colSpan={2} />
                       </tr>
                     ))
                   : null}
@@ -736,7 +697,7 @@ function EntryTable({
               <td className="num strong">{formatMoney(tVat)}</td>
               <td className="num strong">{formatMoney(tWht)}</td>
               <td className="num strong">{formatMoney(tNet)}</td>
-              <td colSpan={showFlowAccountCol ? 3 : 2} />
+              <td colSpan={2} />
             </tr>
           </tbody>
       </table>
@@ -1003,12 +964,12 @@ export default async function AccountingPage({
   // รหัสลูกค้า (สำหรับ avatar/ชื่อ/ค้นหา/ไฟล์ Excel) เฉพาะที่โชว์
   //   ★ perf: ไม่ดึงรายชื่อลูกค้า 5,000 รายทุกคลิกแล้ว — dropdown อัปไฟล์โหลดตอนเปิดกล่อง (on-demand)
   const custIds = [...new Set(allEntries.map((e) => e.customerId).filter((x): x is string => !!x))];
-  const [codeById, taxIdById, addressById, phoneById, hasFlowAccountById] = await Promise.all([
+  const [codeById, customerTypeById, taxIdById, addressById, phoneById] = await Promise.all([
     fetchCustomerCodes(service, tenantId, custIds),
+    fetchCustomerTypes(service, tenantId, custIds),
     fetchCustomerTaxIds(service, tenantId, custIds),
     fetchCustomerAddresses(service, tenantId, custIds),
     fetchCustomerPhones(service, tenantId, custIds),
-    fetchCustomerFlowAccountStatus(service, tenantId, custIds),
   ]);
 
   // ---- จัดการลูกค้า: รายชื่อนักบัญชี + ผู้ดูแลปัจจุบันต่อลูกค้า (สำหรับปุ่ม "เปลี่ยนผู้ดูแล") ----
@@ -1210,11 +1171,6 @@ export default async function AccountingPage({
           initialTaxId={taxIdById.get(g.customerId) ?? null}
           initialAddress={addressById.get(g.customerId) ?? null}
           initialPhone={phoneById.get(g.customerId) ?? null}
-          initialFlowAccountClientId={hasFlowAccountById.get(g.customerId)?.clientId ?? null}
-          hasFlowAccountCredential={
-            !!hasFlowAccountById.get(g.customerId)?.clientId &&
-            !!hasFlowAccountById.get(g.customerId)?.hasSecret
-          }
         />
       ) : null}
 
@@ -1280,11 +1236,10 @@ export default async function AccountingPage({
         }
         openingHref={g.customerId ? `/chat-audit/accounting/opening?customerId=${g.customerId}` : undefined}
         reportsHref={g.customerId ? `/chat-audit/accounting/reports?customerId=${g.customerId}` : undefined}
-        flowaccountMapHref={
-          g.customerId ? `/chat-audit/accounting/flowaccount-map?customerId=${g.customerId}` : undefined
-        }
         financialStatementsHref={
-          g.customerId ? `/chat-audit/accounting/financial-statements?customerId=${g.customerId}` : undefined
+          g.customerId && customerTypeById.get(g.customerId) === "company"
+            ? `/chat-audit/accounting/financial-statements?customerId=${g.customerId}`
+            : undefined
         }
         journalEntryHref={g.customerId ? `/chat-audit/accounting/journal-entry?customerId=${g.customerId}` : undefined}
         fxRevaluationHref={g.customerId ? `/chat-audit/accounting/fx-revaluation?customerId=${g.customerId}` : undefined}
@@ -1435,6 +1390,20 @@ export default async function AccountingPage({
       subtitle="ภาษีซื้อ/ขาย แยกตามลูกค้า — ตรวจบิลจริง แก้ได้ทุกช่อง แล้วออกรายงาน Excel"
     >
       <div className="dash-views">
+        {access.mode === "admin" ? (
+          <div className="card acc-scopebar">
+            <span className="acc-scope-label">ตั้งค่าข้อมูลบัญชีกลาง</span>
+            <div className="acc-inline-flex">
+              <Link href="/chat-audit/admin/chart-of-accounts" className="btn btn-ghost">
+                จัดการผังบัญชี
+              </Link>
+              <Link href="/chat-audit/admin/products" className="btn btn-ghost">
+                จัดการสินค้า/บริการ
+              </Link>
+            </div>
+          </div>
+        ) : null}
+
         {/* ---- แถบสโคป (นักบัญชีที่กำลังดู) ---- */}
         <div className="card acc-scopebar">
           <span className="acc-scope-label">{scopeLabel}</span>

@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import ExcelJS from "exceljs";
 import { buildBillEntriesWorkbook } from "@/lib/accounting/excel";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 
 /**
  * accounting/excel — สร้างไฟล์ .xlsx จริง 2 ชีท (ภาษีซื้อ/ภาษีขาย)
@@ -59,7 +58,6 @@ function entry(p: Partial<BillEntry>): BillEntry {
     createdAt: "2026-07-01T00:00:00Z",
     confirmedAt: null,
     inputTaxMonth: null,
-    flowaccountSync: defaultFlowAccountSync(),
     lines: p.lines ?? [],
   };
 }

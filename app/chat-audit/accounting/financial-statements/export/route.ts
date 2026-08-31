@@ -62,6 +62,20 @@ export async function GET(req: Request) {
       );
     }
 
+    const { data: customerTypeRow } = await service
+      .from("customers")
+      .select("customer_type")
+      .eq("id", customerId)
+      .eq("tenant_id", access.tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if ((customerTypeRow as { customer_type?: string } | null)?.customer_type !== "company") {
+      return NextResponse.json(
+        { error: "forbidden", message: "การปิดงบใช้ได้เฉพาะลูกค้านิติบุคคล" },
+        { status: 403 }
+      );
+    }
+
     const { entries } = await listEntries(service, access.tenantId, { customerId });
     const opening = await listOpeningBalances(service, access.tenantId, customerId);
     const chart = await listChartOfAccounts(service, access.tenantId);

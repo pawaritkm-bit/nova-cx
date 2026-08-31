@@ -60,7 +60,9 @@ async function fetchScopedCustomers(
   access: AccountingAccess
 ): Promise<{ id: string; label: string }[]> {
   const rows = await listScopedCustomers(service, access);
-  return rows.map((c) => ({ id: c.id, label: customerLabel(c.customer_code, c.name) }));
+  return rows
+    .filter((c) => c.customer_type === "company")
+    .map((c) => ({ id: c.id, label: customerLabel(c.customer_code, c.name) }));
 }
 
 /** แปลง ComparePeriodMode ดิบจาก query string → type ที่ถูกต้อง (fallback 'none') */

@@ -1,5 +1,24 @@
 # FlowAccount OpenAPI Integration — แผนงาน M1 (MVP: ส่งใบกำกับภาษี/ใบเสร็จขาย แบบ manual-trigger)
 
+> ## ⛔ ยกเลิกทั้งระบบแล้ว (2026-08-27)
+> **ผู้ใช้ตัดสินใจตัดการเชื่อม FlowAccount ออกทั้งหมด — ทำทุกอย่างในระบบ NOVA-CX ให้ครบแทน**
+> (ฟีเจอร์บัญชีใน CX ครบแล้วตามโรดแมป docs/06 เฟส 1-10b จึงไม่จำเป็นต้อง sync ไปโปรแกรมภายนอกอีก)
+>
+> สิ่งที่ลบออกจากโค้ด (commit เดียวกับโน้ตนี้):
+> - `lib/integrations/flowaccount.ts` / `flowaccount-mapper.ts` (REST client + mapper)
+> - `lib/accounting/flowaccount-sync.ts` / `flowaccount-map.ts` (sync engine + mapping)
+> - UI: ปุ่ม "ส่งไป FlowAccount" + คอลัมน์สถานะในตารางบิล, หน้า `flowaccount-map`,
+>   ช่อง credential (client id/secret) ในแผงจัดการลูกค้า + `clearFlowAccountCredentialAction`
+> - env: `getFlowAccountSharedConfig` (FLOWACCOUNT_TOKEN_URL/API_BASE_URL/SCOPE ไม่ถูกอ่านแล้ว
+>   — ลบออกจาก Vercel/.env ได้)
+>
+> สิ่งที่ **ไม่ลบ** (non-destructive — ไม่มี migration ทำลายข้อมูล):
+> - คอลัมน์ DB เดิม (`bill_entries.flowaccount_*`, `customers.flowaccount_client_id/_secret_enc`)
+>   และตาราง log/mapping — ปล่อยเป็นคอลัมน์/ตารางว่างที่ไม่มีโค้ดอ่าน-เขียนอีกต่อไป
+>
+> เนื้อหาด้านล่างเก็บไว้เป็นประวัติการออกแบบเท่านั้น — อย่าใช้เป็น spec งานใหม่
+
+
 ทิศทาง: **NOVA-CX → FlowAccount (ส่งออกอย่างเดียว)** ไม่มีขาดึงข้อมูลกลับ ไม่มี auto-sync
 เป้าหมาย M1: ปุ่ม **"ส่งไป FlowAccount"** ที่หน้า `/chat-audit/accounting` ต่อบิลขาย (`entry_type='sale'`)
 ที่ยืนยันแล้ว (`status='confirmed'`) — กดทีละใบ ไม่มี background job ไม่มี auto-retry เงียบ

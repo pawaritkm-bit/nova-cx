@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildReview } from "@/lib/accounting/review";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 
 /**
  * accounting/review — ข้อมูลตรวจทานก่อนออก Excel (pure)
@@ -58,7 +57,6 @@ function entry(p: Partial<BillEntry>): BillEntry {
     createdAt: p.createdAt ?? "2026-07-01T00:00:00Z",
     confirmedAt: null,
     inputTaxMonth: null,
-    flowaccountSync: defaultFlowAccountSync(),
     lines: p.lines ?? [],
   };
 }

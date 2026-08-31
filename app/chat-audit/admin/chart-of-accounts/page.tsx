@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic";
 export default async function ChartOfAccountsAdminPage() {
   if (!getSupabaseEnv()) {
     return (
-      <ChatAuditFrame active="chat-admin" role={null} authed={false} title="ผังบัญชี" subtitle="จัดการผังบัญชีกลาง">
+      <ChatAuditFrame active="chat-accounting" role={null} authed={false} title="ผังบัญชี" subtitle="จัดการผังบัญชีกลาง">
         <div className="card">ยังไม่ได้ตั้งค่าฐานข้อมูล</div>
       </ChatAuditFrame>
     );
@@ -35,7 +35,7 @@ export default async function ChartOfAccountsAdminPage() {
   if (!ctx.hasSession) redirect("/login?redirect=/chat-audit/admin/chart-of-accounts");
   if (!ctx.isAdmin || !ctx.tenantId) {
     return (
-      <ChatAuditFrame active="chat-admin" role={ctx.role} authed={ctx.hasSession && !!ctx.role} title="ผังบัญชี" subtitle="จัดการผังบัญชีกลาง">
+      <ChatAuditFrame active="chat-accounting" role={ctx.role} authed={ctx.hasSession && !!ctx.role} title="ผังบัญชี" subtitle="จัดการผังบัญชีกลาง">
         <div className="card"><p style={{ fontWeight: 700 }}>คุณไม่มีสิทธิ์เข้าถึงหน้านี้</p></div>
       </ChatAuditFrame>
     );
@@ -47,14 +47,14 @@ export default async function ChartOfAccountsAdminPage() {
 
     return (
       <ChatAuditFrame
-        active="chat-admin"
+        active="chat-accounting"
         role={ctx.role}
         authed
         title="ผังบัญชี"
         subtitle="จัดการผังบัญชีกลาง (ใช้ร่วมทุกลูกค้าในสำนักงานของคุณ)"
       >
         <div className="dash-views">
-          <p><Link href="/chat-audit/admin" className="underline">← กลับหน้าตั้งค่า</Link></p>
+          <p><Link href="/chat-audit/accounting" className="underline">← กลับหน้าลงบันทึกบัญชี</Link></p>
           <ChartOfAccountsPanel
             accounts={accounts}
             protectedCodes={[...PROTECTED_CODES]}
@@ -65,7 +65,7 @@ export default async function ChartOfAccountsAdminPage() {
     );
   } catch {
     return (
-      <ChatAuditFrame active="chat-admin" role={ctx.role} authed title="ผังบัญชี" subtitle="จัดการผังบัญชีกลาง">
+      <ChatAuditFrame active="chat-accounting" role={ctx.role} authed title="ผังบัญชี" subtitle="จัดการผังบัญชีกลาง">
         <div className="card">อ่านข้อมูลไม่สำเร็จ — ตรวจว่า apply migration ครบ (ถึง 0063)</div>
       </ChatAuditFrame>
     );

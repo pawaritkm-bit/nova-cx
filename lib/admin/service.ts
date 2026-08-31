@@ -351,6 +351,16 @@ export type CustomerRow = {
   created_at: string;
 };
 
+/** กติกา NOVA-CX: รหัส P = บุคคลธรรมดา, N = นิติบุคคล */
+export function inferCustomerTypeFromCode(
+  customerCode: string | null | undefined
+): "company" | "individual" | null {
+  const prefix = customerCode?.trim().charAt(0).toUpperCase();
+  if (prefix === "P") return "individual";
+  if (prefix === "N") return "company";
+  return null;
+}
+
 export async function listCustomers(
   db: DB,
   tenantId: string
@@ -364,7 +374,11 @@ export async function listCustomers(
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
-  return (data ?? []) as CustomerRow[];
+  return ((data ?? []) as CustomerRow[]).map((customer) => ({
+    ...customer,
+    customer_type:
+      customer.customer_type ?? inferCustomerTypeFromCode(customer.customer_code),
+  }));
 }
 
 /**
@@ -401,7 +415,8 @@ export async function createCustomer(
       name: input.name,
       business_name: input.business_name ?? null,
       service_start_date: input.service_start_date ?? null,
-      customer_type: input.customer_type ?? null, // null = ยังไม่จัดประเภท
+      customer_type:
+        input.customer_type ?? inferCustomerTypeFromCode(input.customer_code),
       status: "active",
     })
     .select("id")
@@ -447,6 +462,9 @@ export async function updateCustomer(
   if (patch.service_start_date !== undefined)
     update.service_start_date = patch.service_start_date;
   if (patch.customer_type !== undefined) update.customer_type = patch.customer_type;
+  else if (patch.customer_code !== undefined) {
+    update.customer_type = inferCustomerTypeFromCode(patch.customer_code);
+  }
 
   // ไม่มีฟิลด์ให้แก้ → ยืนยันแค่ว่าลูกค้ามีจริงใน tenant (กัน id ผิด) แล้วจบแบบ no-op
   if (Object.keys(update).length === 0) {

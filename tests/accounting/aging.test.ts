@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { ageBucket, buildAgingReport, AGING_BUCKET_ORDER } from "@/lib/accounting/aging";
 import type { BillEntry, BillEntryLine } from "@/lib/accounting/queries";
-import { defaultFlowAccountSync } from "@/lib/accounting/queries";
 import type { BillPayment } from "@/lib/accounting/bill-payments";
 
 /**
@@ -102,7 +101,6 @@ function mkEntry(p: Partial<BillEntry> & { id: string }): BillEntry {
     createdAt: "2026-07-01T00:00:00Z",
     confirmedAt: null,
     inputTaxMonth: null,
-    flowaccountSync: defaultFlowAccountSync(),
     lines: p.lines ?? [mkLine()],
   };
 }
