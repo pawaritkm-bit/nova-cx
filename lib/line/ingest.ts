@@ -720,6 +720,16 @@ export async function ingestGroupJoin(
   const group = await resolveOrCreateGroup(db, tenantId, groupRef, sourceType, chatChannelId);
   if (!group) return { status: "skipped", reason: "chat_group_upsert_failed" };
 
+  // ★ บอทถูก "เชิญกลับ" เข้ากลุ่มที่เคยถูกลบ (soft-delete จากหน้า admin) → กู้กลุ่มคืน
+  //   เจตนาการเชิญกลับชัดเจนกว่าการลบเดิม — ไม่งั้นกลุ่มจะหายจากทุกหน้าถาวรทั้งที่บอทอยู่ในกลุ่ม
+  //   (ทำเฉพาะ event join — ข้อความปกติไม่กู้ เพื่อคงพฤติกรรมลบกลุ่มทดสอบเดิม)
+  await db
+    .from("chat_groups")
+    .update({ deleted_at: null, is_active: true })
+    .eq("id", group.id)
+    .eq("tenant_id", tenantId)
+    .not("deleted_at", "is", null);
+
   // ★ sync ชื่อกลุ่มไลน์ทุกข้อความ (best-effort · เขียน DB เฉพาะเมื่อชื่อเปลี่ยน) → โฟลเดอร์ตามชื่อไลน์ล่าสุด
   await ensureGroupName(db, tenantId, group.id, groupRef, sourceType, deps.client ?? null);
 
