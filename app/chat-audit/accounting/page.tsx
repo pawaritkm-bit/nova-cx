@@ -942,6 +942,24 @@ export default async function AccountingPage({
     }
   }
 
+  // ★ perf fast-path (2026-09-01 — "คลิกตรวจ/ยืนยันช้า"): หน้านี้ถูกใช้แค่แก้บิลใบเดียว (?edit=)
+  //   แต่เดิมโหลดบิล "ทั้งสโคป" (ทุกลูกค้าของนักบัญชี) → แคบสโคปเหลือลูกค้าของบิลที่แก้รายเดียว
+  //   (pager เลื่อนบิลใช้แค่บิลของลูกค้ารายนั้นอยู่แล้ว) — สิทธิ์เดิมยังคุม: intersect กับสโคปที่คำนวณแล้ว
+  if (sp.edit && UUID_RE.test(sp.edit)) {
+    const { data: ed } = await service
+      .from("bill_entries")
+      .select("customer_id")
+      .eq("id", sp.edit)
+      .eq("tenant_id", tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    const editCustomerId = (ed as { customer_id: string | null } | null)?.customer_id ?? null;
+    if (editCustomerId) {
+      scopeCustomerIds =
+        scopeCustomerIds === undefined ? [editCustomerId] : scopeCustomerIds.filter((id) => id === editCustomerId);
+    }
+  }
+
   let allEntries: BillEntry[];
   try {
     const res = await listEntries(
@@ -1102,29 +1120,26 @@ export default async function AccountingPage({
     [...new Set([...shownEntries.map((e) => e.id), ...(editEntry ? [editEntry.id] : [])])]
   );
 
-  // nav bills (แท็บปัจจุบัน) — sign รูปย่อทุกใบ (parallel) เฉพาะตอนเข้าหน้าแก้ → pager เลื่อน client + preload
+  // nav bills (แท็บปัจจุบัน) — pager เลื่อน client + preload
+  //   ★ perf 2026-09-01: รูปใช้ /api/accounting/bill-thumb (ย่อ+browser cache) แทนการเซ็น
+  //     signed URL รายใบ (เดิม = 1 storage call ต่อบิล × ทั้งแท็บ เป็นร้อย call ก่อน render หน้า)
   const editInNav = !!editEntry && navOrderIds.includes(editEntry.id);
   let pagerBills: PagerBill[] = [];
   if (editInNav) {
-    pagerBills = await Promise.all(
-      shownEntries.map(async (e) => {
-        const p = entryObjectPath(e);
-        const isImg = entryIsImage(e);
-        let url: string | null = p ? signed.get(p) ?? null : null;
-        if (p && isImg) {
-          const rz = await signResizedImage(service, p);
-          if (rz) url = rz;
-        }
-        return {
-          id: e.id,
-          entry: e,
-          viewUrl: url,
-          viewIsImage: isImg,
-          fileName: e.uploadName,
-          fxLocked: fxLockedEntryIds.has(e.id),
-        };
-      })
-    );
+    pagerBills = shownEntries.map((e) => {
+      const p = entryObjectPath(e);
+      const isImg = entryIsImage(e);
+      const url: string | null =
+        p && isImg ? `/api/accounting/bill-thumb?entry=${e.id}&w=1300` : p ? signed.get(p) ?? null : null;
+      return {
+        id: e.id,
+        entry: e,
+        viewUrl: url,
+        viewIsImage: isImg,
+        fileName: e.uploadName,
+        fxLocked: fxLockedEntryIds.has(e.id),
+      };
+    });
   }
 
   const hasAnyFilter = !!(q || selectedMonth || undatedMode);
