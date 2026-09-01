@@ -309,6 +309,41 @@ export default async function AccountingWorkspacePage({
   const inMonth = selectedMonth ? all.filter((e) => monthKeyOf(e) === selectedMonth) : all;
 
   const groups = groupEntriesByCustomer(inMonth);
+
+  // ★ ลูกค้าในความดูแลที่ "ยังไม่มีบิลเดือนนี้" (เช่น ลูกค้าบิลกระดาษเพิ่งเปิด) — โชว์ในคิวด้วย
+  //   ให้เปิดการ์ด/กดอัปโหลดไฟล์ได้ทันที ไม่ต้องรอบิลใบแรก · เฉพาะมุมมองที่มีสโคปชัด
+  //   (นักบัญชี/หัวหน้า/admin ที่เลือกนักบัญชี) — มุมมอง "ทั้งสำนักงาน" ไม่เติม (ลูกค้าเยอะเกิน)
+  if (scopeIds !== undefined && scopeIds.length > 0) {
+    const have = new Set(groups.map((g) => g.customerId).filter((x): x is string => !!x));
+    const missing = scopeIds.filter((id) => !have.has(id)).slice(0, 300);
+    if (missing.length > 0) {
+      try {
+        const { data } = await service
+          .from("customers")
+          .select("id, name")
+          .eq("tenant_id", tenantId)
+          .is("deleted_at", null)
+          .in("id", missing);
+        const zero = () => ({ count: 0, amount: 0, vat: 0, wht: 0, net: 0 });
+        for (const c of (data ?? []) as { id: string; name: string | null }[]) {
+          groups.push({
+            customerId: c.id,
+            name: c.name,
+            count: 0,
+            purchaseCount: 0,
+            saleCount: 0,
+            unspecifiedCount: 0,
+            summary: { purchase: zero(), sale: zero(), unspecified: zero(), all: zero() },
+            latestAt: "",
+            entries: [],
+          });
+        }
+      } catch {
+        // best-effort — โหลดไม่ได้ก็แค่ไม่โชว์ลูกค้าที่ยังไม่มีบิล
+      }
+    }
+  }
+
   const groupKey = (g: (typeof groups)[number]) => g.customerId ?? UNASSIGNED_CUSTOMER;
   const pendingOf = (g: (typeof groups)[number]) => g.entries.filter(isPending).length;
 
@@ -336,7 +371,7 @@ export default async function AccountingWorkspacePage({
 
   // ★ perf: ยิง 2 query ที่ไม่ขึ้นต่อกัน พร้อมกัน (รหัสลูกค้า + sign รูปเฉพาะลูกค้าที่เปิด)
   const [codeMap, signed] = await Promise.all([
-    fetchCodes(service, tenantId, [...new Set(inMonth.map((e) => e.customerId).filter((x): x is string => !!x))]),
+    fetchCodes(service, tenantId, [...new Set(groups.map((g) => g.customerId).filter((x): x is string => !!x))]),
     signPaths(service, reviewList.map(entryPath).filter((p): p is string => !!p)),
   ]);
 
