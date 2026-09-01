@@ -305,6 +305,93 @@ export async function loadSavedStatementAction(input: {
 }
 
 // ---------------------------------------------------------------------
+// "จำติ๊ก" (requirement 2026-09-01): สถานะ "✓ ตรวจแล้ว" + จับคู่มือ ต่อลูกค้า เก็บเป็นไฟล์
+//   review-state.json ใต้โฟลเดอร์สเตทเมนต์ (แบบเดียวกับ sidecar ผลอ่าน — ไม่ต้อง migrate DB)
+//   คีย์ = เนื้อหารายการ (วัน|ยอด|ทิศ|เวลา|อ้างอิง) ไม่ใช่ลำดับแถว → โหลดรอบหน้าไม่เพี้ยน
+// ---------------------------------------------------------------------
+
+export type StatementReviewState = {
+  /** คีย์รายการที่ติ๊ก "ตรวจแล้ว" */
+  reviewed: string[];
+  /** คีย์รายการ → billId ที่เลือกจับคู่มือ */
+  manual: Record<string, string>;
+};
+
+/** เพดานจำนวนคีย์ (กันไฟล์บวม) */
+const REVIEW_KEYS_MAX = 8000;
+const REVIEW_KEY_LEN = 120;
+
+function reviewStatePath(tenantId: string, folderCode: string): string {
+  return `${tenantId}/${STATEMENT_PREFIX}/${folderCode}/review-state.json`;
+}
+
+function sanitizeReviewState(raw: unknown): StatementReviewState {
+  const r = (raw ?? {}) as { reviewed?: unknown; manual?: unknown };
+  const reviewed = (Array.isArray(r.reviewed) ? r.reviewed : [])
+    .filter((k): k is string => typeof k === "string" && k.length > 0)
+    .map((k) => k.slice(0, REVIEW_KEY_LEN))
+    .slice(0, REVIEW_KEYS_MAX);
+  const manual: Record<string, string> = {};
+  if (r.manual && typeof r.manual === "object") {
+    for (const [k, v] of Object.entries(r.manual as Record<string, unknown>)) {
+      if (typeof v === "string" && UUID_RE.test(v) && k.length > 0) {
+        manual[k.slice(0, REVIEW_KEY_LEN)] = v;
+        if (Object.keys(manual).length >= REVIEW_KEYS_MAX) break;
+      }
+    }
+  }
+  return { reviewed, manual };
+}
+
+export async function loadStatementReviewStateAction(input: {
+  customerId: string;
+}): Promise<{ ok: true; state: StatementReviewState } | { ok: false; message: string }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(input.customerId) || !customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้าไม่ถูกต้อง" };
+    }
+    const folderCode = await resolveFolderCode(service, ctx.tenantId, input.customerId);
+    if (!folderCode) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    const { data: blob } = await service.storage
+      .from(BILLS_BUCKET)
+      .download(reviewStatePath(ctx.tenantId, folderCode));
+    if (!blob) return { ok: true, state: { reviewed: [], manual: {} } }; // ยังไม่เคยติ๊ก
+    return { ok: true, state: sanitizeReviewState(JSON.parse(await blob.text())) };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: true, state: { reviewed: [], manual: {} } }; // อ่านพัง = เริ่มว่าง (ไม่ block หน้า)
+  }
+}
+
+export async function saveStatementReviewStateAction(input: {
+  customerId: string;
+  state: StatementReviewState;
+}): Promise<{ ok: boolean }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(input.customerId) || !customerInScope(ctx, input.customerId)) return { ok: false };
+    const folderCode = await resolveFolderCode(service, ctx.tenantId, input.customerId);
+    if (!folderCode) return { ok: false };
+    const clean = sanitizeReviewState(input.state);
+    const body = JSON.stringify({ v: 1, updatedAt: new Date().toISOString(), ...clean });
+    const { error } = await service.storage
+      .from(BILLS_BUCKET)
+      .upload(reviewStatePath(ctx.tenantId, folderCode), Buffer.from(body, "utf8"), {
+        contentType: "application/json",
+        upsert: true,
+      });
+    return { ok: !error };
+  } catch {
+    return { ok: false }; // best-effort — ติ๊กบนจอยังอยู่ ผู้ใช้ติ๊กใหม่ได้
+  }
+}
+
+// ---------------------------------------------------------------------
 // กระทบรายการสเตทเมนต์กับบิลในระบบ (สลิป/บิลซื้อ/บิลขาย) — requirement 2026-09-01
 //   เงินเข้า ↔ บิลขาย · เงินออก ↔ บิลซื้อ · เทียบยอด (เต็ม/หลังหัก ณ ที่จ่าย) + วัน + ชื่อผู้โอน↔คู่ค้า
 // ---------------------------------------------------------------------

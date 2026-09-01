@@ -7,6 +7,8 @@ import {
   matchStatementWithBillsAction,
   listSavedStatementsAction,
   loadSavedStatementAction,
+  loadStatementReviewStateAction,
+  saveStatementReviewStateAction,
   type SavedStatementFile,
 } from "./statement-actions";
 import type { BillMatch, BillForMatch } from "@/lib/accounting/statement-bill-match";
@@ -53,6 +55,12 @@ type FileResult = {
   meta: StatementMeta;
   recon?: ReconInfo;
 };
+
+/** คีย์ประจำรายการ (ผูกกับเนื้อหา ไม่ใช่ลำดับแถว) — ใช้จำติ๊ก "ตรวจแล้ว"/จับคู่มือ ข้ามการเปิดหน้า */
+function txnKey(t: StatementTxn): string {
+  const ref = (t.counterparty_account_no || t.counterparty_name || t.description || "").slice(0, 40);
+  return `${t.date ?? ""}|${(t.amount ?? 0).toFixed(2)}|${t.direction ?? ""}|${t.time ?? ""}|${ref}`;
+}
 
 /** ลายเซ็นเนื้อหาสเตทเมนต์ — กันไฟล์เดิมที่ถูกอัปซ้ำหลายรอบ (path ต่างแต่เนื้อเหมือน) โหลดซ้อนกัน */
 function contentSig(txns: StatementTxn[]): string {
@@ -132,10 +140,13 @@ export default function StatementAnalyzer({
   const [matching, setMatching] = useState(false);
   // บิลทั้งหมดของลูกค้า (จาก action เดียวกัน) — ใช้ช่อง "ค้นบิล" กรองฝั่ง client
   const [bills, setBills] = useState<BillForMatch[]>([]);
-  // แถวที่ติ๊ก "ตรวจแล้ว" (client-side — เคลียร์เมื่อล้างรายการ)
-  const [reviewed, setReviewed] = useState<Set<number>>(new Set());
-  // จับคู่มือ (เลือกจากช่องค้นบิล) — override ผล auto ต่อแถว
-  const [manualPick, setManualPick] = useState<Map<number, BillForMatch>>(new Map());
+  // ★ "จำติ๊ก" (2026-09-01): ติ๊ก "ตรวจแล้ว" + จับคู่มือ คีย์ด้วยเนื้อหารายการ (txnKey) —
+  //   โหลดจาก review-state.json ตอนเปิดหน้า และเซฟกลับอัตโนมัติ (debounce) ทุกครั้งที่เปลี่ยน
+  const [reviewed, setReviewed] = useState<Set<string>>(new Set());
+  // จับคู่มือ: คีย์รายการ → billId (ตัวบิลดูจาก bills ที่กระทบล่าสุด)
+  const [manualPick, setManualPick] = useState<Map<string, string>>(new Map());
+  // โหลดสถานะติ๊กเสร็จแล้ว (กันเซฟทับด้วยค่าว่างก่อนโหลด)
+  const reviewLoadedRef = useRef(false);
   // สร้างบิลขายรายแถว (index ที่กำลังสร้าง · -1 = ไม่มี)
   const [creatingRow, setCreatingRow] = useState<number>(-1);
   // ★ "ระบบจำไว้" (2026-09-01): ไฟล์ที่เคยอัปของลูกค้า — ผลอ่านที่เซฟไว้โหลดขึ้นเองตอนเปิดหน้า
@@ -153,10 +164,7 @@ export default function StatementAnalyzer({
       try {
         const r = await matchStatementWithBillsAction({ customerId, txns: list });
         setMatches(r.ok ? r.matches : null);
-        if (r.ok) {
-          setBills(r.bills);
-          setManualPick(new Map()); // ผล auto ชุดใหม่ — ล้างการเลือกมือเดิม (อิง index ชุดเก่า)
-        }
+        if (r.ok) setBills(r.bills); // จับคู่มือคีย์ด้วยเนื้อหารายการ — คงไว้ได้ (ไม่อิงลำดับแล้ว)
       } catch {
         setMatches(null);
       } finally {
@@ -224,6 +232,17 @@ export default function StatementAnalyzer({
     if (autoLoadedForRef.current === customerId) return; // กัน StrictMode/re-render ยิงซ้ำ
     autoLoadedForRef.current = customerId;
     let cancelled = false;
+    // โหลดติ๊กที่จำไว้ (ขนานกับผลอ่าน — ไม่บล็อกกัน)
+    void loadStatementReviewStateAction({ customerId })
+      .then((r) => {
+        if (cancelled || !r.ok) return;
+        setReviewed(new Set(r.state.reviewed));
+        setManualPick(new Map(Object.entries(r.state.manual)));
+        reviewLoadedRef.current = true;
+      })
+      .catch(() => {
+        reviewLoadedRef.current = true; // โหลดพัง = เริ่มว่าง แต่ยังให้เซฟติ๊กใหม่ได้
+      });
     (async () => {
       const r = await listSavedStatementsAction({ customerId }).catch(() => null);
       if (cancelled) return;
@@ -250,6 +269,18 @@ export default function StatementAnalyzer({
       cancelled = true;
     };
   }, [customerId, addResults]);
+
+  // ★ เซฟติ๊กอัตโนมัติ (debounce 800ms) ทุกครั้งที่ reviewed/manualPick เปลี่ยน — หลังโหลดค่าเดิมแล้วเท่านั้น
+  useEffect(() => {
+    if (!reviewLoadedRef.current) return;
+    const timer = setTimeout(() => {
+      void saveStatementReviewStateAction({
+        customerId,
+        state: { reviewed: Array.from(reviewed), manual: Object.fromEntries(manualPick) },
+      });
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [reviewed, manualPick, customerId]);
 
   // แถวที่กำลังอัปรูปบิลเพิ่ม (-1 = ไม่มี) — ปุ่มบนการ์ด "ไม่พบบิล"
   const [uploadingRow, setUploadingRow] = useState<number>(-1);
@@ -462,8 +493,7 @@ export default function StatementAnalyzer({
     setDone(false);
     setErr(null);
     setMatches(null);
-    setReviewed(new Set());
-    setManualPick(new Map());
+    // ★ ไม่ล้าง reviewed/manualPick — "จำติ๊ก" ผูกกับเนื้อหารายการ โหลดกลับมาก็ติ๊กอยู่
     mergedKeysRef.current = new Set();
     if (fileRef.current) fileRef.current.value = "";
   }
@@ -735,15 +765,15 @@ export default function StatementAnalyzer({
               uploadingRow={uploadingRow}
               filter={(t) => t.direction === "in"}
               updateTxn={updateTxn}
-              onToggleReviewed={(i) =>
+              onToggleReviewed={(k) =>
                 setReviewed((prev) => {
                   const next = new Set(prev);
-                  if (next.has(i)) next.delete(i);
-                  else next.add(i);
+                  if (next.has(k)) next.delete(k);
+                  else next.add(k);
                   return next;
                 })
               }
-              onManualPick={(i, b) => setManualPick((prev) => new Map(prev).set(i, b))}
+              onManualPick={(k, b) => setManualPick((prev) => new Map(prev).set(k, b.id))}
               onCreateBill={(i, t) => createBillForRow(i, t, txns)}
               onUploadBill={(i, t, file) => void uploadBillForRow(i, t, file)}
             />
@@ -759,15 +789,15 @@ export default function StatementAnalyzer({
               uploadingRow={uploadingRow}
               filter={(t) => t.direction === "out"}
               updateTxn={updateTxn}
-              onToggleReviewed={(i) =>
+              onToggleReviewed={(k) =>
                 setReviewed((prev) => {
                   const next = new Set(prev);
-                  if (next.has(i)) next.delete(i);
-                  else next.add(i);
+                  if (next.has(k)) next.delete(k);
+                  else next.add(k);
                   return next;
                 })
               }
-              onManualPick={(i, b) => setManualPick((prev) => new Map(prev).set(i, b))}
+              onManualPick={(k, b) => setManualPick((prev) => new Map(prev).set(k, b.id))}
               onCreateBill={(i, t) => createBillForRow(i, t, txns)}
               onUploadBill={(i, t, file) => void uploadBillForRow(i, t, file)}
             />
@@ -783,15 +813,15 @@ export default function StatementAnalyzer({
               uploadingRow={uploadingRow}
               filter={(t) => t.direction !== "in" && t.direction !== "out"}
               updateTxn={updateTxn}
-              onToggleReviewed={(i) =>
+              onToggleReviewed={(k) =>
                 setReviewed((prev) => {
                   const next = new Set(prev);
-                  if (next.has(i)) next.delete(i);
-                  else next.add(i);
+                  if (next.has(k)) next.delete(k);
+                  else next.add(k);
                   return next;
                 })
               }
-              onManualPick={(i, b) => setManualPick((prev) => new Map(prev).set(i, b))}
+              onManualPick={(k, b) => setManualPick((prev) => new Map(prev).set(k, b.id))}
               onCreateBill={(i, t) => createBillForRow(i, t, txns)}
               onUploadBill={(i, t, file) => void uploadBillForRow(i, t, file)}
               hideWhenEmpty
@@ -850,6 +880,7 @@ function BillAttachment({ bill }: { bill: BillForMatch | undefined }) {
 /** การ์ดฝั่งขวา: ผลเทียบกับบิลในระบบของ 1 รายการ */
 function BillSideCard({
   idx,
+  rowKey,
   t,
   match,
   matchesReady,
@@ -863,6 +894,7 @@ function BillSideCard({
   onUploadBill,
 }: {
   idx: number;
+  rowKey: string;
   t: StatementTxn;
   match: BillMatch | BillForMatch | null;
   matchesReady: boolean;
@@ -870,8 +902,8 @@ function BillSideCard({
   isReviewed: boolean;
   creating: boolean;
   uploading: boolean;
-  onToggleReviewed: (i: number) => void;
-  onManualPick: (i: number, b: BillForMatch) => void;
+  onToggleReviewed: (k: string) => void;
+  onManualPick: (k: string, b: BillForMatch) => void;
   onCreateBill: (i: number, t: StatementTxn) => void;
   onUploadBill: (i: number, t: StatementTxn, file: File) => void;
 }) {
@@ -907,7 +939,7 @@ function BillSideCard({
           <a className="btn btn-ghost" href={`/chat-audit/accounting?edit=${billId}`} target="_blank" rel="noopener">
             เปิดบิล ↗
           </a>
-          <button type="button" className={isReviewed ? "btn" : "btn btn-ghost"} onClick={() => onToggleReviewed(idx)}>
+          <button type="button" className={isReviewed ? "btn" : "btn btn-ghost"} onClick={() => onToggleReviewed(rowKey)}>
             {isReviewed ? "✓ ตรวจแล้ว" : "ติ๊กว่าตรวจแล้ว"}
           </button>
         </div>
@@ -960,7 +992,7 @@ function BillSideCard({
           placeholder="ค้นบิลด้วยชื่อ/เลขที่/ยอด…"
           style={{ maxWidth: 180 }}
         />
-        <button type="button" className={isReviewed ? "btn" : "btn btn-ghost"} onClick={() => onToggleReviewed(idx)}>
+        <button type="button" className={isReviewed ? "btn" : "btn btn-ghost"} onClick={() => onToggleReviewed(rowKey)}>
           {isReviewed ? "✓ ตรวจแล้ว" : "ไม่ต้องมีบิล (เช่น ค่าธรรมเนียม)"}
         </button>
       </div>
@@ -973,7 +1005,7 @@ function BillSideCard({
                 {b.docNo ? ` ${b.docNo}` : ""} · {thDate(b.docDate)} · {money(b.totalGross)}
                 {b.counterparty ? ` · ${b.counterparty}` : ""}
               </span>
-              <button type="button" className="btn btn-ghost" onClick={() => onManualPick(idx, b)}>
+              <button type="button" className="btn btn-ghost" onClick={() => onManualPick(rowKey, b)}>
                 เลือกจับคู่
               </button>
             </li>
@@ -1010,14 +1042,14 @@ function TxnPile({
   txns: StatementTxn[];
   matches: (BillMatch | null)[] | null;
   bills: BillForMatch[];
-  reviewed: Set<number>;
-  manualPick: Map<number, BillForMatch>;
+  reviewed: Set<string>;
+  manualPick: Map<string, string>;
   creatingRow: number;
   uploadingRow: number;
   filter: (t: StatementTxn) => boolean;
   updateTxn: (idx: number, patch: Partial<StatementTxn>) => void;
-  onToggleReviewed: (i: number) => void;
-  onManualPick: (i: number, b: BillForMatch) => void;
+  onToggleReviewed: (k: string) => void;
+  onManualPick: (k: string, b: BillForMatch) => void;
   onCreateBill: (i: number, t: StatementTxn) => void;
   onUploadBill: (i: number, t: StatementTxn, file: File) => void;
   hideWhenEmpty?: boolean;
@@ -1025,7 +1057,7 @@ function TxnPile({
   const rows = txns.map((t, i) => ({ t, i })).filter(({ t }) => filter(t));
   if (rows.length === 0 && hideWhenEmpty) return null;
   const total = rows.reduce((s, { t }) => s + (t.amount ?? 0), 0);
-  const matchedCount = matches ? rows.filter(({ i }) => matches[i] || manualPick.has(i)).length : 0;
+  const matchedCount = matches ? rows.filter(({ t, i }) => matches[i] || manualPick.has(txnKey(t))).length : 0;
   return (
     <div style={{ marginBottom: 16 }}>
       <div className={`stmt-repeat-title ${tone}`}>
@@ -1038,7 +1070,9 @@ function TxnPile({
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {rows.map(({ t, i }) => {
             const amtColor = t.direction === "in" ? "#166534" : t.direction === "out" ? "#b91c1c" : "#475569";
-            const manual = manualPick.get(i) ?? null;
+            const k = txnKey(t);
+            const manualId = manualPick.get(k);
+            const manual = manualId ? bills.find((b) => b.id === manualId) ?? null : null;
             return (
               <div key={i} className="stmt-match-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 {/* ซ้าย: รายการสเตทเมนต์ (แก้ได้) */}
@@ -1099,11 +1133,12 @@ function TxnPile({
                 {/* ขวา: บิลในระบบ */}
                 <BillSideCard
                   idx={i}
+                  rowKey={k}
                   t={t}
                   match={matches ? (manual ?? matches[i]) : null}
                   matchesReady={!!matches}
                   bills={bills}
-                  isReviewed={reviewed.has(i)}
+                  isReviewed={reviewed.has(k)}
                   creating={creatingRow === i}
                   uploading={uploadingRow === i}
                   onToggleReviewed={onToggleReviewed}
