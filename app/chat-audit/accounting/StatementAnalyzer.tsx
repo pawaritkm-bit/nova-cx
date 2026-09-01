@@ -560,37 +560,6 @@ export default function StatementAnalyzer({
         </div>
       ) : null}
 
-      {/* ★ "ระบบจำไว้" — ไฟล์ที่เคยอัปของลูกค้ารายนี้: ผลที่เซฟไว้โหลดขึ้นเอง · ไฟล์เก่ากดอ่านซ้ำได้เลย */}
-      {savedFiles === null ? (
-        <div className="muted" style={{ fontSize: 13 }}>กำลังโหลดผลสเตทเมนต์ที่ระบบจำไว้…</div>
-      ) : savedFiles.length > 0 ? (
-        <details className="stmt-section" open={savedFiles.some((f) => !f.hasSaved)}>
-          <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: 14 }}>
-            📁 ไฟล์สเตทเมนต์ที่เคยอัปไว้ ({savedFiles.length.toLocaleString("th-TH")}) — ไม่ต้องอัปซ้ำ
-          </summary>
-          <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0, fontSize: 13 }}>
-            {savedFiles.map((f) => (
-              <li key={f.path} style={{ display: "flex", gap: 10, alignItems: "center", padding: "3px 0", flexWrap: "wrap" }}>
-                <span>
-                  {f.name} <span className="muted">(อัปเดือน {f.month})</span>
-                </span>
-                {f.hasSaved ? (
-                  <span style={{ color: "#166534", fontSize: 12 }}>✓ โหลดผลที่จำไว้ให้แล้ว</span>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    disabled={rereading !== null}
-                    onClick={() => rereadStored(f)}
-                  >
-                    {rereading === f.path ? "กำลังอ่าน…" : "อ่านอีกครั้ง (ไม่ต้องอัปใหม่)"}
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
       {duplicateNames.length > 0 ? (
         <div className="action-msg warn">
           ⚠ ชื่อไฟล์นี้เคยอ่านสำเร็จไปแล้ว: {duplicateNames.join(", ")} — ถ้าอัปซ้ำ ธุรกรรมจะถูกนับซ้ำสองรอบ
@@ -605,51 +574,82 @@ export default function StatementAnalyzer({
         </div>
       ) : null}
 
-      {/* ★ 2026-08-12 — สถานะรายไฟล์ (สำเร็จ/ล้มเหลว/ตัดข้อมูล/ชุดล้มเหลวบางส่วน) */}
-      {done && fileResults.length > 0 ? (
-        <section className="stmt-section">
-          <h3 className="stmt-h">
-            สถานะไฟล์ ({successCount}/{fileResults.length} สำเร็จ)
-          </h3>
-          <ul className="stmt-file-status-list">
-            {fileResults.map((r, i) => (
-              <li key={i} className={r.ok ? "ok" : "err"}>
-                <b>{r.fileName}</b>{" "}
-                {!r.ok ? (
-                  <span>— ล้มเหลว: {r.errorMessage ?? "ไม่ทราบสาเหตุ"}</span>
-                ) : r.meta?.truncated ? (
-                  <span>
-                    — อ่าน {r.transactions.length.toLocaleString("th-TH")} รายการ (ไฟล์ใหญ่เกินประมวลผลได้ในครั้งเดียว —
-                    อ่านไป {r.meta.includedRows.toLocaleString("th-TH")} จาก {r.meta.totalRows.toLocaleString("th-TH")} แถว
-                    ลองแบ่งไฟล์เป็นช่วงเวลาสั้นลง)
-                  </span>
-                ) : r.meta && r.meta.failedChunks > 0 ? (
-                  <span>
-                    — อ่านได้บางส่วน ({r.meta.chunkCount - r.meta.failedChunks}/{r.meta.chunkCount} ชุดสำเร็จ) ลองอัปโหลด
-                    ไฟล์นี้ใหม่อีกครั้ง
-                  </span>
-                ) : r.transactions.length === 0 ? (
-                  <span>— อ่านไม่พบรายการธุรกรรม</span>
-                ) : (
-                  <span>
-                    — อ่านสำเร็จ {r.transactions.length.toLocaleString("th-TH")} รายการ
-                    {r.recon?.imported ? (
-                      <b style={{ color: "#166534" }}>
-                        {" "}· เซฟเข้าหน้ากระทบยอดธนาคารแล้ว {(r.recon.lineCount ?? 0).toLocaleString("th-TH")} รายการ
-                      </b>
-                    ) : r.recon && r.recon.reason === "duplicate" ? (
-                      <span className="muted"> · ไฟล์นี้เคยเซฟเข้ากระทบยอดแล้ว (ไม่เซฟซ้ำ)</span>
-                    ) : null}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+      {/* ★ layout 2 คอลัมน์ (feedback 2026-09-01): งานหลัก (ผลอ่าน/จับคู่) อยู่กลาง —
+          "อ่านไฟล์ไหนบ้าง" (ไฟล์ที่เคยอัป + สถานะอ่าน) เป็นแถบข้างซ้ายแบบย่อ */}
+      <div className="stmt-layout">
+        <aside className="stmt-side">
+          <div className="stmt-side-title">📁 ไฟล์ที่เคยอัป ({(savedFiles ?? []).length.toLocaleString("th-TH")})</div>
+          {savedFiles === null ? (
+            <div className="muted" style={{ fontSize: 12 }}>กำลังโหลด…</div>
+          ) : savedFiles.length === 0 ? (
+            <div className="muted" style={{ fontSize: 12 }}>ยังไม่เคยอัปไฟล์ของลูกค้ารายนี้</div>
+          ) : (
+            <ul className="stmt-side-files">
+              {savedFiles.map((f) => (
+                <li key={f.path}>
+                  <span className="stmt-side-fname" title={`${f.name} · อัปเดือน ${f.month}`}>{f.name}</span>
+                  {f.hasSaved ? (
+                    <span className="stmt-side-ok">✓ จำผลไว้แล้ว</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-ghost stmt-side-btn"
+                      disabled={rereading !== null}
+                      onClick={() => rereadStored(f)}
+                    >
+                      {rereading === f.path ? "กำลังอ่าน…" : "อ่านอีกครั้ง"}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
 
+          {done && fileResults.length > 0 ? (
+            <>
+              <div className="stmt-side-title" style={{ marginTop: 12 }}>
+                สถานะอ่าน ({successCount}/{fileResults.length} สำเร็จ)
+              </div>
+              <ul className="stmt-file-status-list stmt-side-status">
+                {fileResults.map((r, i) => (
+                  <li key={i} className={r.ok ? "ok" : "err"}>
+                    <b>{r.fileName}</b>{" "}
+                    {!r.ok ? (
+                      <span>— ล้มเหลว: {r.errorMessage ?? "ไม่ทราบสาเหตุ"}</span>
+                    ) : r.meta?.truncated ? (
+                      <span>
+                        — อ่าน {r.transactions.length.toLocaleString("th-TH")} รายการ (ไฟล์ใหญ่ — อ่านไป{" "}
+                        {r.meta.includedRows.toLocaleString("th-TH")}/{r.meta.totalRows.toLocaleString("th-TH")} แถว)
+                      </span>
+                    ) : r.meta && r.meta.failedChunks > 0 ? (
+                      <span>— อ่านได้บางส่วน ({r.meta.chunkCount - r.meta.failedChunks}/{r.meta.chunkCount} ชุด)</span>
+                    ) : r.transactions.length === 0 ? (
+                      <span>— ไม่พบรายการ</span>
+                    ) : (
+                      <span>
+                        — {r.transactions.length.toLocaleString("th-TH")} รายการ
+                        {r.recon?.imported ? (
+                          <b style={{ color: "#166534" }}> · เข้ากระทบยอดแล้ว</b>
+                        ) : r.recon && r.recon.reason === "duplicate" ? (
+                          <span className="muted"> · เคยเข้ากระทบยอดแล้ว</span>
+                        ) : null}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </aside>
+
+        <div className="stmt-main">
       {done && txns.length === 0 && !hasAnyIssue ? (
         <div className="card"><p className="empty">อ่านไม่พบรายการธุรกรรม ลองไฟล์อื่น หรือตรวจว่าเป็นสเตทเมนต์จริง</p></div>
+      ) : null}
+      {!done && txns.length === 0 ? (
+        <div className="card">
+          <p className="empty">เลือกไฟล์สเตทเมนต์ด้านบนแล้วกด &ldquo;อัปสเตทเมนต์ + แยกรายการ&rdquo; — ผลที่เคยอ่านจะโหลดขึ้นเองถ้ามี</p>
+        </div>
       ) : null}
 
       {txns.length > 0 ? (
@@ -770,12 +770,14 @@ export default function StatementAnalyzer({
               hideWhenEmpty
             />
             <p className="stmt-note">
-              รายการถูกเซฟเข้า &ldquo;กระทบยอดธนาคาร&rdquo; ให้อัตโนมัติแล้ว (ดูสถานะรายไฟล์ด้านบน) —
+              รายการถูกเซฟเข้า &ldquo;กระทบยอดธนาคาร&rdquo; ให้อัตโนมัติแล้ว (ดูสถานะที่แถบซ้าย) —
               ฝั่งขวาเทียบกับบิลชุดเดียวกับหน้าลงบันทึกบัญชี ด้วยยอดเงิน + วันที่ + ชื่อผู้โอน
             </p>
           </section>
         </>
       ) : null}
+        </div>
+      </div>
     </div>
   );
 }
