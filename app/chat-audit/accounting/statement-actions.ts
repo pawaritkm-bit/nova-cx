@@ -336,7 +336,7 @@ export async function matchStatementWithBillsAction(input: {
     // บิลของลูกค้า (ร่าง+ยืนยัน) — คู่ค้าฝั่งบิล: ขาย=ผู้ซื้อ · ซื้อ=ผู้ขาย · fallback counterparty_name
     const { data: entries } = await service
       .from("bill_entries")
-      .select("id, doc_no, doc_date, entry_type, status, counterparty_name, seller_name, buyer_name")
+      .select("id, doc_no, doc_date, entry_type, status, counterparty_name, seller_name, buyer_name, upload_path, upload_mime")
       .eq("tenant_id", ctx.tenantId)
       .eq("customer_id", input.customerId)
       .is("deleted_at", null)
@@ -347,7 +347,24 @@ export async function matchStatementWithBillsAction(input: {
       id: string; doc_no: string | null; doc_date: string | null;
       entry_type: "purchase" | "sale" | "unspecified"; status: string;
       counterparty_name: string | null; seller_name: string | null; buyer_name: string | null;
+      upload_path: string | null; upload_mime: string | null;
     }[];
+
+    // ★ 2026-09-01 — ลิงก์ดูรูป/ไฟล์บิล (signed URL หมดอายุ 2 ชม. · batch ครั้งเดียว · cap กันช้า)
+    const withFile = rows.filter((r) => r.upload_path).slice(0, 400);
+    const urlByPath = new Map<string, string>();
+    if (withFile.length > 0) {
+      try {
+        const { data: signed } = await service.storage
+          .from(BILLS_BUCKET)
+          .createSignedUrls(withFile.map((r) => r.upload_path as string), 7200);
+        for (const s of signed ?? []) {
+          if (s.signedUrl && s.path) urlByPath.set(s.path, s.signedUrl);
+        }
+      } catch {
+        // เงียบ — ไม่มีรูปก็ยังจับคู่ได้ตามปกติ
+      }
+    }
 
     // ยอดต่อบิลจากบรรทัด (chunk กัน URL ยาวเกิน) — gross = amount+vat · net = gross − wht
     const totals = new Map<string, { gross: number; net: number }>();
@@ -371,6 +388,7 @@ export async function matchStatementWithBillsAction(input: {
       const t = totals.get(r.id) ?? { gross: 0, net: 0 };
       const counterparty =
         (r.entry_type === "sale" ? r.buyer_name : r.seller_name) || r.counterparty_name || null;
+      const uploadUrl = r.upload_path ? urlByPath.get(r.upload_path) ?? null : null;
       return {
         id: r.id,
         docNo: r.doc_no,
@@ -380,6 +398,8 @@ export async function matchStatementWithBillsAction(input: {
         counterparty,
         totalGross: Math.round(t.gross * 100) / 100,
         totalNet: Math.round(t.net * 100) / 100,
+        uploadUrl,
+        uploadIsImage: !!uploadUrl && /^image\//i.test(r.upload_mime ?? ""),
       };
     }).filter((b) => b.totalGross > 0 || b.totalNet > 0);
 

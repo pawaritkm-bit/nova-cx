@@ -19,6 +19,10 @@ export type BillForMatch = {
   totalGross: number;
   /** ยอดเงินจริงที่วิ่งผ่านธนาคาร (หลังหัก ณ ที่จ่าย) */
   totalNet: number;
+  /** ลิงก์ดูไฟล์บิล (signed URL หมดอายุได้ — refresh ด้วยการกระทบใหม่) · null = บิลไม่มีไฟล์แนบ */
+  uploadUrl?: string | null;
+  /** ไฟล์แนบเป็นรูป (โชว์ thumbnail ได้) — false = PDF/ไฟล์อื่น (ให้ลิงก์เปิดดูแทน) */
+  uploadIsImage?: boolean;
 };
 
 export type TxnForMatch = {

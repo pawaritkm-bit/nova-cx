@@ -11,6 +11,7 @@ import {
 } from "./statement-actions";
 import type { BillMatch, BillForMatch } from "@/lib/accounting/statement-bill-match";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
+import { createBillUploadUrlAction, finalizeBillUploadAction } from "./actions";
 import { UPLOAD_ACCEPT, MAX_UPLOAD_BYTES, validateUpload } from "@/lib/accounting/upload";
 import {
   summarizeByMonth,
@@ -249,6 +250,74 @@ export default function StatementAnalyzer({
       cancelled = true;
     };
   }, [customerId, addResults]);
+
+  // แถวที่กำลังอัปรูปบิลเพิ่ม (-1 = ไม่มี) — ปุ่มบนการ์ด "ไม่พบบิล"
+  const [uploadingRow, setUploadingRow] = useState<number>(-1);
+
+  /** อัปรูปบิลจากแถวที่หาบิลไม่เจอ → สร้างบิล (ประเภทตามทิศทางเงิน) → AI อ่าน → กระทบใหม่ทันที */
+  async function uploadBillForRow(idx: number, t: StatementTxn, file: File) {
+    const v = validateUpload({ mime: file.type, name: file.name, size: file.size });
+    if (!v.ok) {
+      setBillsMsg({ ok: false, text: `${file.name}: ${v.error}` });
+      return;
+    }
+    setUploadingRow(idx);
+    setBillsMsg(null);
+    try {
+      const entryType = t.direction === "in" ? "sale" : t.direction === "out" ? "purchase" : "unspecified";
+      const prep = await createBillUploadUrlAction({
+        customerId,
+        entryType,
+        fileName: file.name,
+        mime: file.type,
+        size: file.size,
+      });
+      if (!prep.ok) {
+        setBillsMsg({ ok: false, text: prep.message });
+        return;
+      }
+      const supabase = createBrowserSupabase();
+      const { error: upErr } = await supabase.storage
+        .from(BILLS_BUCKET)
+        .uploadToSignedUrl(prep.path, prep.token, file, { contentType: file.type || undefined });
+      if (upErr) {
+        setBillsMsg({ ok: false, text: "อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่" });
+        return;
+      }
+      const fin = await finalizeBillUploadAction({
+        customerId,
+        entryType,
+        path: prep.path,
+        name: file.name,
+        mime: file.type,
+      });
+      if (!fin.ok) {
+        setBillsMsg({ ok: false, text: fin.message });
+        return;
+      }
+      // รอ AI อ่านบิลให้จบ (แถวเดียว ไม่นาน) แล้วกระทบใหม่ — บิลใหม่จะขึ้นฝั่งขวาเองถ้ายอด/วันตรง
+      if (fin.id) {
+        try {
+          await fetch("/api/accounting/extract-upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ entryId: fin.id }),
+          });
+        } catch {
+          // อ่านไม่จบก็ไม่เป็นไร — บิลอยู่ในระบบแล้ว ไปคีย์ต่อที่หน้าตรวจได้
+        }
+      }
+      // กระทบใหม่ผ่าน flag+effect (ใช้ txns ล่าสุดจริง — กัน stale closure)
+      wantMatchRef.current = true;
+      setTxns((prev) => [...prev]);
+      setBillsMsg({
+        ok: true,
+        text: "อัปบิลเข้าแล้ว — ถ้าฝั่งขวายังไม่ขึ้นเขียว แปลว่า AI อ่านยอด/วันที่ได้ไม่ตรง ให้กดเปิดบิลไปตรวจ",
+      });
+    } finally {
+      setUploadingRow(-1);
+    }
+  }
 
   /** อ่านไฟล์ที่อยู่ใน storage อยู่แล้วอีกครั้ง (ไฟล์เก่าที่ยังไม่มีผลเซฟ) — ไม่ต้องอัปโหลดใหม่ */
   function rereadStored(f: SavedStatementFile) {
@@ -663,6 +732,7 @@ export default function StatementAnalyzer({
               reviewed={reviewed}
               manualPick={manualPick}
               creatingRow={creatingRow}
+              uploadingRow={uploadingRow}
               filter={(t) => t.direction === "in"}
               updateTxn={updateTxn}
               onToggleReviewed={(i) =>
@@ -675,6 +745,7 @@ export default function StatementAnalyzer({
               }
               onManualPick={(i, b) => setManualPick((prev) => new Map(prev).set(i, b))}
               onCreateBill={(i, t) => createBillForRow(i, t, txns)}
+              onUploadBill={(i, t, file) => void uploadBillForRow(i, t, file)}
             />
             <TxnPile
               title="🔻 กองเงินออก"
@@ -685,6 +756,7 @@ export default function StatementAnalyzer({
               reviewed={reviewed}
               manualPick={manualPick}
               creatingRow={creatingRow}
+              uploadingRow={uploadingRow}
               filter={(t) => t.direction === "out"}
               updateTxn={updateTxn}
               onToggleReviewed={(i) =>
@@ -697,6 +769,7 @@ export default function StatementAnalyzer({
               }
               onManualPick={(i, b) => setManualPick((prev) => new Map(prev).set(i, b))}
               onCreateBill={(i, t) => createBillForRow(i, t, txns)}
+              onUploadBill={(i, t, file) => void uploadBillForRow(i, t, file)}
             />
             <TxnPile
               title="❔ ยังไม่ระบุทิศทาง"
@@ -707,6 +780,7 @@ export default function StatementAnalyzer({
               reviewed={reviewed}
               manualPick={manualPick}
               creatingRow={creatingRow}
+              uploadingRow={uploadingRow}
               filter={(t) => t.direction !== "in" && t.direction !== "out"}
               updateTxn={updateTxn}
               onToggleReviewed={(i) =>
@@ -719,6 +793,7 @@ export default function StatementAnalyzer({
               }
               onManualPick={(i, b) => setManualPick((prev) => new Map(prev).set(i, b))}
               onCreateBill={(i, t) => createBillForRow(i, t, txns)}
+              onUploadBill={(i, t, file) => void uploadBillForRow(i, t, file)}
               hideWhenEmpty
             />
             <p className="stmt-note">
@@ -749,6 +824,29 @@ function TransferWhen({ t }: { t: StatementTxn }) {
   );
 }
 
+/** รูป/ไฟล์บิลแนบบนการ์ด — รูปโชว์ thumbnail กดดูเต็ม · PDF เป็นลิงก์เปิดดู */
+function BillAttachment({ bill }: { bill: BillForMatch | undefined }) {
+  if (!bill?.uploadUrl) return null;
+  if (bill.uploadIsImage) {
+    return (
+      <a href={bill.uploadUrl} target="_blank" rel="noopener" title="กดดูรูปเต็ม" style={{ display: "inline-block", marginTop: 6 }}>
+        {/* signed URL ชั่วคราวจาก storage — ใช้ <img> ตรง ๆ (next/image ไม่รู้จัก host + หมดอายุได้) */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={bill.uploadUrl}
+          alt="รูปบิล"
+          style={{ maxHeight: 120, maxWidth: "100%", borderRadius: 8, border: "1px solid #e2e8f0", display: "block" }}
+        />
+      </a>
+    );
+  }
+  return (
+    <a className="btn btn-ghost" href={bill.uploadUrl} target="_blank" rel="noopener" style={{ marginTop: 6, display: "inline-block" }}>
+      📄 ดูไฟล์บิล ↗
+    </a>
+  );
+}
+
 /** การ์ดฝั่งขวา: ผลเทียบกับบิลในระบบของ 1 รายการ */
 function BillSideCard({
   idx,
@@ -758,9 +856,11 @@ function BillSideCard({
   bills,
   isReviewed,
   creating,
+  uploading,
   onToggleReviewed,
   onManualPick,
   onCreateBill,
+  onUploadBill,
 }: {
   idx: number;
   t: StatementTxn;
@@ -769,11 +869,14 @@ function BillSideCard({
   bills: BillForMatch[];
   isReviewed: boolean;
   creating: boolean;
+  uploading: boolean;
   onToggleReviewed: (i: number) => void;
   onManualPick: (i: number, b: BillForMatch) => void;
   onCreateBill: (i: number, t: StatementTxn) => void;
+  onUploadBill: (i: number, t: StatementTxn, file: File) => void;
 }) {
   const [q, setQ] = useState("");
+  const uploadRef = useRef<HTMLInputElement>(null);
   const base = { borderRadius: 12, padding: "10px 12px", background: "#fff" } as const;
 
   if (!matchesReady) {
@@ -799,6 +902,7 @@ function BillSideCard({
           {match.counterparty ? ` · คู่ค้า: ${match.counterparty}` : ""}
         </div>
         <TransferWhen t={t} />
+        <BillAttachment bill={bills.find((b) => b.id === billId)} />
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
           <a className="btn btn-ghost" href={`/chat-audit/accounting?edit=${billId}`} target="_blank" rel="noopener">
             เปิดบิล ↗
@@ -830,10 +934,25 @@ function BillSideCard({
       <TransferWhen t={t} />
       <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
         {t.direction === "in" ? (
-          <button type="button" className="btn" disabled={creating} onClick={() => onCreateBill(idx, t)}>
+          <button type="button" className="btn" disabled={creating || uploading} onClick={() => onCreateBill(idx, t)}>
             {creating ? "กำลังสร้าง…" : "➕ สร้างบิลขายจากแถวนี้"}
           </button>
         ) : null}
+        {/* อัปรูป/ไฟล์บิลจริงเข้าแถวนี้เลย (requirement 2026-09-01) — บิลใหม่จะจับคู่เองถ้ายอด/วันตรง */}
+        <input
+          ref={uploadRef}
+          type="file"
+          accept={UPLOAD_ACCEPT}
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onUploadBill(idx, t, f);
+            e.target.value = "";
+          }}
+        />
+        <button type="button" className="btn" disabled={uploading || creating} onClick={() => uploadRef.current?.click()}>
+          {uploading ? "กำลังอัป + AI อ่านบิล…" : "📷 อัปรูปบิลแถวนี้"}
+        </button>
         <input
           type="text"
           value={q}
@@ -877,11 +996,13 @@ function TxnPile({
   reviewed,
   manualPick,
   creatingRow,
+  uploadingRow,
   filter,
   updateTxn,
   onToggleReviewed,
   onManualPick,
   onCreateBill,
+  onUploadBill,
   hideWhenEmpty = false,
 }: {
   title: string;
@@ -892,11 +1013,13 @@ function TxnPile({
   reviewed: Set<number>;
   manualPick: Map<number, BillForMatch>;
   creatingRow: number;
+  uploadingRow: number;
   filter: (t: StatementTxn) => boolean;
   updateTxn: (idx: number, patch: Partial<StatementTxn>) => void;
   onToggleReviewed: (i: number) => void;
   onManualPick: (i: number, b: BillForMatch) => void;
   onCreateBill: (i: number, t: StatementTxn) => void;
+  onUploadBill: (i: number, t: StatementTxn, file: File) => void;
   hideWhenEmpty?: boolean;
 }) {
   const rows = txns.map((t, i) => ({ t, i })).filter(({ t }) => filter(t));
@@ -982,9 +1105,11 @@ function TxnPile({
                   bills={bills}
                   isReviewed={reviewed.has(i)}
                   creating={creatingRow === i}
+                  uploading={uploadingRow === i}
                   onToggleReviewed={onToggleReviewed}
                   onManualPick={onManualPick}
                   onCreateBill={onCreateBill}
+                  onUploadBill={onUploadBill}
                 />
               </div>
             );
