@@ -89,7 +89,10 @@ export default function UploadFileButton({
     //   ต่อไฟล์: 1) ขอ signed upload URL → 2) browser อัปไฟล์ตรง → 3) finalize สร้าง entry
     //   → 4) AI อ่านบิลลงบัญชีให้ (best-effort) · ครบทุกไฟล์แล้ว → 5) เข้าหน้าตรวจ/แก้
     startTransition(async () => {
-      const cid = customerId || null;
+      // ★ โหมดผูกลูกค้า (การ์ดลูกค้า): ใช้ prop ตรง ๆ เสมอ — useState(lockedCustomerId) จำค่าได้แค่
+      //   ตอน mount ครั้งแรก พอสลับการ์ดลูกค้าในคิว (component เดิม prop ใหม่) state จะค้างเป็น
+      //   ลูกค้ารายก่อน → บิลไปลงผิดบริษัททั้งที่หน้าจอโชว์ชื่อลูกค้าใหม่ถูกต้อง (บั๊กจริง 2026-09-01)
+      const cid = (locked ? lockedCustomerId : customerId) || null;
       setPhase("uploading");
 
       let firstId: string | null = null;
@@ -174,7 +177,7 @@ export default function UploadFileButton({
 
       // 5) เข้า "หน้ารายการบิลของลูกค้า" ทันที (ไม่รอ AI)
       //    ★ คง accountant + ?uploaded=<id แรก> → โชว์แถบ "AI กำลังอ่าน…" + รีเฟรชเองเมื่อเสร็จ
-      const openKey = customerId || "unassigned";
+      const openKey = cid || "unassigned";
       const sp = new URLSearchParams();
       const acct = accountant || searchParams.get("accountant");
       if (acct) sp.set("accountant", acct);
