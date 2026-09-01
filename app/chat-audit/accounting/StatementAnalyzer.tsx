@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   createStatementUploadUrlAction,
   matchStatementWithBillsAction,
@@ -124,6 +125,9 @@ export default function StatementAnalyzer({
   customerLabel: string;
 }) {
   const [pending, startTransition] = useTransition();
+  // accountant param จาก URL (overlay แนบมา) — ติดไปกับลิงก์ "เปิดบิล" ให้ปุ่มปิดพากลับบริบทเดิม
+  const searchParams = useSearchParams();
+  const accountant = searchParams.get("accountant");
   const [phase, setPhase] = useState<"" | "reading">("");
   const [err, setErr] = useState<string | null>(null);
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
@@ -734,6 +738,7 @@ export default function StatementAnalyzer({
               txns={txns}
               matches={matches}
               bills={bills}
+              accountant={accountant}
               reviewed={reviewed}
               manualPick={manualPick}
               uploadingRow={uploadingRow}
@@ -756,6 +761,7 @@ export default function StatementAnalyzer({
               txns={txns}
               matches={matches}
               bills={bills}
+              accountant={accountant}
               reviewed={reviewed}
               manualPick={manualPick}
               uploadingRow={uploadingRow}
@@ -778,6 +784,7 @@ export default function StatementAnalyzer({
               txns={txns}
               matches={matches}
               bills={bills}
+              accountant={accountant}
               reviewed={reviewed}
               manualPick={manualPick}
               uploadingRow={uploadingRow}
@@ -854,6 +861,7 @@ function BillSideCard({
   match,
   matchesReady,
   bills,
+  accountant,
   isReviewed,
   uploading,
   onToggleReviewed,
@@ -866,6 +874,7 @@ function BillSideCard({
   match: BillMatch | BillForMatch | null;
   matchesReady: boolean;
   bills: BillForMatch[];
+  accountant: string | null;
   isReviewed: boolean;
   uploading: boolean;
   onToggleReviewed: (k: string) => void;
@@ -901,7 +910,7 @@ function BillSideCard({
         <TransferWhen t={t} />
         <BillAttachment bill={bills.find((b) => b.id === billId)} />
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-          <a className="btn btn-ghost" href={`/chat-audit/accounting?edit=${billId}`} target="_blank" rel="noopener">
+          <a className="btn btn-ghost" href={`/chat-audit/accounting?edit=${billId}${accountant ? `&accountant=${encodeURIComponent(accountant)}` : ""}`} target="_blank" rel="noopener">
             เปิดบิล ↗
           </a>
           <button type="button" className={isReviewed ? "btn" : "btn btn-ghost"} onClick={() => onToggleReviewed(rowKey)}>
@@ -986,6 +995,7 @@ function TxnPile({
   txns,
   matches,
   bills,
+  accountant,
   reviewed,
   manualPick,
   uploadingRow,
@@ -1001,6 +1011,7 @@ function TxnPile({
   txns: StatementTxn[];
   matches: (BillMatch | null)[] | null;
   bills: BillForMatch[];
+  accountant: string | null;
   reviewed: Set<string>;
   manualPick: Map<string, string>;
   uploadingRow: number;
@@ -1095,6 +1106,7 @@ function TxnPile({
                   match={matches ? (manual ?? matches[i]) : null}
                   matchesReady={!!matches}
                   bills={bills}
+                  accountant={accountant}
                   isReviewed={reviewed.has(k)}
                   uploading={uploadingRow === i}
                   onToggleReviewed={onToggleReviewed}
