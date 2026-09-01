@@ -21,10 +21,11 @@ const RENDER_SCALE = 2;
 /** สัดส่วนพิกเซล "ไม่ขาว" ขั้นต่ำที่นับว่าหน้ามีเนื้อหา (0.2% ของจุดที่สุ่ม) */
 const MIN_INK_RATIO = 0.002;
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+type PdfjsModule = typeof import("pdfjs-dist");
 
-async function loadPdfjs(): Promise<any> {
-  return import("pdfjs-dist/legacy/build/pdf.mjs");
+async function loadPdfjs(): Promise<PdfjsModule> {
+  // legacy build สำหรับ Node — โมดูลชนิดเดียวกับ root package
+  return import("pdfjs-dist/legacy/build/pdf.mjs") as Promise<PdfjsModule>;
 }
 
 /** นับจำนวนหน้าของ PDF — null = อ่านไม่ได้ */
@@ -64,7 +65,12 @@ export async function renderPdfPagesToPng(buf: Buffer): Promise<Buffer[] | null>
       // พื้นหลังขาว (หน้า PDF โปร่งใส → PNG ดำทั้งหน้า)
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx as any, viewport: vp }).promise;
+      // @napi-rs/canvas เข้ากันได้กับ canvas DOM ที่ pdfjs ต้องการ (type ไม่ตรงเฉย ๆ)
+      await page.render({
+        canvas: canvas as unknown as HTMLCanvasElement,
+        canvasContext: ctx as unknown as CanvasRenderingContext2D,
+        viewport: vp,
+      }).promise;
 
       // ตรวจความขาว (สุ่ม grid ~40x40 จุด)
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
