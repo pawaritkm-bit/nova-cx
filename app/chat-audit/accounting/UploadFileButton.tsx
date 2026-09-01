@@ -43,6 +43,8 @@ export default function UploadFileButton({
   // "" ยังไม่ทำ · uploading กำลังอัปไฟล์ · reading AI กำลังอ่านบิล (โชว์บนปุ่ม)
   const [phase, setPhase] = useState<"" | "uploading" | "reading">("");
   const [fileName, setFileName] = useState<string>("");
+  // ความคืบหน้าอัปหลายไฟล์ เช่น "2/5" (ว่าง = ไฟล์เดียว/ยังไม่เริ่ม)
+  const [prog, setProg] = useState<string>("");
   const [customerId, setCustomerId] = useState<string>(lockedCustomerId ?? "");
   const [entryType, setEntryType] = useState<EntryType>(defaultEntryType);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -68,97 +70,117 @@ export default function UploadFileButton({
   }
 
   function submit() {
-    const file = fileRef.current?.files?.[0] ?? null;
-    if (!file) {
+    const files = Array.from(fileRef.current?.files ?? []);
+    if (files.length === 0) {
       setErr("กรุณาเลือกไฟล์ก่อน");
       return;
     }
-    // validate เบื้องต้นฝั่ง client (server validate ซ้ำอีกชั้นเสมอ)
-    const v = validateUpload({ mime: file.type, name: file.name, size: file.size });
-    if (!v.ok) {
-      setErr(v.error);
-      return;
+    // validate เบื้องต้นทุกไฟล์ก่อนเริ่มอัป (server validate ซ้ำอีกชั้นเสมอ)
+    for (const file of files) {
+      const v = validateUpload({ mime: file.type, name: file.name, size: file.size });
+      if (!v.ok) {
+        setErr(`${file.name}: ${v.error}`);
+        return;
+      }
     }
     setErr(null);
 
-    // อัปตรงเข้า Supabase Storage (ไม่ผ่าน body ของ server action → ไม่ชนเพดาน Vercel 4.5MB)
-    //   1) ขอ signed upload URL → 2) browser อัปไฟล์ตรง → 3) finalize สร้าง entry
-    //   → 4) AI อ่านบิลลงบัญชีให้ (best-effort) → 5) เข้าหน้าตรวจ/แก้
+    // อัปตรงเข้า Supabase Storage ทีละไฟล์ (ไม่ผ่าน body ของ server action → ไม่ชนเพดาน Vercel 4.5MB)
+    //   ต่อไฟล์: 1) ขอ signed upload URL → 2) browser อัปไฟล์ตรง → 3) finalize สร้าง entry
+    //   → 4) AI อ่านบิลลงบัญชีให้ (best-effort) · ครบทุกไฟล์แล้ว → 5) เข้าหน้าตรวจ/แก้
     startTransition(async () => {
       const cid = customerId || null;
       setPhase("uploading");
 
-      // 1) ขอ signed upload URL
-      const prep = await createBillUploadUrlAction({
-        customerId: cid,
-        entryType,
-        fileName: file.name,
-        mime: file.type,
-        size: file.size,
-      });
-      if (!prep.ok) {
-        setErr(prep.message);
-        setPhase("");
-        return;
-      }
+      let firstId: string | null = null;
+      const failed: string[] = [];
 
-      // 2) อัปไฟล์ตรงเข้า Storage ด้วย token (ไฟล์ใหญ่ก็ผ่าน — ไม่วิ่งผ่าน serverless)
-      try {
-        const supabase = createBrowserSupabase();
-        const { error: upErr } = await supabase.storage
-          .from(BILLS_BUCKET)
-          .uploadToSignedUrl(prep.path, prep.token, file, {
-            contentType: file.type || undefined,
-          });
-        if (upErr) {
-          setErr(`อัปโหลดไฟล์ไม่สำเร็จ: ${upErr.message || "กรุณาลองใหม่"}`);
-          setPhase("");
-          return;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (files.length > 1) setProg(`${i + 1}/${files.length}`);
+
+        // 1) ขอ signed upload URL
+        const prep = await createBillUploadUrlAction({
+          customerId: cid,
+          entryType,
+          fileName: file.name,
+          mime: file.type,
+          size: file.size,
+        });
+        if (!prep.ok) {
+          failed.push(`${file.name} (${prep.message})`);
+          continue;
         }
-      } catch {
-        setErr("อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่");
-        setPhase("");
-        return;
-      }
 
-      // 3) finalize → สร้าง entry (draft)
-      const res = await finalizeBillUploadAction({
-        customerId: cid,
-        entryType,
-        path: prep.path,
-        name: file.name,
-        mime: file.type,
-      });
-      if (!res.ok) {
-        setErr(res.message);
-        setPhase("");
-        return;
-      }
-
-      // 4) ★ AI อ่านบิล "เบื้องหลัง" (async · ไม่รอ!) — keepalive ให้ request วิ่งต่อแม้เปลี่ยนหน้า
-      //    → เข้าหน้าทันที ไม่ต้องนั่งรอ ~90 วิ · extraction เสร็จเบื้องหลัง แล้วข้อมูลเด้งเข้ามาเอง
-      if (res.id) {
+        // 2) อัปไฟล์ตรงเข้า Storage ด้วย token (ไฟล์ใหญ่ก็ผ่าน — ไม่วิ่งผ่าน serverless)
         try {
-          void fetch("/api/accounting/extract-upload", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ entryId: res.id }),
-            keepalive: true,
-          }).catch(() => {});
+          const supabase = createBrowserSupabase();
+          const { error: upErr } = await supabase.storage
+            .from(BILLS_BUCKET)
+            .uploadToSignedUrl(prep.path, prep.token, file, {
+              contentType: file.type || undefined,
+            });
+          if (upErr) {
+            failed.push(`${file.name} (อัปโหลดไม่สำเร็จ)`);
+            continue;
+          }
         } catch {
-          // เงียบ — ยังเข้าหน้าได้ (คีย์เอง/สกัดใหม่ภายหลังได้)
+          failed.push(`${file.name} (อัปโหลดไม่สำเร็จ)`);
+          continue;
         }
+
+        // 3) finalize → สร้าง entry (draft)
+        const res = await finalizeBillUploadAction({
+          customerId: cid,
+          entryType,
+          path: prep.path,
+          name: file.name,
+          mime: file.type,
+        });
+        if (!res.ok) {
+          failed.push(`${file.name} (${res.message})`);
+          continue;
+        }
+
+        // 4) ★ AI อ่านบิล "เบื้องหลัง" (async · ไม่รอ!) — keepalive ให้ request วิ่งต่อแม้เปลี่ยนหน้า
+        //    → เข้าหน้าทันที ไม่ต้องนั่งรอ ~90 วิ · extraction เสร็จเบื้องหลัง แล้วข้อมูลเด้งเข้ามาเอง
+        if (res.id) {
+          if (!firstId) firstId = res.id;
+          try {
+            void fetch("/api/accounting/extract-upload", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ entryId: res.id }),
+              keepalive: true,
+            }).catch(() => {});
+          } catch {
+            // เงียบ — ยังเข้าหน้าได้ (คีย์เอง/สกัดใหม่ภายหลังได้)
+          }
+        }
+      }
+
+      setProg("");
+
+      // ทุกไฟล์ล้มเหลว → อยู่ในกล่องเดิม โชว์เหตุผล (ไม่พาไปไหน)
+      if (!firstId) {
+        setErr(`อัปโหลดไม่สำเร็จ: ${failed.join(" · ")}`);
+        setPhase("");
+        return;
+      }
+      // สำเร็จบางส่วน → แจ้งไฟล์ที่พลาดผ่าน alert สั้น ๆ ก่อนพาไปหน้าตรวจ (ที่เหลือขึ้นแล้ว)
+      if (failed.length > 0) {
+        window.alert(`อัปสำเร็จ ${files.length - failed.length}/${files.length} ไฟล์ · ที่ไม่สำเร็จ: ${failed.join(" · ")}`);
       }
 
       // 5) เข้า "หน้ารายการบิลของลูกค้า" ทันที (ไม่รอ AI)
-      //    ★ คง accountant + ?uploaded=<id> → โชว์แถบ "AI กำลังอ่าน…" + รีเฟรชเองเมื่อเสร็จ
+      //    ★ คง accountant + ?uploaded=<id แรก> → โชว์แถบ "AI กำลังอ่าน…" + รีเฟรชเองเมื่อเสร็จ
       const openKey = customerId || "unassigned";
       const sp = new URLSearchParams();
       const acct = accountant || searchParams.get("accountant");
       if (acct) sp.set("accountant", acct);
       sp.set("open", openKey);
       sp.set("type", entryType);
-      if (res.id) sp.set("uploaded", res.id);
+      sp.set("uploaded", firstId);
       setOpen(false);
       reset();
       router.push(`/chat-audit/accounting?${sp.toString()}`);
@@ -192,7 +214,7 @@ export default function UploadFileButton({
             <div className="acc-modal-head">
               <div>
                 <div className="acc-modal-title">อัปโหลดไฟล์เข้าบัญชี</div>
-                <div className="acc-modal-sub">แนบเอกสารที่ไม่ได้มาทางไลน์ (รูป / PDF / Excel / CSV ≤ 50MB)</div>
+                <div className="acc-modal-sub">แนบเอกสารที่ไม่ได้มาทางไลน์ (รูป / PDF / Excel / CSV ≤ 50MB ต่อไฟล์ · เลือกได้หลายไฟล์พร้อมกัน)</div>
               </div>
               <button type="button" className="acc-modal-close" onClick={close} aria-label="ปิด">✕</button>
             </div>
@@ -235,14 +257,18 @@ export default function UploadFileButton({
                   ref={fileRef}
                   type="file"
                   accept={UPLOAD_ACCEPT}
+                  multiple
                   onChange={(e) => {
-                    const f = e.target.files?.[0];
+                    const fs = Array.from(e.target.files ?? []);
                     setErr(null);
-                    if (f && f.size > MAX_UPLOAD_BYTES) {
-                      setErr("ไฟล์ใหญ่เกิน 50MB");
+                    const tooBig = fs.find((f) => f.size > MAX_UPLOAD_BYTES);
+                    if (tooBig) {
+                      setErr(`${tooBig.name}: ไฟล์ใหญ่เกิน 50MB`);
                       setFileName("");
+                    } else if (fs.length > 1) {
+                      setFileName(`${fs.length} ไฟล์: ${fs.map((f) => f.name).join(", ")}`);
                     } else {
-                      setFileName(f?.name ?? "");
+                      setFileName(fs[0]?.name ?? "");
                     }
                   }}
                 />
@@ -253,7 +279,7 @@ export default function UploadFileButton({
 
               <div className="acc-modal-actions">
                 <button type="button" className="btn" onClick={submit} disabled={pending}>
-                  {pending ? "กำลังอัปโหลด…" : "อัปโหลด"}
+                  {pending ? `กำลังอัปโหลด${prog ? ` ${prog}` : ""}…` : "อัปโหลด"}
                 </button>
                 <span className="acc-toolbar-spacer" />
                 <button type="button" className="btn btn-ghost" onClick={close} disabled={pending}>ยกเลิก</button>
