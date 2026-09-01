@@ -6,6 +6,7 @@ import {
   getPlatformReportSettingsAction,
   savePlatformReportSettingsAction,
   createPlatformReportDraftJournalEntryAction,
+  createSaleBillsFromPlatformReportAction,
 } from "./platform-report-actions";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { UPLOAD_ACCEPT, MAX_UPLOAD_BYTES, validateUpload } from "@/lib/accounting/upload";
@@ -185,6 +186,9 @@ export default function PlatformReportAnalyzer({
   const [jeMsg, setJeMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [savingSettings, startSettingsTransition] = useTransition();
   const [creatingJe, startJeTransition] = useTransition();
+  // สร้างบิลขาย (ร่าง) จากยอดขายรวมต่อวัน — requirement 2026-09-01
+  const [billsMsg, setBillsMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [creatingBills, setCreatingBills] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -546,11 +550,28 @@ export default function PlatformReportAnalyzer({
             <div style={{ marginTop: 12 }}>
               <button type="button" className="btn" onClick={createDraftJournalEntry} disabled={creatingJe}>
                 {creatingJe ? "กำลังสร้าง…" : "สร้างสมุดรายวัน (ดราฟต์)"}
+              </button>{" "}
+              <button
+                type="button"
+                className="btn"
+                disabled={creatingBills}
+                title="รวมยอดขาย (credit) ต่อวันเป็นบิลขายร่าง — ยืนยันแล้วไหลเข้าสมุดรายวัน/แยกประเภท/งบอัตโนมัติ"
+                onClick={() => {
+                  setBillsMsg(null);
+                  setCreatingBills(true);
+                  createSaleBillsFromPlatformReportAction({ customerId, lines, platformLabel: "แพลตฟอร์ม" })
+                    .then((r) => setBillsMsg({ ok: r.ok, text: r.message }))
+                    .catch(() => setBillsMsg({ ok: false, text: "สร้างบิลไม่สำเร็จ กรุณาลองใหม่" }))
+                    .finally(() => setCreatingBills(false));
+                }}
+              >
+                {creatingBills ? "กำลังสร้างบิล…" : "➕ สร้างบิลขาย (ร่าง) จากยอดขายรายวัน"}
               </button>
               <p className="stmt-note" style={{ marginTop: 4 }}>
                 สร้างเป็น &quot;ดราฟต์&quot; เสมอ — ไม่ auto-ยืนยัน ต้องไปตรวจสอบ/ยืนยันเองที่หน้า &quot;ลงบันทึกบัญชีเอง&quot; ก่อนจึงจะมีผลกับยอดบัญชีจริง
               </p>
               {jeMsg ? <div className={`action-msg ${jeMsg.ok ? "ok" : "err"}`}>{jeMsg.text}</div> : null}
+              {billsMsg ? <div className={`action-msg ${billsMsg.ok ? "ok" : "err"}`}>{billsMsg.text}</div> : null}
             </div>
           </section>
 

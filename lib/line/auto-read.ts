@@ -31,6 +31,47 @@ import {
 import { summarizePlatformReport } from "@/lib/accounting/platform-report-analyze";
 import { detectPlatformFromName } from "@/lib/accounting/platform/parse";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
+import {
+  saleDraftsFromStatementTxns,
+  saleDraftsFromPlatformLines,
+  createSaleBillDrafts,
+} from "@/lib/accounting/statement-to-bills";
+import type { PlatformReportLine } from "@/lib/accounting/platform-report-analyze";
+
+/**
+ * ★ requirement 2026-09-01: สเตทเมนต์/รายงานแพลตฟอร์มที่ลูกค้าส่งเข้ากลุ่มไลน์ → บิลขาย (ร่าง)
+ *   อัตโนมัติ เฉพาะลูกค้าที่เปิดธง customers.auto_bills_from_statement (กันรายได้ซ้ำกับลูกค้า
+ *   ที่ส่งบิลจริงอยู่แล้ว) · best-effort — พลาดไม่ทำ pipeline เดิมล้ม · idempotent ด้วย dedup key
+ */
+async function maybeAutoBillsFromLine(
+  db: SupabaseClient,
+  chatGroupId: string,
+  build: () => { drafts: ReturnType<typeof saleDraftsFromStatementTxns>; sourceLabel: string }
+): Promise<void> {
+  try {
+    const { data: g } = await db
+      .from("chat_groups")
+      .select("tenant_id, customer_id")
+      .eq("id", chatGroupId)
+      .maybeSingle();
+    const tId = (g as { tenant_id?: string | null } | null)?.tenant_id ?? null;
+    const cId = (g as { customer_id?: string | null } | null)?.customer_id ?? null;
+    if (!tId || !cId) return;
+    const { data: c } = await db
+      .from("customers")
+      .select("auto_bills_from_statement")
+      .eq("id", cId)
+      .eq("tenant_id", tId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (!(c as { auto_bills_from_statement?: boolean } | null)?.auto_bills_from_statement) return;
+    const { drafts, sourceLabel } = build();
+    if (drafts.length === 0) return;
+    await createSaleBillDrafts(db, { tenantId: tId, customerId: cId, drafts, sourceLabel });
+  } catch {
+    console.warn("[auto-read] auto-bills-from-statement failed"); // ★ ไม่ log ชื่อ/ยอด (PDPA)
+  }
+}
 import { resolveSaleFolder, oaOneDriveRoot, lineChatUrl, type MirrorGroupContext } from "@/lib/line/onedrive-mirror";
 
 /** เครื่องหมาย "อ่านแล้ว" นำหน้าชื่อไฟล์ต้นฉบับใน OneDrive (ให้นักบัญชีเห็นทันทีว่าระบบอ่านแล้ว) */
@@ -341,6 +382,11 @@ export async function autoReadSaleAttachment(params: {
         } catch {
           console.warn("[auto-read] auto-reconcile feed failed");
         }
+        // ★ เงินเข้าในสเตทเมนต์ → บิลขาย (ร่าง) อัตโนมัติ (เฉพาะลูกค้าที่เปิดธง)
+        await maybeAutoBillsFromLine(params.db, params.chatGroupId, () => ({
+          drafts: saleDraftsFromStatementTxns(cls.det!.transactions),
+          sourceLabel: `สเตทเมนต์จากไลน์ (${params.originalName || params.fileName})`,
+        }));
       }
       await markSourceRead(folderParts, params.fileName, root);
       return;
@@ -407,6 +453,13 @@ export async function autoReadSaleAttachment(params: {
       } catch {
         console.warn("[auto-read] statement album (image) failed");
       }
+      // ★ เงินเข้าในสเตทเมนต์ → บิลขาย (ร่าง) อัตโนมัติ (เฉพาะ care + ลูกค้าเปิดธง)
+      if (oaType === "care") {
+        await maybeAutoBillsFromLine(params.db, params.chatGroupId, () => ({
+          drafts: saleDraftsFromStatementTxns(txns),
+          sourceLabel: `สเตทเมนต์จากไลน์ (${params.originalName || params.fileName})`,
+        }));
+      }
       await markSourceRead(folderParts, params.fileName, root);
       return;
     }
@@ -434,6 +487,14 @@ export async function autoReadSaleAttachment(params: {
       else await regenPlatformAlbum({ folderParts, root, folder, record });
     } catch {
       console.warn("[auto-read] platform album (ai) failed");
+    }
+    // ★ ยอดขายแพลตฟอร์ม (รวมต่อวัน) → บิลขาย (ร่าง) อัตโนมัติ (เฉพาะ care + ลูกค้าเปิดธง)
+    if (oaType === "care") {
+      const pfLabel = detectPlatformFromName(params.originalName || params.fileName) || "แพลตฟอร์ม";
+      await maybeAutoBillsFromLine(params.db, params.chatGroupId, () => ({
+        drafts: saleDraftsFromPlatformLines(lines as PlatformReportLine[], pfLabel),
+        sourceLabel: `รายงานแพลตฟอร์มจากไลน์ (${pfLabel})`,
+      }));
     }
     await markSourceRead(folderParts, params.fileName, root);
   } catch {

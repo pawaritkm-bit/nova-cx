@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState, useTransition } from "react";
-import { createStatementUploadUrlAction } from "./statement-actions";
+import { createStatementUploadUrlAction, createSaleBillsFromStatementAction } from "./statement-actions";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { UPLOAD_ACCEPT, MAX_UPLOAD_BYTES, validateUpload } from "@/lib/accounting/upload";
 import {
@@ -100,6 +100,9 @@ export default function StatementAnalyzer({
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
   const [done, setDone] = useState(false);
   const [txns, setTxns] = useState<StatementTxn[]>([]);
+  // สร้างบิลขาย (ร่าง) จากเงินเข้า — requirement 2026-09-01
+  const [billsMsg, setBillsMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [creatingBills, setCreatingBills] = useState(false);
   const [fileResults, setFileResults] = useState<FileResult[]>([]);
   const [pdfPassword, setPdfPassword] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -286,6 +289,35 @@ export default function StatementAnalyzer({
           <button type="button" className="btn btn-ghost" onClick={exportCsv}>
             ดาวน์โหลด CSV
           </button>
+        ) : null}
+        {txns.some((t) => t.direction === "in") ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={creatingBills}
+            title="สร้างบิลขาย (ร่าง) จากรายการเงินเข้า — ยืนยันแล้วไหลเข้าสมุดรายวัน/แยกประเภท/งบอัตโนมัติ"
+            onClick={() => {
+              setBillsMsg(null);
+              setCreatingBills(true);
+              createSaleBillsFromStatementAction({
+                customerId,
+                txns,
+                sourceLabel: `สเตทเมนต์ (${selectedNames.join(", ").slice(0, 100) || customerLabel})`,
+              })
+                .then((r) => setBillsMsg({ ok: r.ok, text: r.message }))
+                .catch(() => setBillsMsg({ ok: false, text: "สร้างบิลไม่สำเร็จ กรุณาลองใหม่" }))
+                .finally(() => setCreatingBills(false));
+            }}
+          >
+            {creatingBills
+              ? "กำลังสร้างบิล…"
+              : `➕ สร้างบิลขาย (ร่าง) จากเงินเข้า ${txns.filter((t) => t.direction === "in").length.toLocaleString("th-TH")} รายการ`}
+          </button>
+        ) : null}
+        {billsMsg ? (
+          <span className={`action-msg ${billsMsg.ok ? "" : "err"}`} style={billsMsg.ok ? { color: "#166534" } : undefined}>
+            {billsMsg.text}
+          </span>
         ) : null}
       </div>
       {selectedNames.length > 0 ? (

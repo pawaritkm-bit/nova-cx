@@ -106,3 +106,84 @@ export async function createStatementUploadUrlAction(input: {
     return { ok: false, message: "เตรียมอัปโหลดไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
+
+// ---------------------------------------------------------------------
+// สร้าง "บิลขาย (ร่าง)" จากรายการเงินเข้าที่อ่านได้ — requirement 2026-09-01
+//   เงินเข้า → บิลขายร่าง → (ยืนยันแล้ว) สมุดรายวัน → แยกประเภท → งบ ไหลด้วย engine เดิม
+// ---------------------------------------------------------------------
+import {
+  saleDraftsFromStatementTxns,
+  createSaleBillDrafts,
+  type CreateSaleBillsResult,
+} from "@/lib/accounting/statement-to-bills";
+import type { StatementTxn } from "@/lib/accounting/statement-analyze";
+
+export type CreateBillsFromStatementResult =
+  | ({ ok: true; message: string } & CreateSaleBillsResult)
+  | { ok: false; message: string };
+
+/** เพดานจำนวนรายการที่รับจาก client ต่อครั้ง (กัน payload ผิดปกติ) */
+const MAX_TXNS_INPUT = 3000;
+
+/** sanitize txn จาก client ให้เหลือเฉพาะ field ที่ใช้ (ไม่เชื่อโครงจาก client ตรง ๆ) */
+function sanitizeTxn(raw: unknown): StatementTxn | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const s = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max) : null);
+  const amount = typeof r.amount === "number" && isFinite(r.amount) ? r.amount : null;
+  const direction = r.direction === "in" || r.direction === "out" ? r.direction : null;
+  return {
+    date: s(r.date, 40),
+    description: s(r.description, 300),
+    counterparty_name: s(r.counterparty_name, 200),
+    counterparty_account_no: s(r.counterparty_account_no, 60),
+    direction,
+    amount,
+  };
+}
+
+export async function createSaleBillsFromStatementAction(input: {
+  customerId: string;
+  txns: unknown[];
+  /** ป้ายที่มา เช่น ชื่อไฟล์/ธนาคาร (โชว์ใน notes ของบิล) */
+  sourceLabel?: string;
+}): Promise<CreateBillsFromStatementResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    if (!isUuid(input.customerId)) return { ok: false, message: "กรุณาเลือกลูกค้าก่อนสร้างบิล" };
+    if (!customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+    if (!Array.isArray(input.txns) || input.txns.length === 0) {
+      return { ok: false, message: "ไม่มีรายการให้สร้างบิล" };
+    }
+
+    const txns = input.txns.slice(0, MAX_TXNS_INPUT).map(sanitizeTxn).filter((t): t is StatementTxn => !!t);
+    const drafts = saleDraftsFromStatementTxns(txns);
+    if (drafts.length === 0) return { ok: false, message: "ไม่มีรายการเงินเข้าที่สร้างบิลได้ (ต้องมีวันที่ + ยอดเงิน)" };
+
+    const label = (typeof input.sourceLabel === "string" && input.sourceLabel.trim()
+      ? input.sourceLabel.trim()
+      : "สเตทเมนต์"
+    ).slice(0, 120);
+    const r = await createSaleBillDrafts(service, {
+      tenantId: ctx.tenantId,
+      customerId: input.customerId,
+      drafts,
+      sourceLabel: label,
+    });
+
+    const dupNote = r.skippedDup > 0 ? ` · ข้าม ${r.skippedDup.toLocaleString("th-TH")} รายการที่เคยสร้างแล้ว` : "";
+    return {
+      ok: true,
+      message: `สร้างบิลขาย (ร่าง) ${r.created.toLocaleString("th-TH")} ใบ${dupNote} — ไปตรวจ/ยืนยันที่โต๊ะทำงานบัญชี`,
+      ...r,
+    };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "สร้างบิลไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}

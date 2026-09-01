@@ -199,3 +199,84 @@ export async function createPlatformReportDraftJournalEntryAction(input: {
     return { ok: false, message: "สร้างสมุดรายวันไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
+
+// ---------------------------------------------------------------------
+// สร้าง "บิลขาย (ร่าง)" จากยอดขายในรายงานแพลตฟอร์ม (รวมต่อวัน) — requirement 2026-09-01
+//   ยอดขาย → บิลขายร่าง → (ยืนยันแล้ว) สมุดรายวัน → แยกประเภท → งบ ไหลด้วย engine เดิม
+//   (ค่าธรรมเนียม/รายการหัก ใช้ปุ่ม "สร้างสมุดรายวันดราฟต์" เดิม)
+// ---------------------------------------------------------------------
+import {
+  saleDraftsFromPlatformLines,
+  createSaleBillDrafts,
+  type CreateSaleBillsResult,
+} from "@/lib/accounting/statement-to-bills";
+import type { PlatformReportLine } from "@/lib/accounting/platform-report-analyze";
+
+export type CreateBillsFromPlatformResult =
+  | ({ ok: true; message: string } & CreateSaleBillsResult)
+  | { ok: false; message: string };
+
+const MAX_LINES_INPUT = 20000;
+
+function sanitizePlatformLine(raw: unknown): PlatformReportLine | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const s = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max) : null);
+  return {
+    date: s(r.date, 40),
+    order_no: s(r.order_no, 80),
+    description: s(r.description, 300),
+    category: typeof r.category === "string" ? (r.category as PlatformReportLine["category"]) : null,
+    direction: r.direction === "credit" || r.direction === "deduct" ? r.direction : null,
+    amount: typeof r.amount === "number" && isFinite(r.amount) ? r.amount : null,
+  };
+}
+
+export async function createSaleBillsFromPlatformReportAction(input: {
+  customerId: string;
+  lines: unknown[];
+  /** ชื่อแพลตฟอร์ม เช่น Shopee/Lazada (โชว์ในบิล) */
+  platformLabel?: string;
+}): Promise<CreateBillsFromPlatformResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    if (!isUuid(input.customerId)) return { ok: false, message: "กรุณาเลือกลูกค้าก่อนสร้างบิล" };
+    assertCustomerInScope(ctx, input.customerId);
+    if (!Array.isArray(input.lines) || input.lines.length === 0) {
+      return { ok: false, message: "ไม่มีรายการให้สร้างบิล" };
+    }
+
+    const lines = input.lines
+      .slice(0, MAX_LINES_INPUT)
+      .map(sanitizePlatformLine)
+      .filter((l): l is PlatformReportLine => !!l);
+    const label = (typeof input.platformLabel === "string" && input.platformLabel.trim()
+      ? input.platformLabel.trim()
+      : "แพลตฟอร์ม"
+    ).slice(0, 40);
+    const drafts = saleDraftsFromPlatformLines(lines, label);
+    if (drafts.length === 0) {
+      return { ok: false, message: "ไม่มียอดขาย (credit/sales) ที่สร้างบิลได้ — ต้องมีวันที่ + ยอดเงิน" };
+    }
+
+    const r = await createSaleBillDrafts(service, {
+      tenantId: ctx.tenantId,
+      customerId: input.customerId,
+      drafts,
+      sourceLabel: `รายงานแพลตฟอร์ม ${label}`,
+    });
+
+    const dupNote = r.skippedDup > 0 ? ` · ข้าม ${r.skippedDup.toLocaleString("th-TH")} วันที่เคยสร้างแล้ว` : "";
+    return {
+      ok: true,
+      message: `สร้างบิลขาย (ร่าง) ${r.created.toLocaleString("th-TH")} ใบ (รวมยอดขายต่อวัน)${dupNote} — ไปตรวจ/ยืนยันที่โต๊ะทำงานบัญชี`,
+      ...r,
+    };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "สร้างบิลไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
