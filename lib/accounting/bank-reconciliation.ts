@@ -668,6 +668,8 @@ type ReconTxnInput = {
   counterparty_name?: string | null;
   direction: "in" | "out" | null;
   amount: number | null;
+  /** เวลาโอน HH:MM (2026-09-01) — ติดไปใน description ของบรรทัดกระทบยอด */
+  time?: string | null;
 };
 
 /**
@@ -742,11 +744,16 @@ export async function autoImportReconciledStatement(
   // แปลงธุรกรรม → ParsedStatementRow (amount signed: เข้า=+ / ออก=−)
   const rows: ParsedStatementRow[] = params.transactions
     .filter((t) => t.date && t.amount != null && t.direction)
-    .map((t) => ({
-      date: t.date as string,
-      description: t.counterparty_name || t.description || null,
-      amount: t.direction === "out" ? -Math.abs(t.amount as number) : Math.abs(t.amount as number),
-    }));
+    .map((t) => {
+      // ชื่อผู้โอนนำ + เวลาโอนต่อท้าย (ถ้ามี) — ให้หน้ากระทบยอดเห็น "ใคร โอนกี่โมง" ทันที
+      const base = t.counterparty_name || t.description || null;
+      const withTime = t.time ? `${base ?? "รายการ"} · โอน ${t.time} น.` : base;
+      return {
+        date: t.date as string,
+        description: withTime,
+        amount: t.direction === "out" ? -Math.abs(t.amount as number) : Math.abs(t.amount as number),
+      };
+    });
   if (rows.length === 0) return { imported: false, reason: "no_rows" };
 
   // dedup: มี batch ของบัญชีนี้ที่ file_name เดียวกันแล้ว → ข้าม (กันสเตทเมนต์ใบเดิมเข้าซ้ำ)

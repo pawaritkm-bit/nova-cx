@@ -8,6 +8,7 @@ import {
   extractStatementFromTextChunks,
 } from "@/lib/accounting/statement-extract";
 import { parseStatementDeterministic } from "@/lib/accounting/statement-deterministic";
+import { autoImportReconciledStatement } from "@/lib/accounting/bank-reconciliation";
 import { isPdfEncrypted, readPdfPlainText, unlockPdfToText } from "@/lib/accounting/pdf-unlock";
 import { excelBufferToRows, csvBufferToRows } from "@/lib/accounting/statement-parse";
 import { mimeFromPath } from "@/lib/line/bill-extract-worker";
@@ -76,6 +77,9 @@ export async function POST(request: NextRequest) {
 
     // แยกด้วยชนิดไฟล์: รูป/PDF → ส่งตรงเข้า OpenAI ครั้งเดียว · Excel/CSV → แบ่งเป็นชุดแล้วยิง AI หลายชุด (แก้บั๊ก A)
     let txns: StatementTxn[] = [];
+    // ชื่อแบงก์/เจ้าของบัญชีจาก deterministic parser (ใช้เลือก/สร้างบัญชีเงินฝากตอนเซฟเข้ากระทบยอด)
+    let detBank: string | null = null;
+    let detAcctName: string | null = null;
     let meta: {
       totalRows: number;
       includedRows: number;
@@ -107,6 +111,8 @@ export async function POST(request: NextRequest) {
       }
       if (text) {
         const det = parseStatementDeterministic(text);
+        detBank = det.bank;
+        detAcctName = det.accountName;
         // reconcile ผ่าน = อ่านด้วยโค้ด (ฟรี) · ไม่ผ่าน = fallback AI บน text
         txns = det.fullyReconciled && det.transactions.length > 0 ? det.transactions : await extractStatementFromText(text);
       } else {
@@ -119,6 +125,8 @@ export async function POST(request: NextRequest) {
       const parsed = kind === "excel" ? await excelBufferToRows(buf) : csvBufferToRows(buf);
       // ★ ลอง deterministic บน text ก่อน (บางแบงก์ส่ง Excel ที่มีคอลัมน์ยอดคงเหลือ)
       const det = parseStatementDeterministic(parsed.chunks.join("\n"));
+      detBank = det.bank;
+      detAcctName = det.accountName;
       if (det.fullyReconciled && det.transactions.length > 0) {
         txns = det.transactions;
         meta = { totalRows: parsed.totalRows, includedRows: parsed.includedRows, truncated: parsed.truncated, chunkCount: 0, failedChunks: 0 };
@@ -140,6 +148,24 @@ export async function POST(request: NextRequest) {
     const monthly = summarizeByMonth(txns);
     const repeats = findRepeatCounterparties(txns);
 
+    // ★ 2026-09-01 — อ่านเสร็จเซฟเข้า "กระทบยอดธนาคาร" อัตโนมัติ (best-effort · dedup ด้วยชื่อไฟล์
+    //   ใน autoImportReconciledStatement → อัปไฟล์เดิมซ้ำไม่เกิดรายการซ้ำ) — ต้องรู้ลูกค้าเท่านั้นถึงเซฟ
+    let recon: { imported: boolean; lineCount?: number; reason?: string } | null = null;
+    if (customerId && txns.length > 0) {
+      try {
+        recon = await autoImportReconciledStatement(service, {
+          tenantId: access.tenantId,
+          customerId,
+          bank: detBank,
+          accountName: detAcctName,
+          transactions: txns,
+          sourceFileName: (fileName || path.split("/").pop() || "").slice(0, 200) || null,
+        });
+      } catch {
+        recon = { imported: false, reason: "error" }; // เงียบ — ผลอ่านยังใช้ได้ตามปกติ
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       count: txns.length,
@@ -147,6 +173,7 @@ export async function POST(request: NextRequest) {
       monthly,
       repeats,
       meta,
+      recon,
     });
   } catch {
     // ไม่ให้ล้ม flow — คืน 200 ว่าง (ผู้ใช้ลองใหม่ได้)

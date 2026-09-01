@@ -163,3 +163,8 @@
 }
 .stmt-file-status-list li.ok { border-left: 3px solid #157347; }
 .stmt-file-status-list li.err { border-left: 3px solid #b02a37; color: #b02a37; }
+
+/* แถวจับคู่ 2 ฝั่ง (สเตทเมนต์ | บิลในระบบ) — จอแคบพับเป็นคอลัมน์เดียว (2026-09-01) */
+@media (max-width: 860px) {
+  .stmt-match-row { grid-template-columns: 1fr !important; }
+}

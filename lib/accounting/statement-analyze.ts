@@ -26,6 +26,9 @@ export type StatementTxn = {
   direction: TxnDirection | null;
   /** ยอดเงิน (บวกเสมอ) · null = อ่านตัวเลขไม่ได้ */
   amount: number | null;
+  /** ★ 2026-09-01 — เวลาโอน 'HH:MM' ตามที่พิมพ์ในสเตทเมนต์ · ไม่มี/อ่านไม่ได้ = null/undefined
+   *  (optional เพื่อ backward-compat กับผล AI/ไฟล์เดิมที่ไม่มี field นี้) */
+  time?: string | null;
 };
 
 /** จำนวนครั้งขั้นต่ำที่ถือว่า "โอนซ้ำ" (ลูกค้าประจำ/จ่ายประจำ) */

@@ -115,13 +115,38 @@ const NUM_BANK_CODE: Record<string, string> = {
   "067": "TISCO", "069": "KKP", "070": "ICBC", "071": "TCRB", "073": "LHBK",
 };
 
+/** จับ "ชื่อผู้โอน/ผู้รับ" ที่ตามหลังคำ จาก/ไป (+โค้ดแบงก์/เลขบัญชี) — SCB/KBANK พิมพ์ชื่อท้ายแถว
+ *   เช่น "รับโอนจาก KBANK x7501 นาย จิรายุ ปราณี" · "โอนไป GSB x1369 นางสาว ธนัญญา แก้วแก้ว" */
+const NAME_AFTER_RE =
+  /(?:รับโอนเงินจาก|รับโอนจาก|โอนเงินจาก|โอนจาก|โอนเงินไปยัง|โอนเงินไป|โอนไปยัง|โอนไป|ค่าธรรมเนียมโอนไป)\s+(?:(?:[A-Z]{2,10}|พร้อมเพย์|PromptPay)\s+)?(?:[Xx]\d{2,}\s+)?(.+)$/;
+
+/** ล้างชื่อผู้โอน: ตัดยอดเงิน/วันที่/เวลา/เลขอ้างอิงที่ปนท้ายแถว — คืน null ถ้าไม่เหลือชื่อจริง */
+function cleanCounterpartyName(raw: string): string | null {
+  const s = raw
+    // แถว 2 บรรทัดถูก merge → ตัดทิ้งตั้งแต่คำโอนถัดไป (ชื่อจริงจบก่อนหน้านั้น)
+    .replace(/\s*(?:รับโอน(?:เงิน)?จาก|โอน(?:เงิน)?ไป(?:ยัง)?|โอนจาก|ค่าธรรมเนียม)[\s\S]*$/, " ")
+    .replace(/-?\d{1,3}(?:,\d{3})*\.\d{2}/g, " ")          // ยอดเงิน/คงเหลือ
+    .replace(/\b\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\b/g, " ")   // วันที่
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, " ")          // เวลา
+    .replace(/รหัสอ้างอิง\s*\S+/g, " ")
+    .replace(/\b[Xx]\d{2,}\b/g, " ")                         // เลขบัญชีย่อ xNNNN
+    .replace(/\b\d{6,}\b/g, " ")                             // เลขอ้างอิงยาว
+    .replace(/\s+/g, " ")
+    .trim();
+  // ต้องเป็น "ชื่อ" จริง: มีอักษรไทย หรืออักษรละติน ≥3 ตัวติดกัน · ยาวพอ · ไม่ใช่แค่โค้ดแบงก์
+  if (s.length < 3 || s.length > 80) return null;
+  if (!/[ก-๙]/.test(s) && !/[A-Za-z]{3}/.test(s)) return null;
+  if (BANK_CODE_RE.test(s) && s.split(" ").every((w) => BANK_CODE_RE.test(w))) return null;
+  return s;
+}
+
 /**
- * ประกอบ "คำอธิบายมาตรฐาน" + เลขบัญชีคู่ค้า จากรายละเอียดดิบ ตามสไตล์ NOVA Sales
- *   เข้า → "รับโอนเงินจาก [CODE ]X####" · ออก → "โอนไป [CODE ]X####"
+ * ประกอบ "คำอธิบายมาตรฐาน" + เลขบัญชี + ชื่อคู่ค้า จากรายละเอียดดิบ
+ *   เข้า → "รับโอนเงินจาก [CODE ]X#### [ชื่อ]" · ออก → "โอนไป [CODE ]X#### [ชื่อ]"
  *   ไม่มีเลขบัญชี: QR → "รับโอนเงินผ่าน QR" · ไม่งั้น = รายละเอียดดิบที่ตัดวันที่/เวลา/ยอดแล้ว
- *   ★ ตัด "ชื่อบุคคล" ทิ้ง จับกลุ่มด้วยเลขบัญชี (ตรงกับ output NOVA Sales + กฎ "ไม่มีชื่อ→เลขบัญชี")
+ *   ★ 2026-09-01 — ดึง "ชื่อผู้โอน" จากท้ายแถวด้วย (requirement: คู่ค้า = ชื่อคนโอนจริง ไม่ใช่แค่เลขบัญชี)
  */
-function describe(rawDetail: string, dir: TxnDirection): { description: string; acct: string | null } {
+function describe(rawDetail: string, dir: TxnDirection): { description: string; acct: string | null; name: string | null } {
   let clean = rawDetail.replace(/\s+/g, " ").trim();
   // ตัดวันที่/เวลา/รหัสสาขา/รหัสอ้างอิงที่ปนหัวบรรทัด
   clean = clean
@@ -149,13 +174,20 @@ function describe(rawDetail: string, dir: TxnDirection): { description: string; 
 
   const isQr = /\bQR\b|thai qr|k shop|myqr|พร้อมเพย์.*ขาย|รับเงินจากการขาย/i.test(clean);
   const isCash = /ฝากเงินสด|เงินสด|\bCDM\b|\bATM\b.*ฝาก|deposit cash/i.test(clean);
+  const isFee = /ค่าธรรมเนียม|\bfee\b/i.test(clean);
+
+  // ชื่อผู้โอน/ผู้รับท้ายแถว (best-effort — ไม่มีก็คงจับกลุ่มด้วยเลขบัญชีเหมือนเดิม)
+  const nameM = clean.match(NAME_AFTER_RE);
+  const name = nameM ? cleanCounterpartyName(nameM[1]) : null;
 
   if (acct) {
     const who = code ? `${code} ${acct}` : acct;
-    return { description: dir === "in" ? `รับโอนเงินจาก ${who}` : `โอนไป ${who}`, acct };
+    const withName = name ? `${who} ${name}` : who;
+    const base = dir === "in" ? `รับโอนเงินจาก ${withName}` : `โอนไป ${withName}`;
+    return { description: isFee && dir === "out" ? `ค่าธรรมเนียม ${base}` : base, acct, name };
   }
-  if (isQr) return { description: dir === "in" ? "รับโอนเงินผ่าน QR" : "ชำระเงินผ่าน QR", acct: null };
-  if (isCash) return { description: dir === "in" ? "ฝากเงินสด" : "ถอนเงินสด", acct: null };
+  if (isQr) return { description: dir === "in" ? "รับโอนเงินผ่าน QR" : "ชำระเงินผ่าน QR", acct: null, name };
+  if (isCash) return { description: dir === "in" ? "ฝากเงินสด" : "ถอนเงินสด", acct: null, name };
   // ไม่มีเลขบัญชี/QR/เงินสด → คืนรายละเอียดดิบ แต่ตัด "ยอดเงิน/รหัสอ้างอิง/เวลา" ที่ปนมา ให้อ่านสะอาด
   const memo = clean
     .replace(/-?\d{1,3}(?:,\d{3})*\.\d{2}/g, "")           // ตัดยอดเงิน/คงเหลือที่ปน
@@ -163,7 +195,7 @@ function describe(rawDetail: string, dir: TxnDirection): { description: string; 
     .replace(/\d{1,2}:\d{2}(?::\d{2})?/g, "")               // ตัดเวลา
     .replace(/\s+/g, " ")
     .trim();
-  return { description: memo.slice(0, 50) || (dir === "in" ? "รับเงินเข้า" : "โอนออก"), acct: null };
+  return { description: memo.slice(0, 50) || (dir === "in" ? "รับเงินเข้า" : "โอนออก"), acct: null, name };
 }
 
 /** เดาทิศทางจากคำในรายการ (ไว้ bootstrap opening ของสเตทเมนต์ที่ไม่พิมพ์ยอดยกมา) */
@@ -360,14 +392,17 @@ export function parseStatementDeterministic(text: string): DeterministicParseRes
     const dir: TxnDirection = bal >= prev ? "in" : "out";
     prev = bal;
     if (amount <= 0) continue;
-    const { description, acct } = describe(r.text, dir);
+    const { description, acct, name } = describe(r.text, dir);
+    // เวลาโอน HH:MM ตัวแรกในแถว (สเตทเมนต์พิมพ์คู่วันที่ เช่น "04/05/2026 12:51")
+    const timeM = r.text.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
     txns.push({
       date: isoDate(r.date),
       description,
-      counterparty_name: null, // จับกลุ่มด้วยเลขบัญชี (ตรง output NOVA Sales)
+      counterparty_name: name, // ★ 2026-09-01 ชื่อผู้โอนจริงจากท้ายแถว (null = จับกลุ่มด้วยเลขบัญชี)
       counterparty_account_no: acct,
       direction: dir,
       amount,
+      time: timeM ? `${timeM[1].padStart(2, "0")}:${timeM[2]}` : null,
     });
   }
 

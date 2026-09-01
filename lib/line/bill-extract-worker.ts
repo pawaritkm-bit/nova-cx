@@ -1075,21 +1075,23 @@ export async function extractUploadedEntry(
   }
   // ★ ผังบัญชีของ tenant นี้ — โหลดครั้งเดียว (entry เดี่ยว ไม่ loop หลาย tenant)
   const chart = await listChartOfAccounts(db, tenantId);
-  const bills = await extractBillsData(buf, mime, chart);
-  if (bills.length === 0) return NONE;
   const chartByCode = buildChartByCode(chart);
-
   const entryType = entry.entry_type;
 
-  // ★ ตัดรูปจาก PDF: 1 รูปต่อ 1 บิล (requirement 2026-09-01) — เมื่อจำนวนหน้า = จำนวนบิล
-  //   (เคสสแกน 1 บิล/หน้า) เรนเดอร์ทุกหน้าเป็น PNG แล้วให้แต่ละบิลชี้รูปหน้าของตัวเอง
-  //   → หน้าตรวจบิลโชว์รูป + ซูม/หมุน/OCR ได้เหมือนรูปถ่าย · best-effort: เรนเดอร์/อัปพลาด → ใช้ PDF เดิม
-  const pageImagePath: (string | null)[] = new Array(bills.length).fill(null);
+  // ★ "1 รูปต่อ 1 บิล" (requirement 2026-09-01): PDF หลายหน้า (สแกน 1 บิล/หน้า) →
+  //   เรนเดอร์ทุกหน้าเป็น PNG แล้วให้ AI อ่าน "ทีละหน้า" — แก้ปัญหาอ่านทั้งไฟล์รวดเดียว
+  //   แล้วตรวจเจอบิลไม่ครบ (เคสจริง: สแกน 17 หน้าเจอบิลเดียว) · แต่ละหน้า = บิล 1 ใบ
+  //   พร้อมรูปหน้าของตัวเอง (ซูม/หมุน/OCR ได้) · หน้าที่อ่านไม่ออก = draft ว่างพร้อมรูป (คีย์เอง)
+  //   best-effort: เรนเดอร์ไม่ได้/หน้าเดียว → เส้นเดิม (อ่านทั้งไฟล์)
+  let bills: (ExtractedBill | null)[] | null = null;
+  let pageImagePath: (string | null)[] = [];
+
   if (isPdf && entry.upload_path) {
     try {
       const { renderPdfPagesToPng } = await import("@/lib/accounting/pdf-page-images");
       const pngs = await renderPdfPagesToPng(buf);
-      if (pngs && pngs.length === bills.length) {
+      if (pngs && pngs.length > 1) {
+        pageImagePath = new Array(pngs.length).fill(null);
         for (let i = 0; i < pngs.length; i++) {
           const pngPath = `${entry.upload_path}.p${i + 1}.png`;
           const { error: upErr } = await db.storage
@@ -1097,30 +1099,90 @@ export async function extractUploadedEntry(
             .upload(pngPath, pngs[i], { contentType: "image/png", upsert: true });
           if (!upErr) pageImagePath[i] = pngPath;
         }
+        // อ่านทีละหน้า — pool 3 คุมเวลา/rate limit (24 หน้า ≈ 8 รอบ อยู่ใน maxDuration สบาย)
+        const results: (ExtractedBill | null)[] = new Array(pngs.length).fill(null);
+        let next = 0;
+        await Promise.all(
+          Array.from({ length: Math.min(3, pngs.length) }, async () => {
+            for (;;) {
+              const i = next++;
+              if (i >= pngs.length) return;
+              try {
+                results[i] = await extractBillData(pngs[i], "image/png", chart);
+              } catch {
+                results[i] = null; // หน้านี้อ่านไม่ได้ → draft ว่างพร้อมรูป
+              }
+            }
+          })
+        );
+        bills = results;
       }
     } catch {
-      // เรนเดอร์ไม่ได้ (ไฟล์แปลก/lib พลาด) → ทุกบิลใช้ PDF เดิม
+      // เรนเดอร์ไม่ได้ (ไฟล์แปลก/lib พลาด) → เส้นเดิมด้านล่าง
     }
   }
+
+  if (!bills) {
+    // เส้นเดิม: หน้าเดียว/รูป/เรนเดอร์ไม่ได้ → อ่านทั้งไฟล์รวดเดียว
+    const whole = await extractBillsData(buf, mime, chart);
+    if (whole.length === 0) return NONE;
+    bills = whole;
+    pageImagePath = new Array(whole.length).fill(null);
+    // PDF หน้าเดียวที่มีบิลเดียว → ยังตัดรูปให้ (โชว์รูปแทน PDF)
+    if (isPdf && entry.upload_path && whole.length === 1) {
+      try {
+        const { renderPdfPagesToPng } = await import("@/lib/accounting/pdf-page-images");
+        const pngs = await renderPdfPagesToPng(buf);
+        if (pngs && pngs.length === 1) {
+          const pngPath = `${entry.upload_path}.p1.png`;
+          const { error: upErr } = await db.storage
+            .from(BILLS_BUCKET)
+            .upload(pngPath, pngs[0], { contentType: "image/png", upsert: true });
+          if (!upErr) pageImagePath[0] = pngPath;
+        }
+      } catch {
+        // ใช้ PDF เดิม
+      }
+    }
+  }
+
   const baseName = (entry.upload_name || "บิล").replace(/\.pdf$/i, "");
   const uploadFieldsFor = (i: number) =>
     pageImagePath[i]
       ? { upload_path: pageImagePath[i], upload_name: `${baseName} (หน้า ${i + 1}).png`, upload_mime: "image/png" }
       : { upload_path: entry.upload_path, upload_name: entry.upload_name, upload_mime: entry.upload_mime };
+  /** บรรทัดว่าง 1 บรรทัด (mirror ตอน finalize อัปโหลด) — หน้า/บิลที่ AI อ่านไม่ออก ให้นักบัญชีคีย์เอง */
+  const emptyLineRow = (eid: string) => ({
+    tenant_id: tenantId,
+    entry_id: eid,
+    line_no: 1,
+    vat_type: "vat",
+    description: null,
+    amount: 0,
+    vat_amount: 0,
+    wht_rate: 0,
+    wht_amount: 0,
+    ai_filled: false,
+  });
 
-  // 5) บิลแรก → เติมลง entry เดิม (แทนบรรทัดว่าง) + สลับไฟล์เป็นรูปหน้าแรกถ้าตัดได้
+  // 5) บิล/หน้าแรก → เติมลง entry เดิม (แทนบรรทัดว่าง) + สลับไฟล์เป็นรูปหน้าแรกถ้าตัดได้
+  const first = bills[0];
   await db
     .from("bill_entries")
-    .update({ ...billHeadFields(bills[0], entryType), ...(pageImagePath[0] ? uploadFieldsFor(0) : {}) })
+    .update({ ...(first ? billHeadFields(first, entryType) : {}), ...(pageImagePath[0] ? uploadFieldsFor(0) : {}) })
     .eq("id", entryId)
     .eq("tenant_id", tenantId);
-  await db.from("bill_entry_lines").delete().eq("entry_id", entryId).eq("tenant_id", tenantId);
-  await db
-    .from("bill_entry_lines")
-    .insert(buildEntryLineRows(bills[0].lines, { entryId, tenantId, forceNoVat: false, aiUsed: true, chartByCode }));
+  if (first) {
+    await db.from("bill_entry_lines").delete().eq("entry_id", entryId).eq("tenant_id", tenantId);
+    await db
+      .from("bill_entry_lines")
+      .insert(buildEntryLineRows(first.lines, { entryId, tenantId, forceNoVat: false, aiUsed: true, chartByCode }));
+  }
 
-  // 6) บิลที่ 2..N → สร้าง entry ใหม่ (ลูกค้า/ประเภทเดียวกัน + รูปหน้าของตัวเอง) ให้นักบัญชีตรวจแยกใบ
+  // 6) บิล/หน้าที่ 2..N → สร้าง entry ใหม่ (ลูกค้า/ประเภทเดียวกัน + รูปหน้าของตัวเอง) ให้นักบัญชีตรวจแยกใบ
+  let extractedCount = first ? 1 : 0;
   for (let i = 1; i < bills.length; i++) {
+    const b = bills[i];
     const { data: ins } = await db
       .from("bill_entries")
       .insert({
@@ -1129,20 +1191,23 @@ export async function extractUploadedEntry(
         entry_type: entryType,
         status: "draft",
         ...uploadFieldsFor(i),
-        ...billHeadFields(bills[i], entryType),
+        ...(b ? billHeadFields(b, entryType) : { source: "manual" }),
       })
       .select("id")
       .maybeSingle();
     const newId = (ins as { id?: string } | null)?.id;
     if (!newId) continue;
-    await db
-      .from("bill_entry_lines")
-      .insert(
-        buildEntryLineRows(bills[i].lines, { entryId: newId, tenantId, forceNoVat: false, aiUsed: true, chartByCode })
-      );
+    if (b) {
+      extractedCount++;
+      await db
+        .from("bill_entry_lines")
+        .insert(buildEntryLineRows(b.lines, { entryId: newId, tenantId, forceNoVat: false, aiUsed: true, chartByCode }));
+    } else {
+      await db.from("bill_entry_lines").insert(emptyLineRow(newId));
+    }
   }
 
-  return { extracted: true, count: bills.length };
+  return { extracted: extractedCount > 0, count: bills.length };
 }
 
 export type RedecideResult = {

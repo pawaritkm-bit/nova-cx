@@ -1,7 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
-import { createStatementUploadUrlAction, createSaleBillsFromStatementAction } from "./statement-actions";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  createStatementUploadUrlAction,
+  createSaleBillsFromStatementAction,
+  matchStatementWithBillsAction,
+} from "./statement-actions";
+import type { BillMatch, BillForMatch } from "@/lib/accounting/statement-bill-match";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { UPLOAD_ACCEPT, MAX_UPLOAD_BYTES, validateUpload } from "@/lib/accounting/upload";
 import {
@@ -30,6 +35,9 @@ type StatementMeta = {
   failedChunks: number;
 } | null;
 
+/** ผลเซฟเข้าหน้ากระทบยอดธนาคารอัตโนมัติ (จาก route — best-effort) */
+type ReconInfo = { imported: boolean; lineCount?: number; reason?: string } | null;
+
 /** ผลลัพธ์ของไฟล์เดียว (อัปโหลด+อ่านเสร็จแล้ว) */
 type FileResult = {
   fileName: string;
@@ -37,6 +45,7 @@ type FileResult = {
   errorMessage?: string;
   transactions: StatementTxn[];
   meta: StatementMeta;
+  recon?: ReconInfo;
 };
 
 /** format ตัวเลขเป็นเงินไทย (ทศนิยม 2) */
@@ -106,6 +115,67 @@ export default function StatementAnalyzer({
   const [fileResults, setFileResults] = useState<FileResult[]>([]);
   const [pdfPassword, setPdfPassword] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  // กระทบกับบิลในระบบ (index ตรงกับ txns) — null ในช่อง = รายการนั้นไม่พบบิล · null ทั้งก้อน = ยังไม่ได้กระทบ
+  const [matches, setMatches] = useState<(BillMatch | null)[] | null>(null);
+  const [matching, setMatching] = useState(false);
+  // บิลทั้งหมดของลูกค้า (จาก action เดียวกัน) — ใช้ช่อง "ค้นบิล" กรองฝั่ง client
+  const [bills, setBills] = useState<BillForMatch[]>([]);
+  // แถวที่ติ๊ก "ตรวจแล้ว" (client-side — เคลียร์เมื่อล้างรายการ)
+  const [reviewed, setReviewed] = useState<Set<number>>(new Set());
+  // จับคู่มือ (เลือกจากช่องค้นบิล) — override ผล auto ต่อแถว
+  const [manualPick, setManualPick] = useState<Map<number, BillForMatch>>(new Map());
+  // สร้างบิลขายรายแถว (index ที่กำลังสร้าง · -1 = ไม่มี)
+  const [creatingRow, setCreatingRow] = useState<number>(-1);
+  /** กระทบ txns ชุดที่ให้กับบิลของลูกค้า (เรียกอัตโนมัติหลังอ่าน/สร้างบิล + ปุ่ม manual) */
+  const runBillMatch = useCallback(
+    async (list: StatementTxn[]) => {
+      if (list.length === 0) {
+        setMatches(null);
+        return;
+      }
+      setMatching(true);
+      try {
+        const r = await matchStatementWithBillsAction({ customerId, txns: list });
+        setMatches(r.ok ? r.matches : null);
+        if (r.ok) {
+          setBills(r.bills);
+          setManualPick(new Map()); // ผล auto ชุดใหม่ — ล้างการเลือกมือเดิม (อิง index ชุดเก่า)
+        }
+      } catch {
+        setMatches(null);
+      } finally {
+        setMatching(false);
+      }
+    },
+    [customerId]
+  );
+
+  /** สร้างบิลขาย (ร่าง) จากแถวเดียว — แถวเงินเข้าที่ไม่พบบิล */
+  const createBillForRow = useCallback(
+    (idx: number, t: StatementTxn, allTxns: StatementTxn[]) => {
+      setCreatingRow(idx);
+      createSaleBillsFromStatementAction({
+        customerId,
+        txns: [t],
+        sourceLabel: "สเตทเมนต์ (จับคู่รายแถว)",
+      })
+        .then((r) => {
+          setBillsMsg({ ok: r.ok, text: r.message });
+          if (r.ok) void runBillMatch(allTxns);
+        })
+        .catch(() => setBillsMsg({ ok: false, text: "สร้างบิลไม่สำเร็จ กรุณาลองใหม่" }))
+        .finally(() => setCreatingRow(-1));
+    },
+    [customerId, runBillMatch]
+  );
+
+  // flag "อ่าน/สร้างบิลเสร็จแล้ว รอกระทบกับบิล" — effect ยิงหลัง txns commit จริง (กัน stale closure)
+  const wantMatchRef = useRef(false);
+  useEffect(() => {
+    if (!wantMatchRef.current) return;
+    wantMatchRef.current = false;
+    void runBillMatch(txns);
+  }, [txns, runBillMatch]);
 
   // สรุปรายเดือน + คนโอนซ้ำ คำนวณใหม่ทุกครั้งที่ตารางเปลี่ยน (helper เดียวกับ server) — รวมทุกไฟล์แล้ว
   const monthly = useMemo(() => summarizeByMonth(txns), [txns]);
@@ -154,7 +224,7 @@ export default function StatementAnalyzer({
         body: JSON.stringify({ path: prep.path, customerId, fileName: file.name, password: pdfPassword || undefined }),
       });
       const data = (await res.json().catch(() => null)) as
-        | { ok?: boolean; transactions?: StatementTxn[]; meta?: StatementMeta; message?: string }
+        | { ok?: boolean; transactions?: StatementTxn[]; meta?: StatementMeta; message?: string; recon?: ReconInfo }
         | null;
       if (!res.ok || !data?.ok) {
         return {
@@ -170,6 +240,7 @@ export default function StatementAnalyzer({
         ok: true,
         transactions: Array.isArray(data.transactions) ? data.transactions : [],
         meta: data.meta ?? null,
+        recon: data.recon ?? null,
       };
     } catch {
       return { fileName: file.name, ok: false, errorMessage: "อ่านสเตทเมนต์ไม่สำเร็จ กรุณาลองใหม่", transactions: [], meta: null };
@@ -201,6 +272,9 @@ export default function StatementAnalyzer({
       // ★ 2026-08-12 — รวมผลรอบนี้เข้ากับรอบก่อนหน้า (ไม่ทับ) เพื่อรองรับอัปโหลดหลายรอบต่อกัน
       //   (เช่นมี 30+ ไฟล์ อัปทีละ 20 ได้ 2 รอบ — ผลรวมจะครบทุกไฟล์)
       setFileResults((prev) => [...prev, ...results]);
+      // ★ functional update เสมอ (กัน state ค้างแบบบั๊กอัปโหลดข้ามลูกค้า 2026-09-01) — แล้วให้
+      //   effect ด้านบนเห็น flag นี้ค่อยยิงกระทบกับบิลด้วย txns ล่าสุดจริง
+      wantMatchRef.current = true;
       setTxns((prev) => [...prev, ...results.filter((r) => r.ok).flatMap((r) => r.transactions)]);
       setSelectedNames([]);
       if (fileRef.current) fileRef.current.value = "";
@@ -215,6 +289,9 @@ export default function StatementAnalyzer({
     setSelectedNames([]);
     setDone(false);
     setErr(null);
+    setMatches(null);
+    setReviewed(new Set());
+    setManualPick(new Map());
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -222,9 +299,10 @@ export default function StatementAnalyzer({
    *  จึงต้อง export จากสิ่งที่แสดงบนจอตรง ๆ */
   function exportCsv() {
     const csv = toCsv(
-      ["วันที่", "รายละเอียด", "คู่ค้า", "เลขบัญชี", "ทิศทาง", "ยอดเงิน"],
+      ["วันที่", "เวลา", "รายละเอียด", "คู่ค้า (ชื่อผู้โอน)", "เลขบัญชี", "ทิศทาง", "ยอดเงิน"],
       txns.map((t) => [
         t.date,
+        t.time ?? "",
         t.description,
         t.counterparty_name,
         t.counterparty_account_no,
@@ -304,7 +382,11 @@ export default function StatementAnalyzer({
                 txns,
                 sourceLabel: `สเตทเมนต์ (${selectedNames.join(", ").slice(0, 100) || customerLabel})`,
               })
-                .then((r) => setBillsMsg({ ok: r.ok, text: r.message }))
+                .then((r) => {
+                  setBillsMsg({ ok: r.ok, text: r.message });
+                  // บิลเพิ่งถูกสร้าง → กระทบกับบิลใหม่ให้คอลัมน์ "ตรงกับบิล" อัปเดตทันที
+                  if (r.ok) void runBillMatch(txns);
+                })
                 .catch(() => setBillsMsg({ ok: false, text: "สร้างบิลไม่สำเร็จ กรุณาลองใหม่" }))
                 .finally(() => setCreatingBills(false));
             }}
@@ -365,7 +447,16 @@ export default function StatementAnalyzer({
                 ) : r.transactions.length === 0 ? (
                   <span>— อ่านไม่พบรายการธุรกรรม</span>
                 ) : (
-                  <span>— อ่านสำเร็จ {r.transactions.length.toLocaleString("th-TH")} รายการ</span>
+                  <span>
+                    — อ่านสำเร็จ {r.transactions.length.toLocaleString("th-TH")} รายการ
+                    {r.recon?.imported ? (
+                      <b style={{ color: "#166534" }}>
+                        {" "}· เซฟเข้าหน้ากระทบยอดธนาคารแล้ว {(r.recon.lineCount ?? 0).toLocaleString("th-TH")} รายการ
+                      </b>
+                    ) : r.recon && r.recon.reason === "duplicate" ? (
+                      <span className="muted"> · ไฟล์นี้เคยเซฟเข้ากระทบยอดแล้ว (ไม่เซฟซ้ำ)</span>
+                    ) : null}
+                  </span>
                 )}
               </li>
             ))}
@@ -414,85 +505,356 @@ export default function StatementAnalyzer({
             </section>
           ) : null}
 
-          {/* ตารางธุรกรรม (แก้ได้) */}
+          {/* ตารางธุรกรรม — แยกกอง "เงินเข้า" / "เงินออก" (requirement 2026-09-01) + คอลัมน์กระทบกับบิล */}
           <section className="stmt-section">
-            <h3 className="stmt-h">รายการธุรกรรม ({txns.length}) — แก้ได้</h3>
-            <div className="stmt-table-wrap">
-              <table className="stmt-table">
-                <thead>
-                  <tr>
-                    <th>วันที่</th>
-                    <th>รายละเอียด</th>
-                    <th>คู่ค้า</th>
-                    <th>เลขบัญชี</th>
-                    <th>ทิศทาง</th>
-                    <th className="num">ยอดเงิน</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {txns.map((t, i) => (
-                    <tr key={i} className={t.direction === "in" ? "in" : t.direction === "out" ? "out" : ""}>
-                      <td>
-                        <input
-                          type="text"
-                          value={t.date ?? ""}
-                          placeholder="YYYY-MM-DD"
-                          onChange={(e) => updateTxn(i, { date: e.target.value || null })}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={t.description ?? ""}
-                          onChange={(e) => updateTxn(i, { description: e.target.value || null })}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={t.counterparty_name ?? ""}
-                          onChange={(e) => updateTxn(i, { counterparty_name: e.target.value || null })}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={t.counterparty_account_no ?? ""}
-                          onChange={(e) => updateTxn(i, { counterparty_account_no: e.target.value || null })}
-                        />
-                      </td>
-                      <td>
-                        <select
-                          value={t.direction ?? ""}
-                          onChange={(e) => updateTxn(i, { direction: (e.target.value || null) as TxnDirection | null })}
-                        >
-                          <option value="">—</option>
-                          <option value="in">เข้า</option>
-                          <option value="out">ออก</option>
-                        </select>
-                      </td>
-                      <td className="num">
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={t.amount ?? ""}
-                          onChange={(e) => {
-                            const n = e.target.value === "" ? null : Number(e.target.value);
-                            updateTxn(i, { amount: n != null && Number.isFinite(n) ? n : null });
-                          }}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="stmt-upload-bar" style={{ marginBottom: 6 }}>
+              <h3 className="stmt-h" style={{ margin: 0 }}>รายการธุรกรรม ({txns.length}) — แก้ได้</h3>
+              <button type="button" className="btn btn-ghost" disabled={matching} onClick={() => void runBillMatch(txns)}>
+                {matching ? "กำลังกระทบกับบิล…" : "🔄 กระทบกับบิลอีกครั้ง"}
+              </button>
+              {matches ? (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  ตรงกับบิลแล้ว {matches.filter(Boolean).length.toLocaleString("th-TH")}/{txns.length.toLocaleString("th-TH")} รายการ
+                </span>
+              ) : null}
             </div>
+            <TxnPile
+              title="💚 กองเงินเข้า"
+              tone="in"
+              txns={txns}
+              matches={matches}
+              bills={bills}
+              reviewed={reviewed}
+              manualPick={manualPick}
+              creatingRow={creatingRow}
+              filter={(t) => t.direction === "in"}
+              updateTxn={updateTxn}
+              onToggleReviewed={(i) =>
+                setReviewed((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(i)) next.delete(i);
+                  else next.add(i);
+                  return next;
+                })
+              }
+              onManualPick={(i, b) => setManualPick((prev) => new Map(prev).set(i, b))}
+              onCreateBill={(i, t) => createBillForRow(i, t, txns)}
+            />
+            <TxnPile
+              title="🔻 กองเงินออก"
+              tone="out"
+              txns={txns}
+              matches={matches}
+              bills={bills}
+              reviewed={reviewed}
+              manualPick={manualPick}
+              creatingRow={creatingRow}
+              filter={(t) => t.direction === "out"}
+              updateTxn={updateTxn}
+              onToggleReviewed={(i) =>
+                setReviewed((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(i)) next.delete(i);
+                  else next.add(i);
+                  return next;
+                })
+              }
+              onManualPick={(i, b) => setManualPick((prev) => new Map(prev).set(i, b))}
+              onCreateBill={(i, t) => createBillForRow(i, t, txns)}
+            />
+            <TxnPile
+              title="❔ ยังไม่ระบุทิศทาง"
+              tone=""
+              txns={txns}
+              matches={matches}
+              bills={bills}
+              reviewed={reviewed}
+              manualPick={manualPick}
+              creatingRow={creatingRow}
+              filter={(t) => t.direction !== "in" && t.direction !== "out"}
+              updateTxn={updateTxn}
+              onToggleReviewed={(i) =>
+                setReviewed((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(i)) next.delete(i);
+                  else next.add(i);
+                  return next;
+                })
+              }
+              onManualPick={(i, b) => setManualPick((prev) => new Map(prev).set(i, b))}
+              onCreateBill={(i, t) => createBillForRow(i, t, txns)}
+              hideWhenEmpty
+            />
             <p className="stmt-note">
-              Phase 1: ผลนี้ยังไม่บันทึกลงระบบบัญชี (ดู/สรุป/จับคู่ซ้ำเท่านั้น) — โหลดใหม่แล้วข้อมูลจะหาย
+              รายการถูกเซฟเข้า &ldquo;กระทบยอดธนาคาร&rdquo; ให้อัตโนมัติแล้ว (ดูสถานะรายไฟล์ด้านบน) —
+              ฝั่งขวาเทียบกับบิลชุดเดียวกับหน้าลงบันทึกบัญชี ด้วยยอดเงิน + วันที่ + ชื่อผู้โอน
             </p>
           </section>
         </>
       ) : null}
+    </div>
+  );
+}
+
+/** วันที่ไทยสั้น: '2026-05-14' → '14 พ.ค. 69' (อ่านง่ายบนการ์ด) */
+function thDate(d: string | null | undefined): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d ?? "");
+  if (!m) return d ?? "—";
+  return `${Number(m[3])} ${TH_MONTHS[Number(m[2]) - 1] ?? m[2]} ${(Number(m[1]) + 543) % 100}`;
+}
+
+/** บรรทัด "โอนเมื่อ …" จากสเตทเมนต์ (โชว์ฝั่งบิลตาม requirement 2026-09-01) */
+function TransferWhen({ t }: { t: StatementTxn }) {
+  return (
+    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+      🕐 โอนเมื่อ {thDate(t.date)}
+      {t.time ? ` เวลา ${t.time} น.` : ""} (จากสเตทเมนต์)
+    </div>
+  );
+}
+
+/** การ์ดฝั่งขวา: ผลเทียบกับบิลในระบบของ 1 รายการ */
+function BillSideCard({
+  idx,
+  t,
+  match,
+  matchesReady,
+  bills,
+  isReviewed,
+  creating,
+  onToggleReviewed,
+  onManualPick,
+  onCreateBill,
+}: {
+  idx: number;
+  t: StatementTxn;
+  match: BillMatch | BillForMatch | null;
+  matchesReady: boolean;
+  bills: BillForMatch[];
+  isReviewed: boolean;
+  creating: boolean;
+  onToggleReviewed: (i: number) => void;
+  onManualPick: (i: number, b: BillForMatch) => void;
+  onCreateBill: (i: number, t: StatementTxn) => void;
+}) {
+  const [q, setQ] = useState("");
+  const base = { borderRadius: 12, padding: "10px 12px", background: "#fff" } as const;
+
+  if (!matchesReady) {
+    return (
+      <div style={{ ...base, border: "1px dashed #cbd5e1" }}>
+        <span className="muted" style={{ fontSize: 13 }}>ยังไม่ได้กระทบกับบิล — กด &ldquo;🔄 กระทบกับบิลอีกครั้ง&rdquo; ด้านบน</span>
+      </div>
+    );
+  }
+
+  if (match) {
+    const typeLabel = match.entryType === "sale" ? "บิลขาย" : match.entryType === "purchase" ? "บิลซื้อ" : "บิล";
+    const nameHit = "nameHit" in match ? match.nameHit : true;
+    const billId = "billId" in match ? match.billId : match.id;
+    return (
+      <div style={{ ...base, border: "2px solid #86efac" }}>
+        <div style={{ color: "#166534", fontWeight: 600, fontSize: 13 }}>
+          ✓ พบบิลตรง{nameHit ? " — ยอด + วัน + ชื่อตรง" : " (ยอด + วันตรง)"}
+        </div>
+        <div style={{ fontSize: 13, marginTop: 2 }}>
+          {typeLabel}
+          {match.docNo ? ` ${match.docNo}` : ""} · {match.status === "confirmed" ? "ยืนยันแล้ว" : "ร่าง"}
+          {match.counterparty ? ` · คู่ค้า: ${match.counterparty}` : ""}
+        </div>
+        <TransferWhen t={t} />
+        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+          <a className="btn btn-ghost" href={`/chat-audit/accounting?edit=${billId}`} target="_blank" rel="noopener">
+            เปิดบิล ↗
+          </a>
+          <button type="button" className={isReviewed ? "btn" : "btn btn-ghost"} onClick={() => onToggleReviewed(idx)}>
+            {isReviewed ? "✓ ตรวจแล้ว" : "ติ๊กว่าตรวจแล้ว"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ไม่พบบิล — สร้างบิลขาย (เฉพาะเงินเข้า) หรือค้นบิลจับคู่มือ
+  const qNorm = q.trim().toLowerCase();
+  const hits = qNorm
+    ? bills
+        .filter(
+          (b) =>
+            (b.counterparty ?? "").toLowerCase().includes(qNorm) ||
+            (b.docNo ?? "").toLowerCase().includes(qNorm) ||
+            String(b.totalGross) === qNorm ||
+            String(b.totalNet) === qNorm
+        )
+        .slice(0, 5)
+    : [];
+  return (
+    <div style={{ ...base, border: "1px solid #fcd34d", background: "#fffbeb" }}>
+      <div style={{ color: "#b45309", fontWeight: 600, fontSize: 13 }}>⚠ ไม่พบบิลที่ยอด/วัน/ชื่อตรง</div>
+      <TransferWhen t={t} />
+      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {t.direction === "in" ? (
+          <button type="button" className="btn" disabled={creating} onClick={() => onCreateBill(idx, t)}>
+            {creating ? "กำลังสร้าง…" : "➕ สร้างบิลขายจากแถวนี้"}
+          </button>
+        ) : null}
+        <input
+          type="text"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="ค้นบิลด้วยชื่อ/เลขที่/ยอด…"
+          style={{ maxWidth: 180 }}
+        />
+        <button type="button" className={isReviewed ? "btn" : "btn btn-ghost"} onClick={() => onToggleReviewed(idx)}>
+          {isReviewed ? "✓ ตรวจแล้ว" : "ไม่ต้องมีบิล (เช่น ค่าธรรมเนียม)"}
+        </button>
+      </div>
+      {hits.length > 0 ? (
+        <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0, fontSize: 13 }}>
+          {hits.map((b) => (
+            <li key={b.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "3px 0" }}>
+              <span>
+                {b.entryType === "sale" ? "บิลขาย" : b.entryType === "purchase" ? "บิลซื้อ" : "บิล"}
+                {b.docNo ? ` ${b.docNo}` : ""} · {thDate(b.docDate)} · {money(b.totalGross)}
+                {b.counterparty ? ` · ${b.counterparty}` : ""}
+              </span>
+              <button type="button" className="btn btn-ghost" onClick={() => onManualPick(idx, b)}>
+                เลือกจับคู่
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : qNorm ? (
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>ไม่พบบิลที่ตรงคำค้น</div>
+      ) : null}
+    </div>
+  );
+}
+
+/** กองธุรกรรมหนึ่งทิศทาง — แถวละ 2 ฝั่ง: ซ้ายสเตทเมนต์ (แก้ได้) · ขวาบิลในระบบ (แบบ 2026-09-01) */
+function TxnPile({
+  title,
+  tone,
+  txns,
+  matches,
+  bills,
+  reviewed,
+  manualPick,
+  creatingRow,
+  filter,
+  updateTxn,
+  onToggleReviewed,
+  onManualPick,
+  onCreateBill,
+  hideWhenEmpty = false,
+}: {
+  title: string;
+  tone: "in" | "out" | "";
+  txns: StatementTxn[];
+  matches: (BillMatch | null)[] | null;
+  bills: BillForMatch[];
+  reviewed: Set<number>;
+  manualPick: Map<number, BillForMatch>;
+  creatingRow: number;
+  filter: (t: StatementTxn) => boolean;
+  updateTxn: (idx: number, patch: Partial<StatementTxn>) => void;
+  onToggleReviewed: (i: number) => void;
+  onManualPick: (i: number, b: BillForMatch) => void;
+  onCreateBill: (i: number, t: StatementTxn) => void;
+  hideWhenEmpty?: boolean;
+}) {
+  const rows = txns.map((t, i) => ({ t, i })).filter(({ t }) => filter(t));
+  if (rows.length === 0 && hideWhenEmpty) return null;
+  const total = rows.reduce((s, { t }) => s + (t.amount ?? 0), 0);
+  const matchedCount = matches ? rows.filter(({ i }) => matches[i] || manualPick.has(i)).length : 0;
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div className={`stmt-repeat-title ${tone}`}>
+        {title} — {rows.length.toLocaleString("th-TH")} รายการ · รวม {money(total)}
+        {matches ? ` · ตรงกับบิล ${matchedCount.toLocaleString("th-TH")}` : ""}
+      </div>
+      {rows.length === 0 ? (
+        <p className="empty">ไม่มีรายการ</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {rows.map(({ t, i }) => {
+            const amtColor = t.direction === "in" ? "#166534" : t.direction === "out" ? "#b91c1c" : "#475569";
+            const manual = manualPick.get(i) ?? null;
+            return (
+              <div key={i} className="stmt-match-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {/* ซ้าย: รายการสเตทเมนต์ (แก้ได้) */}
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: "10px 12px", background: "#fff" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <input
+                      type="text"
+                      value={t.date ?? ""}
+                      placeholder="YYYY-MM-DD"
+                      style={{ width: 110 }}
+                      onChange={(e) => updateTxn(i, { date: e.target.value || null })}
+                    />
+                    {t.time ? <span className="muted" style={{ fontSize: 13 }}>{t.time} น.</span> : null}
+                    <select
+                      value={t.direction ?? ""}
+                      onChange={(e) => updateTxn(i, { direction: (e.target.value || null) as TxnDirection | null })}
+                    >
+                      <option value="">—</option>
+                      <option value="in">เข้า</option>
+                      <option value="out">ออก</option>
+                    </select>
+                    <span style={{ flex: 1 }} />
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={t.amount ?? ""}
+                      style={{ width: 120, textAlign: "right", color: amtColor, fontWeight: 600 }}
+                      onChange={(e) => {
+                        const n = e.target.value === "" ? null : Number(e.target.value);
+                        updateTxn(i, { amount: n != null && Number.isFinite(n) ? n : null });
+                      }}
+                    />
+                  </div>
+                  <input
+                    type="text"
+                    value={t.counterparty_name ?? ""}
+                    placeholder="ชื่อผู้โอน"
+                    style={{ width: "100%", marginTop: 6, fontWeight: 600 }}
+                    onChange={(e) => updateTxn(i, { counterparty_name: e.target.value || null })}
+                  />
+                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                    <input
+                      type="text"
+                      value={t.description ?? ""}
+                      placeholder="รายละเอียด"
+                      style={{ flex: 1, fontSize: 13 }}
+                      onChange={(e) => updateTxn(i, { description: e.target.value || null })}
+                    />
+                    <input
+                      type="text"
+                      value={t.counterparty_account_no ?? ""}
+                      placeholder="เลขบัญชี"
+                      style={{ width: 130, fontSize: 13 }}
+                      onChange={(e) => updateTxn(i, { counterparty_account_no: e.target.value || null })}
+                    />
+                  </div>
+                </div>
+                {/* ขวา: บิลในระบบ */}
+                <BillSideCard
+                  idx={i}
+                  t={t}
+                  match={matches ? (manual ?? matches[i]) : null}
+                  matchesReady={!!matches}
+                  bills={bills}
+                  isReviewed={reviewed.has(i)}
+                  creating={creatingRow === i}
+                  onToggleReviewed={onToggleReviewed}
+                  onManualPick={onManualPick}
+                  onCreateBill={onCreateBill}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

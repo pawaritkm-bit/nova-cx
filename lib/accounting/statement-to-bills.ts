@@ -65,11 +65,13 @@ export function saleDraftsFromStatementTxns(txns: StatementTxn[]): IncomeBillDra
     const amount = typeof t.amount === "number" ? round2(t.amount) : 0;
     if (t.direction !== "in" || !day || !(amount > 0)) continue;
     const ref = refOf(t.counterparty_account_no, t.counterparty_name, t.description);
+    // เวลาโอนติดไปใน description ของบิล (requirement 2026-09-01 — ตามรอยธุรกรรมย้อนหลังได้)
+    const baseDesc = (t.description?.trim() || "เงินเข้าจากสเตทเมนต์").slice(0, 180);
     out.push({
       docDate: day,
       amount,
       counterpartyName: t.counterparty_name?.trim() || null,
-      description: (t.description?.trim() || "เงินเข้าจากสเตทเมนต์").slice(0, 200),
+      description: t.time ? `${baseDesc} · โอน ${t.time} น.` : baseDesc,
       dedupKey: `${day}|${amount.toFixed(2)}|${ref}`,
     });
   }

@@ -132,6 +132,7 @@ function sanitizeTxn(raw: unknown): StatementTxn | null {
   const s = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max) : null);
   const amount = typeof r.amount === "number" && isFinite(r.amount) ? r.amount : null;
   const direction = r.direction === "in" || r.direction === "out" ? r.direction : null;
+  const timeRaw = typeof r.time === "string" ? r.time.trim() : "";
   return {
     date: s(r.date, 40),
     description: s(r.description, 300),
@@ -139,6 +140,7 @@ function sanitizeTxn(raw: unknown): StatementTxn | null {
     counterparty_account_no: s(r.counterparty_account_no, 60),
     direction,
     amount,
+    time: /^([01]?\d|2[0-3]):[0-5]\d$/.test(timeRaw) ? timeRaw : null,
   };
 }
 
@@ -185,5 +187,91 @@ export async function createSaleBillsFromStatementAction(input: {
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "สร้างบิลไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+// ---------------------------------------------------------------------
+// กระทบรายการสเตทเมนต์กับบิลในระบบ (สลิป/บิลซื้อ/บิลขาย) — requirement 2026-09-01
+//   เงินเข้า ↔ บิลขาย · เงินออก ↔ บิลซื้อ · เทียบยอด (เต็ม/หลังหัก ณ ที่จ่าย) + วัน + ชื่อผู้โอน↔คู่ค้า
+// ---------------------------------------------------------------------
+import { matchTxnsWithBills, type BillForMatch, type BillMatch } from "@/lib/accounting/statement-bill-match";
+
+export type MatchBillsResult =
+  | { ok: true; matches: (BillMatch | null)[]; billCount: number; bills: BillForMatch[] }
+  | { ok: false; message: string };
+
+/** เพดานจำนวนบิลที่ดึงมาเทียบ (ลูกค้ารายใหญ่สุดยังห่างจากนี้มาก) */
+const MATCH_MAX_BILLS = 2000;
+
+export async function matchStatementWithBillsAction(input: {
+  customerId: string;
+  txns: unknown[];
+}): Promise<MatchBillsResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    if (!isUuid(input.customerId)) return { ok: false, message: "กรุณาเลือกลูกค้า" };
+    if (!customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+    if (!Array.isArray(input.txns)) return { ok: false, message: "ไม่มีรายการให้กระทบ" };
+    const txns = input.txns.slice(0, MAX_TXNS_INPUT).map(sanitizeTxn).filter((t): t is StatementTxn => !!t);
+
+    // บิลของลูกค้า (ร่าง+ยืนยัน) — คู่ค้าฝั่งบิล: ขาย=ผู้ซื้อ · ซื้อ=ผู้ขาย · fallback counterparty_name
+    const { data: entries } = await service
+      .from("bill_entries")
+      .select("id, doc_no, doc_date, entry_type, status, counterparty_name, seller_name, buyer_name")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("customer_id", input.customerId)
+      .is("deleted_at", null)
+      .in("status", ["draft", "confirmed"])
+      .order("doc_date", { ascending: false, nullsFirst: false })
+      .limit(MATCH_MAX_BILLS);
+    const rows = (entries ?? []) as {
+      id: string; doc_no: string | null; doc_date: string | null;
+      entry_type: "purchase" | "sale" | "unspecified"; status: string;
+      counterparty_name: string | null; seller_name: string | null; buyer_name: string | null;
+    }[];
+
+    // ยอดต่อบิลจากบรรทัด (chunk กัน URL ยาวเกิน) — gross = amount+vat · net = gross − wht
+    const totals = new Map<string, { gross: number; net: number }>();
+    for (let i = 0; i < rows.length; i += 150) {
+      const ids = rows.slice(i, i + 150).map((r) => r.id);
+      const { data: lines } = await service
+        .from("bill_entry_lines")
+        .select("entry_id, amount, vat_amount, wht_amount")
+        .eq("tenant_id", ctx.tenantId)
+        .in("entry_id", ids);
+      for (const l of (lines ?? []) as { entry_id: string; amount: number | null; vat_amount: number | null; wht_amount: number | null }[]) {
+        const t = totals.get(l.entry_id) ?? { gross: 0, net: 0 };
+        const gross = (l.amount ?? 0) + (l.vat_amount ?? 0);
+        t.gross += gross;
+        t.net += gross - (l.wht_amount ?? 0);
+        totals.set(l.entry_id, t);
+      }
+    }
+
+    const bills: BillForMatch[] = rows.map((r) => {
+      const t = totals.get(r.id) ?? { gross: 0, net: 0 };
+      const counterparty =
+        (r.entry_type === "sale" ? r.buyer_name : r.seller_name) || r.counterparty_name || null;
+      return {
+        id: r.id,
+        docNo: r.doc_no,
+        docDate: r.doc_date,
+        entryType: r.entry_type,
+        status: r.status,
+        counterparty,
+        totalGross: Math.round(t.gross * 100) / 100,
+        totalNet: Math.round(t.net * 100) / 100,
+      };
+    }).filter((b) => b.totalGross > 0 || b.totalNet > 0);
+
+    return { ok: true, matches: matchTxnsWithBills(txns, bills), billCount: bills.length, bills };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "กระทบกับบิลไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
