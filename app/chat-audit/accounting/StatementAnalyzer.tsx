@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   createStatementUploadUrlAction,
-  createSaleBillsFromStatementAction,
   matchStatementWithBillsAction,
   listSavedStatementsAction,
   loadSavedStatementAction,
@@ -129,9 +128,8 @@ export default function StatementAnalyzer({
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
   const [done, setDone] = useState(false);
   const [txns, setTxns] = useState<StatementTxn[]>([]);
-  // สร้างบิลขาย (ร่าง) จากเงินเข้า — requirement 2026-09-01
+  // ข้อความสถานะ (อัปบิล/กระทบ ฯลฯ)
   const [billsMsg, setBillsMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [creatingBills, setCreatingBills] = useState(false);
   const [fileResults, setFileResults] = useState<FileResult[]>([]);
   const [pdfPassword, setPdfPassword] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -147,8 +145,6 @@ export default function StatementAnalyzer({
   const [manualPick, setManualPick] = useState<Map<string, string>>(new Map());
   // โหลดสถานะติ๊กเสร็จแล้ว (กันเซฟทับด้วยค่าว่างก่อนโหลด)
   const reviewLoadedRef = useRef(false);
-  // สร้างบิลขายรายแถว (index ที่กำลังสร้าง · -1 = ไม่มี)
-  const [creatingRow, setCreatingRow] = useState<number>(-1);
   // ★ "ระบบจำไว้" (2026-09-01): ไฟล์ที่เคยอัปของลูกค้า — ผลอ่านที่เซฟไว้โหลดขึ้นเองตอนเปิดหน้า
   const [savedFiles, setSavedFiles] = useState<SavedStatementFile[] | null>(null);
   // path ที่กำลังอ่านซ้ำจาก storage (ไฟล์เก่าที่ยังไม่มีผลเซฟ)
@@ -172,25 +168,6 @@ export default function StatementAnalyzer({
       }
     },
     [customerId]
-  );
-
-  /** สร้างบิลขาย (ร่าง) จากแถวเดียว — แถวเงินเข้าที่ไม่พบบิล */
-  const createBillForRow = useCallback(
-    (idx: number, t: StatementTxn, allTxns: StatementTxn[]) => {
-      setCreatingRow(idx);
-      createSaleBillsFromStatementAction({
-        customerId,
-        txns: [t],
-        sourceLabel: "สเตทเมนต์ (จับคู่รายแถว)",
-      })
-        .then((r) => {
-          setBillsMsg({ ok: r.ok, text: r.message });
-          if (r.ok) void runBillMatch(allTxns);
-        })
-        .catch(() => setBillsMsg({ ok: false, text: "สร้างบิลไม่สำเร็จ กรุณาลองใหม่" }))
-        .finally(() => setCreatingRow(-1));
-    },
-    [customerId, runBillMatch]
   );
 
   // flag "อ่าน/สร้างบิลเสร็จแล้ว รอกระทบกับบิล" — effect ยิงหลัง txns commit จริง (กัน stale closure)
@@ -571,34 +548,6 @@ export default function StatementAnalyzer({
             ดาวน์โหลด CSV
           </button>
         ) : null}
-        {txns.some((t) => t.direction === "in") ? (
-          <button
-            type="button"
-            className="btn"
-            disabled={creatingBills}
-            title="สร้างบิลขาย (ร่าง) จากรายการเงินเข้า — ยืนยันแล้วไหลเข้าสมุดรายวัน/แยกประเภท/งบอัตโนมัติ"
-            onClick={() => {
-              setBillsMsg(null);
-              setCreatingBills(true);
-              createSaleBillsFromStatementAction({
-                customerId,
-                txns,
-                sourceLabel: `สเตทเมนต์ (${selectedNames.join(", ").slice(0, 100) || customerLabel})`,
-              })
-                .then((r) => {
-                  setBillsMsg({ ok: r.ok, text: r.message });
-                  // บิลเพิ่งถูกสร้าง → กระทบกับบิลใหม่ให้คอลัมน์ "ตรงกับบิล" อัปเดตทันที
-                  if (r.ok) void runBillMatch(txns);
-                })
-                .catch(() => setBillsMsg({ ok: false, text: "สร้างบิลไม่สำเร็จ กรุณาลองใหม่" }))
-                .finally(() => setCreatingBills(false));
-            }}
-          >
-            {creatingBills
-              ? "กำลังสร้างบิล…"
-              : `➕ สร้างบิลขาย (ร่าง) จากเงินเข้า ${txns.filter((t) => t.direction === "in").length.toLocaleString("th-TH")} รายการ`}
-          </button>
-        ) : null}
         {billsMsg ? (
           <span className={`action-msg ${billsMsg.ok ? "" : "err"}`} style={billsMsg.ok ? { color: "#166534" } : undefined}>
             {billsMsg.text}
@@ -761,7 +710,6 @@ export default function StatementAnalyzer({
               bills={bills}
               reviewed={reviewed}
               manualPick={manualPick}
-              creatingRow={creatingRow}
               uploadingRow={uploadingRow}
               filter={(t) => t.direction === "in"}
               updateTxn={updateTxn}
@@ -774,7 +722,6 @@ export default function StatementAnalyzer({
                 })
               }
               onManualPick={(k, b) => setManualPick((prev) => new Map(prev).set(k, b.id))}
-              onCreateBill={(i, t) => createBillForRow(i, t, txns)}
               onUploadBill={(i, t, file) => void uploadBillForRow(i, t, file)}
             />
             <TxnPile
@@ -785,7 +732,6 @@ export default function StatementAnalyzer({
               bills={bills}
               reviewed={reviewed}
               manualPick={manualPick}
-              creatingRow={creatingRow}
               uploadingRow={uploadingRow}
               filter={(t) => t.direction === "out"}
               updateTxn={updateTxn}
@@ -798,7 +744,6 @@ export default function StatementAnalyzer({
                 })
               }
               onManualPick={(k, b) => setManualPick((prev) => new Map(prev).set(k, b.id))}
-              onCreateBill={(i, t) => createBillForRow(i, t, txns)}
               onUploadBill={(i, t, file) => void uploadBillForRow(i, t, file)}
             />
             <TxnPile
@@ -809,7 +754,6 @@ export default function StatementAnalyzer({
               bills={bills}
               reviewed={reviewed}
               manualPick={manualPick}
-              creatingRow={creatingRow}
               uploadingRow={uploadingRow}
               filter={(t) => t.direction !== "in" && t.direction !== "out"}
               updateTxn={updateTxn}
@@ -822,7 +766,6 @@ export default function StatementAnalyzer({
                 })
               }
               onManualPick={(k, b) => setManualPick((prev) => new Map(prev).set(k, b.id))}
-              onCreateBill={(i, t) => createBillForRow(i, t, txns)}
               onUploadBill={(i, t, file) => void uploadBillForRow(i, t, file)}
               hideWhenEmpty
             />
@@ -886,11 +829,9 @@ function BillSideCard({
   matchesReady,
   bills,
   isReviewed,
-  creating,
   uploading,
   onToggleReviewed,
   onManualPick,
-  onCreateBill,
   onUploadBill,
 }: {
   idx: number;
@@ -900,11 +841,9 @@ function BillSideCard({
   matchesReady: boolean;
   bills: BillForMatch[];
   isReviewed: boolean;
-  creating: boolean;
   uploading: boolean;
   onToggleReviewed: (k: string) => void;
   onManualPick: (k: string, b: BillForMatch) => void;
-  onCreateBill: (i: number, t: StatementTxn) => void;
   onUploadBill: (i: number, t: StatementTxn, file: File) => void;
 }) {
   const [q, setQ] = useState("");
@@ -947,7 +886,8 @@ function BillSideCard({
     );
   }
 
-  // ไม่พบบิล — สร้างบิลขาย (เฉพาะเงินเข้า) หรือค้นบิลจับคู่มือ
+  // ไม่พบบิล — อัปบิลจริงเข้าแถวนี้ หรือค้นบิลจับคู่มือ (★ 2026-09-01 ผู้ใช้เลือกไม่สร้างบิลจากเงินเข้า
+  //   อัตโนมัติ — "เดี๋ยวอัพบิลเพิ่มเอง" → เหลือปุ่มอัปบิล/ค้นบิล/ติ๊กไม่ต้องมีบิล)
   const qNorm = q.trim().toLowerCase();
   const hits = qNorm
     ? bills
@@ -965,11 +905,6 @@ function BillSideCard({
       <div style={{ color: "#b45309", fontWeight: 600, fontSize: 13 }}>⚠ ไม่พบบิลที่ยอด/วัน/ชื่อตรง</div>
       <TransferWhen t={t} />
       <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
-        {t.direction === "in" ? (
-          <button type="button" className="btn" disabled={creating || uploading} onClick={() => onCreateBill(idx, t)}>
-            {creating ? "กำลังสร้าง…" : "➕ สร้างบิลขายจากแถวนี้"}
-          </button>
-        ) : null}
         {/* อัปรูป/ไฟล์บิลจริงเข้าแถวนี้เลย (requirement 2026-09-01) — บิลใหม่จะจับคู่เองถ้ายอด/วันตรง */}
         <input
           ref={uploadRef}
@@ -982,7 +917,7 @@ function BillSideCard({
             e.target.value = "";
           }}
         />
-        <button type="button" className="btn" disabled={uploading || creating} onClick={() => uploadRef.current?.click()}>
+        <button type="button" className="btn" disabled={uploading} onClick={() => uploadRef.current?.click()}>
           {uploading ? "กำลังอัป + AI อ่านบิล…" : "📷 อัปรูปบิลแถวนี้"}
         </button>
         <input
@@ -1027,13 +962,11 @@ function TxnPile({
   bills,
   reviewed,
   manualPick,
-  creatingRow,
   uploadingRow,
   filter,
   updateTxn,
   onToggleReviewed,
   onManualPick,
-  onCreateBill,
   onUploadBill,
   hideWhenEmpty = false,
 }: {
@@ -1044,13 +977,11 @@ function TxnPile({
   bills: BillForMatch[];
   reviewed: Set<string>;
   manualPick: Map<string, string>;
-  creatingRow: number;
   uploadingRow: number;
   filter: (t: StatementTxn) => boolean;
   updateTxn: (idx: number, patch: Partial<StatementTxn>) => void;
   onToggleReviewed: (k: string) => void;
   onManualPick: (k: string, b: BillForMatch) => void;
-  onCreateBill: (i: number, t: StatementTxn) => void;
   onUploadBill: (i: number, t: StatementTxn, file: File) => void;
   hideWhenEmpty?: boolean;
 }) {
@@ -1139,11 +1070,9 @@ function TxnPile({
                   matchesReady={!!matches}
                   bills={bills}
                   isReviewed={reviewed.has(k)}
-                  creating={creatingRow === i}
                   uploading={uploadingRow === i}
                   onToggleReviewed={onToggleReviewed}
                   onManualPick={onManualPick}
-                  onCreateBill={onCreateBill}
                   onUploadBill={onUploadBill}
                 />
               </div>
