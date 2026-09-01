@@ -169,42 +169,7 @@
   .stmt-match-row { grid-template-columns: 1fr !important; }
 }
 
-/* ============================================================
-   layout 2 คอลัมน์ (feedback 2026-09-01): ผลอ่าน/จับคู่อยู่กลาง ·
-   "อ่านไฟล์ไหนบ้าง" (ไฟล์ที่เคยอัป + สถานะอ่าน) เป็นแถบข้างซ้ายแบบย่อ
-   ============================================================ */
-.stmt-layout {
-  display: grid;
-  grid-template-columns: 250px minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
-  margin-top: 10px;
-}
-.stmt-side {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-size: 13px;
-  position: sticky;
-  top: 8px;
-  max-height: calc(100vh - 40px);
-  overflow-y: auto;
-}
-.stmt-side-title { font-weight: 600; margin-bottom: 6px; }
-.stmt-side-files { list-style: none; margin: 0; padding: 0; }
-.stmt-side-files li { padding: 4px 0; border-bottom: 1px dashed #e2e8f0; }
-.stmt-side-files li:last-child { border-bottom: 0; }
-.stmt-side-fname {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.stmt-side-ok { color: #166534; font-size: 12px; }
-.stmt-side-btn { font-size: 12px; padding: 2px 8px; }
-.stmt-side-status li { font-size: 12px; }
-@media (max-width: 900px) {
-  .stmt-layout { grid-template-columns: 1fr; }
-  .stmt-side { position: static; max-height: none; }
-}
+/* บรรทัดสรุป "อ่านแล้ว N ไฟล์" (แทนแถบข้าง — feedback 2026-09-01 รอบ 2) */
+.stmt-read-summary { font-size: 13px; margin: 6px 0; }
+.stmt-read-summary > summary { cursor: pointer; font-weight: 600; }
+.stmt-read-summary ul { margin-top: 6px; }

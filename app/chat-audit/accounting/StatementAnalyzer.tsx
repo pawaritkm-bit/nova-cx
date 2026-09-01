@@ -247,16 +247,14 @@ export default function StatementAnalyzer({
     };
   }, [customerId, addResults]);
 
-  // ★ เซฟติ๊กอัตโนมัติ (debounce 800ms) ทุกครั้งที่ reviewed/manualPick เปลี่ยน — หลังโหลดค่าเดิมแล้วเท่านั้น
+  // ★ เซฟติ๊กทันทีทุกครั้งที่เปลี่ยน (ไม่ debounce — ติ๊กแล้วรีบปิดหน้าต่างก็ไม่หาย) —
+  //   หลังโหลดค่าเดิมแล้วเท่านั้น (กันเซฟทับด้วยค่าว่าง) · เขียนไฟล์เล็ก + คนคลิกไม่ถี่ = ไม่หนัก
   useEffect(() => {
     if (!reviewLoadedRef.current) return;
-    const timer = setTimeout(() => {
-      void saveStatementReviewStateAction({
-        customerId,
-        state: { reviewed: Array.from(reviewed), manual: Object.fromEntries(manualPick) },
-      });
-    }, 800);
-    return () => clearTimeout(timer);
+    void saveStatementReviewStateAction({
+      customerId,
+      state: { reviewed: Array.from(reviewed), manual: Object.fromEntries(manualPick) },
+    });
   }, [reviewed, manualPick, customerId]);
 
   // แถวที่กำลังอัปรูปบิลเพิ่ม (-1 = ไม่มี) — ปุ่มบนการ์ด "ไม่พบบิล"
@@ -574,75 +572,68 @@ export default function StatementAnalyzer({
         </div>
       ) : null}
 
-      {/* ★ layout 2 คอลัมน์ (feedback 2026-09-01): งานหลัก (ผลอ่าน/จับคู่) อยู่กลาง —
-          "อ่านไฟล์ไหนบ้าง" (ไฟล์ที่เคยอัป + สถานะอ่าน) เป็นแถบข้างซ้ายแบบย่อ */}
-      <div className="stmt-layout">
-        <aside className="stmt-side">
-          <div className="stmt-side-title">📁 ไฟล์ที่เคยอัป ({(savedFiles ?? []).length.toLocaleString("th-TH")})</div>
-          {savedFiles === null ? (
-            <div className="muted" style={{ fontSize: 12 }}>กำลังโหลด…</div>
-          ) : savedFiles.length === 0 ? (
-            <div className="muted" style={{ fontSize: 12 }}>ยังไม่เคยอัปไฟล์ของลูกค้ารายนี้</div>
-          ) : (
-            <ul className="stmt-side-files">
-              {savedFiles.map((f) => (
-                <li key={f.path}>
-                  <span className="stmt-side-fname" title={`${f.name} · อัปเดือน ${f.month}`}>{f.name}</span>
-                  {f.hasSaved ? (
-                    <span className="stmt-side-ok">✓ จำผลไว้แล้ว</span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn btn-ghost stmt-side-btn"
-                      disabled={rereading !== null}
-                      onClick={() => rereadStored(f)}
-                    >
-                      {rereading === f.path ? "กำลังอ่าน…" : "อ่านอีกครั้ง"}
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
+      {/* ★ feedback 2026-09-01 (รอบ 2): เอาแถบไฟล์ด้านซ้ายออก — เหลือ
+          1) แถวเตือนเฉพาะไฟล์ที่ยังไม่มีผลจำ (ปกติไม่โผล่ — ทุกการอ่านเซฟอัตโนมัติแล้ว)
+          2) บรรทัดสรุป "อ่านแล้ว N ไฟล์" กดกางดูรายไฟล์ได้ · ผลอ่านกินเต็มหน้า */}
+      {savedFiles?.some((f) => !f.hasSaved) ? (
+        <div className="action-msg warn" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span>ไฟล์ที่ยังไม่มีผลจำ (อัปไว้ก่อนระบบจำจะเปิดใช้):</span>
+          {savedFiles
+            .filter((f) => !f.hasSaved)
+            .map((f) => (
+              <button
+                key={f.path}
+                type="button"
+                className="btn btn-ghost"
+                disabled={rereading !== null}
+                onClick={() => rereadStored(f)}
+              >
+                {rereading === f.path ? "กำลังอ่าน…" : `อ่าน "${f.name}" อีกครั้ง`}
+              </button>
+            ))}
+        </div>
+      ) : null}
 
-          {done && fileResults.length > 0 ? (
-            <>
-              <div className="stmt-side-title" style={{ marginTop: 12 }}>
-                สถานะอ่าน ({successCount}/{fileResults.length} สำเร็จ)
-              </div>
-              <ul className="stmt-file-status-list stmt-side-status">
-                {fileResults.map((r, i) => (
-                  <li key={i} className={r.ok ? "ok" : "err"}>
-                    <b>{r.fileName}</b>{" "}
-                    {!r.ok ? (
-                      <span>— ล้มเหลว: {r.errorMessage ?? "ไม่ทราบสาเหตุ"}</span>
-                    ) : r.meta?.truncated ? (
-                      <span>
-                        — อ่าน {r.transactions.length.toLocaleString("th-TH")} รายการ (ไฟล์ใหญ่ — อ่านไป{" "}
-                        {r.meta.includedRows.toLocaleString("th-TH")}/{r.meta.totalRows.toLocaleString("th-TH")} แถว)
-                      </span>
-                    ) : r.meta && r.meta.failedChunks > 0 ? (
-                      <span>— อ่านได้บางส่วน ({r.meta.chunkCount - r.meta.failedChunks}/{r.meta.chunkCount} ชุด)</span>
-                    ) : r.transactions.length === 0 ? (
-                      <span>— ไม่พบรายการ</span>
-                    ) : (
-                      <span>
-                        — {r.transactions.length.toLocaleString("th-TH")} รายการ
-                        {r.recon?.imported ? (
-                          <b style={{ color: "#166534" }}> · เข้ากระทบยอดแล้ว</b>
-                        ) : r.recon && r.recon.reason === "duplicate" ? (
-                          <span className="muted"> · เคยเข้ากระทบยอดแล้ว</span>
-                        ) : null}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : null}
-        </aside>
+      {done && fileResults.length > 0 ? (
+        <details className="stmt-read-summary">
+          <summary>
+            📄 อ่านแล้ว {successCount.toLocaleString("th-TH")} ไฟล์ · รวม {txns.length.toLocaleString("th-TH")} รายการ
+            {fileResults.length > successCount ? ` · ล้มเหลว ${(fileResults.length - successCount).toLocaleString("th-TH")}` : ""}
+            {" — กดดูรายไฟล์"}
+          </summary>
+          <ul className="stmt-file-status-list">
+            {fileResults.map((r, i) => (
+              <li key={i} className={r.ok ? "ok" : "err"}>
+                <b>{r.fileName}</b>{" "}
+                {!r.ok ? (
+                  <span>— ล้มเหลว: {r.errorMessage ?? "ไม่ทราบสาเหตุ"}</span>
+                ) : r.meta?.truncated ? (
+                  <span>
+                    — อ่าน {r.transactions.length.toLocaleString("th-TH")} รายการ (ไฟล์ใหญ่ — อ่านไป{" "}
+                    {r.meta.includedRows.toLocaleString("th-TH")}/{r.meta.totalRows.toLocaleString("th-TH")} แถว)
+                  </span>
+                ) : r.meta && r.meta.failedChunks > 0 ? (
+                  <span>— อ่านได้บางส่วน ({r.meta.chunkCount - r.meta.failedChunks}/{r.meta.chunkCount} ชุด)</span>
+                ) : r.transactions.length === 0 ? (
+                  <span>— ไม่พบรายการ</span>
+                ) : (
+                  <span>
+                    — {r.transactions.length.toLocaleString("th-TH")} รายการ
+                    {r.recon?.imported ? (
+                      <b style={{ color: "#166534" }}> · เข้ากระทบยอดแล้ว</b>
+                    ) : r.recon && r.recon.reason === "duplicate" ? (
+                      <span className="muted"> · เคยเข้ากระทบยอดแล้ว</span>
+                    ) : null}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : savedFiles === null ? (
+        <div className="muted" style={{ fontSize: 13 }}>กำลังโหลดผลสเตทเมนต์ที่ระบบจำไว้…</div>
+      ) : null}
 
-        <div className="stmt-main">
       {done && txns.length === 0 && !hasAnyIssue ? (
         <div className="card"><p className="empty">อ่านไม่พบรายการธุรกรรม ลองไฟล์อื่น หรือตรวจว่าเป็นสเตทเมนต์จริง</p></div>
       ) : null}
@@ -776,8 +767,6 @@ export default function StatementAnalyzer({
           </section>
         </>
       ) : null}
-        </div>
-      </div>
     </div>
   );
 }
