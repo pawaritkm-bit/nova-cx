@@ -47,6 +47,10 @@ const nextConfig = {
     "exceljs",
     "@anthropic-ai/sdk",
     "pdf-lib",
+    // ★ 2026-09-01 — ตัดรูปจาก PDF (1 รูป/บิล): unpdf เรนเดอร์หน้า + @napi-rs/canvas (native .node)
+    //   ห้ามให้ webpack bundle (binary parse ไม่ได้) — native require + @vercel/nft copy ให้เหมือน sharp
+    "unpdf",
+    "@napi-rs/canvas",
   ],
   outputFileTracingIncludes: {
     "/**": [

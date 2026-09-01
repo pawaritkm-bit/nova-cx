@@ -303,9 +303,12 @@ export default async function AccountingWorkspacePage({
     );
   }
 
-  // เดือน: ค่าเริ่ม = เดือนล่าสุดที่มีบิล
+  // เดือน: ค่าเริ่ม = เดือนล่าสุดที่มีบิล · month=all = ดูบิลทุกเดือนรวมกัน
   const months = [...new Set(all.map(monthKeyOf).filter((m): m is string => !!m))].sort((a, b) => b.localeCompare(a));
-  const selectedMonth = isValidMonth(sp.month) && months.includes(sp.month) ? sp.month : months[0] ?? "";
+  const wantAllMonths = sp.month === "all";
+  const selectedMonth = wantAllMonths
+    ? ""
+    : isValidMonth(sp.month) && months.includes(sp.month) ? sp.month : months[0] ?? "";
   const inMonth = selectedMonth ? all.filter((e) => monthKeyOf(e) === selectedMonth) : all;
 
   const groups = groupEntriesByCustomer(inMonth);
@@ -432,7 +435,8 @@ export default async function AccountingWorkspacePage({
   const q = (extra: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
     if (accountantParam) p.set("accountant", accountantParam);
-    if (selectedMonth) p.set("month", selectedMonth);
+    if (wantAllMonths) p.set("month", "all");
+    else if (selectedMonth) p.set("month", selectedMonth);
     for (const [k, v] of Object.entries(extra)) if (v) p.set(k, v);
     const s = p.toString();
     return s ? `?${s}` : "";
@@ -506,6 +510,12 @@ export default async function AccountingWorkspacePage({
                   {thaiMonth(m)}
                 </Link>
               ))}
+              {/* ★ ดูบิลทุกเดือนรวมกัน (requirement 2026-09-01) — คิว/KPI/ตารางนับรวมทุกเดือน */}
+              {months.length > 0 ? (
+                <Link href={`/chat-audit/accounting/workspace${q({ month: "all", open: undefined })}`} className={`wsp-mtab${wantAllMonths ? " on" : ""}`}>
+                  ทุกเดือน
+                </Link>
+              ) : null}
             </div>
           </div>
           <div className="wsp-kpis">

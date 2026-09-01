@@ -738,14 +738,27 @@ export default function EntryEditor({
                 </div>
               </>
             ) : viewUrl ? (
-              /* ไฟล์ที่ไม่ใช่รูป (PDF/Excel/CSV) — เปิด/ดาวน์โหลด (sign URL อายุสั้น) */
-              <div className="acc-bill-file">
+              /* ไฟล์ที่ไม่ใช่รูป (PDF/Excel/CSV) — เปิด/ดาวน์โหลด (sign URL อายุสั้น)
+                 ★ PDF: ฝังตัวอย่างบิลในหน้าเลย (requirement 2026-09-01) — ไม่ต้องเปิดแท็บใหม่ */
+              <div className="acc-bill-file" style={{ width: "100%" }}>
                 <span className="acc-bill-file-icon" aria-hidden="true">📄</span>
                 <div className="acc-bill-file-name" title={fileName ?? undefined}>{fileName || "ไฟล์แนบ"}</div>
                 <div className="acc-bill-tools">
                   <a href={viewUrl} target="_blank" rel="noopener noreferrer" className="btn">เปิดไฟล์</a>
                   <a href={`${viewUrl}&download`} target="_blank" rel="noopener noreferrer" className="btn btn-ghost">ดาวน์โหลด</a>
                 </div>
+                {/[._]pdf($|\?)/i.test(fileName ?? "") || /[._]pdf($|\?)/i.test(viewUrl) ? (
+                  <object
+                    data={viewUrl}
+                    type="application/pdf"
+                    aria-label="ตัวอย่างบิล (PDF)"
+                    style={{ width: "100%", height: "70vh", marginTop: 8, border: "1px solid #e2e8f0", borderRadius: 8 }}
+                  >
+                    <p className="muted" style={{ padding: 8 }}>
+                      เบราว์เซอร์นี้แสดง PDF ในหน้าไม่ได้ — ใช้ปุ่ม “เปิดไฟล์” ด้านบนแทน
+                    </p>
+                  </object>
+                ) : null}
               </div>
             ) : (
               <div className="acc-bill-empty">ไม่มีไฟล์แนบ (รายการคีย์เอง หรือไฟล์ถูกลบ)</div>

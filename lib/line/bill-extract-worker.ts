@@ -1081,14 +1081,45 @@ export async function extractUploadedEntry(
 
   const entryType = entry.entry_type;
 
-  // 5) บิลแรก → เติมลง entry เดิม (แทนบรรทัดว่าง)
-  await db.from("bill_entries").update(billHeadFields(bills[0], entryType)).eq("id", entryId).eq("tenant_id", tenantId);
+  // ★ ตัดรูปจาก PDF: 1 รูปต่อ 1 บิล (requirement 2026-09-01) — เมื่อจำนวนหน้า = จำนวนบิล
+  //   (เคสสแกน 1 บิล/หน้า) เรนเดอร์ทุกหน้าเป็น PNG แล้วให้แต่ละบิลชี้รูปหน้าของตัวเอง
+  //   → หน้าตรวจบิลโชว์รูป + ซูม/หมุน/OCR ได้เหมือนรูปถ่าย · best-effort: เรนเดอร์/อัปพลาด → ใช้ PDF เดิม
+  const pageImagePath: (string | null)[] = new Array(bills.length).fill(null);
+  if (isPdf && entry.upload_path) {
+    try {
+      const { renderPdfPagesToPng } = await import("@/lib/accounting/pdf-page-images");
+      const pngs = await renderPdfPagesToPng(buf);
+      if (pngs && pngs.length === bills.length) {
+        for (let i = 0; i < pngs.length; i++) {
+          const pngPath = `${entry.upload_path}.p${i + 1}.png`;
+          const { error: upErr } = await db.storage
+            .from(BILLS_BUCKET)
+            .upload(pngPath, pngs[i], { contentType: "image/png", upsert: true });
+          if (!upErr) pageImagePath[i] = pngPath;
+        }
+      }
+    } catch {
+      // เรนเดอร์ไม่ได้ (ไฟล์แปลก/lib พลาด) → ทุกบิลใช้ PDF เดิม
+    }
+  }
+  const baseName = (entry.upload_name || "บิล").replace(/\.pdf$/i, "");
+  const uploadFieldsFor = (i: number) =>
+    pageImagePath[i]
+      ? { upload_path: pageImagePath[i], upload_name: `${baseName} (หน้า ${i + 1}).png`, upload_mime: "image/png" }
+      : { upload_path: entry.upload_path, upload_name: entry.upload_name, upload_mime: entry.upload_mime };
+
+  // 5) บิลแรก → เติมลง entry เดิม (แทนบรรทัดว่าง) + สลับไฟล์เป็นรูปหน้าแรกถ้าตัดได้
+  await db
+    .from("bill_entries")
+    .update({ ...billHeadFields(bills[0], entryType), ...(pageImagePath[0] ? uploadFieldsFor(0) : {}) })
+    .eq("id", entryId)
+    .eq("tenant_id", tenantId);
   await db.from("bill_entry_lines").delete().eq("entry_id", entryId).eq("tenant_id", tenantId);
   await db
     .from("bill_entry_lines")
     .insert(buildEntryLineRows(bills[0].lines, { entryId, tenantId, forceNoVat: false, aiUsed: true, chartByCode }));
 
-  // 6) บิลที่ 2..N → สร้าง entry ใหม่ (ลูกค้า/ประเภท/ไฟล์เดียวกัน) ให้นักบัญชีตรวจแยกใบ
+  // 6) บิลที่ 2..N → สร้าง entry ใหม่ (ลูกค้า/ประเภทเดียวกัน + รูปหน้าของตัวเอง) ให้นักบัญชีตรวจแยกใบ
   for (let i = 1; i < bills.length; i++) {
     const { data: ins } = await db
       .from("bill_entries")
@@ -1097,9 +1128,7 @@ export async function extractUploadedEntry(
         customer_id: entry.customer_id,
         entry_type: entryType,
         status: "draft",
-        upload_path: entry.upload_path,
-        upload_name: entry.upload_name,
-        upload_mime: entry.upload_mime,
+        ...uploadFieldsFor(i),
         ...billHeadFields(bills[i], entryType),
       })
       .select("id")
