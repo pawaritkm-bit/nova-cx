@@ -1627,3 +1627,36 @@
   }
   .payroll-slip-print .no-print { display: none !important; }
 }
+
+/* ============================================================
+   overlay แยกสเตทเมนต์/รายงานแพลตฟอร์ม (เปิดจากกล่อง "อัปโหลดไฟล์เอง")
+   — iframe ในหน้าเดิม ไม่เด้งออก · z-index 70 = อยู่เหนือ acc-modal (60)
+   ============================================================ */
+.nova-dash .stmt-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+}
+.nova-dash .stmt-overlay-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff;
+  border-radius: 12px 12px 0 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.nova-dash .stmt-overlay-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #fff;
+  border-radius: 0 0 12px 12px;
+}
+@media (max-width: 720px) {
+  .nova-dash .stmt-overlay { padding: 8px; }
+}

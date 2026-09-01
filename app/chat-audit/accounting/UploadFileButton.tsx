@@ -46,6 +46,8 @@ export default function UploadFileButton({
   // ความคืบหน้าอัปหลายไฟล์ เช่น "2/5" (ว่าง = ไฟล์เดียว/ยังไม่เริ่ม)
   const [prog, setProg] = useState<string>("");
   const [customerId, setCustomerId] = useState<string>(lockedCustomerId ?? "");
+  // overlay แยกสเตทเมนต์/รายงานแพลตฟอร์ม (iframe ในหน้าเดิม) — null = ปิดอยู่
+  const [stmtUrl, setStmtUrl] = useState<string | null>(null);
   const [entryType, setEntryType] = useState<EntryType>(defaultEntryType);
   const fileRef = useRef<HTMLInputElement>(null);
   // ★ perf: โหลดรายชื่อลูกค้าตอนเปิดกล่อง (ไม่ดึงทุกคลิกที่หน้า) — ใช้ prop ก่อน แล้ว fallback fetch
@@ -279,18 +281,27 @@ export default function UploadFileButton({
               </label>
 
               {/* ★ ย้ายมาจากเมนูเครื่องมือ (requirement 2026-09-01): สเตทเมนต์/รายงานแพลตฟอร์ม
-                  อ่านคนละแบบกับบิล — ให้ทางเข้าอยู่ในกล่องอัปโหลดเดียวกัน กันอัปผิดช่อง */}
+                  อ่านคนละแบบกับบิล — ให้ทางเข้าอยู่ในกล่องอัปโหลดเดียวกัน กันอัปผิดช่อง
+                  ★ เปิด "ในหน้าเดิม" เป็น overlay (iframe + ?embed=1) — ไม่เด้งออกไปหน้าอื่น */}
               <div className="acc-field acc-field-wide" style={{ borderTop: "1px dashed #e2e8f0", paddingTop: 10 }}>
                 <span>ไฟล์สเตทเมนต์ธนาคาร / รายงานแพลตฟอร์ม (Shopee ฯลฯ)</span>
-                <a
+                <button
+                  type="button"
                   className="btn btn-ghost"
-                  href={`/chat-audit/accounting/statement${(locked ? lockedCustomerId : customerId) ? `?customerId=${locked ? lockedCustomerId : customerId}` : ""}`}
                   style={{ alignSelf: "flex-start" }}
+                  onClick={() => {
+                    const cid = locked ? lockedCustomerId : customerId;
+                    const sp = new URLSearchParams({ embed: "1" });
+                    if (cid) sp.set("customerId", cid);
+                    const acct = accountant || searchParams.get("accountant");
+                    if (acct) sp.set("accountant", acct);
+                    setStmtUrl(`/chat-audit/accounting/statement?${sp.toString()}`);
+                  }}
                 >
-                  📑 ไปหน้าแยกสเตทเมนต์/รายงานแพลตฟอร์ม →
-                </a>
+                  📑 แยกสเตทเมนต์/รายงานแพลตฟอร์ม (เปิดในหน้านี้)
+                </button>
                 <span className="muted" style={{ fontSize: 12 }}>
-                  เอกสารพวกนี้อย่าอัปเป็นบิล — หน้านั้น AI แยกรายการเข้า/ออก + สร้างบิลขายจากเงินเข้าได้
+                  เอกสารพวกนี้อย่าอัปเป็นบิล — AI จะแยกรายการเข้า/ออก + สร้างบิลขายจากเงินเข้าให้
                 </span>
               </div>
 
@@ -305,6 +316,35 @@ export default function UploadFileButton({
               </div>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {/* overlay แยกสเตทเมนต์/รายงานแพลตฟอร์มในหน้าเดิม — ปิดแล้ว refresh ให้บิลขายที่สร้างโผล่เลย */}
+      {stmtUrl ? (
+        <div className="stmt-overlay" role="dialog" aria-modal="true" aria-label="แยกสเตทเมนต์/รายงานแพลตฟอร์ม">
+          <div className="stmt-overlay-bar">
+            <b>📑 แยกสเตทเมนต์ / รายงานแพลตฟอร์ม</b>
+            <span style={{ flex: 1 }} />
+            <a
+              href={stmtUrl.replace(/([?&])embed=1(&|$)/, "$1").replace(/[?&]$/, "")}
+              target="_blank"
+              rel="noopener"
+              className="btn btn-ghost"
+            >
+              เปิดแท็บใหม่ ↗
+            </a>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setStmtUrl(null);
+                router.refresh();
+              }}
+            >
+              ✕ ปิด
+            </button>
+          </div>
+          <iframe className="stmt-overlay-frame" src={stmtUrl} title="แยกสเตทเมนต์/รายงานแพลตฟอร์ม" />
         </div>
       ) : null}
     </>

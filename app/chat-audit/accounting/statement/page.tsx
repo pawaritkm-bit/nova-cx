@@ -89,6 +89,8 @@ export default async function StatementPage({
         <div className="card acc-review-head">
           {/* เลือกลูกค้า (form GET — คงสโคป server-side) */}
           <form method="get" className="acc-opening-cust">
+            {/* คงโหมดฝัง (iframe) ไว้ตอนสลับลูกค้า — ไม่งั้นเมนูหลักโผล่ซ้อนใน overlay */}
+            {embed ? <input type="hidden" name="embed" value="1" /> : null}
             <label>
               ลูกค้า:{" "}
               <select name="customerId" defaultValue={validCustomerId}>
@@ -103,7 +105,10 @@ export default async function StatementPage({
             <button type="submit" className="btn">เปิด</button>
           </form>
           <span className="acc-toolbar-spacer" />
-          <Link href="/chat-audit/accounting" className="btn btn-ghost">← กลับไปลงบันทึกบัญชี</Link>
+          {/* โหมดฝังมีปุ่ม ✕ ปิดของ overlay อยู่แล้ว — ลิงก์กลับจะพาไฟรมหลงหน้า */}
+          {embed ? null : (
+            <Link href="/chat-audit/accounting" className="btn btn-ghost">← กลับไปลงบันทึกบัญชี</Link>
+          )}
         </div>
 
         {customers.length === 0 ? (
