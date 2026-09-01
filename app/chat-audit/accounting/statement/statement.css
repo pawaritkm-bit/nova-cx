@@ -173,3 +173,59 @@
 .stmt-read-summary { font-size: 13px; margin: 6px 0; }
 .stmt-read-summary > summary { cursor: pointer; font-weight: 600; }
 .stmt-read-summary ul { margin-top: 6px; }
+
+/* ============================================================
+   น้อง NOVA วิ่งตอนโหลด/อ่านสเตทเมนต์ (requirement 2026-09-01)
+   — แอนิเมชัน nv-* พอร์ตจาก liff.css (ต้นแบบที่ผู้ใช้อนุมัติ) scoped ใต้ .stmt-nova
+   ============================================================ */
+.stmt-nova {
+  text-align: center;
+  padding: 12px 0 4px;
+}
+.stmt-nova .nova-loader {
+  position: relative;
+  width: 220px;
+  height: 180px;
+  margin: 0 auto;
+  overflow: hidden;
+}
+.stmt-nova-text {
+  font-weight: 600;
+  color: #1e3a8a;
+  margin-top: 4px;
+}
+.stmt-nova-sub {
+  font-size: 12px;
+  color: #64748b;
+}
+@keyframes nv-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9px); }
+}
+@keyframes nv-legA {
+  0%, 100% { transform: rotate(26deg); }
+  50% { transform: rotate(-26deg); }
+}
+@keyframes nv-legB {
+  0%, 100% { transform: rotate(-26deg); }
+  50% { transform: rotate(26deg); }
+}
+@keyframes nv-armS {
+  0%, 100% { transform: rotate(-10deg); }
+  50% { transform: rotate(12deg); }
+}
+@keyframes nv-dust {
+  0% { opacity: 0.5; transform: translateX(0) scale(0.6); }
+  100% { opacity: 0; transform: translateX(-30px) scale(1.4); }
+}
+.stmt-nova .nv-bob { animation: nv-bob 0.44s ease-in-out infinite; transform-origin: center; }
+.stmt-nova .nv-leg { transform-box: fill-box; transform-origin: top center; }
+.stmt-nova .nv-legA { animation: nv-legA 0.44s ease-in-out infinite; }
+.stmt-nova .nv-legB { animation: nv-legB 0.44s ease-in-out infinite; }
+.stmt-nova .nv-arm { transform-box: fill-box; transform-origin: top center; animation: nv-armS 0.44s ease-in-out infinite; }
+.stmt-nova .nv-dust { animation: nv-dust 0.5s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .stmt-nova .nv-bob, .stmt-nova .nv-legA, .stmt-nova .nv-legB, .stmt-nova .nv-arm, .stmt-nova .nv-dust {
+    animation: none !important;
+  }
+}

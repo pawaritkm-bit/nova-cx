@@ -21,6 +21,7 @@ import {
   type TxnDirection,
 } from "@/lib/accounting/statement-analyze";
 import { toCsv } from "@/lib/accounting/csv-export";
+import NovaMascot from "../../liff/survey/[token]/NovaMascot";
 
 /** bucket เดียวกับบิล (ต้องตรงกับ STATEMENT actions / route) */
 const BILLS_BUCKET = "bills";
@@ -147,6 +148,8 @@ export default function StatementAnalyzer({
   const reviewLoadedRef = useRef(false);
   // ★ "ระบบจำไว้" (2026-09-01): ไฟล์ที่เคยอัปของลูกค้า — ผลอ่านที่เซฟไว้โหลดขึ้นเองตอนเปิดหน้า
   const [savedFiles, setSavedFiles] = useState<SavedStatementFile[] | null>(null);
+  // กำลังโหลดผลที่จำไว้ตอนเปิดหน้า (โชว์น้อง NOVA วิ่ง)
+  const [autoLoading, setAutoLoading] = useState(true);
   // path ที่กำลังอ่านซ้ำจาก storage (ไฟล์เก่าที่ยังไม่มีผลเซฟ)
   const [rereading, setRereading] = useState<string | null>(null);
   /** กระทบ txns ชุดที่ให้กับบิลของลูกค้า (เรียกอัตโนมัติหลังอ่าน/สร้างบิล + ปุ่ม manual) */
@@ -225,6 +228,7 @@ export default function StatementAnalyzer({
       if (cancelled) return;
       if (!r || !r.ok) {
         setSavedFiles([]);
+        setAutoLoading(false);
         return;
       }
       setSavedFiles(r.files);
@@ -241,6 +245,7 @@ export default function StatementAnalyzer({
         addResults(loaded, false);
         setDone(true);
       }
+      if (!cancelled) setAutoLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -589,10 +594,18 @@ export default function StatementAnalyzer({
       ) : null}
       {err ? <div className="action-msg err">{err}</div> : null}
 
-      {phase === "reading" ? (
-        <div className="stmt-reading">
-          AI กำลังอ่านสเตทเมนต์ {selectedNames.length > 1 ? `ทั้ง ${selectedNames.length} ไฟล์` : ""}และแยกรายการเข้า/ออก…
-          (ไฟล์ยาว/หลายไฟล์อาจใช้เวลาสักครู่)
+      {/* ★ น้อง NOVA วิ่ง (requirement 2026-09-01) — ให้นักบัญชีเห็นว่ากำลังโหลด/อ่านอยู่ */}
+      {phase === "reading" || autoLoading || rereading ? (
+        <div className="stmt-nova">
+          <NovaMascot variant="loader" width={150} />
+          <div className="stmt-nova-text">
+            {phase === "reading"
+              ? `น้อง NOVA กำลังอัปโหลด + อ่านสเตทเมนต์${selectedNames.length > 1 ? ` ทั้ง ${selectedNames.length} ไฟล์` : ""}…`
+              : rereading
+                ? "น้อง NOVA กำลังอ่านไฟล์เดิมอีกครั้ง…"
+                : "น้อง NOVA กำลังโหลดผลสเตทเมนต์ที่จำไว้…"}
+          </div>
+          <div className="stmt-nova-sub">ไฟล์ยาว/หลายไฟล์อาจใช้เวลาสักครู่ — ไม่ต้องกดซ้ำ</div>
         </div>
       ) : null}
 
@@ -654,14 +667,12 @@ export default function StatementAnalyzer({
             ))}
           </ul>
         </details>
-      ) : savedFiles === null ? (
-        <div className="muted" style={{ fontSize: 13 }}>กำลังโหลดผลสเตทเมนต์ที่ระบบจำไว้…</div>
       ) : null}
 
       {done && txns.length === 0 && !hasAnyIssue ? (
         <div className="card"><p className="empty">อ่านไม่พบรายการธุรกรรม ลองไฟล์อื่น หรือตรวจว่าเป็นสเตทเมนต์จริง</p></div>
       ) : null}
-      {!done && txns.length === 0 ? (
+      {!done && !autoLoading && txns.length === 0 ? (
         <div className="card">
           <p className="empty">เลือกไฟล์สเตทเมนต์ด้านบนแล้วกด &ldquo;อัปสเตทเมนต์ + แยกรายการ&rdquo; — ผลที่เคยอ่านจะโหลดขึ้นเองถ้ามี</p>
         </div>
