@@ -237,10 +237,15 @@ export default function StatementAnalyzer({
       }
       setSavedFiles(r.files);
       const withSaved = r.files.filter((f) => f.hasSaved).slice(0, 12);
+      // ★ perf 2026-09-01: โหลดขนาน (เดิมทีละไฟล์ 12 รอบ ~4 วิ → พร้อมกัน 4 ~1 วิ)
+      const results = await mapWithConcurrency(withSaved, 4, (f) =>
+        loadSavedStatementAction({ customerId, path: f.path })
+          .then((s) => ({ f, s }))
+          .catch(() => ({ f, s: null as null }))
+      );
+      if (cancelled) return;
       const loaded: FileResult[] = [];
-      for (const f of withSaved) {
-        const s = await loadSavedStatementAction({ customerId, path: f.path }).catch(() => null);
-        if (cancelled) return;
+      for (const { f, s } of results) {
         if (s && s.ok && s.transactions.length > 0) {
           loaded.push({ fileName: s.fileName, path: f.path, ok: true, transactions: s.transactions, meta: null, recon: null });
         }
@@ -836,11 +841,14 @@ function BillAttachment({ bill }: { bill: BillForMatch | undefined }) {
   if (bill.uploadIsImage) {
     return (
       <a href={bill.uploadUrl} target="_blank" rel="noopener" title="กดดูรูปเต็ม" style={{ display: "inline-block", marginTop: 6 }}>
-        {/* signed URL ชั่วคราวจาก storage — ใช้ <img> ตรง ๆ (next/image ไม่รู้จัก host + หมดอายุได้) */}
+        {/* ★ perf 2026-09-01: thumbnail ผ่าน bill-thumb (ย่อฝั่ง storage + browser cache)
+            — กดที่รูปค่อยเปิด signed URL ตัวเต็ม */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={bill.uploadUrl}
+          src={`/api/accounting/bill-thumb?entry=${bill.id}&w=480`}
           alt="รูปบิล"
+          loading="lazy"
+          decoding="async"
           style={{ maxHeight: 120, maxWidth: "100%", borderRadius: 8, border: "1px solid #e2e8f0", display: "block" }}
         />
       </a>

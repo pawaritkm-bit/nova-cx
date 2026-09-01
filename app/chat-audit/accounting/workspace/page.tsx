@@ -654,8 +654,11 @@ export default async function AccountingWorkspacePage({
                       <div className="wsp-thumb">
                         {url && img ? (
                           <a href={`#zoom-${e.id}`} className="wsp-thumb-zoom" aria-label="ขยายดูบิล">
+                            {/* ★ perf 2026-09-01: รูปย่อผ่าน bill-thumb (~10-30KB + browser cache)
+                                แทน signed URL สแกนเต็ม (~0.3-1MB/ใบ) — เลื่อนรายการลื่นขึ้นมาก
+                                รูปเต็มโหลดเฉพาะตอนกดขยาย (lightbox ด้านล่างใช้ signed URL เดิม) */}
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={url} alt="บิล" loading="lazy" decoding="async" />
+                            <img src={`/api/accounting/bill-thumb?entry=${e.id}&w=360`} alt="บิล" loading="lazy" decoding="async" />
                             <span className="wsp-zoom-ic">🔍 ขยาย</span>
                           </a>
                         ) : path && url ? (
@@ -668,8 +671,10 @@ export default async function AccountingWorkspacePage({
                       {/* แว่นขยาย: คลิกรูปเล็ก → เปิดรูปใหญ่เต็มจอ (CSS :target · คลิกพื้นหลัง/รูปเพื่อปิด) */}
                       {url && img ? (
                         <a id={`zoom-${e.id}`} href="#" className="wsp-lightbox" aria-label="ปิดรูปขยาย">
+                          {/* ★ perf: loading=lazy — lightbox ซ่อนด้วย display:none จึงไม่ intersect
+                              → รูปเต็มโหลด "ตอนกดขยาย" เท่านั้น (เดิมโหลดเต็มทุกใบตั้งแต่เปิดหน้า) */}
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={url} alt="บิล (ขยาย)" />
+                          <img src={url} alt="บิล (ขยาย)" loading="lazy" decoding="async" />
                           <span className="wsp-lightbox-close">✕ ปิด</span>
                         </a>
                       ) : null}
