@@ -257,6 +257,30 @@ export default function StatementAnalyzer({
     });
   }, [reviewed, manualPick, customerId]);
 
+  // ★ บิลที่อัปจากหน้าอื่น (เช่นกล่องอัปโหลดบิล/แท็บเปิดบิล) โผล่มาจับคู่เองเมื่อกลับมาหน้านี้ —
+  //   กระทบใหม่ตอนหน้าถูกโฟกัส/สลับแท็บกลับมา (throttle 15 วิ · ข้ามตอนเพิ่งเปิดหน้า)
+  const lastWakeMatchRef = useRef<number>(Date.now());
+  useEffect(() => {
+    const onWake = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastWakeMatchRef.current < 15000) return;
+      lastWakeMatchRef.current = now;
+      // trigger ผ่าน flag+effect — ใช้ txns ล่าสุดจริงเสมอ (ไม่มีรายการ = ไม่ทำอะไร)
+      setTxns((prev) => {
+        if (prev.length === 0) return prev;
+        wantMatchRef.current = true;
+        return [...prev];
+      });
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+    };
+  }, []);
+
   // แถวที่กำลังอัปรูปบิลเพิ่ม (-1 = ไม่มี) — ปุ่มบนการ์ด "ไม่พบบิล"
   const [uploadingRow, setUploadingRow] = useState<number>(-1);
 
