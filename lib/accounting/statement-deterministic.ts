@@ -67,10 +67,13 @@ function isoDate(d: ParsedDate): string {
 
 /** หา "ยอดยกมา" (opening balance) จากหัวสเตทเมนต์ — ใช้เป็นจุดตั้งต้นของ balance-delta */
 function findOpeningBalance(text: string): number | null {
+  // ★ ช่องว่างระหว่างป้ายกับตัวเลขต้องเผื่อคำอังกฤษกำกับ เช่น SCB พิมพ์ "ยอดยกมา (Balance Forward)\t285,353.06"
+  //   (21+ ตัวอักษร — เดิมเผื่อแค่ 20 ทำให้หา opening ไม่เจอ → เสียแถวแรก/ตก fullyReconciled ทั้งไฟล์)
   const m =
-    text.match(/ยอดยกมา[^\d\-]{0,20}(-?\d{1,3}(?:,\d{3})*\.\d{2})/) ||
+    text.match(/ยอดยกมา[^\d\-]{0,40}(-?\d{1,3}(?:,\d{3})*\.\d{2})/) ||
     text.match(/(-?\d{1,3}(?:,\d{3})*\.\d{2})[^\d\n]{0,6}ยอดยกมา/) ||
-    text.match(/BROUGHT\s+FORWARD[^\d\-]{0,20}(-?\d{1,3}(?:,\d{3})*\.\d{2})/i);
+    text.match(/BROUGHT\s+FORWARD[^\d\-]{0,40}(-?\d{1,3}(?:,\d{3})*\.\d{2})/i) ||
+    text.match(/BALANCE\s+FORWARD\)?[^\d\-]{0,40}(-?\d{1,3}(?:,\d{3})*\.\d{2})/i);
   return m ? parseFloat(m[1].replace(/,/g, "")) : null;
 }
 
