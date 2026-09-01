@@ -191,6 +191,120 @@ export async function createSaleBillsFromStatementAction(input: {
 }
 
 // ---------------------------------------------------------------------
+// "ระบบจำไว้" (requirement 2026-09-01): ไฟล์สเตทเมนต์อยู่ใน storage ถาวรอยู่แล้ว
+//   - listSavedStatementsAction: ไฟล์ที่เคยอัปของลูกค้า + มีผลอ่านเซฟไว้ไหม (sidecar .txns.json)
+//   - loadSavedStatementAction: โหลดผลอ่านที่เซฟไว้ (ไม่ต้องอ่าน/อัปซ้ำ) — ไฟล์เก่าไม่มี sidecar
+//     ให้เรียก /api/accounting/extract-statement ด้วย path เดิม (อ่านจาก storage ตรง ๆ ครั้งเดียว)
+// ---------------------------------------------------------------------
+
+/** ไฟล์สเตทเมนต์ที่เคยอัปไว้ 1 ไฟล์ */
+export type SavedStatementFile = {
+  /** path เต็มใน bucket (ใช้โหลด/อ่านซ้ำ) */
+  path: string;
+  /** ชื่อไฟล์ที่อัป (ตัด timestamp นำหน้าแล้ว) */
+  name: string;
+  /** โฟลเดอร์เดือนที่อัป (YYYY-MM) */
+  month: string;
+  /** มีผลอ่านเซฟไว้แล้ว (โหลดได้ทันที ไม่ต้องอ่านใหม่) */
+  hasSaved: boolean;
+};
+
+/** เพดานเดือนย้อนหลัง + ไฟล์ต่อลูกค้า (กัน listing บาน) */
+const SAVED_MONTHS_LIMIT = 12;
+const SAVED_FILES_LIMIT = 60;
+
+export async function listSavedStatementsAction(input: {
+  customerId: string;
+}): Promise<{ ok: true; files: SavedStatementFile[] } | { ok: false; message: string }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(input.customerId)) return { ok: false, message: "กรุณาเลือกลูกค้า" };
+    if (!customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+    const folderCode = await resolveFolderCode(service, ctx.tenantId, input.customerId);
+    if (!folderCode) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    const base = `${ctx.tenantId}/${STATEMENT_PREFIX}/${folderCode}`;
+
+    // ชั้น 1: โฟลเดอร์เดือน (ใหม่→เก่า) · ชั้น 2: ไฟล์ในเดือน
+    const { data: monthDirs } = await service.storage.from(BILLS_BUCKET).list(base, { limit: 200 });
+    const months = (monthDirs ?? [])
+      .map((d) => d.name)
+      .filter((n) => /^\d{4}-\d{2}$/.test(n))
+      .sort()
+      .reverse()
+      .slice(0, SAVED_MONTHS_LIMIT);
+
+    const files: SavedStatementFile[] = [];
+    for (const m of months) {
+      const { data: items } = await service.storage.from(BILLS_BUCKET).list(`${base}/${m}`, { limit: 500 });
+      const names = (items ?? []).map((i) => i.name);
+      const sidecars = new Set(names.filter((n) => n.endsWith(".txns.json")));
+      for (const n of names) {
+        if (n.endsWith(".txns.json")) continue;
+        files.push({
+          path: `${base}/${m}/${n}`,
+          name: n.replace(/^[0-9T:.Z-]+_/, ""), // ตัด timestamp นำหน้าที่ server ใส่ตอนอัป
+          month: m,
+          hasSaved: sidecars.has(`${n}.txns.json`),
+        });
+        if (files.length >= SAVED_FILES_LIMIT) break;
+      }
+      if (files.length >= SAVED_FILES_LIMIT) break;
+    }
+    return { ok: true, files };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "โหลดรายชื่อไฟล์ไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+export async function loadSavedStatementAction(input: {
+  customerId: string;
+  path: string;
+}): Promise<{ ok: true; fileName: string; transactions: StatementTxn[] } | { ok: false; message: string }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(input.customerId)) return { ok: false, message: "กรุณาเลือกลูกค้า" };
+    if (!customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+    const folderCode = await resolveFolderCode(service, ctx.tenantId, input.customerId);
+    if (!folderCode) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    // ★ path ต้องอยู่ใต้โฟลเดอร์สเตทเมนต์ของลูกค้ารายนี้เท่านั้น (กันชี้ข้ามลูกค้า/tenant)
+    const p = typeof input.path === "string" ? input.path : "";
+    if (!p.startsWith(`${ctx.tenantId}/${STATEMENT_PREFIX}/${folderCode}/`) || p.includes("..")) {
+      return { ok: false, message: "ไฟล์ไม่ถูกต้อง" };
+    }
+
+    const { data: blob, error } = await service.storage
+      .from(BILLS_BUCKET)
+      .download(p.endsWith(".txns.json") ? p : `${p}.txns.json`);
+    if (error || !blob) return { ok: false, message: "ไฟล์นี้ยังไม่มีผลอ่านเซฟไว้ — กด “อ่านอีกครั้ง”" };
+    const parsed = JSON.parse(await blob.text()) as {
+      fileName?: string;
+      transactions?: unknown[];
+    };
+    const txns = (Array.isArray(parsed.transactions) ? parsed.transactions : [])
+      .slice(0, MAX_TXNS_INPUT)
+      .map(sanitizeTxn)
+      .filter((t): t is StatementTxn => !!t);
+    return {
+      ok: true,
+      fileName: (parsed.fileName || p.split("/").pop() || "ไฟล์").slice(0, 200),
+      transactions: txns,
+    };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "โหลดผลที่เซฟไว้ไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+// ---------------------------------------------------------------------
 // กระทบรายการสเตทเมนต์กับบิลในระบบ (สลิป/บิลซื้อ/บิลขาย) — requirement 2026-09-01
 //   เงินเข้า ↔ บิลขาย · เงินออก ↔ บิลซื้อ · เทียบยอด (เต็ม/หลังหัก ณ ที่จ่าย) + วัน + ชื่อผู้โอน↔คู่ค้า
 // ---------------------------------------------------------------------

@@ -5,6 +5,9 @@ import {
   createStatementUploadUrlAction,
   createSaleBillsFromStatementAction,
   matchStatementWithBillsAction,
+  listSavedStatementsAction,
+  loadSavedStatementAction,
+  type SavedStatementFile,
 } from "./statement-actions";
 import type { BillMatch, BillForMatch } from "@/lib/accounting/statement-bill-match";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
@@ -41,12 +44,20 @@ type ReconInfo = { imported: boolean; lineCount?: number; reason?: string } | nu
 /** ผลลัพธ์ของไฟล์เดียว (อัปโหลด+อ่านเสร็จแล้ว) */
 type FileResult = {
   fileName: string;
+  /** path ใน storage (ใช้เป็นคีย์กันรวมซ้ำ — ชื่อไฟล์ไทยถูก sanitize จนชนกันได้ เช่น "69.pdf") */
+  path?: string;
   ok: boolean;
   errorMessage?: string;
   transactions: StatementTxn[];
   meta: StatementMeta;
   recon?: ReconInfo;
 };
+
+/** ลายเซ็นเนื้อหาสเตทเมนต์ — กันไฟล์เดิมที่ถูกอัปซ้ำหลายรอบ (path ต่างแต่เนื้อเหมือน) โหลดซ้อนกัน */
+function contentSig(txns: StatementTxn[]): string {
+  const total = txns.reduce((s, t) => s + (t.amount ?? 0), 0);
+  return `${txns.length}|${txns[0]?.date ?? ""}|${txns[txns.length - 1]?.date ?? ""}|${total.toFixed(2)}`;
+}
 
 /** format ตัวเลขเป็นเงินไทย (ทศนิยม 2) */
 function money(n: number): string {
@@ -126,6 +137,10 @@ export default function StatementAnalyzer({
   const [manualPick, setManualPick] = useState<Map<number, BillForMatch>>(new Map());
   // สร้างบิลขายรายแถว (index ที่กำลังสร้าง · -1 = ไม่มี)
   const [creatingRow, setCreatingRow] = useState<number>(-1);
+  // ★ "ระบบจำไว้" (2026-09-01): ไฟล์ที่เคยอัปของลูกค้า — ผลอ่านที่เซฟไว้โหลดขึ้นเองตอนเปิดหน้า
+  const [savedFiles, setSavedFiles] = useState<SavedStatementFile[] | null>(null);
+  // path ที่กำลังอ่านซ้ำจาก storage (ไฟล์เก่าที่ยังไม่มีผลเซฟ)
+  const [rereading, setRereading] = useState<string | null>(null);
   /** กระทบ txns ชุดที่ให้กับบิลของลูกค้า (เรียกอัตโนมัติหลังอ่าน/สร้างบิล + ปุ่ม manual) */
   const runBillMatch = useCallback(
     async (list: StatementTxn[]) => {
@@ -176,6 +191,97 @@ export default function StatementAnalyzer({
     wantMatchRef.current = false;
     void runBillMatch(txns);
   }, [txns, runBillMatch]);
+
+  // คีย์ที่รวมผลแล้ว (ref — dedup ตอนโหลดอัตโนมัติ/อ่านซ้ำ โดยไม่พึ่ง state ใน closure):
+  //   path (ชื่อไฟล์ไทยถูก sanitize จนชนกันได้) + ลายเซ็นเนื้อหา (ไฟล์เดิมอัปซ้ำหลายรอบ path ต่างกัน)
+  const mergedKeysRef = useRef<Set<string>>(new Set());
+
+  /** รวมผลไฟล์เข้า state เดียวจุด — allowDup=true เฉพาะการอัปเองซ้ำโดยตั้งใจ (มีคำเตือนอยู่แล้ว)
+   *  คืนจำนวนไฟล์ที่รวมจริง (0 = โดน dedup หมด — ผู้เรียกใช้แจ้งผู้ใช้ได้) */
+  const addResults = useCallback((incoming: FileResult[], allowDup: boolean): number => {
+    const okOnes = incoming.filter((r) => r.ok);
+    const fresh: FileResult[] = [];
+    for (const r of okOnes) {
+      const keys = [r.path ?? `name:${r.fileName}`, `sig:${contentSig(r.transactions)}`];
+      if (!allowDup && keys.some((k) => mergedKeysRef.current.has(k))) continue;
+      keys.forEach((k) => mergedKeysRef.current.add(k));
+      fresh.push(r);
+    }
+    const failed = incoming.filter((r) => !r.ok);
+    if (fresh.length === 0 && failed.length === 0) return 0;
+    setFileResults((prev) => [...prev, ...fresh, ...failed]);
+    if (fresh.length > 0) {
+      wantMatchRef.current = true;
+      setTxns((prev) => [...prev, ...fresh.flatMap((r) => r.transactions)]);
+    }
+    return fresh.length;
+  }, []);
+
+  // ★ เปิดหน้า → โหลด "ผลอ่านที่ระบบจำไว้" ของลูกค้ารายนี้ขึ้นมาเอง (ไม่ต้องอัป/อ่านซ้ำ)
+  const autoLoadedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (autoLoadedForRef.current === customerId) return; // กัน StrictMode/re-render ยิงซ้ำ
+    autoLoadedForRef.current = customerId;
+    let cancelled = false;
+    (async () => {
+      const r = await listSavedStatementsAction({ customerId }).catch(() => null);
+      if (cancelled) return;
+      if (!r || !r.ok) {
+        setSavedFiles([]);
+        return;
+      }
+      setSavedFiles(r.files);
+      const withSaved = r.files.filter((f) => f.hasSaved).slice(0, 12);
+      const loaded: FileResult[] = [];
+      for (const f of withSaved) {
+        const s = await loadSavedStatementAction({ customerId, path: f.path }).catch(() => null);
+        if (cancelled) return;
+        if (s && s.ok && s.transactions.length > 0) {
+          loaded.push({ fileName: s.fileName, path: f.path, ok: true, transactions: s.transactions, meta: null, recon: null });
+        }
+      }
+      if (!cancelled && loaded.length > 0) {
+        addResults(loaded, false);
+        setDone(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [customerId, addResults]);
+
+  /** อ่านไฟล์ที่อยู่ใน storage อยู่แล้วอีกครั้ง (ไฟล์เก่าที่ยังไม่มีผลเซฟ) — ไม่ต้องอัปโหลดใหม่ */
+  function rereadStored(f: SavedStatementFile) {
+    setRereading(f.path);
+    fetch("/api/accounting/extract-statement", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: f.path, customerId, fileName: f.name, password: pdfPassword || undefined }),
+    })
+      .then(async (res) => {
+        const data = (await res.json().catch(() => null)) as
+          | { ok?: boolean; transactions?: StatementTxn[]; meta?: StatementMeta; recon?: ReconInfo; message?: string }
+          | null;
+        if (!res.ok || !data?.ok || !Array.isArray(data.transactions)) {
+          addResults([{ fileName: f.name, ok: false, errorMessage: data?.message ?? "อ่านไม่สำเร็จ กรุณาลองใหม่", transactions: [], meta: null }], false);
+          return;
+        }
+        const merged = addResults(
+          [{ fileName: f.name, path: f.path, ok: true, transactions: data.transactions, meta: data.meta ?? null, recon: data.recon ?? null }],
+          false
+        );
+        if (merged === 0) {
+          setBillsMsg({ ok: true, text: `"${f.name}" เนื้อหาซ้ำกับไฟล์ที่โหลดไว้แล้ว — ไม่รวมซ้ำ (แต่เซฟผลไว้ให้แล้ว รอบหน้าโหลดเอง)` });
+        }
+        setDone(true);
+        // ตอนนี้มีผลเซฟแล้ว (route เซฟ sidecar ให้) — อัปสถานะในลิสต์
+        setSavedFiles((prev) => prev?.map((x) => (x.path === f.path ? { ...x, hasSaved: true } : x)) ?? prev);
+      })
+      .catch(() => {
+        addResults([{ fileName: f.name, ok: false, errorMessage: "อ่านไม่สำเร็จ กรุณาลองใหม่", transactions: [], meta: null }], false);
+      })
+      .finally(() => setRereading(null));
+  }
 
   // สรุปรายเดือน + คนโอนซ้ำ คำนวณใหม่ทุกครั้งที่ตารางเปลี่ยน (helper เดียวกับ server) — รวมทุกไฟล์แล้ว
   const monthly = useMemo(() => summarizeByMonth(txns), [txns]);
@@ -271,11 +377,8 @@ export default function StatementAnalyzer({
       const results = await mapWithConcurrency(files, FILE_CONCURRENCY, (f) => processOneFile(f));
       // ★ 2026-08-12 — รวมผลรอบนี้เข้ากับรอบก่อนหน้า (ไม่ทับ) เพื่อรองรับอัปโหลดหลายรอบต่อกัน
       //   (เช่นมี 30+ ไฟล์ อัปทีละ 20 ได้ 2 รอบ — ผลรวมจะครบทุกไฟล์)
-      setFileResults((prev) => [...prev, ...results]);
-      // ★ functional update เสมอ (กัน state ค้างแบบบั๊กอัปโหลดข้ามลูกค้า 2026-09-01) — แล้วให้
-      //   effect ด้านบนเห็น flag นี้ค่อยยิงกระทบกับบิลด้วย txns ล่าสุดจริง
-      wantMatchRef.current = true;
-      setTxns((prev) => [...prev, ...results.filter((r) => r.ok).flatMap((r) => r.transactions)]);
+      // อัปเอง = ตั้งใจ (มีคำเตือนไฟล์ซ้ำก่อนกดแล้ว) → allowDup (ไฟล์ที่อ่านสำเร็จจะกระทบกับบิลผ่าน effect)
+      addResults(results, true);
       setSelectedNames([]);
       if (fileRef.current) fileRef.current.value = "";
       setDone(true);
@@ -292,6 +395,7 @@ export default function StatementAnalyzer({
     setMatches(null);
     setReviewed(new Set());
     setManualPick(new Map());
+    mergedKeysRef.current = new Set();
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -406,6 +510,38 @@ export default function StatementAnalyzer({
         <div className="stmt-fname">
           เลือกไว้ {selectedNames.length} ไฟล์: {selectedNames.join(", ")}
         </div>
+      ) : null}
+
+      {/* ★ "ระบบจำไว้" — ไฟล์ที่เคยอัปของลูกค้ารายนี้: ผลที่เซฟไว้โหลดขึ้นเอง · ไฟล์เก่ากดอ่านซ้ำได้เลย */}
+      {savedFiles === null ? (
+        <div className="muted" style={{ fontSize: 13 }}>กำลังโหลดผลสเตทเมนต์ที่ระบบจำไว้…</div>
+      ) : savedFiles.length > 0 ? (
+        <details className="stmt-section" open={savedFiles.some((f) => !f.hasSaved)}>
+          <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: 14 }}>
+            📁 ไฟล์สเตทเมนต์ที่เคยอัปไว้ ({savedFiles.length.toLocaleString("th-TH")}) — ไม่ต้องอัปซ้ำ
+          </summary>
+          <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0, fontSize: 13 }}>
+            {savedFiles.map((f) => (
+              <li key={f.path} style={{ display: "flex", gap: 10, alignItems: "center", padding: "3px 0", flexWrap: "wrap" }}>
+                <span>
+                  {f.name} <span className="muted">(อัปเดือน {f.month})</span>
+                </span>
+                {f.hasSaved ? (
+                  <span style={{ color: "#166534", fontSize: 12 }}>✓ โหลดผลที่จำไว้ให้แล้ว</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={rereading !== null}
+                    onClick={() => rereadStored(f)}
+                  >
+                    {rereading === f.path ? "กำลังอ่าน…" : "อ่านอีกครั้ง (ไม่ต้องอัปใหม่)"}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
       {duplicateNames.length > 0 ? (
         <div className="action-msg warn">

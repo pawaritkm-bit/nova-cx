@@ -166,6 +166,30 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // ★ 2026-09-01 — "ระบบจำไว้": เซฟผลอ่านเป็น sidecar `<ไฟล์>.txns.json` คู่ไฟล์เดิมใน storage
+    //   → เปิดหน้าแยกสเตทเมนต์ครั้งหน้าโหลดขึ้นเองโดยไม่ต้องอัป/อ่านซ้ำ (best-effort · upsert ทับได้)
+    let saved = false;
+    if (txns.length > 0) {
+      try {
+        const sidecar = JSON.stringify({
+          v: 1,
+          fileName: (fileName || path.split("/").pop() || "").slice(0, 200),
+          bank: detBank,
+          savedAt: new Date().toISOString(),
+          transactions: txns,
+        });
+        const up = await service.storage
+          .from(BILLS_BUCKET)
+          .upload(`${path}.txns.json`, Buffer.from(sidecar, "utf8"), {
+            contentType: "application/json",
+            upsert: true,
+          });
+        saved = !up.error;
+      } catch {
+        saved = false; // เงียบ — ผลอ่านยังใช้ได้ตามปกติ
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       count: txns.length,
@@ -174,6 +198,7 @@ export async function POST(request: NextRequest) {
       repeats,
       meta,
       recon,
+      saved,
     });
   } catch {
     // ไม่ให้ล้ม flow — คืน 200 ว่าง (ผู้ใช้ลองใหม่ได้)
