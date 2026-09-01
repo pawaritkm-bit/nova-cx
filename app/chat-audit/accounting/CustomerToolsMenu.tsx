@@ -79,10 +79,10 @@ export default function CustomerToolsMenu({
       ],
     },
     {
-      title: "กระทบยอด / สเตทเมนต์",
+      title: "กระทบยอด",
       items: [
+        // ★ "แยกสเตทเมนต์/รายงานแพลตฟอร์ม" ย้ายไปอยู่ในกล่อง "อัปโหลดไฟล์เอง" (2026-09-01)
         { label: "กระทบยอดธนาคาร", href: `/chat-audit/accounting/bank-reconciliation?customerId=${cid}` },
-        { label: "แยกสเตทเมนต์/รายงานแพลตฟอร์ม", href: `/chat-audit/accounting/statement?customerId=${cid}` },
       ],
     },
     {

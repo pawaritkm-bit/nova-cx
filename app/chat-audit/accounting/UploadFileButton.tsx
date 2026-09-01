@@ -278,6 +278,22 @@ export default function UploadFileButton({
                 {fileName ? <span className="acc-upload-fname" title={fileName}>{fileName}</span> : null}
               </label>
 
+              {/* ★ ย้ายมาจากเมนูเครื่องมือ (requirement 2026-09-01): สเตทเมนต์/รายงานแพลตฟอร์ม
+                  อ่านคนละแบบกับบิล — ให้ทางเข้าอยู่ในกล่องอัปโหลดเดียวกัน กันอัปผิดช่อง */}
+              <div className="acc-field acc-field-wide" style={{ borderTop: "1px dashed #e2e8f0", paddingTop: 10 }}>
+                <span>ไฟล์สเตทเมนต์ธนาคาร / รายงานแพลตฟอร์ม (Shopee ฯลฯ)</span>
+                <a
+                  className="btn btn-ghost"
+                  href={`/chat-audit/accounting/statement${(locked ? lockedCustomerId : customerId) ? `?customerId=${locked ? lockedCustomerId : customerId}` : ""}`}
+                  style={{ alignSelf: "flex-start" }}
+                >
+                  📑 ไปหน้าแยกสเตทเมนต์/รายงานแพลตฟอร์ม →
+                </a>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  เอกสารพวกนี้อย่าอัปเป็นบิล — หน้านั้น AI แยกรายการเข้า/ออก + สร้างบิลขายจากเงินเข้าได้
+                </span>
+              </div>
+
               {err ? <div className="action-msg err">{err}</div> : null}
 
               <div className="acc-modal-actions">
