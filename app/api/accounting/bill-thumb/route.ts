@@ -66,16 +66,35 @@ export async function GET(request: NextRequest) {
     //   เป็นรูปเหมือนบิลรูปถ่าย (ใช้ renderPdfPagesToPng ตัวเดียวกับฟีเจอร์ตัดหน้า) · เรนเดอร์ไม่ได้ → 404
     //   (หน้าเว็บโชว์ป้าย PDF ตามเดิม) · เบราว์เซอร์ cache 1 ชม. เหมือนรูปปกติ
     if (isPdf) {
-      const { data: blob } = await service.storage.from(BILLS_BUCKET).download(path);
-      if (!blob) return NextResponse.json({ ok: false }, { status: 404 });
+      // ★ ไฟล์อาจอยู่ Supabase หรือ OneDrive (path ขึ้นต้น NOVA-Care/NOVA-Bills) — ใช้ตัวโหลดสองระบบ
+      //   (บั๊กที่ผู้ใช้เจอ 2026-09-02: PDF จากกลุ่ม LINE เก็บบน OneDrive → โหลดจาก Supabase ไม่ได้ = 404)
+      const { downloadStoredBillFile } = await import("@/lib/storage/bill-download");
+      const buf = await downloadStoredBillFile(service, path);
+      if (!buf) return NextResponse.json({ ok: false }, { status: 404 });
       const { renderPdfPagesToPng } = await import("@/lib/accounting/pdf-page-images");
       const scale = width <= 480 ? 0.7 : 1.6; // thumb เล็กไม่ต้องคม 2x — เร็วกว่า
-      const pages = await renderPdfPagesToPng(Buffer.from(await blob.arrayBuffer()), { maxPages: 1, scale });
+      const pages = await renderPdfPagesToPng(buf, { maxPages: 1, scale });
       const png = pages?.[0];
       if (!png) return NextResponse.json({ ok: false }, { status: 404 });
       return new NextResponse(new Uint8Array(png), {
         status: 200,
         headers: { "content-type": "image/png", "cache-control": "private, max-age=3600" },
+      });
+    }
+
+    // ★ รูปที่เก็บบน OneDrive: render endpoint ของ Supabase ย่อให้ไม่ได้ — ส่งไฟล์เต็มจาก OneDrive
+    const { isOneDriveBillPath, downloadStoredBillFile } = await import("@/lib/storage/bill-download");
+    if (isOneDriveBillPath(path)) {
+      const buf = await downloadStoredBillFile(service, path);
+      if (!buf) return NextResponse.json({ ok: false }, { status: 404 });
+      const extMime = /\.png($|\?)/i.test(path)
+        ? "image/png"
+        : /\.webp($|\?)/i.test(path)
+          ? "image/webp"
+          : "image/jpeg";
+      return new NextResponse(new Uint8Array(buf), {
+        status: 200,
+        headers: { "content-type": entry.upload_mime?.startsWith("image/") ? entry.upload_mime : extMime, "cache-control": "private, max-age=3600" },
       });
     }
 

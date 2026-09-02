@@ -657,11 +657,13 @@ export default async function AccountingWorkspacePage({
                   const url = path ? signed.get(path) ?? null : null;
                   const img = entryIsImage(e) || entryIsPdf(e); // PDF = รูปหน้าแรกผ่าน bill-thumb
                   const pend = isPending(e);
-                  const lightboxSrc = entryIsImage(e) ? url : `/api/accounting/bill-thumb?entry=${e.id}&w=1300&v=2`;
+                  // ★ ไฟล์ OneDrive เซ็น signed URL ไม่ได้ (url=null) — รูปใหญ่ใช้ bill-thumb แทนเสมอเมื่อไม่มี url
+                  const lightboxSrc =
+                    entryIsImage(e) && url ? url : `/api/accounting/bill-thumb?entry=${e.id}&w=1300&v=2`;
                   return (
                     <div key={e.id} className={`wsp-card${pend ? " pend" : " done"}`}>
                       <div className="wsp-thumb">
-                        {url && img ? (
+                        {img && path ? (
                           <a href={`#zoom-${e.id}`} className="wsp-thumb-zoom" aria-label="ขยายดูบิล">
                             {/* ★ perf 2026-09-01: รูปย่อผ่าน bill-thumb (~10-30KB + browser cache)
                                 แทน signed URL สแกนเต็ม (~0.3-1MB/ใบ) — เลื่อนรายการลื่นขึ้นมาก
@@ -678,7 +680,7 @@ export default async function AccountingWorkspacePage({
                         ) : path ? <span className="ext">{extLabel(path)}</span> : <span className="ext none">ไม่มีรูป</span>}
                       </div>
                       {/* แว่นขยาย: คลิกรูปเล็ก → เปิดรูปใหญ่เต็มจอ (CSS :target · คลิกพื้นหลัง/รูปเพื่อปิด) */}
-                      {url && img ? (
+                      {img && path ? (
                         <a id={`zoom-${e.id}`} href="#" className="wsp-lightbox" aria-label="ปิดรูปขยาย">
                           {/* ★ perf: loading=lazy — lightbox ซ่อนด้วย display:none จึงไม่ intersect
                               → รูปเต็มโหลด "ตอนกดขยาย" เท่านั้น (เดิมโหลดเต็มทุกใบตั้งแต่เปิดหน้า) */}

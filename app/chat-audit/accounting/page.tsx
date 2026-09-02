@@ -1121,11 +1121,14 @@ export default async function AccountingPage({
   if (editObjectPath) pathsToSign.push(editObjectPath);
   const signed = await signPaths(service, pathsToSign);
 
-  const editIsImage = editEntry ? entryIsImage(editEntry) : false;
+  // ★ 2026-09-02: ตัวแก้บิลก็โชว์ PDF/ไฟล์ OneDrive เป็นรูปหน้าแรก (bill-thumb) — signed URL ใช้ไม่ได้กับ OneDrive
+  const editIsImage = editEntry ? entryIsImage(editEntry) || entryIsPdfThumb(editEntry) : false;
   let editViewUrl = editObjectPath ? signed.get(editObjectPath) ?? null : null;
-  if (editObjectPath && editIsImage) {
+  if (editObjectPath && editEntry && entryIsImage(editEntry) && !entryObjectPath(editEntry)?.startsWith("NOVA-")) {
     const resized = await signResizedImage(service, editObjectPath);
     if (resized) editViewUrl = resized;
+  } else if (editEntry && editIsImage) {
+    editViewUrl = `/api/accounting/bill-thumb?entry=${editEntry.id}&w=1300&v=2`;
   }
 
   // เฟส 10 ส่วน Z (0.9) — บิลไหนมีการรับ/จ่ายเงินไปแล้วบ้าง → ล็อกช่อง currency/fx_rate ที่ EntryEditor
@@ -1144,7 +1147,8 @@ export default async function AccountingPage({
   if (editInNav) {
     pagerBills = shownEntries.map((e) => {
       const p = entryObjectPath(e);
-      const isImg = entryIsImage(e);
+      // ★ 2026-09-02: PDF ก็ดูเป็นรูปหน้าแรกผ่าน bill-thumb (รวมไฟล์บน OneDrive ที่เซ็น URL ไม่ได้)
+      const isImg = entryIsImage(e) || entryIsPdfThumb(e);
       const url: string | null =
         p && isImg ? `/api/accounting/bill-thumb?entry=${e.id}&w=1300&v=2` : p ? signed.get(p) ?? null : null;
       return {
