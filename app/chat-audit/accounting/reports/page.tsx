@@ -579,12 +579,13 @@ export default async function AccountingReportsPage({
                           มี <strong>{statements.journal.skipped.length.toLocaleString("th-TH")}</strong> บิลที่
                           <strong>ยังไม่เข้างบ</strong> (ตกหล่น) — ดูรายละเอียด/เหตุผลด้านล่าง
                         </span>
+                        {/* ★ กดปิดในตัวแก้บิลแล้วกลับมาหน้างบเดิม (ผ่าน back=) — เปิดแท็บเดิม */}
                         <a
                           className="btn btn-sm btn-ghost"
                           style={{ flexShrink: 0 }}
-                          href={`/chat-audit/accounting?edit=${statements.journal.skipped[0].entryId}`}
-                          target="_blank"
-                          rel="noopener"
+                          href={`/chat-audit/accounting?edit=${statements.journal.skipped[0].entryId}&back=${encodeURIComponent(
+                            `/chat-audit/accounting/reports${buildQuery({ customerId, from, to, draft: includeDraft, tab })}`
+                          )}`}
                         >
                           แก้บิลที่ตกหล่น ↗
                         </a>
@@ -620,8 +621,13 @@ export default async function AccountingReportsPage({
                           <td>{sk.entryType === "purchase" ? "ซื้อ" : sk.entryType === "sale" ? "ขาย" : "รอระบุ"}</td>
                           <td>{sk.reason}</td>
                           <td>
-                            {/* ★ 2026-09-02 ผู้ใช้: ลิงก์ตรงไปหน้าตรวจ/แก้บิลใบนั้น — แก้เสร็จกลับมาริเฟรชงบ */}
-                            <a className="btn btn-ghost" href={`/chat-audit/accounting?edit=${sk.entryId}`} target="_blank" rel="noopener">
+                            {/* ★ 2026-09-02 ผู้ใช้: ลิงก์ตรงไปตัวแก้บิล — กดปิดกลับมาหน้างบเดิม (back=) */}
+                            <a
+                              className="btn btn-sm btn-ghost"
+                              href={`/chat-audit/accounting?edit=${sk.entryId}&back=${encodeURIComponent(
+                                `/chat-audit/accounting/reports${buildQuery({ customerId, from, to, draft: includeDraft, tab })}`
+                              )}`}
+                            >
                               แก้บิล ↗
                             </a>
                           </td>
