@@ -1000,3 +1000,43 @@ describe("★★ [tester] T — end-to-end: import CSV → suggest → confirm �
     expect(afterDelete).toHaveLength(0);
   });
 });
+
+// ★ 2026-09-02 — กันยอดเบิ้ล: ไฟล์ "ช่วงยาว" + "รายเดือน" ของบัญชีเดียวกัน (พบจริงกับลูกค้า)
+import { filterNewStatementRows } from "@/lib/accounting/bank-reconciliation";
+
+describe("filterNewStatementRows — dedup รายรายการแบบ multiset", () => {
+  const row = (date: string, amount: number, description: string | null = null) => ({ date, amount, description });
+
+  it("รายการที่มีอยู่แล้ว (วัน+ยอด+คำอธิบายตรง) ถูกตัดทิ้ง — ที่เหลือผ่าน", () => {
+    const existing = [row("2026-05-04", 5000, "นาย ก · โอน 12:51 น."), row("2026-05-05", -200, "ค่าธรรมเนียม")];
+    const incoming = [
+      row("2026-05-04", 5000, "นาย ก · โอน 12:51 น."), // ซ้ำ → ตัด
+      row("2026-05-06", 900, "นาย ข"), // ใหม่ → ผ่าน
+    ];
+    const r = filterNewStatementRows(existing, incoming);
+    expect(r.dropped).toBe(1);
+    expect(r.kept).toHaveLength(1);
+    expect(r.kept[0].date).toBe("2026-05-06");
+  });
+
+  it("multiset: มีอยู่ 1 รายการ แต่ไฟล์ใหม่มีรายการเหมือนกัน 2 → ผ่าน 1 (ไม่ตัดเกิน)", () => {
+    const existing = [row("2026-05-04", 89, "นาย ก")];
+    const incoming = [row("2026-05-04", 89, "นาย ก"), row("2026-05-04", 89, "นาย ก")];
+    const r = filterNewStatementRows(existing, incoming);
+    expect(r.dropped).toBe(1);
+    expect(r.kept).toHaveLength(1);
+  });
+
+  it("ยอดติดเครื่องหมาย: เงินเข้า 500 กับเงินออก -500 วันเดียวกัน = คนละรายการ ไม่ตัดกัน", () => {
+    const existing = [row("2026-05-04", 500, "x")];
+    const r = filterNewStatementRows(existing, [row("2026-05-04", -500, "x")]);
+    expect(r.dropped).toBe(0);
+    expect(r.kept).toHaveLength(1);
+  });
+
+  it("ไม่มีของเดิม → ผ่านหมด (พฤติกรรมไฟล์แรกไม่เปลี่ยน)", () => {
+    const r = filterNewStatementRows([], [row("2026-05-04", 5000), row("2026-05-05", 100)]);
+    expect(r.dropped).toBe(0);
+    expect(r.kept).toHaveLength(2);
+  });
+});

@@ -55,6 +55,8 @@ type FileResult = {
   transactions: StatementTxn[];
   meta: StatementMeta;
   recon?: ReconInfo;
+  /** จำนวนรายการที่ถูกตัดเพราะซ้ำกับไฟล์อื่นที่โหลดแล้ว (ไฟล์ช่วงเวลาทับซ้อน — กันยอดเบิ้ล) */
+  droppedDup?: number;
 };
 
 /** คีย์ประจำรายการ (ผูกกับเนื้อหา ไม่ใช่ลำดับแถว) — ใช้จำติ๊ก "ตรวจแล้ว"/จับคู่มือ ข้ามการเปิดหน้า */
@@ -188,24 +190,53 @@ export default function StatementAnalyzer({
   // คีย์ที่รวมผลแล้ว (ref — dedup ตอนโหลดอัตโนมัติ/อ่านซ้ำ โดยไม่พึ่ง state ใน closure):
   //   path (ชื่อไฟล์ไทยถูก sanitize จนชนกันได้) + ลายเซ็นเนื้อหา (ไฟล์เดิมอัปซ้ำหลายรอบ path ต่างกัน)
   const mergedKeysRef = useRef<Set<string>>(new Set());
+  // ★ กันยอดเบิ้ล (พบจริง 2026-09-02): ลูกค้าดึงสเตทเมนต์ "ช่วงยาว" (มีค-กค) + "รายเดือน" ของบัญชี
+  //   เดียวกันมาพร้อมกัน → รายการเดียวกันโผล่ 2 ไฟล์ → นับซ้ำ. dedup ระดับรายการแบบ multiset:
+  //   จำนวนต่อคีย์ (วัน|ยอด|ทิศ|เวลา|อ้างอิง) = max ข้ามไฟล์ — รายการที่ซ้ำกันจริงในไฟล์เดียว
+  //   (เช่นโอน 2 ครั้งยอดเท่ากันคนเดียวกัน) ยังนับครบ ไม่โดนตัดทิ้ง
+  const mergedTxnCountsRef = useRef<Map<string, number>>(new Map());
 
   /** รวมผลไฟล์เข้า state เดียวจุด — allowDup=true เฉพาะการอัปเองซ้ำโดยตั้งใจ (มีคำเตือนอยู่แล้ว)
-   *  คืนจำนวนไฟล์ที่รวมจริง (0 = โดน dedup หมด — ผู้เรียกใช้แจ้งผู้ใช้ได้) */
+   *  ตัดรายการซ้ำข้ามไฟล์เสมอ (ทุกทางเข้า รวมอัปเอง) · คืนจำนวนไฟล์ที่รวมจริง */
   const addResults = useCallback((incoming: FileResult[], allowDup: boolean): number => {
     const okOnes = incoming.filter((r) => r.ok);
     const fresh: FileResult[] = [];
+    let droppedTotal = 0;
     for (const r of okOnes) {
       const keys = [r.path ?? `name:${r.fileName}`, `sig:${contentSig(r.transactions)}`];
       if (!allowDup && keys.some((k) => mergedKeysRef.current.has(k))) continue;
       keys.forEach((k) => mergedKeysRef.current.add(k));
-      fresh.push(r);
+
+      // ตัดรายการที่มีครบแล้วจากไฟล์ก่อนหน้า (multiset — ดูคอมเมนต์ mergedTxnCountsRef)
+      const fileCounts = new Map<string, number>();
+      const kept: StatementTxn[] = [];
+      let dropped = 0;
+      for (const t of r.transactions) {
+        const k = txnKey(t);
+        const seenInFile = (fileCounts.get(k) ?? 0) + 1;
+        fileCounts.set(k, seenInFile);
+        if (seenInFile > (mergedTxnCountsRef.current.get(k) ?? 0)) kept.push(t);
+        else dropped += 1;
+      }
+      for (const [k, c] of fileCounts) {
+        if (c > (mergedTxnCountsRef.current.get(k) ?? 0)) mergedTxnCountsRef.current.set(k, c);
+      }
+      droppedTotal += dropped;
+      fresh.push({ ...r, transactions: kept, droppedDup: dropped });
     }
     const failed = incoming.filter((r) => !r.ok);
     if (fresh.length === 0 && failed.length === 0) return 0;
     setFileResults((prev) => [...prev, ...fresh, ...failed]);
-    if (fresh.length > 0) {
+    const addedTxns = fresh.flatMap((r) => r.transactions);
+    if (addedTxns.length > 0) {
       wantMatchRef.current = true;
-      setTxns((prev) => [...prev, ...fresh.flatMap((r) => r.transactions)]);
+      setTxns((prev) => [...prev, ...addedTxns]);
+    }
+    if (droppedTotal > 0) {
+      setBillsMsg({
+        ok: true,
+        text: `กันยอดเบิ้ลให้แล้ว: ตัดรายการซ้ำ ${droppedTotal.toLocaleString("th-TH")} รายการ (ไฟล์ช่วงเวลาทับซ้อนกัน เช่น สเตทเมนต์รายเดือน + ช่วงยาวของบัญชีเดียวกัน)`,
+      });
     }
     return fresh.length;
   }, []);
@@ -508,6 +539,7 @@ export default function StatementAnalyzer({
     setMatches(null);
     // ★ ไม่ล้าง reviewed/manualPick — "จำติ๊ก" ผูกกับเนื้อหารายการ โหลดกลับมาก็ติ๊กอยู่
     mergedKeysRef.current = new Set();
+    mergedTxnCountsRef.current = new Map();
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -665,6 +697,9 @@ export default function StatementAnalyzer({
                 ) : (
                   <span>
                     — {r.transactions.length.toLocaleString("th-TH")} รายการ
+                    {r.droppedDup ? (
+                      <span style={{ color: "#b45309" }}> · ตัดซ้ำ {r.droppedDup.toLocaleString("th-TH")} (มีในไฟล์อื่นแล้ว)</span>
+                    ) : null}
                     {r.recon?.imported ? (
                       <b style={{ color: "#166534" }}> · เข้ากระทบยอดแล้ว</b>
                     ) : r.recon && r.recon.reason === "duplicate" ? (

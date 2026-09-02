@@ -706,6 +706,39 @@ async function ensureBankAccountFromStatement(
 }
 
 /**
+ * ★ กันยอดเบิ้ล (พบจริง 2026-09-02): ลูกค้าส่งสเตทเมนต์ "ช่วงยาว" + "รายเดือน" ของบัญชีเดียวกัน
+ *   → รายการเดียวกันอยู่ 2 ไฟล์ → dedup ด้วยชื่อไฟล์อย่างเดียวไม่พอ. ตัวกรองนี้เทียบ "รายรายการ"
+ *   แบบ multiset: คีย์ วันที่|ยอด(ติดเครื่องหมาย)|คำอธิบาย — รายการที่มีอยู่ครบแล้วถูกตัดทิ้ง
+ *   ส่วนรายการที่ซ้ำกันจริงในไฟล์เดียว (โอน 2 ครั้งเหมือนกันเป๊ะ) ยังผ่านครบ (นับเป็นจำนวน)
+ *   pure — มี unit test ประกบ
+ */
+export function filterNewStatementRows(
+  existing: { date: string; description: string | null; amount: number }[],
+  incoming: ParsedStatementRow[]
+): { kept: ParsedStatementRow[]; dropped: number } {
+  const keyOf = (r: { date: string; description: string | null; amount: number }) =>
+    `${r.date}|${round2(r.amount).toFixed(2)}|${(r.description ?? "").trim()}`;
+  const counts = new Map<string, number>();
+  for (const r of existing) {
+    const k = keyOf(r);
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const kept: ParsedStatementRow[] = [];
+  let dropped = 0;
+  for (const r of incoming) {
+    const k = keyOf(r);
+    const remain = counts.get(k) ?? 0;
+    if (remain > 0) {
+      counts.set(k, remain - 1); // มีอยู่แล้ว → ตัดทิ้ง (กินโควตาที่มี)
+      dropped += 1;
+    } else {
+      kept.push(r);
+    }
+  }
+  return { kept, dropped };
+}
+
+/**
  * ★ Auto-feed: สเตทเมนต์ที่ deterministic reconcile ผ่าน (มาทาง care OA) → insert เข้า bank_statement_lines
  *   ให้หน้ากระทบยอดมีธุรกรรมพร้อมจับคู่ทันที (ไม่ต้องอัป CSV ซ้ำ)
  *   ★ ลูกค้ายังไม่มีบัญชีเงินฝาก/ไม่ตรงแบงก์ → สร้างให้อัตโนมัติจากสเตทเมนต์ (ชื่อแบงก์+เลขบัญชี) · dedup ด้วย file_name
@@ -756,7 +789,7 @@ export async function autoImportReconciledStatement(
     });
   if (rows.length === 0) return { imported: false, reason: "no_rows" };
 
-  // dedup: มี batch ของบัญชีนี้ที่ file_name เดียวกันแล้ว → ข้าม (กันสเตทเมนต์ใบเดิมเข้าซ้ำ)
+  // dedup ชั้น 1: มี batch ของบัญชีนี้ที่ file_name เดียวกันแล้ว → ข้าม (กันสเตทเมนต์ใบเดิมเข้าซ้ำ)
   const sig = clampText(params.sourceFileName || `auto-${rows.length}-${rows[0].date}-${rows[rows.length - 1].date}`, 200);
   const { data: existing } = await db
     .from("bank_statement_import_batches")
@@ -768,8 +801,32 @@ export async function autoImportReconciledStatement(
     .limit(1);
   if (existing && (existing as unknown[]).length > 0) return { imported: false, reason: "duplicate" };
 
-  const res = await importBatchFromCsv(db, tenantId, customerId, acct.id, sig, rows);
-  return res.ok ? { imported: true, lineCount: res.lineCount } : { imported: false, reason: res.message };
+  // dedup ชั้น 2 (2026-09-02): เทียบรายรายการกับแถวที่มีอยู่ในช่วงวันเดียวกัน — กันไฟล์
+  //   "ช่วงยาว + รายเดือน" ของบัญชีเดียวกันทำยอดเบิ้ล (ชื่อไฟล์ต่างกัน ชั้น 1 จับไม่ได้)
+  const dates = rows.map((r) => r.date).sort();
+  const { data: existLines } = await db
+    .from("bank_statement_lines")
+    .select("stmt_date, description, amount")
+    .eq("tenant_id", tenantId)
+    .eq("customer_id", customerId)
+    .eq("bank_account_id", acct.id)
+    .gte("stmt_date", dates[0])
+    .lte("stmt_date", dates[dates.length - 1])
+    .limit(10000);
+  const { kept, dropped } = filterNewStatementRows(
+    ((existLines ?? []) as { stmt_date: string; description: string | null; amount: number }[]).map((l) => ({
+      date: l.stmt_date,
+      description: l.description,
+      amount: l.amount,
+    })),
+    rows
+  );
+  if (kept.length === 0) return { imported: false, reason: "duplicate" };
+
+  const res = await importBatchFromCsv(db, tenantId, customerId, acct.id, sig, kept);
+  if (!res.ok) return { imported: false, reason: res.message };
+  void dropped; // จำนวนที่ตัด — ผู้เรียกดูจาก lineCount เทียบ input ได้
+  return { imported: true, lineCount: res.lineCount };
 }
 
 /**
