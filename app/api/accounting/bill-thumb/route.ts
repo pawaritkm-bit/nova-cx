@@ -69,7 +69,9 @@ export async function GET(request: NextRequest) {
     let contentType = "image/webp";
     try {
       const r = await fetch(
-        `${base}/storage/v1/render/image/authenticated/${BILLS_BUCKET}/${path}?width=${width}&quality=62`,
+        // ★ resize=contain จำเป็น: ส่ง width อย่างเดียวโดยไม่ระบุโหมด = cover → "ครอปข้าง"
+        //   (บั๊กที่ผู้ใช้เจอ 2026-09-02: สลิปแนวตั้ง 990×1237 เหลือแถบกลาง 360×1237 — เห็นครึ่งเดียว)
+        `${base}/storage/v1/render/image/authenticated/${BILLS_BUCKET}/${path}?width=${width}&quality=62&resize=contain`,
         { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: "image/webp,image/*" } }
       );
       if (r.ok) {
