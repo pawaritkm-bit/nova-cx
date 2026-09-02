@@ -3,7 +3,12 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { moveEntryTypeAction, deleteEntryAction } from "./actions";
+import {
+  moveEntryTypeAction,
+  deleteEntryAction,
+  moveEntryCustomerAction,
+  listCustomerOptionsAction,
+} from "./actions";
 import { syncStockFromBillAction } from "./stock-sync-actions";
 import type { EntryType, EntryStatus, StockSyncInfo } from "@/lib/accounting/queries";
 
@@ -54,6 +59,9 @@ export default function RowActions({
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // ★ ย้ายบิลไปบริษัทอื่น (2026-09-02) — โหลดรายชื่อบริษัทในสโคปตอนกดปุ่ม (on-demand เหมือน dropdown อัปไฟล์)
+  const [moveOptions, setMoveOptions] = useState<{ id: string; label: string }[] | null>(null);
+  const [moveOpen, setMoveOpen] = useState(false);
 
   const confirmed = status === "confirmed";
 
@@ -79,6 +87,37 @@ export default function RowActions({
         router.refresh();
       } else {
         setMsg({ ok: res.ok, text: res.message });
+      }
+    });
+  }
+
+  // เปิด/ปิดกล่องย้ายบริษัท — ครั้งแรกโหลดรายชื่อบริษัทที่ตัวเองดูแล (server กรองสโคปให้)
+  function toggleMove() {
+    setMsg(null);
+    if (moveOpen) {
+      setMoveOpen(false);
+      return;
+    }
+    setMoveOpen(true);
+    if (moveOptions === null) {
+      startTransition(async () => {
+        const opts = await listCustomerOptionsAction();
+        setMoveOptions(opts);
+      });
+    }
+  }
+
+  function moveCustomer(targetId: string) {
+    if (!targetId) return;
+    const label = moveOptions?.find((o) => o.id === targetId)?.label ?? "บริษัทที่เลือก";
+    if (!window.confirm(`ย้ายบิลนี้ไป "${label}"?\nสมุดบัญชี/งบของทั้งสองบริษัทจะอัปเดตตามทันที`)) return;
+    setMsg(null);
+    startTransition(async () => {
+      const res = await moveEntryCustomerAction(entryId, targetId);
+      setMsg({ ok: res.ok, text: res.message });
+      if (res.ok) {
+        setMoveOpen(false);
+        router.refresh();
       }
     });
   }
@@ -172,6 +211,16 @@ export default function RowActions({
               </button>
             ))
           : null}
+        {/* ย้ายบิลไปบริษัทอื่น — นักบัญชีย้ายเองได้ในสโคปตัวเอง (เคส AI แยกบิลผิดบริษัทจากกลุ่มรวม) */}
+        <button
+          type="button"
+          className="acc-mini-btn"
+          onClick={toggleMove}
+          disabled={pending}
+          title="ย้ายบิลนี้ไปบริษัท/ลูกค้าอื่นที่คุณดูแล"
+        >
+          ย้ายบริษัท
+        </button>
         <button
           type="button"
           className="acc-mini-btn danger"
@@ -182,7 +231,28 @@ export default function RowActions({
           ลบ
         </button>
       </div>
-      {msg && !msg.ok ? <div className="acc-rowmsg err">{msg.text}</div> : null}
+      {moveOpen ? (
+        <div className="acc-rowmove">
+          <select
+            defaultValue=""
+            disabled={pending || moveOptions === null}
+            onChange={(e) => moveCustomer(e.target.value)}
+            aria-label="เลือกบริษัทปลายทาง"
+          >
+            <option value="" disabled>
+              {moveOptions === null ? "กำลังโหลดรายชื่อบริษัท…" : "เลือกบริษัทปลายทาง…"}
+            </option>
+            {(moveOptions ?? [])
+              .filter((o) => o.id !== customerId)
+              .map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+          </select>
+        </div>
+      ) : null}
+      {msg ? <div className={`acc-rowmsg ${msg.ok ? "" : "err"}`}>{msg.text}</div> : null}
     </div>
   );
 }

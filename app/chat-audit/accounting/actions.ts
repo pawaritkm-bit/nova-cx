@@ -529,6 +529,81 @@ export async function moveEntryTypeAction(
 }
 
 /**
+ * ย้ายบิลไปลูกค้า/บริษัทอื่น — ★ 2026-09-02 ผู้ใช้: "นักบัญชีสามารถแก้ ลบ และย้ายบิลเองได้
+ * ไม่จำเป็นต้องเป็นสิทธิ์ฝั่งเซิร์ฟเวอร์ (admin)" — เคสหลัก: กลุ่ม LINE รวมหลายบริษัท
+ * (เช่นพี่สวย 6 บริษัท) AI แยกบิลผิดบริษัท นักบัญชีย้ายเองได้ทันที
+ *
+ *   สิทธิ์: นักบัญชีย้ายได้ระหว่างลูกค้า "ในความดูแลตัวเอง" เท่านั้น (ต้นทาง+ปลายทาง
+ *   ต้องอยู่ในสโคปทั้งคู่) · lead = ในทีม · admin = ทุกลูกค้า — บังคับ server-side เหมือนเดิม
+ *
+ *   ★ payment_bank_account_id เป็นบัญชีธนาคาร "ของลูกค้าต้นทาง" (FK per-customer)
+ *     → ย้ายแล้วล้างทิ้ง (วิธีจ่าย transfer ยังอยู่ — เอนจินใช้ 1020 default ของปลายทาง)
+ *   ★ บิล confirmed ย้ายได้ — สมุด/งบคำนวณสดจาก bill_entries จึงย้ายเล่มตามทันทีทั้งสองบริษัท
+ */
+export async function moveEntryCustomerAction(
+  entryId: string,
+  targetCustomerId: string
+): Promise<SaveResult> {
+  if (!isUuid(entryId)) return { ok: false, message: "ไม่พบรายการที่เลือก" };
+  if (!isUuid(targetCustomerId)) return { ok: false, message: "ไม่พบบริษัทปลายทาง" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    const { data: entryRow } = await service
+      .from("bill_entries")
+      .select("customer_id")
+      .eq("id", entryId)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (!entryRow) return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
+    const sourceCustomerId = (entryRow as { customer_id: string | null }).customer_id;
+    if (sourceCustomerId === targetCustomerId) {
+      return { ok: false, message: "บิลอยู่บริษัทนี้อยู่แล้ว" };
+    }
+
+    // ★ สโคปนักบัญชี: ต้นทาง (ถ้ามี) และปลายทาง ต้องอยู่ในความดูแลทั้งคู่ (admin/lead ผ่านตามสโคป)
+    //   บิลที่ยังไม่ผูกลูกค้า (source=null): admin ย้ายได้ · นักบัญชี/หัวหน้าไม่ได้ (นโยบายเดิม)
+    assertCustomerInScope(ctx, sourceCustomerId);
+    assertCustomerInScope(ctx, targetCustomerId);
+
+    // ยืนยันว่าลูกค้าปลายทางมีจริงใน tenant (กัน uuid มั่ว) + เอาชื่อไปใส่ข้อความตอบ
+    const { data: target } = await service
+      .from("customers")
+      .select("id, name, customer_code")
+      .eq("id", targetCustomerId)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (!target) return { ok: false, message: "ไม่พบบริษัทปลายทาง" };
+    const t = target as { name: string | null; customer_code: string | null };
+
+    const { error } = await service
+      .from("bill_entries")
+      .update({
+        customer_id: targetCustomerId,
+        // บัญชีธนาคารผูกกับลูกค้าเดิม — ล้างกัน FK ชี้ข้ามบริษัท (เลือกใหม่ได้ที่หน้าแก้บิล)
+        payment_bank_account_id: null,
+      })
+      .eq("id", entryId)
+      .eq("tenant_id", ctx.tenantId)
+      .is("deleted_at", null);
+    if (error) return { ok: false, message: "ย้ายบิลไม่สำเร็จ กรุณาลองใหม่" };
+
+    revalidatePath(PATH);
+    revalidatePath("/chat-audit/accounting/workspace");
+    revalidatePath("/chat-audit/bills");
+    const label = [t.customer_code, t.name].filter(Boolean).join(" · ") || "บริษัทปลายทาง";
+    return { ok: true, message: `ย้ายบิลไป ${label} แล้ว`, id: entryId };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ย้ายบิลไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
  * ลบ entry — ★ soft-delete เท่านั้น (กู้คืนได้ด้วย restoreEntryAction/ปุ่ม "เลิกทำ")
  *
  *   เดิมลบแบบทำลาย (ลบไฟล์จาก storage + มาร์ค attachment ว่าไม่ใช่บิล) → กู้ไม่ได้

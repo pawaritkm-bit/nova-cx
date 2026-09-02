@@ -165,8 +165,18 @@
 .nova-dash .acc-mini-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .nova-dash .acc-mini-btn.danger { border-color: var(--red); color: var(--red); }
 .nova-dash .acc-mini-btn.danger:hover:not(:disabled) { background: var(--red); color: #fff; }
-.nova-dash .acc-rowmsg { font-size: 11px; }
+.nova-dash .acc-rowmsg { font-size: 11px; color: #166534; }
 .nova-dash .acc-rowmsg.err { color: #b91c1c; }
+/* กล่องเลือกบริษัทปลายทาง (ปุ่ม "ย้ายบริษัท" 2026-09-02) */
+.nova-dash .acc-rowmove select {
+  max-width: 220px;
+  padding: 4px 8px;
+  border: 1px solid #dbe3ee;
+  border-radius: 7px;
+  font-size: 12px;
+  font-family: inherit;
+  background: #fff;
+}
 
 /* ปุ่ม/ป้ายสถานะ "ส่งไป FlowAccount" ต่อแถวบิลขาย (FlowAccountSyncButton.tsx) */
 .nova-dash .fa-sync { display: flex; flex-direction: column; align-items: center; gap: 4px; }
