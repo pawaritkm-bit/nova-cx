@@ -660,9 +660,9 @@ export default async function AccountingWorkspacePage({
                   const url = path ? signed.get(path) ?? null : null;
                   const img = entryIsImage(e) || entryIsPdf(e); // PDF = รูปหน้าแรกผ่าน bill-thumb
                   const pend = isPending(e);
-                  // ★ ไฟล์ OneDrive เซ็น signed URL ไม่ได้ (url=null) — รูปใหญ่ใช้ bill-thumb แทนเสมอเมื่อไม่มี url
-                  const lightboxSrc =
-                    entryIsImage(e) && url ? url : `/api/accounting/bill-thumb?entry=${e.id}&w=1300&v=2`;
+                  // ★ 2026-09-02 ผู้ใช้ ("กดรูปใหญ่ช้า"): รูปใหญ่ใช้ bill-thumb w=1300 เสมอ
+                  //   (เล็กกว่าไฟล์สแกนเต็ม ~10 เท่า + browser cache) — ครอบ OneDrive ที่เซ็น URL ไม่ได้ด้วย
+                  const lightboxSrc = `/api/accounting/bill-thumb?entry=${e.id}&w=1300&v=2`;
                   return (
                     <div key={e.id} className={`wsp-card${pend ? " pend" : " done"}`}>
                       <div className="wsp-thumb">
@@ -687,10 +687,10 @@ export default async function AccountingWorkspacePage({
                           → ใช้ hash ที่ไม่มี element (#ปิด): :target หลุด = รูปปิด แต่ตำแหน่งจอคงเดิม */}
                       {img && path ? (
                         <a id={`zoom-${e.id}`} href="#ปิด" className="wsp-lightbox" aria-label="ปิดรูปขยาย">
-                          {/* ★ perf: loading=lazy — lightbox ซ่อนด้วย display:none จึงไม่ intersect
-                              → รูปเต็มโหลด "ตอนกดขยาย" เท่านั้น (เดิมโหลดเต็มทุกใบตั้งแต่เปิดหน้า) */}
+                          {/* ★ 2026-09-02 ("กดรูปใหญ่ช้า"): เลิก lazy — โหลดรูปย่อ 1300px รอไว้
+                              เบื้องหลังแบบ priority ต่ำตั้งแต่เปิดหน้า (ใบละ ~50-120KB) → กดแล้วขึ้นทันที */}
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={lightboxSrc ?? undefined} alt="บิล (ขยาย)" loading="lazy" decoding="async" />
+                          <img src={lightboxSrc} alt="บิล (ขยาย)" fetchPriority="low" decoding="async" />
                           <span className="wsp-lightbox-close">✕ ปิด</span>
                         </a>
                       ) : null}
