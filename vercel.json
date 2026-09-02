@@ -1,6 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["hnd1"],
+  "regions": [
+    "hnd1"
+  ],
   "crons": [
     {
       "path": "/api/cron/health-ping",
@@ -53,6 +55,12 @@
     },
     "app/api/accounting/extract-share-circle/route.ts": {
       "maxDuration": 120
+    },
+    "app/api/cron/process-attachments/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/cron/extract-bills/route.ts": {
+      "maxDuration": 300
     },
     "app/api/**/route.ts": {
       "maxDuration": 60

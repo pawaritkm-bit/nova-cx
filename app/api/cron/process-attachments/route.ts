@@ -6,7 +6,9 @@ import { newRequestId, logServerError, isValidCronAuth } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// ★ 2026-09-02 บั๊กที่ผู้ใช้เจอ ("บิลจากกลุ่ม LINE ไม่ไหลเข้าลูกค้า"): 60s ไม่พอ —
+//   เก็บไฟล์ + AI อ่านบิล real-time ต่อท้ายรอบเดียว โดนตัดกลางคันเงียบ ๆ
+export const maxDuration = 300;
 
 /**
  * POST/GET /api/cron/process-attachments
@@ -46,7 +48,34 @@ async function handle(request: NextRequest) {
   try {
     const db = createServiceRoleClient();
     const summary = await processPendingAttachments(db, { limit: 20 });
-    return NextResponse.json({ status: "ok", ...summary }, { status: 200 });
+
+    // ★ 2026-09-02 safety net: กวาดอ่านบิลค้างของ "กลุ่มรวมหลายบริษัท" (route_by_slip) ทุกรอบ —
+    //   real-time ตอน store อาจโดนตัด (timeout/สะดุด) และ cron extract-bills แบบตามเวลาปิดถาวร
+    //   → ไม่มีรอบเก็บตก บิลค้าง pending จนกว่าจะมีไฟล์ใหม่มากระตุ้น · sweep นี้ idempotent
+    //   (คัดเฉพาะที่ยังไม่มี entry) และจำกัด 5 ใบ/กลุ่ม/รอบ คุมต้นทุน
+    let sweep: { groups: number; created: number } = { groups: 0, created: 0 };
+    try {
+      const { data: routeGroups } = await db
+        .from("chat_groups")
+        .select("id")
+        .eq("route_by_slip", true)
+        .eq("is_active", true)
+        .is("deleted_at", null)
+        .limit(20);
+      const { processBillExtraction } = await import("@/lib/line/bill-extract-worker");
+      for (const g of (routeGroups ?? []) as { id: string }[]) {
+        try {
+          const r = await processBillExtraction(db, { chatGroupId: g.id, limit: 5 });
+          sweep = { groups: sweep.groups + 1, created: sweep.created + r.created };
+        } catch {
+          // กลุ่มเดียวพลาด → ข้าม (best-effort)
+        }
+      }
+    } catch {
+      // sweep พลาดทั้งชุด → ไม่กระทบงานเก็บไฟล์หลัก
+    }
+
+    return NextResponse.json({ status: "ok", ...summary, routeSweep: sweep }, { status: 200 });
   } catch (e) {
     logServerError("cron/process-attachments", requestId, e);
     // คืน 200 กัน Vercel Cron retry เป็น error loop + ให้ monitor เห็นสถานะ
