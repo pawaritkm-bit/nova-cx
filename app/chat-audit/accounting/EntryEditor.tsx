@@ -902,11 +902,14 @@ export default function EntryEditor({
               ) : null}
               {fxMsg ? <div className="acc-field acc-field-wide action-msg err">{fxMsg}</div> : null}
 
-              {/* hint บัญชีคู่ที่จะเป็นเครดิต (ช่วยตรวจ — ยังไม่ลงจริง แค่บอกให้เห็น)
-                  เงินโอน → บัญชีคู่ = เงินฝากธนาคาร (default 1020) */}
+              {/* hint บัญชีคู่ (ช่วยตรวจ — ยังไม่ลงจริง แค่บอกให้เห็น) · เงินโอน → 1020 เงินฝากธนาคาร
+                  ★ ฝั่งตามประเภทบิล (กติกาผู้ใช้ 2026-09-02 — ตรงกับ journal.ts ที่ลงจริงอยู่แล้ว):
+                    ขาย = เงินเข้า → บัญชีคู่ฝั่ง "เดบิต" · ซื้อ = เงินออก → ฝั่ง "เครดิต"
+                    (เดิมป้ายเขียน "เครดิต" ตายตัวทุกกรณี ทำให้บิลขายอ่านแล้วสับสน) */}
               {contraHint ? (
                 <div className="acc-field acc-field-wide acc-contra-hint">
-                  บัญชีคู่ (เครดิต): {contraHint.code ? <b>{contraHint.code}</b> : null} {contraHint.name}
+                  บัญชีคู่{entryType === "sale" ? " (เดบิต)" : entryType === "purchase" ? " (เครดิต)" : ""}:{" "}
+                  {contraHint.code ? <b>{contraHint.code}</b> : null} {contraHint.name}
                 </div>
               ) : null}
               <label className="acc-field acc-field-wide">
