@@ -285,6 +285,9 @@ export default async function VatReportPage({
 
   return (
     <VatReportDoc
+      // ★ 2026-09-02 บั๊กเดียวกับสมุดรายวัน: ตารางแก้ได้เก็บ state ครั้งแรก — เปลี่ยนช่วง/ประเภทแล้ว
+      //   ต้อง remount รับข้อมูลชุดใหม่
+      key={`${kind}|${fromDate}|${toDate}`}
       customerId={customerId}
       kind={kind}
       companyName={companyName}

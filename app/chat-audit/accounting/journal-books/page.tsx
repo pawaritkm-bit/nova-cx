@@ -258,6 +258,9 @@ export default async function JournalBooksPage({
 
   return (
     <JournalBooksDoc
+      // ★ 2026-09-02 บั๊กที่ผู้ใช้เจอ: เปลี่ยนช่วงเดือนแล้วตารางยังโชว์ชุดเก่า — ตารางแก้ได้เก็บ
+      //   state จาก props ครั้งแรกครั้งเดียว → key ตามช่วงวันที่เพื่อ remount รับข้อมูลชุดใหม่
+      key={`${fromDate}|${toDate}`}
       customerId={customerId}
       companyName={companyName}
       periodLabel={periodLabel}
