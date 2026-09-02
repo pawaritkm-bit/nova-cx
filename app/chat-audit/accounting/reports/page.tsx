@@ -13,6 +13,7 @@ import { buildLedgerStatements } from "@/lib/accounting/ledger-statement";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { filterEntriesForReport, periodLabel, validMonth } from "@/lib/accounting/report-filter";
+import ReportsTabs from "./ReportsTabs";
 import { loadCombinedJournalLines, flattenCombinedJournalLines } from "@/lib/accounting/statement-inputs";
 import { buildPndReport, buildPp30Report } from "@/lib/accounting/rd-export";
 import { formatMoney } from "@/lib/accounting/calc";
@@ -575,11 +576,30 @@ export default async function AccountingReportsPage({
                       <li>
                         มี <strong>{statements.journal.skipped.length.toLocaleString("th-TH")}</strong> บิลที่
                         <strong>ยังไม่เข้างบ</strong> (ตกหล่น) — ดูรายละเอียด/เหตุผลด้านล่าง
+                        {/* ★ 2026-09-02 ผู้ใช้: ปุ่มลิงก์ไปหน้าบิลที่ยังไม่ปิด */}
+                        <a
+                          className="btn btn-ghost"
+                          style={{ marginLeft: 8 }}
+                          href={`/chat-audit/accounting?edit=${statements.journal.skipped[0].entryId}`}
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          แก้บิลที่ตกหล่น ↗
+                        </a>
                       </li>
                     ) : null}
                     {includeDraft && draftCount > 0 ? (
                       <li>
                         รวมบิล <strong>ร่าง {draftCount.toLocaleString("th-TH")}</strong> ใบในงบนี้ (ติ๊ก “เฉพาะที่ยืนยันแล้ว” เพื่อตัดออก)
+                        <a
+                          className="btn btn-ghost"
+                          style={{ marginLeft: 8 }}
+                          href={`/chat-audit/accounting?open=${customerId}`}
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          ไปหน้าตรวจ/ยืนยันบิล ↗
+                        </a>
                       </li>
                     ) : null}
                   </ul>
@@ -596,7 +616,7 @@ export default async function AccountingReportsPage({
                 <div className="table-wrap" style={{ marginTop: 10 }}>
                   <table className="dlv-table acc-table">
                     <thead>
-                      <tr><th>วันที่</th><th>เลขที่</th><th>ประเภท</th><th>เหตุผลที่ตกหล่น</th></tr>
+                      <tr><th>วันที่</th><th>เลขที่</th><th>ประเภท</th><th>เหตุผลที่ตกหล่น</th><th>แก้ไข</th></tr>
                     </thead>
                     <tbody>
                       {statements.journal.skipped.map((sk, i) => (
@@ -605,6 +625,12 @@ export default async function AccountingReportsPage({
                           <td>{sk.docNo || "—"}</td>
                           <td>{sk.entryType === "purchase" ? "ซื้อ" : sk.entryType === "sale" ? "ขาย" : "รอระบุ"}</td>
                           <td>{sk.reason}</td>
+                          <td>
+                            {/* ★ 2026-09-02 ผู้ใช้: ลิงก์ตรงไปหน้าตรวจ/แก้บิลใบนั้น — แก้เสร็จกลับมาริเฟรชงบ */}
+                            <a className="btn btn-ghost" href={`/chat-audit/accounting?edit=${sk.entryId}`} target="_blank" rel="noopener">
+                              แก้บิล ↗
+                            </a>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -613,30 +639,22 @@ export default async function AccountingReportsPage({
               </details>
             ) : null}
 
-            {/* ---- แท็บรายงาน + ปุ่ม Export ---- */}
+            {/* ---- แท็บรายงาน + ปุ่ม Export ----
+                 ★ 2026-09-02 ผู้ใช้: กดแท็บช้า — เดิม Link โหลดหน้าใหม่ (ดึงบิล+คำนวณงบใหม่ทุกคลิก)
+                 แก้: render ทั้ง 5 รายงานรอบเดียว (statements คำนวณครบอยู่แล้ว) → สลับฝั่ง client ทันที */}
             <div className="card">
-              <div className="acc-subtabs" style={{ marginBottom: 14 }}>
-                {TABS.map((t) => (
-                  <Link
-                    key={t.key}
-                    href={`/chat-audit/accounting/reports${buildQuery({ customerId, from, to, draft: includeDraft, tab: t.key })}`}
-                    scroll={false}
-                    className={`acc-subtab${tab === t.key ? " active" : ""}`}
-                    aria-current={tab === t.key ? "page" : undefined}
-                  >
-                    {t.label}
-                  </Link>
-                ))}
-                <span className="acc-toolbar-spacer" />
-                <a href={exportQuery(tab)} className="btn">⬇ Export {TABS.find((t) => t.key === tab)?.label} (Excel)</a>
-                <a href={exportQuery("all")} className="btn btn-ghost">⬇ ทั้งหมด</a>
-              </div>
-
-              {tab === "journal" ? <JournalView s={statements} /> : null}
-              {tab === "ledger" ? <LedgerView s={statements} /> : null}
-              {tab === "trial" ? <TrialView s={statements} /> : null}
-              {tab === "income" ? <IncomeView s={statements} /> : null}
-              {tab === "balance" ? <BalanceView s={statements} /> : null}
+              <ReportsTabs
+                tabs={TABS}
+                initial={tab}
+                exportHrefs={TABS.map((t) => exportQuery(t.key))}
+                allHref={exportQuery("all")}
+              >
+                <JournalView s={statements} />
+                <LedgerView s={statements} />
+                <TrialView s={statements} />
+                <IncomeView s={statements} />
+                <BalanceView s={statements} />
+              </ReportsTabs>
             </div>
 
             {/* ---- ยื่นสรรพากร (RD Prep) ---- */}
