@@ -23,6 +23,11 @@ export type BillForMatch = {
   uploadUrl?: string | null;
   /** ไฟล์แนบเป็นรูป (โชว์ thumbnail ได้) — false = PDF/ไฟล์อื่น (ให้ลิงก์เปิดดูแทน) */
   uploadIsImage?: boolean;
+  /** ★ 2026-09-02 บัญชีของบรรทัดในบิล (บรรทัดแรกที่มีบัญชี) — โชว์/เติมได้จากหน้ากระทบยอด */
+  accountCode?: string | null;
+  accountName?: string | null;
+  /** true = มีบรรทัดยอด>0 ที่ยังไม่เลือกบัญชี → บิลยังไม่เข้าสมุดรายวัน 5 เล่ม */
+  accountMissing?: boolean;
 };
 
 export type TxnForMatch = {

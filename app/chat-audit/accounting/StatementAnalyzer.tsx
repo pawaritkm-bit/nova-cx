@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  applyStatementAccountToBillAction,
   createStatementUploadUrlAction,
   matchStatementWithBillsAction,
   learnStatementAccountAction,
@@ -451,6 +452,30 @@ export default function StatementAnalyzer({
       return next;
     });
   }, []);
+
+  /** ★ 2026-09-02 ผู้ใช้: บิลที่จับคู่แล้วแต่ยังไม่มีบัญชี = ไม่ไหลไปสมุด 5 เล่ม —
+   *  เลือกบัญชีตรงนี้ → เขียนลงบรรทัดบิลจริงทันที (บิลไหลเข้าสมุดรายวัน→แยกประเภท→งบเอง)
+   *  + สอน learning จากชื่อผู้โอน/ยอด · อัปเดตการ์ดเป็นเขียวโดยไม่ต้องกระทบใหม่ */
+  const pickAccountForBill = useCallback(
+    (t: StatementTxn, billId: string, code: string, name: string) => {
+      setBills((prev) =>
+        prev.map((b) =>
+          b.id === billId ? { ...b, accountCode: code, accountName: name, accountMissing: false } : b
+        )
+      );
+      void applyStatementAccountToBillAction({
+        customerId,
+        billId,
+        accountCode: code,
+        accountName: name,
+        counterpartyName: t.counterparty_name,
+        amount: t.amount,
+      }).then((r) => {
+        if (!r.ok) setBillsMsg({ ok: false, text: r.message ?? "บันทึกบัญชีลงบิลไม่สำเร็จ" });
+      });
+    },
+    [customerId]
+  );
 
   /** อ่านไฟล์ที่อยู่ใน storage อยู่แล้วอีกครั้ง (ไฟล์เก่าที่ยังไม่มีผลเซฟ) — ไม่ต้องอัปโหลดใหม่ */
   function rereadStored(f: SavedStatementFile) {
@@ -1026,6 +1051,7 @@ export default function StatementAnalyzer({
               accountPick={accountPick}
               accountSuggestions={accountSuggestions}
               onPickAccount={pickAccount}
+              onPickAccountForBill={pickAccountForBill}
               onClearAccount={clearAccount}
               reviewed={reviewed}
               manualPick={manualPick}
@@ -1054,6 +1080,7 @@ export default function StatementAnalyzer({
               accountPick={accountPick}
               accountSuggestions={accountSuggestions}
               onPickAccount={pickAccount}
+              onPickAccountForBill={pickAccountForBill}
               onClearAccount={clearAccount}
               reviewed={reviewed}
               manualPick={manualPick}
@@ -1082,6 +1109,7 @@ export default function StatementAnalyzer({
               accountPick={accountPick}
               accountSuggestions={accountSuggestions}
               onPickAccount={pickAccount}
+              onPickAccountForBill={pickAccountForBill}
               onClearAccount={clearAccount}
               reviewed={reviewed}
               manualPick={manualPick}
@@ -1163,6 +1191,7 @@ function BillSideCard({
   accountPicked,
   accountSuggestion,
   onPickAccount,
+  onPickAccountForBill,
   onClearAccount,
   match,
   matchesReady,
@@ -1180,9 +1209,11 @@ function BillSideCard({
   chart: ChartAccount[];
   /** บัญชีที่นักบัญชีเลือกไว้ ("code|name") · null = ยังไม่เลือก */
   accountPicked: string | null;
-  /** คำแนะนำจาก learning map (เฉพาะแถวไม่พบบิล) */
+  /** คำแนะนำจาก learning map (แถวไม่พบบิล + แถวที่บิลยังไม่มีบัญชี) */
   accountSuggestion: AccountSuggestion;
   onPickAccount: (code: string, name: string) => void;
+  /** ★ 2026-09-02 — เลือกบัญชีให้ "บิลที่จับคู่แล้ว" (เขียนลงบรรทัดบิลจริง → ไหลเข้าสมุด 5 เล่ม) */
+  onPickAccountForBill: (billId: string, code: string, name: string) => void;
   onClearAccount: () => void;
   match: BillMatch | BillForMatch | null;
   matchesReady: boolean;
@@ -1213,18 +1244,66 @@ function BillSideCard({
     const typeLabel = match.entryType === "sale" ? "บิลขาย" : match.entryType === "purchase" ? "บิลซื้อ" : "บิล";
     const nameHit = "nameHit" in match ? match.nameHit : true;
     const billId = "billId" in match ? match.billId : match.id;
+    const matchedBill = bills.find((b) => b.id === billId);
+    // ★ 2026-09-02 ผู้ใช้: "กระทบเสร็จแล้วทำไมไม่ไหลไปสมุด 5 เล่ม" — บิลที่บัญชีขาดถูกสมุดรายวันข้าม
+    //   → โชว์/เติมบัญชีของบิลจากการ์ดนี้เลย (เขียนลงบรรทัดบิลจริง + จำ) บิลถึงไหลไปสมุด→แยกประเภท→งบ
+    const acctCode = (matchedBill?.accountCode ?? "").trim();
+    const acctName = matchedBill?.accountName ?? "";
+    const needAcct = matchedBill?.accountMissing === true;
     return (
-      <div style={{ ...base, border: "2px solid #86efac" }}>
+      <div style={{ ...base, border: needAcct ? "2px solid #fcd34d" : "2px solid #86efac", background: needAcct ? "#fffbeb" : "#fff" }}>
         <div style={{ color: "#166534", fontWeight: 600, fontSize: 13 }}>
           ✓ พบบิลตรง{nameHit ? " — ยอด + วัน + ชื่อตรง" : " (ยอด + วันตรง)"}
         </div>
+        {needAcct ? (
+          <div style={{ color: "#b45309", fontWeight: 600, fontSize: 12, marginTop: 2 }}>
+            ⚠ บิลยังไม่มีบัญชี — ใส่บัญชีด้านล่างก่อน ถึงจะไหลเข้าสมุดรายวัน 5 เล่ม
+          </div>
+        ) : null}
         <div style={{ fontSize: 13, marginTop: 2 }}>
           {typeLabel}
           {match.docNo ? ` ${match.docNo}` : ""} · {match.status === "confirmed" ? "ยืนยันแล้ว" : "ร่าง"}
           {match.counterparty ? ` · คู่ค้า: ${match.counterparty}` : ""}
         </div>
         <TransferWhen t={t} />
-        <BillAttachment bill={bills.find((b) => b.id === billId)} />
+        <BillAttachment bill={matchedBill} />
+        {needAcct || editingAcct ? (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>
+              บัญชี{t.direction === "in" ? " (รายได้)" : t.direction === "out" ? " (ค่าใช้จ่าย)" : ""}:
+            </span>
+            <div style={{ minWidth: 220, flex: 1 }}>
+              <AccountCombobox
+                accountCode={editingAcct ? "" : accountSuggestion?.code ?? ""}
+                accountName={editingAcct ? "" : accountSuggestion?.name ?? ""}
+                chart={chart}
+                readOnly={false}
+                onSelect={(c, n) => {
+                  setEditingAcct(false);
+                  onPickAccountForBill(billId, c, n);
+                }}
+                onNameChange={() => {}}
+                onClear={() => setEditingAcct(true)}
+              />
+            </div>
+            {!editingAcct && accountSuggestion ? (
+              <span
+                style={{ fontSize: 11, background: "#eff6ff", color: "#1d4ed8", borderRadius: 8, padding: "1px 8px" }}
+                title="แนะนำจากที่นักบัญชีเคยเลือกให้ผู้โอนคนนี้/ยอดนี้ — เลือก/แก้เพื่อยืนยัน"
+              >
+                🤖 แนะนำ
+              </span>
+            ) : null}
+          </div>
+        ) : acctCode ? (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap", fontSize: 13 }}>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>บัญชี:</span>
+            <span>🔒 {acctCode}{acctName ? ` · ${acctName}` : ""}</span>
+            <button type="button" className="btn btn-ghost" onClick={() => setEditingAcct(true)} title="เลือกบัญชีใหม่ (เขียนทับบรรทัดบิล)">
+              เปลี่ยน
+            </button>
+          </div>
+        ) : null}
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
           {/* ★ 2026-09-02 ผู้ใช้: จับคู่แล้วคือจบ — เหลือปุ่ม "แก้ไข" ไว้แก้เฉพาะบิลที่ผิด */}
           <a className="btn btn-ghost" href={`/chat-audit/accounting?edit=${billId}${accountant ? `&accountant=${encodeURIComponent(accountant)}` : ""}`} target="_blank" rel="noopener">
@@ -1359,6 +1438,7 @@ function TxnPile({
   accountPick,
   accountSuggestions,
   onPickAccount,
+  onPickAccountForBill,
   onClearAccount,
   reviewed,
   manualPick,
@@ -1380,6 +1460,7 @@ function TxnPile({
   accountPick: Map<string, string>;
   accountSuggestions: AccountSuggestion[] | null;
   onPickAccount: (k: string, t: StatementTxn, code: string, name: string) => void;
+  onPickAccountForBill: (t: StatementTxn, billId: string, code: string, name: string) => void;
   onClearAccount: (k: string) => void;
   reviewed: Set<string>;
   manualPick: Map<string, string>;
@@ -1480,6 +1561,7 @@ function TxnPile({
                   accountPicked={accountPick.get(k) ?? null}
                   accountSuggestion={accountSuggestions ? accountSuggestions[i] ?? null : null}
                   onPickAccount={(code, name) => onPickAccount(k, t, code, name)}
+                  onPickAccountForBill={(billId, code, name) => onPickAccountForBill(t, billId, code, name)}
                   onClearAccount={() => onClearAccount(k)}
                   isReviewed={reviewed.has(k)}
                   uploading={uploadingRow === i}

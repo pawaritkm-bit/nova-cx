@@ -600,25 +600,33 @@ export async function matchStatementWithBillsAction(input: {
     }
 
     // ยอดต่อบิลจากบรรทัด (chunk กัน URL ยาวเกิน) — gross = amount+vat · net = gross − wht
-    const totals = new Map<string, { gross: number; net: number }>();
+    // ★ 2026-09-02 + บัญชีของบรรทัด: บิลที่บัญชีขาดจะไม่เข้าสมุดรายวัน 5 เล่ม —
+    //   หน้ากระทบยอดต้องเห็น/เติมได้ (ผู้ใช้: "กระทบเสร็จแล้วทำไมไม่ไหลไปสมุด 5 เล่ม")
+    const totals = new Map<string, { gross: number; net: number; acctCode: string | null; acctName: string | null; missing: boolean }>();
     for (let i = 0; i < rows.length; i += 150) {
       const ids = rows.slice(i, i + 150).map((r) => r.id);
       const { data: lines } = await service
         .from("bill_entry_lines")
-        .select("entry_id, amount, vat_amount, wht_amount")
+        .select("entry_id, amount, vat_amount, wht_amount, account_code, account_name")
         .eq("tenant_id", ctx.tenantId)
         .in("entry_id", ids);
-      for (const l of (lines ?? []) as { entry_id: string; amount: number | null; vat_amount: number | null; wht_amount: number | null }[]) {
-        const t = totals.get(l.entry_id) ?? { gross: 0, net: 0 };
+      for (const l of (lines ?? []) as { entry_id: string; amount: number | null; vat_amount: number | null; wht_amount: number | null; account_code: string | null; account_name: string | null }[]) {
+        const t = totals.get(l.entry_id) ?? { gross: 0, net: 0, acctCode: null, acctName: null, missing: false };
         const gross = (l.amount ?? 0) + (l.vat_amount ?? 0);
         t.gross += gross;
         t.net += gross - (l.wht_amount ?? 0);
+        const code = (l.account_code ?? "").trim();
+        if (code && !t.acctCode) {
+          t.acctCode = code;
+          t.acctName = (l.account_name ?? "").trim() || null;
+        }
+        if (!code && (l.amount ?? 0) !== 0) t.missing = true;
         totals.set(l.entry_id, t);
       }
     }
 
     const bills: BillForMatch[] = rows.map((r) => {
-      const t = totals.get(r.id) ?? { gross: 0, net: 0 };
+      const t = totals.get(r.id) ?? { gross: 0, net: 0, acctCode: null, acctName: null, missing: false };
       const counterparty =
         (r.entry_type === "sale" ? r.buyer_name : r.seller_name) || r.counterparty_name || null;
       const uploadUrl = r.upload_path ? urlByPath.get(r.upload_path) ?? null : null;
@@ -633,17 +641,23 @@ export async function matchStatementWithBillsAction(input: {
         totalNet: Math.round(t.net * 100) / 100,
         uploadUrl,
         uploadIsImage: !!uploadUrl && /^image\//i.test(r.upload_mime ?? ""),
+        accountCode: t.acctCode,
+        accountName: t.acctName,
+        accountMissing: t.missing,
       };
     }).filter((b) => b.totalGross > 0 || b.totalNet > 0);
 
     const matches = matchTxnsWithBills(txns, bills);
+    const billById = new Map(bills.map((b) => [b.id, b]));
 
-    // ★ 2026-09-02 — แนะนำบัญชีคู่ให้รายการที่ "ไม่พบบิล" จาก learning map (เรียนรู้จากที่
-    //   นักบัญชีเคยกรอก — ทั้งบนแถวกระทบยอดนี้และตอนยืนยันบิล) · cache ต่อ (ฝั่ง|ชื่อ) กัน query ซ้ำ
+    // ★ 2026-09-02 — แนะนำบัญชีคู่จาก learning map (เรียนรู้จากที่นักบัญชีเคยกรอก):
+    //   แถวไม่พบบิล + แถวที่ "พบบิลแต่บิลยังไม่มีบัญชี" (ต้องใส่บัญชีถึงเข้าสมุด 5 เล่ม) ·
+    //   cache ต่อ (ฝั่ง|ชื่อ|ยอด) กัน query ซ้ำ
     const sugCache = new Map<string, AccountSuggestion>();
     const accountSuggestions: AccountSuggestion[] = await Promise.all(
       txns.map(async (t, i) => {
-        if (matches[i]) return null; // มีบิลแล้ว — บัญชีตามบิล
+        const m = matches[i];
+        if (m && billById.get(m.billId)?.accountMissing !== true) return null; // บิลมีบัญชีแล้ว
         if (t.direction !== "in" && t.direction !== "out") return null;
         const name = (t.counterparty_name ?? "").trim();
         const amt = typeof t.amount === "number" && t.amount > 0 ? t.amount : null;
@@ -662,5 +676,86 @@ export async function matchStatementWithBillsAction(input: {
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "กระทบกับบิลไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * ★ 2026-09-02 ผู้ใช้: "กระทบยอดเสร็จแล้วทำไมไม่ไหลไปสมุดบัญชี 5 เล่ม" —
+ *   สมุดรายวันข้ามบิลที่ "บรรทัดยังไม่มีบัญชี" (บัญชีขาด = ลงไม่ครบ) → บิลที่จับคู่บนหน้า
+ *   กระทบยอดต้องเติมบัญชีได้เลยจากหน้านั้น บิลถึงไหล สมุด 5 เล่ม → แยกประเภท → งบ
+ *   กติกาเขียน: บิลบรรทัดเดียว = เขียนทับ (แก้ AI จับผิดหมวดได้) · หลายบรรทัด = เติมเฉพาะที่ว่าง
+ *   + สอน learning map (ชื่อผู้โอน "หรือ" ยอดซ้ำ — กติกา 0128) ให้แนะนำเองรอบหน้า
+ */
+export async function applyStatementAccountToBillAction(input: {
+  customerId: string;
+  billId: string;
+  accountCode: string;
+  accountName: string;
+  counterpartyName?: string | null;
+  amount?: number | null;
+}): Promise<{ ok: boolean; message?: string }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(input.customerId) || !customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้าไม่ถูกต้อง" };
+    }
+    if (!isUuid(input.billId)) return { ok: false, message: "บิลไม่ถูกต้อง" };
+    const code = String(input.accountCode ?? "").trim();
+    const name = String(input.accountName ?? "").trim().slice(0, 120);
+    if (!/^[0-9A-Za-z.\-]{1,12}$/.test(code)) return { ok: false, message: "รหัสบัญชีไม่ถูกต้อง" };
+
+    // บิลต้องเป็นของลูกค้ารายนี้ใน tenant เดียวกันเท่านั้น (กันชี้ข้ามลูกค้า)
+    const { data: bill } = await service
+      .from("bill_entries")
+      .select("id, entry_type")
+      .eq("id", input.billId)
+      .eq("tenant_id", ctx.tenantId)
+      .eq("customer_id", input.customerId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    const b = bill as { id: string; entry_type: string } | null;
+    if (!b) return { ok: false, message: "ไม่พบบิลที่จับคู่" };
+
+    const { data: lines } = await service
+      .from("bill_entry_lines")
+      .select("id, amount, account_code")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("entry_id", b.id);
+    const ls = (lines ?? []) as { id: string; amount: number | null; account_code: string | null }[];
+    if (ls.length === 0) return { ok: false, message: "บิลนี้ไม่มีบรรทัดรายการ" };
+    const targets =
+      ls.length === 1 ? ls : ls.filter((l) => !(l.account_code ?? "").trim() && (l.amount ?? 0) !== 0);
+    for (const l of targets) {
+      const { error } = await service
+        .from("bill_entry_lines")
+        .update({ account_code: code, account_name: name || null })
+        .eq("id", l.id)
+        .eq("tenant_id", ctx.tenantId);
+      if (error) return { ok: false, message: "บันทึกบัญชีลงบิลไม่สำเร็จ" };
+    }
+
+    // สอน learning (best-effort — บันทึกบัญชีสำเร็จไปแล้ว ไม่ให้การจำพังงาน)
+    const entryType = b.entry_type === "sale" || b.entry_type === "purchase" ? b.entry_type : null;
+    const cpName =
+      typeof input.counterpartyName === "string" ? input.counterpartyName.trim().slice(0, 200) : "";
+    const amt =
+      typeof input.amount === "number" && Number.isFinite(input.amount) && input.amount > 0
+        ? input.amount
+        : null;
+    if (entryType && (cpName || amt)) {
+      await recordAccountRules(service, {
+        tenantId: ctx.tenantId,
+        entryType,
+        counterpartyTaxId: null,
+        counterpartyName: cpName || null,
+        lines: [{ accountCode: code, accountName: name || null, amount: amt }],
+      }).catch(() => {});
+    }
+    return { ok: true };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "บันทึกบัญชีไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
