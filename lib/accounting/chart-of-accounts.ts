@@ -32,9 +32,13 @@ export function buildChartByCode(chart: ChartAccount[]): ChartByCode {
 export function searchChart(chart: ChartAccount[], q: string): ChartAccount[] {
   const s = (q ?? "").trim().toLowerCase();
   if (!s) return chart;
-  return chart.filter(
-    (a) => a.code.toLowerCase().includes(s) || a.name.toLowerCase().includes(s)
-  );
+  // ★ ค้นด้วยตัวเลข = จับจาก "เลขหลักแรก" (prefix) — หมวดบัญชีอิงเลขหน้า (ผู้ใช้สั่ง 2026-09-02):
+  //   พิมพ์ "4030" เจอ 4030 แต่ไม่เจอ 3040 · พิมพ์ "40" เจอทั้ง 40xx · ชื่อบัญชียังค้น substring เดิม
+  const isNumeric = /^\d+$/.test(s);
+  return chart.filter((a) => {
+    const codeHit = isNumeric ? a.code.toLowerCase().startsWith(s) : a.code.toLowerCase().includes(s);
+    return codeHit || a.name.toLowerCase().includes(s);
+  });
 }
 
 /**

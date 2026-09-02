@@ -85,11 +85,24 @@ describe("searchChartNonBankGrouped — จัดกลุ่มตามหม�
     expect(digits).toEqual([...digits].sort((a, b) => a - b));
   });
 
-  it("ค้นด้วยรหัสหลายหลัก (534) → substring ไม่ใช่ digit-filter", () => {
+  it("ค้นด้วยรหัสหลายหลัก (534) → จับจากเลขหลักแรก (prefix)", () => {
     const groups = searchChartNonBankGrouped(TEST_CHART, "534");
     const all = groups.flatMap((g) => g.accounts);
-    expect(all.every((a) => a.code.includes("534"))).toBe(true);
+    expect(all.every((a) => a.code.startsWith("534") || a.name.includes("534"))).toBe(true);
     expect(all.some((a) => a.code === "5340")).toBe(true);
+  });
+
+  it("★ เลขจับจากหลักแรกเป็นหลัก (ผู้ใช้สั่ง 2026-09-02): '40' เจอ 4010 แต่ไม่เจอ 2040", () => {
+    const all = searchChartNonBankGrouped(TEST_CHART, "40").flatMap((g) => g.accounts);
+    expect(all.some((a) => a.code === "4010")).toBe(true);
+    expect(all.some((a) => a.code === "2040")).toBe(false);
+    expect(all.every((a) => a.code.startsWith("40") || a.name.includes("40"))).toBe(true);
+  });
+
+  it("★ '2040' เจอเฉพาะ 2040 — ไม่ลากรหัสที่มี 040 ตรงกลางมาด้วย", () => {
+    const all = searchChartNonBankGrouped(TEST_CHART, "2040").flatMap((g) => g.accounts);
+    expect(all.some((a) => a.code === "2040")).toBe(true);
+    expect(all.every((a) => a.code.startsWith("2040") || a.name.includes("2040"))).toBe(true);
   });
 
   it("ว่าง → คืนทุกหมวดที่มีบัญชี (รวมบัญชีเงินฝากธนาคารในหมวด 1)", () => {
@@ -106,12 +119,10 @@ describe("searchChartNonBankGrouped — จัดกลุ่มตามหม�
     expect(searchChartNonBankGrouped(TEST_CHART, "zzzไม่มีจริง")).toEqual([]);
   });
 
-  it("เลข 7–9 (ไม่ใช่ 1–6) → ถือเป็น substring ไม่ใช่ digit-filter", () => {
-    // '7' ไม่เข้าเงื่อนไข digit-filter → ค้น substring: ทุกผลต้องมี '7' ในรหัส/ชื่อ
+  it("เลข 7–9 (ไม่ใช่ 1–6) → prefix บนรหัส (ไม่มีรหัสขึ้นต้น 7) + substring บนชื่อ", () => {
     const all = searchChartNonBankGrouped(TEST_CHART, "7").flatMap((g) => g.accounts);
-    expect(all.length).toBeGreaterThan(0);
-    expect(all.every((a) => a.code.includes("7") || a.name.includes("7"))).toBe(true);
-    // และไม่มีทั้งหมวดที่ code ไม่มี 7 (เช่น 5010) หลุดมา
+    expect(all.every((a) => a.code.startsWith("7") || a.name.includes("7"))).toBe(true);
+    // รหัสที่มี 7 อยู่ตรงกลาง (ไม่ใช่หลักแรก) ต้องไม่หลุดมา
     expect(all.some((a) => a.code === "5010")).toBe(false);
   });
 });

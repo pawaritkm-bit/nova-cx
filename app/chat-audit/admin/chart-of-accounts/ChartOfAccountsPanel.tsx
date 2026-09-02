@@ -163,10 +163,14 @@ export default function ChartOfAccountsPanel({
 
   const filtered = useMemo(() => {
     const s = query.trim().toLowerCase();
+    // ★ ค้นด้วยตัวเลข = จับจาก "เลขหลักแรก" (prefix) — หมวดบัญชีอิงเลขหน้า (ผู้ใช้สั่ง 2026-09-02):
+    //   พิมพ์ "40" เจอ 4030/4010 (หมวด 4) แต่ไม่เจอ 3040 · ชื่อบัญชียังค้นแบบมีคำอยู่ตรงไหนก็เจอ
+    const isNumeric = /^\d+$/.test(s);
     return accounts.filter((a) => {
       if (!showInactive && !a.isActive) return false;
       if (!s) return true;
-      return a.code.toLowerCase().includes(s) || a.name.toLowerCase().includes(s);
+      const codeHit = isNumeric ? a.code.toLowerCase().startsWith(s) : a.code.toLowerCase().includes(s);
+      return codeHit || a.name.toLowerCase().includes(s);
     });
   }, [accounts, query, showInactive]);
 
