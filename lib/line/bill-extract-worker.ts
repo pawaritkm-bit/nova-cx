@@ -47,6 +47,14 @@ const BILL_DOC_KINDS = ["sale", "purchase", "handwritten", "cash"];
  */
 const EXTRACT_ELIGIBLE_DOC_KINDS = [...BILL_DOC_KINDS, "file"];
 
+/**
+ * ★ 0126 กลุ่มรวมหลายบริษัท (route_by_slip): เอกสารหลักคือ "สลิปโอนเงิน" (doc_kind='slip')
+ *   ต้อง eligible เข้าคิวด้วย — เฉพาะกลุ่ม route_by_slip เท่านั้น (กลุ่มลูกค้าปกติคงพฤติกรรมเดิม
+ *   ไม่อ่านสลิปอัตโนมัติ = ไม่เพิ่มต้นทุน AI)
+ *   บั๊กที่ผู้ใช้เจอ 2026-09-02: สลิปแรกในกลุ่มรวมค้าง pending เพราะ 'slip' ไม่อยู่ในคิว
+ */
+const ROUTE_GROUP_DOC_KINDS = [...EXTRACT_ELIGIBLE_DOC_KINDS, "slip"];
+
 /** doc_kind ที่ "ไม่ใช่ใบกำกับภาษี" → ไม่มี VAT แน่นอน (บังคับ novat ทุก line ไม่ต้องเดา) */
 const NONVAT_DOC_KINDS = new Set(["handwritten", "cash", "slip"]);
 
@@ -698,12 +706,24 @@ export async function selectExtractionCandidates(
 
   // ★ group-scoped (ใช้ตอน "ผูกลูกค้าทีหลัง" → ดึงบิลของกลุ่มนั้นทันที): กรองด้วย inner join chat_messages
   if (chatGroupId) {
+    // กลุ่มรวมหลายบริษัท (route_by_slip) → สลิปต้องเข้าคิวด้วย (best-effort: อ่านธงพลาด = ชนิดปกติ)
+    let kinds = EXTRACT_ELIGIBLE_DOC_KINDS;
+    try {
+      const { data: g } = await db
+        .from("chat_groups")
+        .select("route_by_slip")
+        .eq("id", chatGroupId)
+        .maybeSingle();
+      if ((g as { route_by_slip?: boolean | null } | null)?.route_by_slip) kinds = ROUTE_GROUP_DOC_KINDS;
+    } catch {
+      /* เงียบ — ใช้ชนิดปกติ */
+    }
     const { data, error } = await db
       .from("message_attachments")
       .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, original_name, chat_messages!inner(chat_group_id)")
       .eq("fetch_status", "stored")
       .in("attachment_type", ["image", "file"])
-      .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
+      .in("doc_kind", kinds)
       .not("drive_file_id", "is", null)
       .eq("chat_messages.chat_group_id", chatGroupId)
       .order("created_at", { ascending: true })
@@ -758,7 +778,7 @@ export async function selectExtractionCandidates(
         .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, original_name, chat_messages!inner(chat_groups!inner(customer_id, route_by_slip))")
         .eq("fetch_status", "stored")
         .in("attachment_type", ["image", "file"])
-        .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
+        .in("doc_kind", ROUTE_GROUP_DOC_KINDS)
         .not("drive_file_id", "is", null)
         .is("chat_messages.chat_groups.customer_id", null)
         .eq("chat_messages.chat_groups.route_by_slip", true)

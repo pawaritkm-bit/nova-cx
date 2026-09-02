@@ -71,6 +71,8 @@ type AttachmentRow = {
 type GroupContext = {
   id: string | null;
   customer_id: string | null;
+  /** ★ 0126 กลุ่มรวมหลายบริษัท — customer_id ว่างโดยตั้งใจ แยกบริษัทตามสลิปตอนอ่านบิล */
+  route_by_slip?: boolean | null;
   group_ref: string | null;
   display_name_enc: string | null;
   customers: { customer_code: string | null; customer_type: string | null } | null;
@@ -357,7 +359,7 @@ export async function processPendingAttachments(
        chat_messages!inner (
          sent_at,
          chat_groups!inner (
-           id, customer_id, group_ref, display_name_enc,
+           id, customer_id, route_by_slip, group_ref, display_name_enc,
            customers ( customer_code, customer_type ),
            chat_channels ( oa_type )
          )
@@ -672,7 +674,14 @@ export async function processPendingAttachments(
     }
     stored++;
     // ★ เก็บกลุ่มที่ได้ "บิล" ใหม่ (ไม่ใช่สเตทเมนต์/แพลตฟอร์ม) + ผูกลูกค้าแล้ว → อ่านทันทีหลัง loop
-    if (group?.id && group.customer_id && (!classification || classification.type === "other")) {
+    // ★ 0126: กลุ่มรวมหลายบริษัท (route_by_slip) customer_id ว่างโดยตั้งใจ — ต้องอ่านทันทีเหมือนกัน
+    //   (บั๊กที่ผู้ใช้เจอ 2026-09-02: สลิปแรกในกลุ่มรวมค้าง pending ตลอด เพราะเกตนี้เช็คแค่ customer_id
+    //    ส่วน cron extract-bills แบบตามเวลาปิดอยู่ → ไม่มีทางอื่นให้บิลถูกอ่านเลย)
+    if (
+      group?.id &&
+      (group.customer_id || group.route_by_slip) &&
+      (!classification || classification.type === "other")
+    ) {
       billGroups.add(group.id);
     }
   }
