@@ -917,7 +917,7 @@ export default function EntryEditor({
                     ขวา = ฝั่งตรงข้าม "เว้นว่างให้นักบัญชีกรอก" (ไม่ auto-fill — ระบบจำชื่อ/ยอดซ้ำจากที่
                     กรอกไว้ผ่าน learning ตอนบันทึก · อนาคต AI แม่นค่อยเติมเอง) = บัญชีของบรรทัดรายการ
                     (บิลบรรทัดเดียวแก้ตรงนี้ = แก้บรรทัดให้เลย · หลายบรรทัดชี้ไปแก้ที่ตาราง) */}
-              {contraHint ? (
+              {(
                 <div className="acc-field acc-field-wide">
                   <span>การลงบัญชี (บัญชีคู่)</span>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -925,39 +925,67 @@ export default function EntryEditor({
                       <div style={{ fontSize: 12, fontWeight: 700, color: entryType === "sale" ? "#166534" : "#b91c1c" }}>
                         {entryType === "sale" ? "เดบิต (เงินเข้า)" : entryType === "purchase" ? "เครดิต (เงินออก)" : "บัญชีคู่"}
                       </div>
-                      <div style={{ fontSize: 14, marginTop: 2 }}>
-                        {contraHint.code ? <b>{contraHint.code}</b> : null} {contraHint.name}
-                      </div>
+                      {/* ★ 2026-09-02 ผู้ใช้: กล่องนี้ต้องขึ้นทุกบิล — ยังไม่เลือกวิธีจ่าย = บอกให้เลือกก่อน */}
+                      {contraHint ? (
+                        <div style={{ fontSize: 14, marginTop: 2 }}>
+                          {contraHint.code ? <b>{contraHint.code}</b> : null} {contraHint.name}
+                        </div>
+                      ) : (
+                        <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                          — เลือก “วิธีจ่าย/รับเงิน” ด้านบนก่อน (โอน = 1020 ธนาคาร · สด = 1010 เงินสด · เชื่อ = ลูกหนี้/เจ้าหนี้)
+                        </div>
+                      )}
                       <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>อัตโนมัติตามวิธีรับ/จ่ายเงิน</div>
                     </div>
                     <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px" }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: entryType === "sale" ? "#b91c1c" : "#166534" }}>
                         {entryType === "sale" ? "เครดิต (ฝั่งตรงข้าม)" : entryType === "purchase" ? "เดบิต (ฝั่งตรงข้าม)" : "ฝั่งตรงข้าม"}
                       </div>
-                      {lines.length === 1 ? (
-                        <div style={{ marginTop: 4 }}>
-                          <AccountCombobox
-                            accountCode={lines[0].accountCode}
-                            accountName={lines[0].accountName}
-                            chart={chart}
-                            readOnly={locked}
-                            onSelect={(code, name) => patchLine(lines[0].key, { accountCode: code, accountName: name })}
-                            onNameChange={(name) => patchLine(lines[0].key, { accountName: name })}
-                            onClear={() => patchLine(lines[0].key, { accountCode: "", accountName: "" })}
-                          />
-                          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-                            เว้นว่างให้กรอกเอง — ระบบจำชื่อผู้โอน/ยอดซ้ำที่กรอก ไว้เติมให้อัตโนมัติเมื่อแม่น
+                      {/* ★ 2026-09-02 ผู้ใช้: combobox ต้องขึ้นทุกบิล — หลายบรรทัด: เลือกแล้ว
+                          "เติมบรรทัดที่ยังว่าง" (บรรทัดที่เลือกไว้แล้วไม่ทับ — แก้รายบรรทัดที่ตารางล่าง) */}
+                      {(() => {
+                        const codes = [...new Set(lines.map((l) => (l.accountCode ?? "").trim()).filter(Boolean))];
+                        const shared = lines.length === 1
+                          ? { code: lines[0].accountCode, name: lines[0].accountName }
+                          : codes.length === 1 && lines.every((l) => (l.accountCode ?? "").trim())
+                            ? { code: codes[0], name: lines.find((l) => (l.accountCode ?? "").trim() === codes[0])?.accountName ?? "" }
+                            : { code: "", name: "" };
+                        const applyAll = (code: string, name: string) => {
+                          if (lines.length === 1) {
+                            patchLine(lines[0].key, { accountCode: code, accountName: name });
+                            return;
+                          }
+                          for (const l of lines) {
+                            if (!(l.accountCode ?? "").trim()) patchLine(l.key, { accountCode: code, accountName: name });
+                          }
+                        };
+                        return (
+                          <div style={{ marginTop: 4 }}>
+                            <AccountCombobox
+                              accountCode={shared.code}
+                              accountName={shared.name}
+                              chart={chart}
+                              readOnly={locked}
+                              onSelect={applyAll}
+                              onNameChange={(name) => {
+                                if (lines.length === 1) patchLine(lines[0].key, { accountName: name });
+                              }}
+                              onClear={() => {
+                                if (lines.length === 1) patchLine(lines[0].key, { accountCode: "", accountName: "" });
+                              }}
+                            />
+                            <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                              {lines.length === 1
+                                ? "เว้นว่างให้กรอกเอง — ระบบจำชื่อผู้โอน/ยอดซ้ำที่กรอก ไว้เติมให้อัตโนมัติเมื่อแม่น"
+                                : "หลายบรรทัด: เลือกที่นี่ = เติมบรรทัดที่ยังว่าง · แก้รายบรรทัดที่ตารางด้านล่าง"}
+                            </div>
                           </div>
-                        </div>
-                      ) : (
-                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                          หลายบรรทัด — เลือกบัญชีที่ตารางรายการด้านล่าง
-                        </div>
-                      )}
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
-              ) : null}
+              )}
               <label className="acc-field acc-field-wide">
                 <span>คู่ค้า {aiSrc && entry.counterpartyName ? <AiTag /> : null}</span>
                 <input type="text" value={partyName} onChange={(e) => setPartyName(e.target.value)} disabled={locked} placeholder="ชื่อผู้ขาย/ผู้ซื้อ" />

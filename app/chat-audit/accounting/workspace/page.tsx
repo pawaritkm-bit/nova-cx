@@ -467,13 +467,13 @@ export default async function AccountingWorkspacePage({
   // ★ ขั้น flow กดย้อนดูได้ (รับเอกสาร / AI ร่างบัญชี / ตรวจ) — เปลี่ยน view · active ตาม view ที่เลือก
   const stepHref = (v: string) => `/chat-audit/accounting/workspace${q({ view: v, open: openKey })}`;
   // active ตาม tab ก่อน (กระทบยอด=3 / ภาษี=4) ไม่งั้นตาม view (รับเอกสาร=0 / ร่าง=1 / ตรวจ=2)
-  const curIdx = tab === "reconcile" ? 3 : tab === "tax" ? 4 : tab === "close" ? 5 : view === "received" ? 0 : view === "drafted" ? 1 : 2;
+  // ★ 2026-09-02 ผู้ใช้: ตัดขั้น "กระทบยอดธนาคาร" — ซ้ำกับปุ่มหลัก "กระทบยอดบิลกับสเตทเมนต์"
+  const curIdx = tab === "tax" ? 3 : tab === "close" ? 4 : view === "received" ? 0 : view === "drafted" ? 1 : 2;
   const STEPS: { t: string; c: number | null; href?: string; active?: boolean; done?: boolean }[] = [
     { t: "รับเอกสาร", c: received, href: stepHref("received") },
     { t: "AI ร่างบัญชี", c: draftCount, href: stepHref("drafted") },
     { t: "ตรวจ/ยืนยัน", c: pending, href: stepHref("review") },
     // ★ ขั้น flow เปิด "ในหน้าเดียว" (แท็บ) ไม่เด้งออก/ไม่ดาวน์โหลด
-    { t: "กระทบยอดธนาคาร", c: null, href: `/chat-audit/accounting/workspace${q({ tab: "reconcile", open: openKey })}` },
     { t: "ภาษี (ภพ.30)", c: null, href: `/chat-audit/accounting/workspace${q({ tab: "tax", open: openKey })}` },
     { t: "ปิดเดือน", c: null, href: `/chat-audit/accounting/workspace${q({ tab: "close", open: openKey })}` },
   ].map((s, i) => ({ ...s, active: i === curIdx, done: i < curIdx }));
@@ -605,14 +605,11 @@ export default async function AccountingWorkspacePage({
             <Link className={`wsp-tab${tab === "review" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ open: openKey })}`} scroll={false}>
               {view === "received" ? "📥 เอกสารทั้งหมด" : view === "drafted" ? "🤖 ร่าง AI" : "📝 ตรวจเอกสาร"} {tab === "review" && openGroup ? `· ${reviewList.length} ใบ` : ""}
             </Link>
-            <Link className={`wsp-tab${tab === "reconcile" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ tab: "reconcile", open: openKey })}`} scroll={false}>🏦 กระทบยอดธนาคาร</Link>
             <Link className={`wsp-tab${tab === "tax" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ tab: "tax", open: openKey })}`} scroll={false}>🧾 ภาษี ภพ.30</Link>
             <Link className={`wsp-tab${tab === "close" ? " on" : ""}`} href={`/chat-audit/accounting/workspace${q({ tab: "close", open: openKey })}`} scroll={false}>📑 ปิดเดือน</Link>
           </div>
 
-          {tab === "reconcile" ? (
-            <iframe className="wsp-embed" src={`/chat-audit/accounting/bank-reconciliation?embed=1${selectedMonth ? `&month=${selectedMonth}` : ""}`} title="กระทบยอดธนาคาร" />
-          ) : tab === "close" ? (
+          {tab === "close" ? (
             <CloseMonthView received={received} pending={pending} confirmed={confirmed} purchaseBase={purchaseBase} saleBase={saleBase} whtTotal={whtTotal} month={selectedMonth} />
           ) : tab === "tax" ? (
             <TaxView entries={inMonth} month={selectedMonth} accParam={accountantParam} />

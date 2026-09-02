@@ -272,10 +272,7 @@ export default function CustomerTabs({
             {budgetHref ? (
               <a href={budgetHref} className="btn btn-ghost">งบประมาณ</a>
             ) : null}
-            {/* กระทบยอดธนาคาร — เทียบยอดบัญชีเงินฝากกับ statement ธนาคารจริง (เฟส 6 ส่วน T) */}
-            {bankReconciliationHref ? (
-              <a href={bankReconciliationHref} className="btn btn-ghost">กระทบยอดธนาคาร</a>
-            ) : null}
+            {/* ★ 2026-09-02 ผู้ใช้: ตัดปุ่มกระทบยอดธนาคาร — ซ้ำกับ "กระทบยอดบิลกับสเตทเมนต์" */}
             {/* ทะเบียนทรัพย์สินถาวร + ค่าเสื่อมราคาอัตโนมัติ (เฟส 7 ส่วน V) */}
             {fixedAssetsHref ? (
               <a href={fixedAssetsHref} className="btn btn-ghost">ทรัพย์สินถาวร</a>
