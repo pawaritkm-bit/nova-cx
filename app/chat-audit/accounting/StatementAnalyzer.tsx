@@ -959,7 +959,11 @@ export default function StatementAnalyzer({
               </button>
               {matches ? (
                 <span className="muted" style={{ fontSize: 12 }}>
-                  ตรงกับบิลแล้ว {matches.filter(Boolean).length.toLocaleString("th-TH")}/{txns.length.toLocaleString("th-TH")} รายการ
+                  เคลียร์แล้ว (มีบิล/ลงบัญชีคู่){" "}
+                  {txns
+                    .filter((t, i) => matches[i] || manualPick.has(txnKey(t)) || accountPick.has(txnKey(t)))
+                    .length.toLocaleString("th-TH")}
+                  /{txns.length.toLocaleString("th-TH")} รายการ
                 </span>
               ) : null}
             </div>
@@ -1196,9 +1200,22 @@ function BillSideCard({
         )
         .slice(0, 5)
     : [];
+  // ★ 2026-09-02 กติกาผู้ใช้: "ไม่มีรูปบิล แต่มีเลขบัญชีคู่ = ปิดได้ เปลี่ยนเป็นสีเขียว"
+  const hasAccount = !!accountPicked;
   return (
-    <div style={{ ...base, border: "1px solid #fcd34d", background: "#fffbeb" }}>
-      <div style={{ color: "#b45309", fontWeight: 600, fontSize: 13 }}>⚠ ไม่พบบิลที่ยอด/วัน/ชื่อตรง</div>
+    <div
+      style={{
+        ...base,
+        ...(hasAccount
+          ? { border: "2px solid #86efac", background: "#fff" }
+          : { border: "1px solid #fcd34d", background: "#fffbeb" }),
+      }}
+    >
+      {hasAccount ? (
+        <div style={{ color: "#166534", fontWeight: 600, fontSize: 13 }}>✓ ลงบัญชีคู่แล้ว (ไม่ต้องมีบิล)</div>
+      ) : (
+        <div style={{ color: "#b45309", fontWeight: 600, fontSize: 13 }}>⚠ ไม่พบบิลที่ยอด/วัน/ชื่อตรง</div>
+      )}
       <TransferWhen t={t} />
       {/* ★ 2026-09-02 บัญชีคู่บนแถวกระทบยอด: 🤖 แนะนำจากที่เคยเรียนรู้ · นักบัญชีพิมพ์เลข/เลื่อนหา
           แก้ได้เอง (combobox เดียวกับหน้าตรวจ/แก้บิล) · เลือกแล้วระบบจำ + ใช้สอนการแนะนำรอบหน้า */}
@@ -1325,12 +1342,12 @@ function TxnPile({
   const rows = txns.map((t, i) => ({ t, i })).filter(({ t }) => filter(t));
   if (rows.length === 0 && hideWhenEmpty) return null;
   const total = rows.reduce((s, { t }) => s + (t.amount ?? 0), 0);
-  const matchedCount = matches ? rows.filter(({ t, i }) => matches[i] || manualPick.has(txnKey(t))).length : 0;
+  const matchedCount = matches ? rows.filter(({ t, i }) => matches[i] || manualPick.has(txnKey(t)) || accountPick.has(txnKey(t))).length : 0;
   return (
     <div style={{ marginBottom: 16 }}>
       <div className={`stmt-repeat-title ${tone}`}>
         {title} — {rows.length.toLocaleString("th-TH")} รายการ · รวม {money(total)}
-        {matches ? ` · ตรงกับบิล ${matchedCount.toLocaleString("th-TH")}` : ""}
+        {matches ? ` · เคลียร์แล้ว (บิล/บัญชีคู่) ${matchedCount.toLocaleString("th-TH")}` : ""}
       </div>
       {rows.length === 0 ? (
         <p className="empty">ไม่มีรายการ</p>
