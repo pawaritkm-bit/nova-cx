@@ -1270,7 +1270,7 @@ function BillSideCard({
           style={{ maxWidth: 180 }}
         />
         <button type="button" className={isReviewed ? "btn" : "btn btn-ghost"} onClick={() => onToggleReviewed(rowKey)}>
-          {isReviewed ? "✓ ตรวจแล้ว" : "ไม่ต้องมีบิล (เช่น ค่าธรรมเนียม)"}
+          {isReviewed ? "✓ ตรวจแล้ว" : "ไม่ต้องมีบิล"}
         </button>
       </div>
       {hits.length > 0 ? (
