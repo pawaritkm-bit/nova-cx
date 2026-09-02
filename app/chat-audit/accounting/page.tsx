@@ -1130,7 +1130,7 @@ export default async function AccountingPage({
       const p = entryObjectPath(e);
       const isImg = entryIsImage(e);
       const url: string | null =
-        p && isImg ? `/api/accounting/bill-thumb?entry=${e.id}&w=1300` : p ? signed.get(p) ?? null : null;
+        p && isImg ? `/api/accounting/bill-thumb?entry=${e.id}&w=1300&v=2` : p ? signed.get(p) ?? null : null;
       return {
         id: e.id,
         entry: e,

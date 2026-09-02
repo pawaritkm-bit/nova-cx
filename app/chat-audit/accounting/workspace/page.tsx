@@ -661,7 +661,7 @@ export default async function AccountingWorkspacePage({
                                 แทน signed URL สแกนเต็ม (~0.3-1MB/ใบ) — เลื่อนรายการลื่นขึ้นมาก
                                 รูปเต็มโหลดเฉพาะตอนกดขยาย (lightbox ด้านล่างใช้ signed URL เดิม) */}
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={`/api/accounting/bill-thumb?entry=${e.id}&w=360`} alt="บิล" loading="lazy" decoding="async" />
+                            <img src={`/api/accounting/bill-thumb?entry=${e.id}&w=360&v=2`} alt="บิล" loading="lazy" decoding="async" />
                             <span className="wsp-zoom-ic">🔍 ขยาย</span>
                           </a>
                         ) : path && url ? (

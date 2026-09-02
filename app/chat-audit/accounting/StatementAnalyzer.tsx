@@ -1138,7 +1138,7 @@ function BillAttachment({ bill }: { bill: BillForMatch | undefined }) {
             — กดที่รูปค่อยเปิด signed URL ตัวเต็ม */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={`/api/accounting/bill-thumb?entry=${bill.id}&w=480`}
+          src={`/api/accounting/bill-thumb?entry=${bill.id}&w=480&v=2`}
           alt="รูปบิล"
           loading="lazy"
           decoding="async"
