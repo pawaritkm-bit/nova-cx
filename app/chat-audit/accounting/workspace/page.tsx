@@ -682,10 +682,10 @@ export default async function AccountingWorkspacePage({
                           </a>
                         ) : path ? <span className="ext">{extLabel(path)}</span> : <span className="ext none">ไม่มีรูป</span>}
                       </div>
-                      {/* แว่นขยาย: คลิกรูปเล็ก → เปิดรูปใหญ่เต็มจอ (CSS :target · คลิกพื้นหลัง/รูปเพื่อปิด) */}
+                      {/* แว่นขยาย: คลิกรูปเล็ก → เปิดรูปใหญ่เต็มจอ (CSS :target · คลิกพื้นหลัง/รูปเพื่อปิด)
+                          ★ 2026-09-02 ผู้ใช้: กดปิดแล้วห้ามเด้งขึ้นบนสุด — href="#" ทำ browser scroll top
+                          → ใช้ hash ที่ไม่มี element (#ปิด): :target หลุด = รูปปิด แต่ตำแหน่งจอคงเดิม */}
                       {img && path ? (
-                        {/* ★ 2026-09-02 ผู้ใช้: กดปิดรูปแล้วห้ามเด้งขึ้นบนสุด — href="#" ทำ browser scroll top
-                            → ชี้ hash ที่ไม่มี element (#ปิด) : :target หลุด = ปิดรูป แต่จอไม่เลื่อน */}
                         <a id={`zoom-${e.id}`} href="#ปิด" className="wsp-lightbox" aria-label="ปิดรูปขยาย">
                           {/* ★ perf: loading=lazy — lightbox ซ่อนด้วย display:none จึงไม่ intersect
                               → รูปเต็มโหลด "ตอนกดขยาย" เท่านั้น (เดิมโหลดเต็มทุกใบตั้งแต่เปิดหน้า) */}
