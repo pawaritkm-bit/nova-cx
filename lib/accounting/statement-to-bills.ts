@@ -281,6 +281,10 @@ export async function createConfirmedBillsFromRecon(
   }
 
   // คีย์ที่เคยสร้างแล้ว (รวมร่างจากฟีเจอร์เก่า) — กันซ้ำ · เก็บ entryId ไว้เผื่อ "แก้บัญชี" ใบเดิม
+  // ★ 2026-09-02: นับเฉพาะใบที่ "ยังอยู่" — ร่างเก่าที่นักบัญชีลบทิ้งต้องไม่บล็อกการลงบัญชีใหม่
+  //   (บั๊กที่เจอจริง: ร่างจากฟีเจอร์เก่า 230 ใบถูกลบไปแล้ว แต่คีย์ยังค้าง → กรอกบัญชี 190 แถว
+  //    แล้วไม่ลงสมุดสักแถว) · การกรอกบัญชีบนแถวกระทบยอด = คำสั่งชัดเจนให้ลง — ไม่อยากให้ลง
+  //   ให้ล้างบัญชีที่กรอกบนแถวนั้นแทน
   const seen = new Map<string, string | null>();
   try {
     const { data } = await db
@@ -288,6 +292,7 @@ export async function createConfirmedBillsFromRecon(
       .select("id, notes")
       .eq("tenant_id", args.tenantId)
       .eq("customer_id", args.customerId)
+      .is("deleted_at", null)
       .like("notes", `%${DEDUP_MARK}%`)
       .limit(5000);
     for (const r of (data ?? []) as { id: string; notes: string | null }[]) {
