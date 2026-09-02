@@ -162,6 +162,7 @@ export default async function FinancialStatementsPrintPage({
       compareBalance={compareFormal?.balanceSheet ?? null}
       cashFlow={formal.cashFlow}
       compareCashFlow={compareFormal?.cashFlow ?? null}
+      equity={formal.equityChange}
       skippedCount={skippedCount}
       backHref={`/chat-audit/accounting/financial-statements?customerId=${customerId}`}
     />

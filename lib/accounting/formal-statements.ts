@@ -37,6 +37,7 @@
 import { buildStatements, type Statements } from "@/lib/accounting/statements";
 import { filterEntriesForReport, validMonth, type ReportPeriod } from "@/lib/accounting/report-filter";
 import { round2, type BillEntry } from "@/lib/accounting/queries";
+import { buildEquityChangeStatement, type EquityChangeStatement } from "@/lib/accounting/equity-change";
 import type { OpeningBalance } from "@/lib/accounting/opening-balance";
 import type { ChartAccount, ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import type { BalanceSheet } from "@/lib/accounting/financial-statements";
@@ -55,6 +56,8 @@ export type FormalStatements = {
   flow: Pick<Statements, "journal" | "ledger" | "trialBalance" | "incomeStatement">;
   balanceSheet: BalanceSheet;
   cashFlow: CashFlowStatement;
+  /** ★ 2026-09-02 (ขั้น 8 ครบ) — งบการเปลี่ยนแปลงส่วนของผู้ถือหุ้น (ต้นงวด→เปลี่ยนแปลง→ปลายงวด) */
+  equityChange: EquityChangeStatement;
 };
 
 /** เดือนก่อนหน้า "YYYY-MM" ที่ระบุ (จัดการข้ามปีถูกต้อง) — คืน "" ถ้ารูปแบบผิด */
@@ -108,6 +111,9 @@ export function buildFormalStatements(
   const cashPool = new Set(cashPoolCodesOf(chart));
   const fromMonth = validMonth(period.from);
   let openingCash: number;
+  // ★ 2026-09-02 — งบทดลอง "ต้นงวด" (สะสมก่อน from · ไม่มี from = จากยอดยกมาล้วน)
+  //   ใช้ทั้ง openingCash (เดิม) และงบเปลี่ยนแปลงส่วนผู้ถือหุ้น (ใหม่)
+  let openingStatements: Statements;
   if (fromMonth) {
     const beforeFromMonth = monthBefore(fromMonth);
     const beforeFromEntries = filterEntriesForReport(entries, {
@@ -117,19 +123,21 @@ export function buildFormalStatements(
     });
     // ★ ตัด manual JE/payment/note ที่ลงวันที่ตั้งแต่ fromMonth เป็นต้นไปทิ้ง (อยู่ในงวด flow ไม่ใช่ "ก่อน from")
     const beforeFromJournalLines = journalLinesBeforeMonth(cumulativeJournalLinesRaw, fromMonth);
-    const beforeFrom = buildStatements(beforeFromEntries, opening, chartByCode, beforeFromJournalLines);
+    openingStatements = buildStatements(beforeFromEntries, opening, chartByCode, beforeFromJournalLines);
     openingCash = round2(
-      beforeFrom.trialBalance.rows
+      openingStatements.trialBalance.rows
         .filter((r) => cashPool.has(r.code))
         .reduce((s, r) => s + r.balance, 0)
     );
   } else {
+    openingStatements = buildStatements([], opening, chartByCode, []);
     openingCash = round2(
       opening
         .filter((o) => cashPool.has((o.accountCode ?? "").trim()))
         .reduce((s, o) => s + (Number.isFinite(o.openingBalance) ? o.openingBalance : 0), 0)
     );
   }
+  const equityChange = buildEquityChangeStatement(openingStatements.trialBalance, cumulative.trialBalance);
 
   // แหล่งข้อมูลของงบกระแสเงินสด = JournalLine[] ของรอบ "flow" เท่านั้น (bill journal + flowCombinedLines)
   const flowJournalLines = [...flow.journal.lines, ...flowJournalLinesRaw];
@@ -144,5 +152,6 @@ export function buildFormalStatements(
     },
     balanceSheet: cumulative.balanceSheet,
     cashFlow,
+    equityChange,
   };
 }

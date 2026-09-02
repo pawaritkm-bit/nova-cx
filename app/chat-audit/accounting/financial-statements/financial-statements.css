@@ -156,3 +156,22 @@
 
   @page { size: A4; margin: 12mm; }
 }
+
+/* ★ 2026-09-02 (ขั้น 8 ครบ) — หมายเหตุประกอบงบ (แก้ไขได้ก่อนพิมพ์) */
+.fs-note { margin-bottom: 12px; }
+.fs-note-title { font-weight: 700; font-size: 13.5px; margin-bottom: 4px; }
+.fs-note-text {
+  width: 100%;
+  border: 1px dashed #cbd5e1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  color: inherit;
+  background: transparent;
+  resize: vertical;
+}
+@media print {
+  .fs-note-text { border: none; padding: 0; resize: none; overflow: hidden; }
+}

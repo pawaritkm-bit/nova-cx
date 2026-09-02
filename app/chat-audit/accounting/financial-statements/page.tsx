@@ -23,6 +23,9 @@ import type { IncomeStatement, BalanceSheet } from "@/lib/accounting/financial-s
 import { aggregateCashFlowLines, type CashFlowStatement } from "@/lib/accounting/cash-flow";
 import { formatMoney } from "@/lib/accounting/calc";
 import { monthKeyOf, thaiMonthLabel } from "@/lib/accounting/monthly";
+import { CLOSE_MARK, type EquityChangeStatement } from "@/lib/accounting/equity-change";
+import { listManualEntries } from "@/lib/accounting/manual-journal";
+import ClosePeriodCard from "./ClosePeriodCard";
 import ChatAuditFrame from "../../_Frame";
 import "../../chat-admin.css";
 import "../../bills/bills.css";
@@ -32,11 +35,12 @@ export const dynamic = "force-dynamic";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type TabKey = "income" | "balance" | "cashflow";
+type TabKey = "income" | "balance" | "cashflow" | "equity";
 const TABS: { key: TabKey; label: string }[] = [
   { key: "income", label: "งบกำไรขาดทุน" },
   { key: "balance", label: "งบแสดงฐานะการเงิน" },
   { key: "cashflow", label: "กระแสเงินสด" },
+  { key: "equity", label: "เปลี่ยนแปลงส่วนผู้ถือหุ้น" },
 ];
 
 const COMPARE_MODE_OPTIONS: { value: ComparePeriodMode; label: string }[] = [
@@ -484,6 +488,23 @@ export default async function FinancialStatementsPage({
     }
   }
 
+  // ★ 2026-09-02 (ขั้น 8) — งวดที่ปิดบัญชีแล้ว (จาก JE ปิดที่ยังอยู่) สำหรับการ์ดปิดงวด
+  let closedMonths: string[] = [];
+  if (customerId) {
+    try {
+      const manual = await listManualEntries(service, access.tenantId, customerId);
+      closedMonths = manual
+        .map((e) => {
+          const m = (e.memo ?? "").match(/⚙close\|(\d{4}-\d{2})/);
+          return m ? m[1] : null;
+        })
+        .filter((m): m is string => !!m);
+      void CLOSE_MARK; // คีย์เดียวกับ close-actions (อ้างอิงให้ import ไม่หลุด)
+    } catch {
+      // best-effort — การ์ดยังใช้งานปิดงวดได้
+    }
+  }
+
   const currentPeriodLabel = periodLabel(from, to);
   const comparePeriodLabel = comparePeriod ? periodLabel(comparePeriod.from, comparePeriod.to) : null;
 
@@ -720,10 +741,59 @@ export default async function FinancialStatementsPage({
                   compareLabel={comparePeriodLabel}
                 />
               ) : null}
+              {tab === "equity" ? <EquityChangeView eq={formal.equityChange} /> : null}
             </div>
+
+            {/* ---- ปิดบัญชีสิ้นงวด (★ 2026-09-02 ขั้น 8 ครบ) ---- */}
+            <ClosePeriodCard
+              customerId={customerId}
+              defaultMonth={to || monthOptions[0] || ""}
+              closedMonths={closedMonths}
+            />
           </>
         ) : null}
       </div>
     </ChatAuditFrame>
+  );
+}
+
+
+/** งบการเปลี่ยนแปลงส่วนของผู้ถือหุ้น (บนจอ) — ★ 2026-09-02 (ขั้น 8 ครบ) */
+function EquityChangeView({ eq }: { eq: EquityChangeStatement }) {
+  return (
+    <div className="table-wrap">
+      <table className="dlv-table acc-table">
+        <thead>
+          <tr>
+            <th>รายการ</th>
+            <th className="num">ยอดต้นงวด</th>
+            <th className="num">เปลี่ยนแปลงระหว่างงวด</th>
+            <th className="num">ยอดปลายงวด</th>
+          </tr>
+        </thead>
+        <tbody>
+          {eq.rows.map((r) => (
+            <tr key={r.code}>
+              <td>{r.code} · {r.name}</td>
+              <td className="num">{formatMoney(r.opening)}</td>
+              <td className="num">{formatMoney(r.change)}</td>
+              <td className="num">{formatMoney(r.closing)}</td>
+            </tr>
+          ))}
+          <tr>
+            <td>{eq.unclosedProfit.name}</td>
+            <td className="num">{formatMoney(eq.unclosedProfit.opening)}</td>
+            <td className="num">{formatMoney(eq.unclosedProfit.change)}</td>
+            <td className="num">{formatMoney(eq.unclosedProfit.closing)}</td>
+          </tr>
+          <tr className="acc-total">
+            <td className="strong">รวมส่วนของผู้ถือหุ้น</td>
+            <td className="num strong">{formatMoney(eq.openingTotal)}</td>
+            <td className="num strong">{formatMoney(eq.changeTotal)}</td>
+            <td className="num strong">{formatMoney(eq.closingTotal)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   );
 }

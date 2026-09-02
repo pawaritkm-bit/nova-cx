@@ -5,6 +5,7 @@ import { formatMoney } from "@/lib/accounting/calc";
 import { mergeCompareLines, sumCompareLines, type CompareLine } from "@/lib/accounting/statement-compare";
 import type { IncomeStatement, BalanceSheet } from "@/lib/accounting/financial-statements";
 import { aggregateCashFlowLines, type CashFlowStatement } from "@/lib/accounting/cash-flow";
+import type { EquityChangeStatement } from "@/lib/accounting/equity-change";
 
 /**
  * เอกสารพิมพ์งบการเงินฉบับทางการ (เฟส 4 ส่วน N2) — mirror WhtCertDoc.tsx/SalesDocumentPrintDoc.tsx
@@ -249,6 +250,7 @@ export default function FinancialStatementPrintDoc({
   compareBalance,
   cashFlow,
   compareCashFlow,
+  equity,
   skippedCount,
   backHref,
 }: {
@@ -263,6 +265,8 @@ export default function FinancialStatementPrintDoc({
   compareBalance: BalanceSheet | null;
   cashFlow: CashFlowStatement;
   compareCashFlow: CashFlowStatement | null;
+  /** ★ 2026-09-02 (ขั้น 8 ครบ) — งบการเปลี่ยนแปลงส่วนของผู้ถือหุ้น */
+  equity: EquityChangeStatement;
   /** จำนวนบิลที่ยังไม่เข้างบ (ตกหล่น) — เตือนผู้จัดทำ/ผู้สอบทานก่อนเซ็นพิมพ์ */
   skippedCount: number;
   backHref: string;
@@ -270,6 +274,34 @@ export default function FinancialStatementPrintDoc({
   const [preparer, setPreparer] = useState("");
   const [reviewer, setReviewer] = useState("");
   const [docDate, setDocDate] = useState("");
+
+  // ★ หมายเหตุประกอบงบ — ร่างมาตรฐาน (NPAEs) เติมตัวเลขจากงบ · แก้ไขได้ก่อนพิมพ์ (ไม่ persist)
+  const [notes, setNotes] = useState<{ title: string; text: string }[]>(() => [
+    {
+      title: "1. ข้อมูลทั่วไป",
+      text: `${businessName || "กิจการ"} จดทะเบียนเป็นนิติบุคคลตามประมวลกฎหมายแพ่งและพาณิชย์${taxId ? ` เลขทะเบียน/เลขประจำตัวผู้เสียภาษี ${taxId}` : ""}${address ? `\nที่ตั้งสำนักงาน: ${address}` : ""}`,
+    },
+    {
+      title: "2. เกณฑ์การจัดทำงบการเงิน",
+      text: "งบการเงินนี้จัดทำขึ้นตามมาตรฐานการรายงานทางการเงินสำหรับกิจการที่ไม่มีส่วนได้เสียสาธารณะ (TFRS for NPAEs) โดยใช้เกณฑ์คงค้างและเกณฑ์ราคาทุนเดิม",
+    },
+    {
+      title: "3. สรุปนโยบายการบัญชีที่สำคัญ",
+      text: "• การรับรู้รายได้: รับรู้เมื่อได้ให้บริการ/ส่งมอบสินค้าแล้ว\n• เงินสดและรายการเทียบเท่าเงินสด: เงินสดในมือและเงินฝากธนาคาร\n• ลูกหนี้การค้า: แสดงด้วยมูลค่าที่คาดว่าจะได้รับ\n• ที่ดิน อาคาร และอุปกรณ์: แสดงด้วยราคาทุนหักค่าเสื่อมราคาสะสม คิดค่าเสื่อมวิธีเส้นตรงตามอายุการใช้งาน",
+    },
+    {
+      title: "4. เงินสดและรายการเทียบเท่าเงินสด",
+      text: `เงินสดและรายการเทียบเท่าเงินสด ณ วันสิ้นงวด ${formatMoney(cashFlow.closingCash)} บาท`,
+    },
+    {
+      title: "5. ส่วนของผู้ถือหุ้น",
+      text: `ส่วนของผู้ถือหุ้นรวม ณ วันสิ้นงวด ${formatMoney(balance.totalEquityWithProfit)} บาท (กำไร (ขาดทุน) สุทธิสำหรับงวด ${formatMoney(income.netProfit)} บาท) — รายละเอียดตามงบการเปลี่ยนแปลงส่วนของผู้ถือหุ้น`,
+    },
+    {
+      title: "6. การอนุมัติงบการเงิน",
+      text: "งบการเงินนี้ได้รับอนุมัติให้ออกโดยผู้มีอำนาจของกิจการแล้ว",
+    },
+  ]);
 
   return (
     <div className="fs-shell">
@@ -317,6 +349,85 @@ export default function FinancialStatementPrintDoc({
             ⚠️ งบยังไม่สมดุล — ผลต่าง {formatMoney(balance.difference)} บาท (ตรวจยอดยกมา/รายการตกหล่นก่อนใช้งบ)
           </p>
         ) : null}
+        <FsSignBlock
+          docDate={docDate}
+          setDocDate={setDocDate}
+          preparer={preparer}
+          setPreparer={setPreparer}
+          reviewer={reviewer}
+          setReviewer={setReviewer}
+        />
+      </div>
+
+      {/* ================= ตัวเอกสาร (A4) — งบการเปลี่ยนแปลงส่วนของผู้ถือหุ้น (★ 2026-09-02 ขั้น 8 ครบ) ================= */}
+      <div className="fs-page fs-page-break">
+        <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
+        <h1 className="fs-title">งบการเปลี่ยนแปลงส่วนของผู้ถือหุ้น</h1>
+        <p className="fs-period">สำหรับงวด {periodLabel}</p>
+        <table className="fs-table">
+          <thead>
+            <tr>
+              <th>รายการ</th>
+              <th className="fs-num">ยอดต้นงวด</th>
+              <th className="fs-num">เปลี่ยนแปลงระหว่างงวด</th>
+              <th className="fs-num">ยอดปลายงวด</th>
+            </tr>
+          </thead>
+          <tbody>
+            {equity.rows.map((r) => (
+              <tr key={r.code}>
+                <td>{r.code} · {r.name}</td>
+                <td className="fs-num">{formatMoney(r.opening)}</td>
+                <td className="fs-num">{formatMoney(r.change)}</td>
+                <td className="fs-num">{formatMoney(r.closing)}</td>
+              </tr>
+            ))}
+            <tr>
+              <td>{equity.unclosedProfit.name}</td>
+              <td className="fs-num">{formatMoney(equity.unclosedProfit.opening)}</td>
+              <td className="fs-num">{formatMoney(equity.unclosedProfit.change)}</td>
+              <td className="fs-num">{formatMoney(equity.unclosedProfit.closing)}</td>
+            </tr>
+            <tr className="fs-total">
+              <td>รวมส่วนของผู้ถือหุ้น</td>
+              <td className="fs-num">{formatMoney(equity.openingTotal)}</td>
+              <td className="fs-num">{formatMoney(equity.changeTotal)}</td>
+              <td className="fs-num">{formatMoney(equity.closingTotal)}</td>
+            </tr>
+          </tbody>
+        </table>
+        <FsSignBlock
+          docDate={docDate}
+          setDocDate={setDocDate}
+          preparer={preparer}
+          setPreparer={setPreparer}
+          reviewer={reviewer}
+          setReviewer={setReviewer}
+        />
+      </div>
+
+      {/* ================= ตัวเอกสาร (A4) — หมายเหตุประกอบงบการเงิน (แก้ไขได้ก่อนพิมพ์) ================= */}
+      <div className="fs-page fs-page-break">
+        <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
+        <h1 className="fs-title">หมายเหตุประกอบงบการเงิน</h1>
+        <p className="fs-period">สำหรับงวด {periodLabel}</p>
+        <p className="fs-toolbar-hint no-print" style={{ marginTop: 0 }}>
+          แก้ข้อความหมายเหตุได้ทุกข้อก่อนพิมพ์ (ตัวเลขเติมจากงบให้แล้ว — ไม่บันทึกลง DB)
+        </p>
+        {notes.map((n, i) => (
+          <div key={i} className="fs-note">
+            <div className="fs-note-title">{n.title}</div>
+            <textarea
+              className="fs-note-text"
+              value={n.text}
+              rows={Math.max(2, n.text.split("\n").length + 1)}
+              onChange={(e) =>
+                setNotes((prev) => prev.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))
+              }
+              aria-label={n.title}
+            />
+          </div>
+        ))}
         <FsSignBlock
           docDate={docDate}
           setDocDate={setDocDate}
