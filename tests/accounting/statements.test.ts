@@ -160,7 +160,7 @@ describe("journal — บิลที่ตกหล่น (skipped) พร้�
     expect(r.skipped[0].reason).toContain("ยังไม่ระบุประเภท");
   });
 
-  it("บรรทัดไม่เลือกบัญชี → ตกหล่น", () => {
+  it("★ 2026-09-02 ผู้ใช้: บรรทัดไม่เลือกบัญชี → ไม่ข้าม (ลงบัญชีพัก 0000 สมดุล)", () => {
     const r = buildJournalEntries([
       mkEntry({
         id: "m",
@@ -169,8 +169,13 @@ describe("journal — บิลที่ตกหล่น (skipped) พร้�
         lines: [mkLine({ accountCode: null, amount: 500 })],
       }),
     ]);
-    expect(r.lines).toHaveLength(0);
-    expect(r.skipped[0].reason).toContain("ยังไม่เลือกบัญชี");
+    expect(r.skipped).toHaveLength(0);
+    const suspense = r.lines.find((l) => l.accountCode === "0000");
+    expect(suspense?.debit).toBe(500);
+    expect(suspense?.accountName).toContain("รอเลือกบัญชี");
+    // ยังสมดุล: Dr 0000 500 / Cr เงินสด 500
+    expect(r.totalDebit).toBe(r.totalCredit);
+    expect(r.totalDebit).toBe(500);
   });
 
   it("★ โอนแต่ไม่ผูกบัญชีธนาคาร → ใช้ default 1020 (ไม่ตกหล่น)", () => {

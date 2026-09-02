@@ -22,9 +22,12 @@
  *
  * บิลที่ตกหล่น (ไม่เข้าสมุดรายวัน) → เก็บใน skipped[] พร้อมเหตุผล ให้ UI เตือนนักบัญชีไปแก้:
  *   - ยังไม่ระบุประเภท (unspecified)
- *   - มีบรรทัดที่ยังไม่เลือกบัญชี (account_code ขาด) — กันงบเพี้ยน
  *   - ยังไม่ระบุวิธีรับ/จ่ายเงิน (คำนวณบัญชีคู่ไม่ได้) / โอนแต่ยังไม่เลือกบัญชีธนาคาร
  *   - บิลไม่มีจำนวนเงิน
+ *
+ * ★ 2026-09-02 ผู้ใช้: "บิลที่บรรทัดยังไม่มีเลขบัญชี ไม่ข้าม" — บรรทัดที่บัญชีขาดไม่ทำให้บิล
+ *   ตกหล่นอีกต่อไป: ลงด้วยบัญชีพัก 0000 "รอเลือกบัญชี (พัก)" ให้เดบิต=เครดิตสมดุล บิลไหลเข้า
+ *   สมุด 5 เล่ม → แยกประเภท → งบ ทันที · เห็น 0000 ที่ไหน = จุดที่นักบัญชีต้องกลับไปเลือกบัญชีจริง
  */
 import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { contraAccountFor } from "@/lib/accounting/payment";
@@ -38,6 +41,10 @@ import {
 } from "@/lib/accounting/statement-config";
 
 export type JournalSide = "debit" | "credit";
+
+/** บัญชีพักสำหรับบรรทัดที่ยังไม่เลือกบัญชี — เด่นชัดในสมุด/แยกประเภท ให้กลับไปเลือกบัญชีจริง */
+export const SUSPENSE_ACCOUNT_CODE = "0000";
+export const SUSPENSE_ACCOUNT_NAME = "รอเลือกบัญชี (พัก)";
 
 /** 1 บรรทัดในสมุดรายวัน (เดบิตหรือเครดิต) */
 export type JournalLine = {
@@ -111,14 +118,14 @@ export function buildJournalEntries(entries: BillEntry[], chartByCode: ChartByCo
       continue;
     }
 
-    // 2) ทุกบรรทัดที่มียอด ต้องเลือกบัญชีแล้ว (บัญชีขาด = ลงไม่ครบ → งบเพี้ยน)
-    const missingAccount = e.lines.some(
-      (l) => nonZero(round2(l.amount)) && !(l.accountCode && l.accountCode.trim())
-    );
-    if (missingAccount) {
-      skip("มีบรรทัดที่ยังไม่เลือกบัญชี");
-      continue;
-    }
+    // 2) ★ 2026-09-02 ผู้ใช้: บรรทัดที่ยังไม่เลือกบัญชี "ไม่ข้าม" — ลงบัญชีพัก 0000 แทน
+    //    (เดิม: บัญชีขาด = บิลทั้งใบตกหล่นจากสมุด 5 เล่ม) · 0000 โผล่ที่ไหน = ต้องกลับไปเลือกบัญชีจริง
+    const lineAccount = (l: { accountCode: string | null; accountName?: string | null }) => {
+      const code = (l.accountCode ?? "").trim();
+      return code
+        ? { code, name: accountName(chartByCode, code, l.accountName) }
+        : { code: SUSPENSE_ACCOUNT_CODE, name: SUSPENSE_ACCOUNT_NAME };
+    };
 
     // 3) บัญชีคู่ (เครดิต/เดบิต) จากวิธีรับ/จ่ายเงิน
     //   ★ บิลที่ยังไม่ตั้งวิธีจ่าย/รับ → ถือเป็น "เชื่อ" (ตั้งเจ้าหนี้/ลูกหนี้) เพื่อให้เข้าสมุดรายวันเลย
@@ -167,14 +174,16 @@ export function buildJournalEntries(entries: BillEntry[], chartByCode: ChartByCo
 
     if (e.entryType === "purchase") {
       for (const l of e.lines) {
-        pushDebit(l.accountCode as string, accountName(chartByCode, l.accountCode as string, l.accountName), l.amount);
+        const a = lineAccount(l);
+        pushDebit(a.code, a.name, l.amount);
       }
       pushDebit(INPUT_VAT, accountName(chartByCode, INPUT_VAT), sumVat);
       pushCredit(WHT_PAYABLE, accountName(chartByCode, WHT_PAYABLE), sumWht);
       pushCredit(contra.code, contra.name, contraAmount);
     } else {
       for (const l of e.lines) {
-        pushCredit(l.accountCode as string, accountName(chartByCode, l.accountCode as string, l.accountName), l.amount);
+        const a = lineAccount(l);
+        pushCredit(a.code, a.name, l.amount);
       }
       pushCredit(OUTPUT_VAT, accountName(chartByCode, OUTPUT_VAT), sumVat);
       pushDebit(WHT_RECEIVABLE, accountName(chartByCode, WHT_RECEIVABLE), sumWht);
