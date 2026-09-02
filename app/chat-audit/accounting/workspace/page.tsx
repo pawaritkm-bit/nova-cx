@@ -14,6 +14,7 @@ import ChatAuditFrame from "../../_Frame";
 import DeleteBillButton from "./DeleteBillButton";
 import RenameCustomerButton from "./RenameCustomerButton";
 import UploadFileButton from "../UploadFileButton";
+import StatementReconcileButton from "../StatementReconcileButton";
 import BatchConfirmButton from "../BatchConfirmButton";
 import CustomerToolsMenu from "../CustomerToolsMenu";
 import CustomerAdminControls from "../CustomerAdminControls";
@@ -556,6 +557,8 @@ export default async function AccountingWorkspacePage({
                 accountant={accountantParam || null}
                 label="เพิ่มไฟล์บิลเอง"
               />
+              {/* ★ ปุ่มหลักกระทบยอด (requirement 2026-09-02) — ย้ายทางเข้าสเตทเมนต์จากกล่องอัปโหลดมาไว้ที่นี่ */}
+              <StatementReconcileButton customerId={openGroup.customerId} accountant={accountantParam || null} />
               <CustomerToolsMenu
                 customerId={openGroup.customerId}
                 month={selectedMonth}
