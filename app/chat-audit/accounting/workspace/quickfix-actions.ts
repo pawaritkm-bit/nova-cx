@@ -15,6 +15,7 @@ import {
   customerInScope,
   AccountingAuthError,
 } from "@/lib/accounting/access";
+import { paymentMethodForMoneyAccount } from "@/lib/accounting/payment";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -25,6 +26,8 @@ export async function quickFixBillAction(input: {
   counterpartyName?: string;
   /** true = สลับซื้อ⇄ขาย (สลับฝั่งเดบิต/เครดิตทั้งใบ) */
   flipType?: boolean;
+  /** ★ เปลี่ยน "บัญชีฝั่งเงิน" (เดบิตเงินเข้า/เครดิตเงินออก) → แปลงเป็นวิธีรับ/จ่ายให้สอดคล้อง */
+  moneyAccountCode?: string;
 }): Promise<
   | { ok: true; message: string; entryType?: "purchase" | "sale"; counterpartyName?: string | null }
   | { ok: false; message: string }
@@ -75,6 +78,18 @@ export async function quickFixBillAction(input: {
       }
     }
 
+    if (input.moneyAccountCode !== undefined) {
+      const t = (newType ?? entry.entry_type) as "purchase" | "sale" | string;
+      if (t !== "purchase" && t !== "sale") {
+        return { ok: false, message: "บิลยังไม่ระบุประเภท — เลือกซื้อ/ขายก่อน" };
+      }
+      const method = paymentMethodForMoneyAccount(input.moneyAccountCode, t);
+      if (!method) return { ok: false, message: "บัญชีฝั่งเงินไม่ถูกต้อง" };
+      patch.payment_method = method;
+      // เปลี่ยนวิธี = ปลดผูกบัญชีธนาคารเฉพาะ (ให้ default ตามผัง) — เว้นเลือกโค้ดธนาคารที่ผูกไว้เดิม
+      if (method !== "transfer") patch.payment_bank_account_id = null;
+    }
+
     if (input.counterpartyName !== undefined) {
       newCp = input.counterpartyName.trim().slice(0, 200) || null;
       patch.counterparty_name = newCp;
@@ -90,7 +105,9 @@ export async function quickFixBillAction(input: {
 
     return {
       ok: true,
-      message: input.flipType
+      message: input.moneyAccountCode !== undefined
+        ? "เปลี่ยนบัญชีฝั่งเงิน/วิธีรับ-จ่ายแล้ว"
+        : input.flipType
         ? `สลับเป็น${newType === "sale" ? "บิลขาย (เครดิตรายได้/เดบิตเงินเข้า)" : "บิลซื้อ (เดบิตค่าใช้จ่าย/เครดิตเงินออก)"}แล้ว`
         : "บันทึกคู่ค้าแล้ว",
       entryType: newType,

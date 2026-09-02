@@ -148,3 +148,58 @@ export function contraAccountFor(
       return null;
   }
 }
+
+/**
+ * ★ 2026-09-02 (กล่องเดบิต/เครดิตบนการ์ดบิล) — เลือก "บัญชีฝั่งเงิน" แล้วแปลงกลับเป็นวิธีรับ/จ่าย
+ *   1010=เงินสด · 1155/2220=เช็ค (ตามฝั่ง) · 1140/2010=เชื่อ (ตามฝั่ง) · อื่น ๆ (บัญชีธนาคาร)=โอน
+ */
+export function paymentMethodForMoneyAccount(
+  code: string,
+  entryType: EntryType
+): PaymentMethod | null {
+  const c = code.trim();
+  if (!c) return null;
+  if (c === CONTRA_CONFIG.cash.code) return "cash";
+  if (
+    (entryType === "sale" && c === CONTRA_CONFIG.cheque.sale.code) ||
+    (entryType === "purchase" && c === CONTRA_CONFIG.cheque.purchase.code)
+  )
+    return "cheque";
+  if (
+    (entryType === "sale" && c === CONTRA_CONFIG.credit.sale.code) ||
+    (entryType === "purchase" && c === CONTRA_CONFIG.credit.purchase.code)
+  )
+    return "credit";
+  return "transfer";
+}
+
+/** ตัวเลือกบัญชีฝั่งเงินสำหรับ combobox (เงินสด/ธนาคาร/เช็ค/เชื่อ ตามฝั่งบิล) */
+export function moneyAccountOptions(
+  chartByCode: ChartByCode,
+  entryType: EntryType,
+  extraBankCode?: string | null
+): { code: string; name: string }[] {
+  if (entryType !== "sale" && entryType !== "purchase") return [];
+  const side = entryType;
+  const codes = [
+    CONTRA_CONFIG.cash.code,
+    CONTRA_CONFIG.transferDefault.code,
+    ...(extraBankCode && extraBankCode.trim() ? [extraBankCode.trim()] : []),
+    CONTRA_CONFIG.cheque[side].code,
+    CONTRA_CONFIG.credit[side].code,
+  ];
+  const fallback: Record<string, string> = {
+    [CONTRA_CONFIG.cash.code]: CONTRA_CONFIG.cash.name,
+    [CONTRA_CONFIG.transferDefault.code]: CONTRA_CONFIG.transferDefault.name,
+    [CONTRA_CONFIG.cheque[side].code]: CONTRA_CONFIG.cheque[side].name,
+    [CONTRA_CONFIG.credit[side].code]: CONTRA_CONFIG.credit[side].name,
+  };
+  const seen = new Set<string>();
+  const out: { code: string; name: string }[] = [];
+  for (const c of codes) {
+    if (seen.has(c)) continue;
+    seen.add(c);
+    out.push({ code: c, name: chartByCode[c]?.name ?? fallback[c] ?? c });
+  }
+  return out;
+}

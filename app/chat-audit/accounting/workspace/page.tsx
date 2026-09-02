@@ -720,6 +720,7 @@ export default async function AccountingWorkspacePage({
                             accountCode={e.lines[0]?.accountCode ?? null}
                             accountName={e.lines[0]?.accountName ?? null}
                             lineAmount={e.lines[0]?.amount ?? null}
+                            netAmount={s.net}
                             paymentMethod={e.paymentMethod}
                             paymentBankAccountCode={e.paymentBankAccountCode}
                             chart={chart}

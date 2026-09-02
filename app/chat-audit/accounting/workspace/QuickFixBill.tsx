@@ -4,17 +4,19 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import AccountCombobox from "../AccountCombobox";
 import { buildChartByCode, type ChartAccount } from "@/lib/accounting/chart-of-accounts";
-import { contraAccountFor } from "@/lib/accounting/payment";
+import { contraAccountFor, moneyAccountOptions } from "@/lib/accounting/payment";
+import { formatMoney } from "@/lib/accounting/calc";
 import type { PaymentMethod } from "@/lib/accounting/queries";
 import { quickFixBillAction } from "./quickfix-actions";
 import { applyStatementAccountToBillAction } from "../statement-actions";
 
 /**
- * แผงแก้ไขด่วนบนการ์ดบิล (โต๊ะทำงาน · เฉพาะบิลร่าง) — ★ 2026-09-02 ผู้ใช้:
- * "AI จับผิดอยู่ แก้ไม่ได้" → แก้ตรงการ์ดได้ 3 อย่างโดยไม่ต้องเปิดตัวแก้เต็ม:
- *   1) คู่ค้า (พิมพ์ทับ · เว้นเคาะแล้วบันทึกเอง)
- *   2) ⇄ สลับซื้อ↔ขาย = สลับฝั่งเดบิต/เครดิตทั้งใบ
- *   3) บัญชี (combobox เดียวกับทุกหน้า) — เขียนลงบรรทัดบิลจริง + ระบบจำ "รายลูกค้า"
+ * กล่องลงบัญชีบนการ์ดบิล (โต๊ะทำงาน · บิลร่าง) — ★ 2026-09-02 ดีไซน์ที่ผู้ใช้อนุมัติ:
+ *   แถวบน: [คู่ค้า (พิมพ์แก้)] [⇄ สลับซื้อ↔ขาย]
+ *   กล่อง "การลงบัญชี": เดบิตบน · เครดิตล่าง — แก้เลขได้ทั้งสองบรรทัด (รวมที่ AI กรอก):
+ *     - ฝั่งเงิน (บิลขาย=เดบิต · บิลซื้อ=เครดิต): เลือก 1010/1020/เช็ค/เชื่อ → วิธีรับ-จ่ายปรับตาม
+ *     - ฝั่งรายได้/ค่าใช้จ่าย: เขียนลงบรรทัดบิลจริง + ระบบจำรายลูกค้า
+ *   VAT/หัก ณ ที่จ่าย ระบบแตกบรรทัดให้เองตอนเข้าสมุด (กล่องนี้โชว์คู่หลัก)
  */
 export default function QuickFixBill({
   customerId,
@@ -24,6 +26,7 @@ export default function QuickFixBill({
   accountCode,
   accountName,
   lineAmount,
+  netAmount,
   paymentMethod,
   paymentBankAccountCode,
   chart,
@@ -34,9 +37,10 @@ export default function QuickFixBill({
   counterpartyName: string | null;
   accountCode: string | null;
   accountName: string | null;
-  /** ยอดบรรทัดแรก — ใช้สอน learning "ยอดซ้ำ" */
+  /** ยอดบรรทัดแรก (ฝั่งรายได้/ค่าใช้จ่าย) — ใช้โชว์ + สอน learning "ยอดซ้ำ" */
   lineAmount: number | null;
-  /** ★ 2026-09-02 — โชว์ฝั่งเดบิต/เครดิต + บัญชีคู่หน้าการ์ด (ไม่ต้องคลิกเข้าด้านใน) */
+  /** ยอดเงินจริงที่วิ่งผ่านฝั่งเงิน (รวม VAT หัก WHT แล้ว) */
+  netAmount: number | null;
   paymentMethod: PaymentMethod | null;
   paymentBankAccountCode: string | null;
   chart: ChartAccount[];
@@ -50,13 +54,20 @@ export default function QuickFixBill({
   const [busy, startTransition] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // ฝั่งเงิน (บัญชีคู่จากวิธีจ่าย) — ขาย: เดบิต(เงินเข้า) · ซื้อ: เครดิต(เงินออก)
-  const contra =
-    entryType === "sale" || entryType === "purchase"
-      ? contraAccountFor(buildChartByCode(chart), paymentMethod ?? "credit", entryType, paymentBankAccountCode)
-      : null;
-  const moneyLabel = entryType === "sale" ? "เดบิต (เงินเข้า)" : entryType === "purchase" ? "เครดิต (เงินออก)" : "บัญชีคู่";
-  const oppLabel = entryType === "sale" ? "เครดิต" : entryType === "purchase" ? "เดบิต" : "บัญชี";
+  const chartByCode = buildChartByCode(chart);
+  const known = entryType === "sale" || entryType === "purchase";
+  const contra = known
+    ? contraAccountFor(chartByCode, paymentMethod ?? "credit", entryType, paymentBankAccountCode)
+    : null;
+  // ตัวเลือกฝั่งเงิน (เงินสด/ธนาคาร/เช็ค/เชื่อ) — แปลงเป็น ChartAccount ให้ combobox เดิมใช้ได้
+  const moneyChart: ChartAccount[] = known
+    ? moneyAccountOptions(chartByCode, entryType, paymentBankAccountCode).map((o) => ({
+        code: o.code,
+        name: o.name,
+        category: chartByCode[o.code]?.category ?? "สินทรัพย์",
+        bank: false,
+      }))
+    : [];
 
   const saveCp = () => {
     if ((counterpartyName ?? "") === cp.trim()) return;
@@ -72,13 +83,21 @@ export default function QuickFixBill({
       const r = await quickFixBillAction({ customerId, entryId, flipType: true });
       setMsg({ ok: r.ok, text: r.message });
       if (r.ok) {
-        if (r.counterpartyName !== undefined && r.counterpartyName !== null) setCp(r.counterpartyName);
+        if (r.counterpartyName) setCp(r.counterpartyName);
         router.refresh();
       }
     });
   };
 
-  const pickAccount = (code: string, name: string) => {
+  const pickMoney = (code: string) => {
+    startTransition(async () => {
+      const r = await quickFixBillAction({ customerId, entryId, moneyAccountCode: code });
+      setMsg({ ok: r.ok, text: r.message });
+      if (r.ok) router.refresh();
+    });
+  };
+
+  const pickLine = (code: string, name: string) => {
     setAcct({ code, name });
     startTransition(async () => {
       const r = await applyStatementAccountToBillAction({
@@ -89,10 +108,50 @@ export default function QuickFixBill({
         counterpartyName: cp || counterpartyName,
         amount: lineAmount,
       });
-      setMsg({ ok: r.ok, text: r.ok ? "บันทึกบัญชีแล้ว (ระบบจำของลูกค้ารายนี้)" : r.message ?? "บันทึกบัญชีไม่สำเร็จ" });
+      setMsg({ ok: r.ok, text: r.ok ? "บันทึกบัญชีแล้ว (ระบบจำของลูกค้ารายนี้)" : r.message ?? "บันทึกไม่สำเร็จ" });
       if (r.ok) router.refresh();
     });
   };
+
+  // เดบิตอยู่บนเสมอ: ขาย → เดบิต=ฝั่งเงิน · ซื้อ → เดบิต=ฝั่งค่าใช้จ่าย
+  const moneyRow = (
+    <div className="wsp-jrow" key="money">
+      <span className={`wsp-jside ${entryType === "sale" ? "dr" : "cr"}`}>
+        {entryType === "sale" ? "เดบิต" : "เครดิต"}
+      </span>
+      <div className="wsp-jacct">
+        <AccountCombobox
+          accountCode={contra?.code ?? ""}
+          accountName={contra?.name ?? ""}
+          chart={moneyChart}
+          readOnly={busy}
+          onSelect={(code) => pickMoney(code)}
+          onNameChange={() => {}}
+          onClear={() => {}}
+        />
+      </div>
+      <span className="wsp-jamt">{netAmount != null ? formatMoney(netAmount) : "—"}</span>
+    </div>
+  );
+  const lineRow = (
+    <div className="wsp-jrow" key="line">
+      <span className={`wsp-jside ${entryType === "sale" ? "cr" : "dr"}`}>
+        {entryType === "sale" ? "เครดิต" : "เดบิต"}
+      </span>
+      <div className="wsp-jacct">
+        <AccountCombobox
+          accountCode={acct.code}
+          accountName={acct.name}
+          chart={chart}
+          readOnly={busy}
+          onSelect={pickLine}
+          onNameChange={(n) => acct.code && pickLine(acct.code, n)}
+          onClear={() => setAcct({ code: "", name: "" })}
+        />
+      </div>
+      <span className="wsp-jamt">{lineAmount != null ? formatMoney(lineAmount) : "—"}</span>
+    </div>
+  );
 
   return (
     <div className="wsp-quickfix">
@@ -110,27 +169,19 @@ export default function QuickFixBill({
         type="button"
         className="wsp-btn ghost"
         onClick={flip}
-        disabled={busy || entryType === "unspecified"}
+        disabled={busy || !known}
         title="สลับซื้อ↔ขาย (สลับฝั่งเดบิต/เครดิตทั้งใบ)"
       >
         ⇄ {entryType === "sale" ? "สลับเป็นซื้อ" : entryType === "purchase" ? "สลับเป็นขาย" : "สลับ Dr/Cr"}
       </button>
-      <span className="wsp-qf-side" style={{ color: entryType === "sale" ? "#166534" : "#b91c1c" }}>
-        {moneyLabel}
-        {contra?.code ? <b> {contra.code}</b> : null} {contra?.name ?? (entryType !== "unspecified" ? "— เลือกวิธีจ่ายก่อน" : "")}
-      </span>
-      <span className="wsp-qf-side" style={{ color: entryType === "sale" ? "#b91c1c" : "#166534" }}>{oppLabel}:</span>
-      <div className="wsp-quickfix-acct">
-        <AccountCombobox
-          accountCode={acct.code}
-          accountName={acct.name}
-          chart={chart}
-          readOnly={false}
-          onSelect={pickAccount}
-          onNameChange={(n) => acct.code && pickAccount(acct.code, n)}
-          onClear={() => setAcct({ code: "", name: "" })}
-        />
-      </div>
+      {known ? (
+        <div className="wsp-jbox">
+          <div className="wsp-jbox-title">การลงบัญชี — แก้เลขได้ทั้งสองบรรทัด (รวมที่ AI กรอก)</div>
+          {entryType === "sale" ? [moneyRow, lineRow] : [lineRow, moneyRow]}
+        </div>
+      ) : (
+        <span className="muted" style={{ fontSize: 12 }}>ระบุประเภทซื้อ/ขายก่อน จึงลงเดบิต/เครดิตได้</span>
+      )}
       {msg ? (
         <span style={{ fontSize: 11, color: msg.ok ? "#166534" : "#b91c1c", flexBasis: "100%" }}>
           {msg.ok ? "✓ " : "⚠ "}{msg.text}
