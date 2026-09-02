@@ -29,7 +29,7 @@ export default function StatementReconcileButton({
 
   return (
     <>
-      <button type="button" className="btn" style={{ border: "2px solid #2563eb", color: "#1d4ed8", fontWeight: 700 }} onClick={open}>
+      <button type="button" className="btn" onClick={open}>
         📑 {label}
       </button>
       {url ? (
