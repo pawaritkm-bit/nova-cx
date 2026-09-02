@@ -3,7 +3,9 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import AccountCombobox from "../AccountCombobox";
-import type { ChartAccount } from "@/lib/accounting/chart-of-accounts";
+import { buildChartByCode, type ChartAccount } from "@/lib/accounting/chart-of-accounts";
+import { contraAccountFor } from "@/lib/accounting/payment";
+import type { PaymentMethod } from "@/lib/accounting/queries";
 import { quickFixBillAction } from "./quickfix-actions";
 import { applyStatementAccountToBillAction } from "../statement-actions";
 
@@ -22,6 +24,8 @@ export default function QuickFixBill({
   accountCode,
   accountName,
   lineAmount,
+  paymentMethod,
+  paymentBankAccountCode,
   chart,
 }: {
   customerId: string;
@@ -32,6 +36,9 @@ export default function QuickFixBill({
   accountName: string | null;
   /** ยอดบรรทัดแรก — ใช้สอน learning "ยอดซ้ำ" */
   lineAmount: number | null;
+  /** ★ 2026-09-02 — โชว์ฝั่งเดบิต/เครดิต + บัญชีคู่หน้าการ์ด (ไม่ต้องคลิกเข้าด้านใน) */
+  paymentMethod: PaymentMethod | null;
+  paymentBankAccountCode: string | null;
   chart: ChartAccount[];
 }) {
   const router = useRouter();
@@ -42,6 +49,14 @@ export default function QuickFixBill({
   });
   const [busy, startTransition] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // ฝั่งเงิน (บัญชีคู่จากวิธีจ่าย) — ขาย: เดบิต(เงินเข้า) · ซื้อ: เครดิต(เงินออก)
+  const contra =
+    entryType === "sale" || entryType === "purchase"
+      ? contraAccountFor(buildChartByCode(chart), paymentMethod ?? "credit", entryType, paymentBankAccountCode)
+      : null;
+  const moneyLabel = entryType === "sale" ? "เดบิต (เงินเข้า)" : entryType === "purchase" ? "เครดิต (เงินออก)" : "บัญชีคู่";
+  const oppLabel = entryType === "sale" ? "เครดิต" : entryType === "purchase" ? "เดบิต" : "บัญชี";
 
   const saveCp = () => {
     if ((counterpartyName ?? "") === cp.trim()) return;
@@ -100,6 +115,11 @@ export default function QuickFixBill({
       >
         ⇄ {entryType === "sale" ? "สลับเป็นซื้อ" : entryType === "purchase" ? "สลับเป็นขาย" : "สลับ Dr/Cr"}
       </button>
+      <span className="wsp-qf-side" style={{ color: entryType === "sale" ? "#166534" : "#b91c1c" }}>
+        {moneyLabel}
+        {contra?.code ? <b> {contra.code}</b> : null} {contra?.name ?? (entryType !== "unspecified" ? "— เลือกวิธีจ่ายก่อน" : "")}
+      </span>
+      <span className="wsp-qf-side" style={{ color: entryType === "sale" ? "#b91c1c" : "#166534" }}>{oppLabel}:</span>
       <div className="wsp-quickfix-acct">
         <AccountCombobox
           accountCode={acct.code}
