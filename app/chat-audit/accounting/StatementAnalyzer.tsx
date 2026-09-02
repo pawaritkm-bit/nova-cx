@@ -477,6 +477,51 @@ export default function StatementAnalyzer({
     [customerId]
   );
 
+  // ★ 2026-09-02 ผู้ใช้: "ไม่ต้องมีปุ่มลงบัญชี — เขียวทั้งหมดก็ไหลไปสมุดเอง"
+  //   แถวที่กรอกบัญชีครบ (เขียว, ไม่มีบิล) → ลงบัญชีอัตโนมัติหลังหยุดกรอก ~2 วิ
+  //   ปลอดภัย: server idempotent (คีย์ ⚙sib กันเบิ้ล) + เปลี่ยนบัญชีทีหลัง = แก้ใบเดิมไม่สร้างใหม่
+  const autoPostedSigRef = useRef("");
+  useEffect(() => {
+    if (!matches) return;
+    const postable = txns
+      .map((t, i) => ({ t, i, k: txnKey(t) }))
+      .filter(
+        (x) =>
+          accountPick.has(x.k) &&
+          !(matches && matches[x.i]) &&
+          !manualPick.has(x.k) &&
+          (x.t.direction === "in" || x.t.direction === "out")
+      );
+    if (postable.length === 0) return;
+    const sig = postable
+      .map((x) => `${x.k}»${accountPick.get(x.k)}`)
+      .sort()
+      .join(",");
+    if (sig === autoPostedSigRef.current) return; // ชุดนี้ลงไปแล้ว — ไม่ยิงซ้ำ
+    const timer = setTimeout(() => {
+      setPosting(true);
+      const rows = postable.map(({ t, k }) => {
+        const [code, ...nm] = (accountPick.get(k) ?? "").split("|");
+        return { ...t, accountCode: code, accountName: nm.join("|") || null };
+      });
+      postStatementAccountRowsAction({ customerId, rows })
+        .then((r) => {
+          if (r.ok) {
+            autoPostedSigRef.current = sig;
+            setBillsMsg({ ok: true, text: `🧾 ${r.message}` });
+            wantMatchRef.current = true;
+            setTxns((prev) => [...prev]); // กระทบใหม่ — แถวที่ลงแล้วจับคู่บิลยืนยันเป็นเขียว
+          } else {
+            setBillsMsg({ ok: false, text: r.message });
+          }
+        })
+        .catch(() => setBillsMsg({ ok: false, text: "ลงบัญชีอัตโนมัติไม่สำเร็จ — จะลองใหม่เมื่อแก้รายการ" }))
+        .finally(() => setPosting(false));
+    }, 2000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txns, matches, accountPick, manualPick, customerId]);
+
   /** อ่านไฟล์ที่อยู่ใน storage อยู่แล้วอีกครั้ง (ไฟล์เก่าที่ยังไม่มีผลเซฟ) — ไม่ต้องอัปโหลดใหม่ */
   function rereadStored(f: SavedStatementFile) {
     setRereading(f.path);
@@ -987,49 +1032,13 @@ export default function StatementAnalyzer({
               <button type="button" className="btn btn-ghost" disabled={matching} onClick={() => void runBillMatch(txns)}>
                 {matching ? "กำลังกระทบกับบิล…" : "🔄 กระทบกับบิลอีกครั้ง"}
               </button>
-              {(() => {
-                // แถวพร้อมลงบัญชี: กรอกบัญชีแล้ว + ยังไม่มีบิล (ลงแล้วกลายเป็นบิลยืนยัน → จับคู่เขียวเอง)
-                const postable = txns
-                  .map((t, i) => ({ t, i, k: txnKey(t) }))
-                  .filter(
-                    (x) =>
-                      accountPick.has(x.k) &&
-                      !(matches && matches[x.i]) &&
-                      !manualPick.has(x.k) &&
-                      (x.t.direction === "in" || x.t.direction === "out")
-                  );
-                if (postable.length === 0) return null;
-                return (
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={posting}
-                    title="สร้างบิลยืนยันพร้อมบัญชีที่เลือก → เข้าสมุดรายวัน 5 เล่ม → แยกประเภท → งบ ทันที (กดซ้ำไม่เบิ้ล)"
-                    onClick={() => {
-                      setPosting(true);
-                      setBillsMsg(null);
-                      const rows = postable.map(({ t, k }) => {
-                        const [code, ...nm] = (accountPick.get(k) ?? "").split("|");
-                        return { ...t, accountCode: code, accountName: nm.join("|") || null };
-                      });
-                      postStatementAccountRowsAction({ customerId, rows })
-                        .then((r) => {
-                          setBillsMsg({ ok: r.ok, text: r.message });
-                          if (r.ok) {
-                            wantMatchRef.current = true;
-                            setTxns((prev) => [...prev]); // กระทบใหม่ — แถวที่ลงแล้วจับคู่บิลยืนยันเป็นเขียว
-                          }
-                        })
-                        .catch(() => setBillsMsg({ ok: false, text: "ลงบัญชีไม่สำเร็จ กรุณาลองใหม่" }))
-                        .finally(() => setPosting(false));
-                    }}
-                  >
-                    {posting
-                      ? "กำลังลงบัญชี…"
-                      : `🧾 ลงบัญชี ${postable.length.toLocaleString("th-TH")} รายการ (เข้าสมุดรายวัน→แยกประเภท→งบ)`}
-                  </button>
-                );
-              })()}
+              {/* ★ 2026-09-02 ผู้ใช้: "ไม่ต้องมีปุ่ม — เขียวทั้งหมดก็ไหลไปสมุดเอง" →
+                  ลงบัญชีอัตโนมัติ (effect ด้านบน) เหลือแค่ป้ายสถานะ */}
+              {posting ? (
+                <span style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 600 }}>
+                  🧾 กำลังลงบัญชีอัตโนมัติ… (เข้าสมุดรายวัน→แยกประเภท→งบ)
+                </span>
+              ) : null}
               {matches ? (
                 <span className="muted" style={{ fontSize: 12 }}>
                   เคลียร์แล้ว (มีบิล/ลงบัญชีคู่){" "}

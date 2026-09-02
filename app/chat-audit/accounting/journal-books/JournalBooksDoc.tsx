@@ -175,6 +175,20 @@ export default function JournalBooksDoc({
     pushRange(`${month}-01`, `${month}-${String(last).padStart(2, "0")}`);
   }
 
+  // ★ 2026-09-02 ผู้ใช้: ช่วงหลายเดือน (ทั้งเดือนนี้ → ถึงเดือนนี้) + ปุ่มดึงข้อมูล
+  const [rangeStart, setRangeStart] = useState(selectedMonth);
+  const [rangeEnd, setRangeEnd] = useState(selectedMonth);
+  function lastDayOf(month: string): string {
+    const [y, m] = month.split("-").map(Number);
+    const last = new Date(Date.UTC(y ?? 0, m ?? 0, 0)).getUTCDate();
+    return `${month}-${String(last).padStart(2, "0")}`;
+  }
+  function applyMonthRange() {
+    const [a, b] = rangeStart <= rangeEnd ? [rangeStart, rangeEnd] : [rangeEnd, rangeStart];
+    if (!/^\d{4}-\d{2}$/.test(a) || !/^\d{4}-\d{2}$/.test(b)) return;
+    pushRange(`${a}-01`, lastDayOf(b));
+  }
+
   // ---- Excel: ส่งค่าที่แก้บนจอไป POST → server สร้าง .xlsx ให้ตรงที่เห็น ----
   const [excelBusy, setExcelBusy] = useState(false);
   const [excelErr, setExcelErr] = useState<string | null>(null);
@@ -251,6 +265,50 @@ export default function JournalBooksDoc({
             ))}
           </select>
         </label>
+        {/* ★ 2026-09-02 ผู้ใช้: "เพิ่มเมนูทั้งเดือนนี้ ถึงเดือนนี้ แล้วมีปุ่มกดดึงข้อมูล" —
+            เลือกช่วงหลายเดือน (เดือนเริ่ม→เดือนจบ) แล้วกดดึงทีเดียว */}
+        <label className="vr-month-picker">
+          <span>ช่วงเดือน</span>
+          <select
+            className="vr-select"
+            value={rangeStart}
+            onChange={(e) => {
+              const v = e.target.value;
+              setRangeStart(v);
+              if (rangeEnd < v) setRangeEnd(v);
+            }}
+            aria-label="เดือนเริ่มต้น"
+          >
+            {monthOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="vr-month-picker">
+          <span>ถึงเดือน</span>
+          <select
+            className="vr-select"
+            value={rangeEnd}
+            onChange={(e) => {
+              const v = e.target.value;
+              setRangeEnd(v);
+              if (rangeStart > v) setRangeStart(v);
+            }}
+            aria-label="เดือนสิ้นสุด"
+          >
+            {monthOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="vr-btn"
+          onClick={applyMonthRange}
+          title="ดึงรายการของช่วงเดือนที่เลือก"
+        >
+          📥 ดึงข้อมูล
+        </button>
         <label className="vr-month-picker">
           <span>เล่ม</span>
           <select

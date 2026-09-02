@@ -47,4 +47,16 @@ describe("กระทบยอดแล้วบิลต้องไหลเ�
     expect(s).toMatch(/บิลยังไม่มีบัญชี/);
     expect(s).toMatch(/applyStatementAccountToBillAction\(\{/);
   });
+
+  it("★ ผู้ใช้สั่ง 2026-09-02: ไม่มีปุ่มลงบัญชี — เขียวแล้วลงอัตโนมัติ (idempotent + แก้ใบเดิมได้)", () => {
+    const s = src("app/chat-audit/accounting/StatementAnalyzer.tsx");
+    // effect ลงบัญชีอัตโนมัติ (มี signature กันยิงซ้ำ) — ไม่มีปุ่ม onClick ยิง post แล้ว
+    expect(s).toMatch(/autoPostedSigRef/);
+    expect(s).toMatch(/กำลังลงบัญชีอัตโนมัติ/);
+    expect(s).not.toMatch(/onClick=\{[^}]*postStatementAccountRowsAction/s);
+    // ฝั่ง server: คีย์ซ้ำ = แก้บัญชีใบเดิม (ไม่สร้างใหม่ ไม่เบิ้ล)
+    const b = src("lib/accounting/statement-to-bills.ts");
+    expect(b).toMatch(/seen = new Map<string, string \| null>/);
+    expect(b).toMatch(/updated\+\+/);
+  });
 });

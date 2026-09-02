@@ -352,7 +352,8 @@ export async function postStatementAccountRowsAction(input: {
       sourceLabel: "หน้ากระทบยอดบิลกับสเตทเมนต์",
     });
     const parts = [`ลงบัญชีแล้ว ${r.created.toLocaleString("th-TH")} รายการ`];
-    if (r.skippedDup > 0) parts.push(`ข้ามที่เคยลงแล้ว ${r.skippedDup.toLocaleString("th-TH")}`);
+    if (r.updated > 0) parts.push(`แก้บัญชีใบเดิม ${r.updated.toLocaleString("th-TH")}`);
+    if (r.skippedDup > 0) parts.push(`เคยลงแล้ว ${r.skippedDup.toLocaleString("th-TH")}`);
     if (r.failed > 0) parts.push(`พลาด ${r.failed.toLocaleString("th-TH")}`);
     return { ok: true, message: parts.join(" · ") + " — เข้าสมุดรายวัน → แยกประเภท → งบ แล้ว", created: r.created };
   } catch (e) {

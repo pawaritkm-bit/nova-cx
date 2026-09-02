@@ -255,7 +255,7 @@ export type ReconPostRow = {
   accountName: string | null;
 };
 
-export type PostReconResult = { created: number; skippedDup: number; failed: number };
+export type PostReconResult = { created: number; skippedDup: number; failed: number; updated: number };
 
 /** สร้างบิล "ยืนยันแล้ว" จากแถวกระทบยอดที่กรอกบัญชีครบ — idempotent */
 export async function createConfirmedBillsFromRecon(
@@ -263,7 +263,7 @@ export async function createConfirmedBillsFromRecon(
   args: { tenantId: string; customerId: string; rows: ReconPostRow[]; sourceLabel: string }
 ): Promise<PostReconResult> {
   const rows = args.rows.slice(0, MAX_BILLS_PER_RUN);
-  if (rows.length === 0) return { created: 0, skippedDup: 0, failed: 0 };
+  if (rows.length === 0) return { created: 0, skippedDup: 0, failed: 0, updated: 0 };
 
   // วิธีรับ/จ่ายเงิน: โอนเสมอ (มาจากสเตทเมนต์ธนาคาร) — บัญชีเงินฝากผูกเมื่อมีบัญชีเดียวพอดี
   let paymentBankAccountId: string | null = null;
@@ -280,19 +280,19 @@ export async function createConfirmedBillsFromRecon(
     // best-effort
   }
 
-  // คีย์ที่เคยสร้างแล้ว (รวมร่างจากฟีเจอร์เก่า) — กันซ้ำ
-  const seen = new Set<string>();
+  // คีย์ที่เคยสร้างแล้ว (รวมร่างจากฟีเจอร์เก่า) — กันซ้ำ · เก็บ entryId ไว้เผื่อ "แก้บัญชี" ใบเดิม
+  const seen = new Map<string, string | null>();
   try {
     const { data } = await db
       .from("bill_entries")
-      .select("notes")
+      .select("id, notes")
       .eq("tenant_id", args.tenantId)
       .eq("customer_id", args.customerId)
       .like("notes", `%${DEDUP_MARK}%`)
       .limit(5000);
-    for (const r of (data ?? []) as { notes: string | null }[]) {
+    for (const r of (data ?? []) as { id: string; notes: string | null }[]) {
       const m = r.notes?.match(/⚙sib\|(.+)$/m);
-      if (m) seen.add(m[1].trim());
+      if (m) seen.set(m[1].trim(), r.id);
     }
   } catch {
     // อ่านคีย์เดิมไม่ได้ → สร้างต่อ (นักบัญชีเห็น/ลบใบซ้ำได้)
@@ -302,6 +302,7 @@ export async function createConfirmedBillsFromRecon(
   let created = 0;
   let skippedDup = 0;
   let failed = 0;
+  let updated = 0;
 
   for (const r of rows) {
     const day = isoDay(r.date);
@@ -313,10 +314,26 @@ export async function createConfirmedBillsFromRecon(
     const ref = refOf(r.accountNo, r.counterpartyName, r.description);
     const dedupKey = `${day}|${amount.toFixed(2)}|${ref}`;
     if (seen.has(dedupKey)) {
+      // ★ 2026-09-02 ผู้ใช้ (ลงบัญชีอัตโนมัติ ไม่มีปุ่ม): ใบนี้เคยลงแล้ว → ถ้านักบัญชี "เปลี่ยนบัญชี"
+      //   บนแถวเดิม ให้แก้บัญชีของใบเดิมตาม (ไม่สร้างใบใหม่ ไม่เบิ้ล)
+      const existingId = seen.get(dedupKey);
+      if (existingId) {
+        try {
+          const { error: upErr } = await db
+            .from("bill_entry_lines")
+            .update({ account_code: r.accountCode.trim(), account_name: r.accountName?.trim() || null })
+            .eq("tenant_id", args.tenantId)
+            .eq("entry_id", existingId)
+            .neq("account_code", r.accountCode.trim());
+          if (!upErr) updated++;
+        } catch {
+          // best-effort — ใบเดิมยังอยู่ครบ
+        }
+      }
       skippedDup++;
       continue;
     }
-    seen.add(dedupKey);
+    seen.set(dedupKey, null);
 
     const isIn = r.direction === "in";
     const timeNote = r.time ? ` · โอน ${r.time} น.` : "";
@@ -365,5 +382,5 @@ export async function createConfirmedBillsFromRecon(
     created++;
   }
 
-  return { created, skippedDup, failed };
+  return { created, skippedDup, failed, updated };
 }
