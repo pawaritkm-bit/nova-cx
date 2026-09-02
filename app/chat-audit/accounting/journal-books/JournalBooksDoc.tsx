@@ -167,15 +167,8 @@ export default function JournalBooksDoc({
     router.push(`/chat-audit/accounting/journal-books?${params.toString()}`);
   }
 
-  /** ปุ่มลัด "ทั้งเดือน": เลือกเดือน YYYY-MM → from=วันที่1, to=วันสุดท้ายของเดือน */
-  function onWholeMonth(month: string) {
-    const [y, m] = month.split("-").map(Number);
-    if (!y || !m) return;
-    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
-    pushRange(`${month}-01`, `${month}-${String(last).padStart(2, "0")}`);
-  }
-
   // ★ 2026-09-02 ผู้ใช้: ช่วงหลายเดือน (ทั้งเดือนนี้ → ถึงเดือนนี้) + ปุ่มดึงข้อมูล
+  //   (เมนู "ทั้งเดือน" เดือนเดียวแบบเด้งทันที ผู้ใช้สั่งเอาออก — ใช้ช่วงเดือนแทน)
   const [rangeStart, setRangeStart] = useState(selectedMonth);
   const [rangeEnd, setRangeEnd] = useState(selectedMonth);
   function lastDayOf(month: string): string {
@@ -252,21 +245,8 @@ export default function JournalBooksDoc({
             aria-label="วันสิ้นสุด"
           />
         </label>
-        <label className="vr-month-picker">
-          <span>ทั้งเดือน</span>
-          <select
-            className="vr-select"
-            value={selectedMonth}
-            onChange={(e) => onWholeMonth(e.target.value)}
-            aria-label="เลือกทั้งเดือน"
-          >
-            {monthOptions.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </label>
-        {/* ★ 2026-09-02 ผู้ใช้: "เพิ่มเมนูทั้งเดือนนี้ ถึงเดือนนี้ แล้วมีปุ่มกดดึงข้อมูล" —
-            เลือกช่วงหลายเดือน (เดือนเริ่ม→เดือนจบ) แล้วกดดึงทีเดียว */}
+        {/* ★ 2026-09-02 ผู้ใช้: เมนู "ทั้งเดือน" (เดือนเดียว เด้งทันที) เอาออก — เหลือช่วงเดือน+ปุ่มดึงข้อมูล
+            เลือกเดือนเดียว = ตั้งช่วงเดือนเริ่ม/จบเป็นเดือนเดียวกันแล้วกดดึง */}
         <label className="vr-month-picker">
           <span>ช่วงเดือน</span>
           <select
