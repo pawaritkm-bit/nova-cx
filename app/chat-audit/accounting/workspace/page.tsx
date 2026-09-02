@@ -687,10 +687,10 @@ export default async function AccountingWorkspacePage({
                           → ใช้ hash ที่ไม่มี element (#ปิด): :target หลุด = รูปปิด แต่ตำแหน่งจอคงเดิม */}
                       {img && path ? (
                         <a id={`zoom-${e.id}`} href="#ปิด" className="wsp-lightbox" aria-label="ปิดรูปขยาย">
-                          {/* ★ 2026-09-02 ("กดรูปใหญ่ช้า"): เลิก lazy — โหลดรูปย่อ 1300px รอไว้
-                              เบื้องหลังแบบ priority ต่ำตั้งแต่เปิดหน้า (ใบละ ~50-120KB) → กดแล้วขึ้นทันที */}
+                          {/* ★ 2026-09-02 ผู้ใช้เลือกโหมดประหยัด: โหลดตอนกดเหมือนเดิม (lazy) —
+                              แต่ใช้รูปย่อ 1300px (~100KB) แทนสแกนเต็ม (เป็น MB) = กดแล้วเร็วขึ้นมากอยู่ดี */}
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={lightboxSrc} alt="บิล (ขยาย)" fetchPriority="low" decoding="async" />
+                          <img src={lightboxSrc} alt="บิล (ขยาย)" loading="lazy" decoding="async" />
                           <span className="wsp-lightbox-close">✕ ปิด</span>
                         </a>
                       ) : null}
