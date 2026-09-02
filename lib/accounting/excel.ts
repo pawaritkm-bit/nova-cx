@@ -43,6 +43,25 @@ function vatTypeLabel(vatType: string): string {
   return vatType === "novat" ? "ไม่มี VAT" : "VAT 7%";
 }
 
+/** วันที่ ISO (YYYY-MM-DD) → วันที่/เดือน/ปี พ.ศ. — ผู้ใช้สั่ง 2026-09-02 (เดิมโชว์ ปี-เดือน-วัน ดิบ) */
+function thaiDateDMY(iso: string | null): string {
+  if (!iso) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  return m ? `${m[3]}/${m[2]}/${Number(m[1]) + 543}` : iso;
+}
+
+/** เรียงบิลตามวันที่เอกสาร เก่า→ใหม่ (ไม่มีวันที่ = ท้ายสุด · เท่ากันเรียงต่อด้วยเลขที่) */
+function byDocDateAsc(a: BillEntry, b: BillEntry): number {
+  if (a.docDate && b.docDate) {
+    if (a.docDate !== b.docDate) return a.docDate < b.docDate ? -1 : 1;
+  } else if (a.docDate) {
+    return -1;
+  } else if (b.docDate) {
+    return 1;
+  }
+  return (a.docNo ?? "").localeCompare(b.docNo ?? "", "th");
+}
+
 /** เขียน 1 ชีทของประเภทเอกสาร (purchase/sale) — คืนยอดรวมไว้ทำสรุปนอกได้ */
 function writeSheet(ws: ExcelJS.Worksheet, entries: BillEntry[]): void {
   ws.columns = COLUMNS.map((c) => ({ header: c.header, key: c.key, width: c.width }));
@@ -57,7 +76,7 @@ function writeSheet(ws: ExcelJS.Worksheet, entries: BillEntry[]): void {
   let sumWht = 0;
   let sumNet = 0;
 
-  for (const e of entries) {
+  for (const e of [...entries].sort(byDocDateAsc)) {
     // entry ที่ไม่มี line เลย → ใส่ 1 แถวหัวเปล่า (ให้เห็นว่ามีบิลนี้)
     const lines = e.lines.length > 0 ? e.lines : [null];
     for (const l of lines) {
@@ -71,7 +90,7 @@ function writeSheet(ws: ExcelJS.Worksheet, entries: BillEntry[]): void {
       sumNet = round2(sumNet + net);
 
       ws.addRow({
-        docDate: e.docDate ?? "",
+        docDate: thaiDateDMY(e.docDate),
         docNo: e.docNo ?? "",
         counterparty: e.counterpartyName ?? "",
         taxId: e.counterpartyTaxId ?? "",

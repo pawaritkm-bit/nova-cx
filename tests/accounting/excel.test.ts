@@ -111,6 +111,9 @@ describe("buildBillEntriesWorkbook", () => {
     expect(ws.getRow(1).getCell(7).value).toBe("ชื่อบัญชี");
     expect(ws.getRow(1).getCell(9).value).toBe("มูลค่า");
 
+    // ★ ผู้ใช้สั่ง 2026-09-02: วันที่ในไฟล์ต้องเป็น วันที่/เดือน/ปี พ.ศ. (เดิม ISO ปี-เดือน-วัน)
+    expect(ws.getRow(2).getCell(1).value).toBe("10/07/2569");
+
     // 2 line + 1 แถวรวม = 3 แถวข้อมูล (row 2,3,4)
     expect(ws.getRow(2).getCell(6).value).toBe("5010");
     expect(ws.getRow(2).getCell(7).value).toBe("ซื้อสินค้า");
@@ -121,6 +124,21 @@ describe("buildBillEntriesWorkbook", () => {
     expect(totalRow.getCell(5).value).toBe("รวมทั้งสิ้น");
     expect(totalRow.getCell(9).value).toBe(150);
     expect(totalRow.getCell(10).value).toBe(7);
+  });
+
+  it("★ แถวเรียงตามวันที่เอกสาร เก่า→ใหม่ (ไม่ใช่ลำดับที่ส่งเข้ามา)", async () => {
+    const buf = await buildBillEntriesWorkbook([
+      entry({ entryType: "sale", docDate: "2026-07-20", docNo: "B", lines: [line({ amount: 2 })] }),
+      entry({ entryType: "sale", docDate: "2026-07-05", docNo: "A", lines: [line({ amount: 1 })] }),
+      entry({ entryType: "sale", docDate: null, docNo: "Z", lines: [line({ amount: 3 })] }),
+    ]);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
+    const ws = wb.getWorksheet("ภาษีขาย")!;
+    expect(ws.getRow(2).getCell(1).value).toBe("05/07/2569");
+    expect(ws.getRow(3).getCell(1).value).toBe("20/07/2569");
+    // ไม่มีวันที่ = ท้ายสุด (ก่อนแถวรวม)
+    expect(ws.getRow(4).getCell(2).value).toBe("Z");
   });
 
   it("ไม่มี entry เลย → ยังได้ 2 ชีท + แถวรวม 0", async () => {
