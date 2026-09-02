@@ -198,3 +198,18 @@
   font-size: 12.5px;
 }
 .wsp-quickfix-acct { flex: 1 1 200px; min-width: 180px; font-size: 12.5px; }
+
+/* ★ 2026-09-02 ผู้ใช้: "เมาส์โดนรูป = แว่นขยายรูปใหญ่เลย เลื่อนออกกลับเท่าเดิม ไม่ต้องกด"
+   hover ที่รูปเล็ก → รูปเดิมขยาย ~5 เท่า (~350x440) ลอยทับการ์ดไปทางขวา (transform ไม่ดันเลย์เอาต์)
+   เลื่อนเมาส์ออก = กลับขนาดเดิมอัตโนมัติ · คลิกยังเปิด lightbox ใหญ่เต็มจอได้เหมือนเดิม */
+.wsp-thumb:hover { overflow: visible; z-index: 80; }
+.wsp-thumb-zoom img { transition: transform 0.12s ease-out; }
+.wsp-thumb-zoom:hover img {
+  transform: scale(5);
+  transform-origin: left center;
+  background: #fff;
+  box-shadow: 0 10px 36px rgba(15, 23, 42, 0.4);
+  border-radius: 3px;
+  z-index: 80;
+}
+.wsp-thumb-zoom:hover .wsp-zoom-ic { opacity: 0; } /* ป้าย "ขยาย" ไม่บังรูปตอนซูม */
