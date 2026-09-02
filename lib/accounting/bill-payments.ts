@@ -284,7 +284,18 @@ export function validatePaymentInput(
 export type PaymentJournalEntry = Pick<
   BillEntry,
   "id" | "entryType" | "docNo" | "customerId" | "counterpartyName"
->;
+> & {
+  /** ★ 2026-09-02 optional — ใช้ fallback คำอธิบายเมื่อบิลไม่มีชื่อคู่ค้า (caller ส่ง BillEntry เต็มอยู่แล้ว) */
+  lines?: { description: string | null }[];
+};
+
+/** คำอธิบายบิล: ชื่อคู่ค้า → fallback คำอธิบายบรรทัดแรก (บิลไม่มีชื่อผู้โอน 2026-09-02) */
+function entryDescOf(entry: PaymentJournalEntry): string | null {
+  return (
+    (entry.counterpartyName ?? "").trim() ||
+    ((entry.lines ?? []).find((l) => (l.description ?? "").trim())?.description?.trim() ?? null)
+  );
+}
 
 /** ข้อมูลการรับ/จ่ายเงินเท่าที่ mapper ต้องใช้ — BillPayment ผ่านเข้าได้ตรง ๆ */
 export type PaymentJournalInput = Pick<BillPayment, "payDate" | "amount" | "method" | "bankAccountCode">;
@@ -317,7 +328,7 @@ export function toJournalLines(
     date: payment.payDate,
     docNo: entry.docNo,
     customerId: entry.customerId,
-    counterparty: entry.counterpartyName ?? null,
+    counterparty: entryDescOf(entry),
   };
 
   if (entry.entryType === "sale") {
@@ -358,7 +369,7 @@ export function toJournalPosting(
     entryId: entry.id,
     date: payment.payDate,
     docNo: entry.docNo,
-    description: (payment.notes && payment.notes.trim()) || entry.counterpartyName || "",
+    description: (payment.notes && payment.notes.trim()) || entryDescOf(entry) || "",
     debits,
     credits,
     totalDebit,

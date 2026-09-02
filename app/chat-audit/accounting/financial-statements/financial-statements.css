@@ -175,3 +175,17 @@
 @media print {
   .fs-note-text { border: none; padding: 0; resize: none; overflow: hidden; }
 }
+
+/* ★ 2026-09-02 — เอกสารแก้ไขได้ (contentEditable ทุกหน้า) */
+.fs-page[contenteditable] { outline: none; }
+.fs-page[contenteditable]:focus-within { box-shadow: 0 0 0 2px #bfdbfe inset; }
+@media print { .fs-page[contenteditable]:focus-within { box-shadow: none; } }
+.fs-edit-slot {
+  display: inline-block;
+  min-width: 140px;
+  min-height: 1.2em;
+  border-bottom: 1px dashed #cbd5e1;
+}
+.fs-sign-slot { width: 100%; text-align: center; border-bottom: none; }
+.fs-note-text { white-space: pre-wrap; font-size: 13px; line-height: 1.55; }
+@media print { .fs-edit-slot { border-bottom: none; } }

@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { formatMoney } from "@/lib/accounting/calc";
 import { mergeCompareLines, sumCompareLines, type CompareLine } from "@/lib/accounting/statement-compare";
 import type { IncomeStatement, BalanceSheet } from "@/lib/accounting/financial-statements";
@@ -271,12 +270,11 @@ export default function FinancialStatementPrintDoc({
   skippedCount: number;
   backHref: string;
 }) {
-  const [preparer, setPreparer] = useState("");
-  const [reviewer, setReviewer] = useState("");
-  const [docDate, setDocDate] = useState("");
-
-  // ★ หมายเหตุประกอบงบ — ร่างมาตรฐาน (NPAEs) เติมตัวเลขจากงบ · แก้ไขได้ก่อนพิมพ์ (ไม่ persist)
-  const [notes, setNotes] = useState<{ title: string; text: string }[]>(() => [
+  // ★ 2026-09-02 ผู้ใช้: "หน้าปิดงบเปิดให้แก้ไขได้เหมือนหน้ารายงานสมุดบัญชี" —
+  //   ทุกหน้าเอกสารเป็น contentEditable: คลิกแก้ตัวเลข/ข้อความ/ชื่อผู้จัดทำ/หมายเหตุตรงบนเอกสาร
+  //   ได้เลยก่อนพิมพ์ (ไม่บันทึกลง DB) — component นี้จึงไม่มี state (state เปลี่ยน = React
+  //   วาดใหม่ทับที่ผู้ใช้แก้บนเอกสารหาย)
+  const notes: { title: string; text: string }[] = [
     {
       title: "1. ข้อมูลทั่วไป",
       text: `${businessName || "กิจการ"} จดทะเบียนเป็นนิติบุคคลตามประมวลกฎหมายแพ่งและพาณิชย์${taxId ? ` เลขทะเบียน/เลขประจำตัวผู้เสียภาษี ${taxId}` : ""}${address ? `\nที่ตั้งสำนักงาน: ${address}` : ""}`,
@@ -301,7 +299,7 @@ export default function FinancialStatementPrintDoc({
       title: "6. การอนุมัติงบการเงิน",
       text: "งบการเงินนี้ได้รับอนุมัติให้ออกโดยผู้มีอำนาจของกิจการแล้ว",
     },
-  ]);
+  ];
 
   return (
     <div className="fs-shell">
@@ -310,7 +308,7 @@ export default function FinancialStatementPrintDoc({
         <a href={backHref} className="fs-btn fs-btn-ghost">
           ← กลับ
         </a>
-        <span className="fs-toolbar-hint">กรอกผู้จัดทำ/ผู้สอบทาน แล้วกด “พิมพ์ / บันทึก PDF”</span>
+        <span className="fs-toolbar-hint">★ คลิกแก้ตัวเลข/ข้อความได้ทุกจุดบนเอกสาร (เหมือนหน้าสมุดรายวัน) — ใช้เฉพาะตอนพิมพ์ ไม่กระทบข้อมูลจริง · ยอดรวมไม่คำนวณใหม่อัตโนมัติ</span>
         <button type="button" className="fs-btn fs-btn-primary" onClick={() => window.print()}>
           🖨 พิมพ์ / บันทึก PDF
         </button>
@@ -323,23 +321,16 @@ export default function FinancialStatementPrintDoc({
       ) : null}
 
       {/* ================= ตัวเอกสาร (A4) — งบกำไรขาดทุน ================= */}
-      <div className="fs-page">
+      <div className="fs-page" contentEditable suppressContentEditableWarning spellCheck={false}>
         <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
         <h1 className="fs-title">งบกำไรขาดทุน</h1>
         <p className="fs-period">สำหรับงวด {periodLabel}</p>
         <IncomeTable current={income} compare={compareIncome} currentLabel={periodLabel} compareLabel={comparePeriodLabel} />
-        <FsSignBlock
-          docDate={docDate}
-          setDocDate={setDocDate}
-          preparer={preparer}
-          setPreparer={setPreparer}
-          reviewer={reviewer}
-          setReviewer={setReviewer}
-        />
+        <FsSignBlock />
       </div>
 
       {/* ================= ตัวเอกสาร (A4) — งบแสดงฐานะการเงิน (ขึ้นหน้าใหม่ตอนพิมพ์) ================= */}
-      <div className="fs-page fs-page-break">
+      <div className="fs-page fs-page-break" contentEditable suppressContentEditableWarning spellCheck={false}>
         <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
         <h1 className="fs-title">งบแสดงฐานะการเงิน</h1>
         <p className="fs-period">ณ วันสิ้นงวด {periodLabel}</p>
@@ -349,18 +340,11 @@ export default function FinancialStatementPrintDoc({
             ⚠️ งบยังไม่สมดุล — ผลต่าง {formatMoney(balance.difference)} บาท (ตรวจยอดยกมา/รายการตกหล่นก่อนใช้งบ)
           </p>
         ) : null}
-        <FsSignBlock
-          docDate={docDate}
-          setDocDate={setDocDate}
-          preparer={preparer}
-          setPreparer={setPreparer}
-          reviewer={reviewer}
-          setReviewer={setReviewer}
-        />
+        <FsSignBlock />
       </div>
 
       {/* ================= ตัวเอกสาร (A4) — งบการเปลี่ยนแปลงส่วนของผู้ถือหุ้น (★ 2026-09-02 ขั้น 8 ครบ) ================= */}
-      <div className="fs-page fs-page-break">
+      <div className="fs-page fs-page-break" contentEditable suppressContentEditableWarning spellCheck={false}>
         <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
         <h1 className="fs-title">งบการเปลี่ยนแปลงส่วนของผู้ถือหุ้น</h1>
         <p className="fs-period">สำหรับงวด {periodLabel}</p>
@@ -396,18 +380,11 @@ export default function FinancialStatementPrintDoc({
             </tr>
           </tbody>
         </table>
-        <FsSignBlock
-          docDate={docDate}
-          setDocDate={setDocDate}
-          preparer={preparer}
-          setPreparer={setPreparer}
-          reviewer={reviewer}
-          setReviewer={setReviewer}
-        />
+        <FsSignBlock />
       </div>
 
       {/* ================= ตัวเอกสาร (A4) — หมายเหตุประกอบงบการเงิน (แก้ไขได้ก่อนพิมพ์) ================= */}
-      <div className="fs-page fs-page-break">
+      <div className="fs-page fs-page-break" contentEditable suppressContentEditableWarning spellCheck={false}>
         <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
         <h1 className="fs-title">หมายเหตุประกอบงบการเงิน</h1>
         <p className="fs-period">สำหรับงวด {periodLabel}</p>
@@ -417,29 +394,14 @@ export default function FinancialStatementPrintDoc({
         {notes.map((n, i) => (
           <div key={i} className="fs-note">
             <div className="fs-note-title">{n.title}</div>
-            <textarea
-              className="fs-note-text"
-              value={n.text}
-              rows={Math.max(2, n.text.split("\n").length + 1)}
-              onChange={(e) =>
-                setNotes((prev) => prev.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))
-              }
-              aria-label={n.title}
-            />
+            <div className="fs-note-text">{n.text}</div>
           </div>
         ))}
-        <FsSignBlock
-          docDate={docDate}
-          setDocDate={setDocDate}
-          preparer={preparer}
-          setPreparer={setPreparer}
-          reviewer={reviewer}
-          setReviewer={setReviewer}
-        />
+        <FsSignBlock />
       </div>
 
       {/* ================= ตัวเอกสาร (A4) — งบกระแสเงินสด (ขึ้นหน้าใหม่ตอนพิมพ์, ส่วน O4) ================= */}
-      <div className="fs-page fs-page-break">
+      <div className="fs-page fs-page-break" contentEditable suppressContentEditableWarning spellCheck={false}>
         <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
         <h1 className="fs-title">งบกระแสเงินสด</h1>
         <p className="fs-period">สำหรับงวด {periodLabel}</p>
@@ -449,14 +411,7 @@ export default function FinancialStatementPrintDoc({
             ⚠️ งบกระแสเงินสดยังไม่สมดุล (reconciled=false) — ตรวจการจัดหมวดรายการเงินสดก่อนใช้งบ
           </p>
         ) : null}
-        <FsSignBlock
-          docDate={docDate}
-          setDocDate={setDocDate}
-          preparer={preparer}
-          setPreparer={setPreparer}
-          reviewer={reviewer}
-          setReviewer={setReviewer}
-        />
+        <FsSignBlock />
       </div>
     </div>
   );
@@ -473,54 +428,19 @@ function FsLetterhead({ businessName, taxId, address }: { businessName: string; 
   );
 }
 
-/** ช่องวันที่จัดทำ + ผู้จัดทำ/ผู้สอบทาน (กรอกอิสระ ไม่ persist ลง DB, 0.2) */
-function FsSignBlock({
-  docDate,
-  setDocDate,
-  preparer,
-  setPreparer,
-  reviewer,
-  setReviewer,
-}: {
-  docDate: string;
-  setDocDate: (v: string) => void;
-  preparer: string;
-  setPreparer: (v: string) => void;
-  reviewer: string;
-  setReviewer: (v: string) => void;
-}) {
+/** ช่องวันที่จัดทำ + ผู้จัดทำ/ผู้สอบทาน — แก้ตรงบนเอกสาร (หน้าเป็น contentEditable, ไม่ persist) */
+function FsSignBlock() {
   return (
     <div className="fs-signblock">
-      <label className="fs-signdate">
-        วันที่จัดทำ:{" "}
-        <input
-          className="fs-in"
-          value={docDate}
-          onChange={(e) => setDocDate(e.target.value)}
-          placeholder="วว/ดด/ปปปป"
-          aria-label="วันที่จัดทำ"
-        />
-      </label>
+      <div className="fs-signdate">วันที่จัดทำ: <span className="fs-edit-slot">​</span></div>
       <div className="fs-sign">
         <div className="fs-sign-box">
-          <input
-            className="fs-in fs-sign-in"
-            value={preparer}
-            onChange={(e) => setPreparer(e.target.value)}
-            placeholder="ชื่อผู้จัดทำ"
-            aria-label="ผู้จัดทำ"
-          />
+          <div className="fs-edit-slot fs-sign-slot">​</div>
           <div className="fs-sign-line" />
           <div className="fs-sign-label">ผู้จัดทำ</div>
         </div>
         <div className="fs-sign-box">
-          <input
-            className="fs-in fs-sign-in"
-            value={reviewer}
-            onChange={(e) => setReviewer(e.target.value)}
-            placeholder="ชื่อผู้สอบทาน"
-            aria-label="ผู้สอบทาน"
-          />
+          <div className="fs-edit-slot fs-sign-slot">​</div>
           <div className="fs-sign-line" />
           <div className="fs-sign-label">ผู้สอบทาน</div>
         </div>

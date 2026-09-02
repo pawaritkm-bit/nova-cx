@@ -258,6 +258,8 @@ export type NoteJournalEntry = {
   docNo: string | null;
   customerId: string | null;
   counterpartyName: string | null;
+  /** ★ 2026-09-02 optional — fallback คำอธิบายเมื่อบิลไม่มีชื่อคู่ค้า (caller ส่ง BillEntry เต็มอยู่แล้ว) */
+  lines?: { description: string | null }[];
 };
 
 /**
@@ -298,7 +300,10 @@ export function toJournalLines(
     date: note.docDate,
     docNo: note.docNo,
     customerId: entry.customerId,
-    counterparty: entry.counterpartyName ?? null,
+    // ★ 2026-09-02 — บิลไม่มีชื่อคู่ค้า → ใช้คำอธิบายบรรทัดแรกแทน (เหมือน journal.ts)
+    counterparty:
+      (entry.counterpartyName ?? "").trim() ||
+      ((entry.lines ?? []).find((l) => (l.description ?? "").trim())?.description?.trim() ?? null),
   };
 
   const lines: JournalLine[] = [];
