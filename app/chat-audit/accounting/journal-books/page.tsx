@@ -141,7 +141,25 @@ export default async function JournalBooksPage({
     toDate = toValid || fromValid;
     if (fromDate > toDate) [fromDate, toDate] = [toDate, fromDate];
   } else {
-    const b = monthBounds(monthParam) ?? monthBounds(currentMonthThai())!;
+    let monthPick = monthParam;
+    if (!monthBounds(monthPick)) {
+      // ★ 2026-09-02 ผู้ใช้ ("ไม่เห็นขึ้นเลย"): เปิดโดยไม่ระบุเดือน เดิม default เดือนปฏิทินปัจจุบัน
+      //   ซึ่งมักยังไม่มีบิล (งานบัญชีทำย้อนหลัง) → หน้าโล่งทั้งที่ข้อมูลอยู่เดือนก่อน ๆ
+      //   แก้: default = เดือนล่าสุดที่ "มีบิลจริง" ของลูกค้ารายนี้ (ไม่มีบิลเลยค่อยใช้เดือนปัจจุบัน)
+      const { data: latest } = await service
+        .from("bill_entries")
+        .select("doc_date")
+        .eq("tenant_id", tenantId)
+        .eq("customer_id", customerId)
+        .is("deleted_at", null)
+        .not("doc_date", "is", null)
+        .order("doc_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const d = (latest as { doc_date?: string | null } | null)?.doc_date;
+      if (d && monthBounds(d.slice(0, 7))) monthPick = d.slice(0, 7);
+    }
+    const b = monthBounds(monthPick) ?? monthBounds(currentMonthThai())!;
     fromDate = b.first;
     toDate = b.last;
   }

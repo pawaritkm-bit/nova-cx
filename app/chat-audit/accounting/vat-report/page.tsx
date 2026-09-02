@@ -187,7 +187,24 @@ export default async function VatReportPage({
     // ใส่กลับด้าน → สลับให้ (หัวรายงาน/ช่องวันจะได้เรียงถูก)
     if (fromDate > toDate) [fromDate, toDate] = [toDate, fromDate];
   } else {
-    const b = monthBounds(currentMonthThai())!;
+    // ★ 2026-09-02 ผู้ใช้ ("ไม่เห็นขึ้นเลย"): ไม่ส่งช่วงวันที่ → ใช้ ?month= ถ้ามี ·
+    //   ไม่มีก็ default เดือนล่าสุดที่ "มีบิลจริง" ของลูกค้า (งานบัญชีทำย้อนหลัง เดือนปัจจุบันมักว่าง)
+    let monthPick = (sp.month ?? "").trim();
+    if (!monthBounds(monthPick)) {
+      const { data: latest } = await service
+        .from("bill_entries")
+        .select("doc_date")
+        .eq("tenant_id", tenantId)
+        .eq("customer_id", customerId)
+        .is("deleted_at", null)
+        .not("doc_date", "is", null)
+        .order("doc_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const d = (latest as { doc_date?: string | null } | null)?.doc_date;
+      monthPick = d ? d.slice(0, 7) : "";
+    }
+    const b = monthBounds(monthPick) ?? monthBounds(currentMonthThai())!;
     fromDate = b.first;
     toDate = b.last;
   }
