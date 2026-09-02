@@ -189,3 +189,19 @@
 .fs-sign-slot { width: 100%; text-align: center; border-bottom: none; }
 .fs-note-text { white-space: pre-wrap; font-size: 13px; line-height: 1.55; }
 @media print { .fs-edit-slot { border-bottom: none; } }
+
+/* ★ 2026-09-02 — แถบเหลืองบอกช่องแก้ได้ (เหมือนหน้ารายงานสมุดบัญชี) */
+.fs-page[contenteditable] td:hover,
+.fs-page[contenteditable] th:hover,
+.fs-page[contenteditable] .fs-note-text:hover,
+.fs-page[contenteditable] .fs-edit-slot:hover {
+  background: #fff7d6;
+  box-shadow: inset 0 -2px 0 #f59e0b55;
+  cursor: text;
+}
+@media print {
+  .fs-page[contenteditable] td:hover,
+  .fs-page[contenteditable] th:hover,
+  .fs-page[contenteditable] .fs-note-text:hover,
+  .fs-page[contenteditable] .fs-edit-slot:hover { background: transparent; box-shadow: none; }
+}

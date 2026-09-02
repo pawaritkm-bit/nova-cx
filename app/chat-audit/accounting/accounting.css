@@ -1660,3 +1660,16 @@
 @media (max-width: 720px) {
   .nova-dash .stmt-overlay { padding: 8px; }
 }
+
+/* ★ 2026-09-02 ผู้ใช้: "คลิกแล้วพิมพ์แก้ได้เลย แบบแถบเหลืองเหมือนหน้ารายงานสมุดบัญชี" —
+   ตารางที่แก้บนจอได้ (contentEditable): ชี้เมาส์เห็นแถบเหลือง + เคอร์เซอร์พิมพ์ บอกว่าคลิกแก้ได้ทันที */
+.nova-dash [contenteditable="true"] td:hover,
+.nova-dash [contenteditable="true"] th:hover {
+  background: #fff7d6;
+  box-shadow: inset 0 -2px 0 #f59e0b55;
+  cursor: text;
+}
+@media print {
+  .nova-dash [contenteditable="true"] td:hover,
+  .nova-dash [contenteditable="true"] th:hover { background: transparent; box-shadow: none; }
+}
