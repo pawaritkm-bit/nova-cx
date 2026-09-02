@@ -176,7 +176,6 @@ export default function QuickFixBill({
       </button>
       {known ? (
         <div className="wsp-jbox">
-          <div className="wsp-jbox-title">การลงบัญชี — แก้เลขได้ทั้งสองบรรทัด (รวมที่ AI กรอก)</div>
           {entryType === "sale" ? [moneyRow, lineRow] : [lineRow, moneyRow]}
         </div>
       ) : (
