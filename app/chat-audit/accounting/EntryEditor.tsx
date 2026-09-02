@@ -366,6 +366,16 @@ export default function EntryEditor({
     router.push(closeHref);
   }, [router, closeHref]);
 
+  // ★ perf 2026-09-02 (ผู้ใช้: "กดปิดเด้งกลับช้า"): prefetch เส้นทางปิดตั้งแต่เปิดตัวแก้
+  //   หน้า back (เช่น งบการเงิน) มี loading boundary → กด ✕ เปลี่ยนหน้าทันที ตัวเลขตามมา
+  useEffect(() => {
+    try {
+      router.prefetch(closeHref);
+    } catch {
+      /* prefetch เป็น optimization — พังก็ปิดแบบปกติได้ */
+    }
+  }, [router, closeHref]);
+
   // ปิดด้วย Esc
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

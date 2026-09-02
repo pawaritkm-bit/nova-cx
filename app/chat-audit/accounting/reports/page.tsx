@@ -422,14 +422,17 @@ export default async function AccountingReportsPage({
   } | null = null;
   if (customerId) {
     try {
-      const { entries } = await listEntries(service, access.tenantId, { customerId });
+      // ★ perf 2026-09-02 (ผู้ใช้: เด้งกลับช้า): 3 query อิสระ — ยิงขนานแทนต่อคิว
+      const [{ entries }, opening, chart] = await Promise.all([
+        listEntries(service, access.tenantId, { customerId }),
+        listOpeningBalances(service, access.tenantId, customerId),
+        listChartOfAccounts(service, access.tenantId),
+      ]);
       monthOptions = [...new Set(entries.map(monthKeyOf).filter((m): m is string => !!m))].sort((a, b) =>
         b.localeCompare(a)
       );
       const filtered = filterEntriesForReport(entries, { from, to, includeDraft });
       draftCount = filtered.filter((e) => e.status !== "confirmed").length;
-      const opening = await listOpeningBalances(service, access.tenantId, customerId);
-      const chart = await listChartOfAccounts(service, access.tenantId);
       const chartByCode = buildChartByCode(chart);
 
       // เฟส 1-3 (C/E-F/J, 0.13): manual JE + bill_payments (confirmed) + CN/DN (confirmed) ของลูกค้ารายนี้
