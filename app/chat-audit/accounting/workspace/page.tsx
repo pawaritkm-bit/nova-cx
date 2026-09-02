@@ -684,7 +684,9 @@ export default async function AccountingWorkspacePage({
                       </div>
                       {/* แว่นขยาย: คลิกรูปเล็ก → เปิดรูปใหญ่เต็มจอ (CSS :target · คลิกพื้นหลัง/รูปเพื่อปิด) */}
                       {img && path ? (
-                        <a id={`zoom-${e.id}`} href="#" className="wsp-lightbox" aria-label="ปิดรูปขยาย">
+                        {/* ★ 2026-09-02 ผู้ใช้: กดปิดรูปแล้วห้ามเด้งขึ้นบนสุด — href="#" ทำ browser scroll top
+                            → ชี้ hash ที่ไม่มี element (#ปิด) : :target หลุด = ปิดรูป แต่จอไม่เลื่อน */}
+                        <a id={`zoom-${e.id}`} href="#ปิด" className="wsp-lightbox" aria-label="ปิดรูปขยาย">
                           {/* ★ perf: loading=lazy — lightbox ซ่อนด้วย display:none จึงไม่ intersect
                               → รูปเต็มโหลด "ตอนกดขยาย" เท่านั้น (เดิมโหลดเต็มทุกใบตั้งแต่เปิดหน้า) */}
                           {/* eslint-disable-next-line @next/next/no-img-element */}
