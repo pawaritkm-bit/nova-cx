@@ -47,6 +47,8 @@ export default function CustomerToolsMenu({
         { label: "รับ/จ่ายเงิน", href: `/chat-audit/accounting/payments?customerId=${cid}` },
         { label: "เงินสดย่อย", href: `/chat-audit/accounting/petty-cash?customerId=${cid}` },
         { label: "ปรับปรุงอัตราแลกเปลี่ยนปลายงวด", href: `/chat-audit/accounting/fx-revaluation?customerId=${cid}` },
+        // ★ 2026-09-02 — ผังบัญชี: เพิ่ม/แก้รหัส (เลขซ้ำได้ ชื่อห้ามซ้ำ) — ผังเป็นของสำนักงาน (ทุกลูกค้าใช้ร่วม)
+        { label: "ผังบัญชี (เพิ่ม/แก้รหัสบัญชี)", href: `/chat-audit/admin/chart-of-accounts` },
       ],
     },
     {

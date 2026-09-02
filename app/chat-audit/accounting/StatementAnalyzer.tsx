@@ -1194,6 +1194,9 @@ function BillSideCard({
   onUploadBill: (i: number, t: StatementTxn, file: File) => void;
 }) {
   const [q, setQ] = useState("");
+  // ★ 2026-09-02 ผู้ใช้: ค่าที่ AI เติมให้ต้อง "กดเปลี่ยน" ได้ — เดิมปุ่มเปลี่ยนล้าง pick แล้ว
+  //   suggestion เด้งกลับมาเติมช่องทันที (ติดลูป) → ธงนี้พัก suggestion ไว้จนกว่าจะเลือกใหม่
+  const [editingAcct, setEditingAcct] = useState(false);
   const uploadRef = useRef<HTMLInputElement>(null);
   const base = { borderRadius: 12, padding: "10px 12px", background: "#fff" } as const;
 
@@ -1266,8 +1269,8 @@ function BillSideCard({
           แก้ได้เอง (combobox เดียวกับหน้าตรวจ/แก้บิล) · เลือกแล้วระบบจำ + ใช้สอนการแนะนำรอบหน้า */}
       {(() => {
         const picked = accountPicked ? accountPicked.split("|") : null;
-        const code = picked ? picked[0] : accountSuggestion?.code ?? "";
-        const name = picked ? picked.slice(1).join("|") : accountSuggestion?.name ?? "";
+        const code = picked ? picked[0] : editingAcct ? "" : accountSuggestion?.code ?? "";
+        const name = picked ? picked.slice(1).join("|") : editingAcct ? "" : accountSuggestion?.name ?? "";
         return (
           <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, fontWeight: 600 }}>บัญชี{t.direction === "in" ? " (รายได้)" : t.direction === "out" ? " (ค่าใช้จ่าย)" : ""}:</span>
@@ -1277,9 +1280,15 @@ function BillSideCard({
                 accountName={name}
                 chart={chart}
                 readOnly={false}
-                onSelect={(c, n) => onPickAccount(c, n)}
+                onSelect={(c, n) => {
+                  setEditingAcct(false);
+                  onPickAccount(c, n);
+                }}
                 onNameChange={(n) => code && onPickAccount(code, n)}
-                onClear={onClearAccount}
+                onClear={() => {
+                  onClearAccount();
+                  setEditingAcct(true); // พัก 🤖 แนะนำ — เปิด combobox ให้เลือกใหม่ทันที
+                }}
               />
             </div>
             {!picked && accountSuggestion ? (

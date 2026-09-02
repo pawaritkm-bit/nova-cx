@@ -175,6 +175,16 @@ export async function createChartAccount(
   const v = validateChartAccountInput(input);
   if (!v) return { ok: false, message: "กรุณากรอกรหัส/ชื่อ/หมวดบัญชีให้ครบ" };
 
+  // ★ กติกาผู้ใช้ 2026-09-02: "เลขซ้ำได้ ชื่อห้ามซ้ำ" (เช่น 4010 ขายสินค้า + 4010 รายได้บริการ)
+  const { data: dupName } = await db
+    .from("chart_of_accounts")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("name", v.name)
+    .is("deleted_at", null)
+    .limit(1);
+  if (dupName && dupName.length > 0) return { ok: false, message: "ชื่อบัญชีนี้มีอยู่ในผังแล้ว (เลขซ้ำได้ แต่ชื่อห้ามซ้ำ)" };
+
   const { data: maxRow } = await db
     .from("chart_of_accounts")
     .select("sort_order")
@@ -199,7 +209,7 @@ export async function createChartAccount(
     .maybeSingle();
   if (error || !data) {
     const code = (error as { code?: string } | null)?.code;
-    if (code === "23505") return { ok: false, message: "รหัสบัญชีนี้มีอยู่ในผังแล้ว" };
+    if (code === "23505") return { ok: false, message: "รหัส+ชื่อคู่นี้มีอยู่ในผังแล้ว" };
     return { ok: false, message: "เพิ่มบัญชีไม่สำเร็จ กรุณาลองใหม่" };
   }
   return { ok: true, id: (data as { id: string }).id };
@@ -224,6 +234,17 @@ export async function updateChartAccount(
   const cur = await loadRow(db, tenantId, id);
   if (!cur) return { ok: false, message: "ไม่พบบัญชี (อาจถูกลบไปแล้ว)" };
 
+  // ชื่อห้ามซ้ำ (ยกเว้นแถวตัวเอง) — กติกา 2026-09-02
+  const { data: dupName } = await db
+    .from("chart_of_accounts")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("name", v.name)
+    .neq("id", id)
+    .is("deleted_at", null)
+    .limit(1);
+  if (dupName && dupName.length > 0) return { ok: false, message: "ชื่อบัญชีนี้มีอยู่ในผังแล้ว (เลขซ้ำได้ แต่ชื่อห้ามซ้ำ)" };
+
   const isStructuralCode = PROTECTED_CODES.has(cur.code) || BANK_STRUCTURAL_CODES.has(cur.code);
   if (isStructuralCode && v.code !== cur.code) {
     return { ok: false, message: "รหัสบัญชีนี้เป็นรหัสโครงสร้างที่ระบบผูกไว้ — แก้รหัสไม่ได้ (แก้ชื่อ/หมวดได้)" };
@@ -246,7 +267,7 @@ export async function updateChartAccount(
     .is("deleted_at", null);
   if (error) {
     const code = (error as { code?: string }).code;
-    if (code === "23505") return { ok: false, message: "รหัสบัญชีนี้มีอยู่ในผังแล้ว" };
+    if (code === "23505") return { ok: false, message: "รหัส+ชื่อคู่นี้มีอยู่ในผังแล้ว" };
     return { ok: false, message: "บันทึกไม่สำเร็จ กรุณาลองใหม่" };
   }
   return { ok: true, id };
