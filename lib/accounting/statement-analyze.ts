@@ -29,6 +29,9 @@ export type StatementTxn = {
   /** ★ 2026-09-01 — เวลาโอน 'HH:MM' ตามที่พิมพ์ในสเตทเมนต์ · ไม่มี/อ่านไม่ได้ = null/undefined
    *  (optional เพื่อ backward-compat กับผล AI/ไฟล์เดิมที่ไม่มี field นี้) */
   time?: string | null;
+  /** ★ 2026-09-02 — ยอดคงเหลือ "หลังรายการนี้" จากคอลัมน์ balance ของสเตทเมนต์ (deterministic เท่านั้น
+   *  — AI/ไฟล์เดิมไม่มี = null/undefined) ใช้คำนวณยอดยกมา/ยกไปต่อเดือน */
+  balance?: number | null;
 };
 
 /** จำนวนครั้งขั้นต่ำที่ถือว่า "โอนซ้ำ" (ลูกค้าประจำ/จ่ายประจำ) */
@@ -44,6 +47,12 @@ export type MonthlySummary = {
   outCount: number;
   /** จำนวนรายการทั้งหมดของเดือน (รวมที่ระบุทิศทางไม่ได้) */
   count: number;
+  /** ★ 2026-09-02 — ยอดยกมา (ต้นงวด) / ยอดยกไป (ปลายงวด) จากคอลัมน์ balance ของสเตทเมนต์
+   *  · null = รายการเดือนนี้ไม่มี balance ติดมา (เช่นอ่านด้วย AI) — UI fallback โชว์สุทธิแบบเดิม
+   *  ยกไป = balance ของรายการ "ล่าสุด" ของเดือน (เรียง วันที่ → เวลา → ลำดับที่เจอ)
+   *  ยกมา = ยกไป − (เข้า − ออก) ของเดือน (สมการ balance chain — ไม่ต้องพึ่งรายการแรก) */
+  openBalance: number | null;
+  closeBalance: number | null;
 };
 
 /** คู่ค้าที่โอนซ้ำ (ต่อทิศทาง) */
@@ -120,11 +129,14 @@ function safeAmount(v: number | null): number {
  */
 export function summarizeByMonth(txns: StatementTxn[]): MonthlySummary[] {
   const map = new Map<string, MonthlySummary>();
+  // รายการ "ล่าสุด" ที่มี balance ต่อเดือน (คีย์เรียง: วันที่|เวลา|ลำดับที่เจอ — ลำดับที่เจอกันเคสวันเวลาซ้ำ)
+  const lastBal = new Map<string, { sortKey: string; balance: number }>();
+  let seq = 0;
   for (const t of txns) {
     const key = bkkMonthKey(t.date) ?? "";
     let row = map.get(key);
     if (!row) {
-      row = { month: key, inTotal: 0, outTotal: 0, inCount: 0, outCount: 0, count: 0 };
+      row = { month: key, inTotal: 0, outTotal: 0, inCount: 0, outCount: 0, count: 0, openBalance: null, closeBalance: null };
       map.set(key, row);
     }
     row.count += 1;
@@ -135,6 +147,20 @@ export function summarizeByMonth(txns: StatementTxn[]): MonthlySummary[] {
     } else if (t.direction === "out") {
       row.outTotal += amt;
       row.outCount += 1;
+    }
+    if (typeof t.balance === "number" && Number.isFinite(t.balance)) {
+      const sortKey = `${t.date ?? ""}|${t.time ?? "00:00"}|${String(seq).padStart(8, "0")}`;
+      const cur = lastBal.get(key);
+      if (!cur || sortKey > cur.sortKey) lastBal.set(key, { sortKey, balance: t.balance });
+    }
+    seq += 1;
+  }
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  for (const [key, row] of map) {
+    const lb = lastBal.get(key);
+    if (lb) {
+      row.closeBalance = r2(lb.balance);
+      row.openBalance = r2(lb.balance - (row.inTotal - row.outTotal));
     }
   }
   // เรียงเดือนใหม่→เก่า · กลุ่ม "ไม่ระบุเดือน" ('') ไว้ท้ายสุด

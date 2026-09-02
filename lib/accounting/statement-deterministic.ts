@@ -403,6 +403,7 @@ export function parseStatementDeterministic(text: string): DeterministicParseRes
       direction: dir,
       amount,
       time: timeM ? `${timeM[1].padStart(2, "0")}:${timeM[2]}` : null,
+      balance: bal, // ยอดคงเหลือหลังรายการนี้ (คอลัมน์ balance) — ใช้ทำยอดยกมา/ยกไปต่อเดือน
     });
   }
 

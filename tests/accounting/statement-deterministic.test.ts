@@ -108,3 +108,16 @@ describe("parseStatementDeterministic — ชื่อผู้โอน + เ�
     expect(det.transactions[0].time).toBe("08:00");
   });
 });
+
+describe("parseStatementDeterministic — balance ต่อรายการ (ยอดยกมา/ยกไป 2026-09-02)", () => {
+  it("ทุกรายการติดยอดคงเหลือหลังรายการ (จากคอลัมน์ balance)", () => {
+    const text =
+      HEAD +
+      "ยอดยกมา (Balance Forward)\t \t285,353.06\n" +
+      "01/06/2026 10:00\tX1\tENET\t3,880.00\t289,233.06\tรับโอนจาก KBANK x7135\n" +
+      "02/06/2026 11:00\tX1\tENET\t1,000.00\t288,233.06\tโอนเงินไป SCB x2333\n";
+    const det = parseStatementDeterministic(text);
+    expect(det.transactions[0].balance).toBeCloseTo(289233.06, 2);
+    expect(det.transactions[1].balance).toBeCloseTo(288233.06, 2);
+  });
+});

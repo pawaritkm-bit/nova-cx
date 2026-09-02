@@ -141,6 +141,7 @@ function sanitizeTxn(raw: unknown): StatementTxn | null {
     direction,
     amount,
     time: /^([01]?\d|2[0-3]):[0-5]\d$/.test(timeRaw) ? timeRaw : null,
+    balance: typeof r.balance === "number" && isFinite(r.balance) ? r.balance : null,
   };
 }
 

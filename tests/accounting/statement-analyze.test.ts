@@ -280,3 +280,21 @@ describe("normalizeStatementExtraction (ผลดิบจากโมเดล)
     ])).toBe(false);
   });
 });
+
+// ★ 2026-09-02 — ยอดยกมา/ยกไปต่อเดือนจาก balance (สมการ ยกมา = ยกไป − (เข้า−ออก))
+describe("summarizeByMonth — openBalance/closeBalance", () => {
+  it("ยกไป = balance รายการล่าสุดของเดือน · ยกมา = ยกไป − สุทธิ · ไม่มี balance = null", () => {
+    const txns = [
+      { date: "2026-05-04", description: null, counterparty_name: null, counterparty_account_no: null, direction: "in" as const, amount: 5000, time: "12:51", balance: 305000 },
+      { date: "2026-05-14", description: null, counterparty_name: null, counterparty_account_no: null, direction: "out" as const, amount: 2000, time: "09:00", balance: 303000 },
+      { date: "2026-06-01", description: null, counterparty_name: null, counterparty_account_no: null, direction: "in" as const, amount: 1000, time: null, balance: null },
+    ];
+    const m = summarizeByMonth(txns);
+    const may = m.find((x) => x.month === "2026-05")!;
+    expect(may.closeBalance).toBeCloseTo(303000, 2);
+    expect(may.openBalance).toBeCloseTo(303000 - (5000 - 2000), 2); // 300,000 = ยอดต้นงวด
+    const jun = m.find((x) => x.month === "2026-06")!;
+    expect(jun.closeBalance).toBeNull();
+    expect(jun.openBalance).toBeNull();
+  });
+});

@@ -803,10 +803,26 @@ export default function StatementAnalyzer({
                     <span>เงินออก ({m.outCount})</span>
                     <b>{money(m.outTotal)}</b>
                   </div>
-                  <div className="stmt-month-net">
-                    <span>คงเหลือสุทธิ</span>
-                    <b>{money(m.inTotal - m.outTotal)}</b>
-                  </div>
+                  {m.closeBalance != null && m.openBalance != null ? (
+                    <>
+                      {/* ★ 2026-09-02 ยอดยกมา/ยกไป = ยอดคงเหลือ ณ ต้น/สิ้นงวด จากคอลัมน์ balance
+                          ของสเตทเมนต์จริง (ไม่ใช่แค่ เข้า−ออก) — ไฟล์ที่อ่านด้วย AI ไม่มี balance
+                          จะ fallback โชว์สุทธิแบบเดิม */}
+                      <div className="stmt-month-net">
+                        <span>ยอดยกมา (ต้นงวด)</span>
+                        <b>{money(m.openBalance)}</b>
+                      </div>
+                      <div className="stmt-month-net">
+                        <span>ยอดยกไป (สิ้นงวด)</span>
+                        <b>{money(m.closeBalance)}</b>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="stmt-month-net">
+                      <span>คงเหลือสุทธิ</span>
+                      <b>{money(m.inTotal - m.outTotal)}</b>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -856,6 +872,19 @@ export default function StatementAnalyzer({
                 <span style={{ color: "#1d4ed8" }}>
                   คงเหลือสุทธิ <b>{money(grandTotal.net)}</b>
                 </span>
+                {(() => {
+                  // monthly เรียงใหม่→เก่า: ยกมา = เดือนเก่าสุดที่มี balance · ยกไป = เดือนใหม่สุด
+                  const withBal = monthly.filter((m) => m.openBalance != null && m.closeBalance != null);
+                  if (withBal.length === 0) return null;
+                  const oldest = withBal[withBal.length - 1];
+                  const newest = withBal[0];
+                  return (
+                    <>
+                      <span className="muted">ยกมาต้นงวด {money(oldest.openBalance as number)}</span>
+                      <span className="muted">ยกไปสิ้นงวด {money(newest.closeBalance as number)}</span>
+                    </>
+                  );
+                })()}
               </div>
             </div>
           </section>
