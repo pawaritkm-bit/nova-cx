@@ -102,12 +102,18 @@ export function buildJournalEntries(entries: BillEntry[], chartByCode: ChartByCo
   let totalCredit = 0;
 
   for (const e of entries) {
+    // ★ 2026-09-02 ผู้ใช้ ("ทำไมคำอธิบายไม่ขึ้น"): บิลไม่มีชื่อคู่ค้า (เช่น รายการสเตทเมนต์
+    //   ที่เป็นโค้ดธนาคาร ไม่มีชื่อผู้โอน) → ใช้คำอธิบายบรรทัดแรกที่มีข้อความแทน
+    //   (เช่น "TX SYSG จากระบบเงินฝาก · โอน 00:00 น.") — แยกประเภท/สมุดรายวันจะได้ไม่ว่าง
+    const counterparty =
+      (e.counterpartyName ?? "").trim() ||
+      (e.lines.find((l) => (l.description ?? "").trim())?.description?.trim() ?? null);
     const base = {
       entryId: e.id,
       docNo: e.docNo,
       date: e.docDate,
       customerId: e.customerId,
-      counterparty: e.counterpartyName ?? null,
+      counterparty,
     };
     const skip = (reason: string) =>
       skipped.push({ ...base, entryType: e.entryType, reason });

@@ -153,6 +153,30 @@ describe("journal — ซื้อ โอน บิลผสม VAT + noVAT ไ�
   });
 });
 
+describe("journal — คำอธิบาย (counterparty) fallback จากคำอธิบายบรรทัด (ผู้ใช้เจอ 2026-09-02)", () => {
+  it("บิลไม่มีชื่อคู่ค้า → ใช้ description ของบรรทัดแรกที่มีข้อความ", () => {
+    const r = buildJournalEntries([
+      mkEntry({
+        id: "d1", entryType: "sale", paymentMethod: "transfer", paymentBankAccountCode: "1020",
+        counterpartyName: null,
+        lines: [mkLine({ accountCode: "4010", amount: 500, description: "TX SYSG จากระบบเงินฝาก · โอน 00:00 น." })],
+      }),
+    ]);
+    expect(r.lines.length).toBeGreaterThan(0);
+    expect(r.lines[0].counterparty).toBe("TX SYSG จากระบบเงินฝาก · โอน 00:00 น.");
+  });
+
+  it("มีชื่อคู่ค้า → ใช้ชื่อคู่ค้าตามเดิม (ไม่โดน fallback ทับ)", () => {
+    const r = buildJournalEntries([
+      mkEntry({
+        id: "d2", entryType: "sale", paymentMethod: "cash", counterpartyName: "บจก. ซีต้า แอร์ 211",
+        lines: [mkLine({ accountCode: "4010", amount: 500, description: "โอนเงิน" })],
+      }),
+    ]);
+    expect(r.lines[0].counterparty).toBe("บจก. ซีต้า แอร์ 211");
+  });
+});
+
 describe("journal — บิลที่ตกหล่น (skipped) พร้อมเหตุผล", () => {
   it("unspecified → ตกหล่น", () => {
     const r = buildJournalEntries([mkEntry({ id: "u", entryType: "unspecified", paymentMethod: "cash" })]);
