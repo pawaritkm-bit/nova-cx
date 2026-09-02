@@ -18,6 +18,7 @@ import { UPLOAD_ACCEPT, MAX_UPLOAD_BYTES, validateUpload } from "@/lib/accountin
 import {
   summarizeByMonth,
   findRepeatCounterparties,
+  bkkMonthKey,
   type StatementTxn,
   type TxnDirection,
 } from "@/lib/accounting/statement-analyze";
@@ -429,9 +430,38 @@ export default function StatementAnalyzer({
 
   // สรุปรายเดือน + คนโอนซ้ำ คำนวณใหม่ทุกครั้งที่ตารางเปลี่ยน (helper เดียวกับ server) — รวมทุกไฟล์แล้ว
   const monthly = useMemo(() => summarizeByMonth(txns), [txns]);
-  const repeats = useMemo(() => findRepeatCounterparties(txns), [txns]);
-  const repeatIn = repeats.filter((r) => r.direction === "in");
-  const repeatOut = repeats.filter((r) => r.direction === "out");
+  // ★ คนโอนซ้ำ "แยกรายเดือน" + สรุปท้าย (แบบที่ผู้ใช้อนุมัติ 2026-09-02):
+  //   ซ้ำ = ≥2 ครั้งภายในเดือนเดียวกัน · ท้ายการ์ดเดือน = สรุปทุกรายการของเดือน ·
+  //   ท้ายสุด = รวมทุกเดือน (เข้ากี่ครั้ง/ออกกี่ครั้ง/ยอด/สุทธิ)
+  const monthlyRepeats = useMemo(() => {
+    const byMonth = new Map<string, StatementTxn[]>();
+    for (const t of txns) {
+      const k = bkkMonthKey(t.date) ?? "";
+      const arr = byMonth.get(k) ?? [];
+      arr.push(t);
+      byMonth.set(k, arr);
+    }
+    return [...monthly]
+      .sort((a, b) => (b.month || "").localeCompare(a.month || "")) // ใหม่ → เก่า
+      .map((m) => {
+        const rep = findRepeatCounterparties(byMonth.get(m.month || "") ?? []);
+        return {
+          ...m,
+          repeatIn: rep.filter((r) => r.direction === "in"),
+          repeatOut: rep.filter((r) => r.direction === "out"),
+        };
+      });
+  }, [txns, monthly]);
+  const grandTotal = useMemo(() => {
+    let inCount = 0, inTotal = 0, outCount = 0, outTotal = 0;
+    for (const m of monthly) {
+      inCount += m.inCount;
+      inTotal += m.inTotal;
+      outCount += m.outCount;
+      outTotal += m.outTotal;
+    }
+    return { inCount, inTotal, outCount, outTotal, net: inTotal - outTotal };
+  }, [monthly]);
 
   function updateTxn(idx: number, patch: Partial<StatementTxn>) {
     setTxns((prev) => prev.map((t, i) => (i === idx ? { ...t, ...patch } : t)));
@@ -748,16 +778,53 @@ export default function StatementAnalyzer({
             </div>
           </section>
 
-          {/* ตารางคนโอนซ้ำ (รวมทุกไฟล์ — จับคู่ข้ามไฟล์ได้ด้วย เช่นลูกค้าประจำที่โอนเข้ามาในหลายเดือน/หลายไฟล์) */}
-          {repeatIn.length > 0 || repeatOut.length > 0 ? (
-            <section className="stmt-section">
-              <h3 className="stmt-h">คนที่โอนซ้ำ (ตั้งแต่ 2 ครั้งขึ้นไป){fileResults.length > 1 ? " (รวมทุกไฟล์)" : ""}</h3>
-              <div className="stmt-repeat-grid">
-                <RepeatTable title="โอนเข้าซ้ำ (ลูกค้าประจำ?)" rows={repeatIn} tone="in" />
-                <RepeatTable title="โอนออกซ้ำ (จ่ายประจำ?)" rows={repeatOut} tone="out" />
+          {/* ★ คนโอนซ้ำ แยกรายเดือน + สรุปท้ายเดือน/รวมทุกเดือน (แบบผู้ใช้อนุมัติ 2026-09-02) */}
+          <section className="stmt-section">
+            <h3 className="stmt-h">คนที่โอนซ้ำ (ตั้งแต่ 2 ครั้งขึ้นไป) — แยกรายเดือน</h3>
+            {monthlyRepeats.map((m) => (
+              <div
+                key={m.month || "none"}
+                style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: "10px 14px", marginBottom: 10 }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>📅 {monthLabel(m.month)}</div>
+                <div className="stmt-repeat-grid">
+                  <RepeatTable title="โอนเข้าซ้ำ (ลูกค้าประจำ?)" rows={m.repeatIn} tone="in" />
+                  <RepeatTable title="โอนออกซ้ำ (จ่ายประจำ?)" rows={m.repeatOut} tone="out" />
+                </div>
+                <div
+                  style={{
+                    borderTop: "1px solid #e2e8f0",
+                    marginTop: 8,
+                    paddingTop: 6,
+                    fontSize: 13,
+                    display: "flex",
+                    gap: 16,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span className="muted">สรุปเดือนนี้ (ทุกรายการ):</span>
+                  <b style={{ color: "#166534" }}>เข้า {m.inCount.toLocaleString("th-TH")} ครั้ง · {money(m.inTotal)}</b>
+                  <b style={{ color: "#b91c1c" }}>ออก {m.outCount.toLocaleString("th-TH")} ครั้ง · {money(m.outTotal)}</b>
+                  <span>สุทธิ {money(m.inTotal - m.outTotal)}</span>
+                </div>
               </div>
-            </section>
-          ) : null}
+            ))}
+            {/* สรุปรวมทุกเดือน (ตรงท้าย) */}
+            <div style={{ background: "#eff6ff", borderRadius: 12, padding: "10px 14px" }}>
+              <div style={{ fontWeight: 700, color: "#1d4ed8", marginBottom: 4 }}>Σ สรุปรวมทุกเดือน</div>
+              <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 14 }}>
+                <span style={{ color: "#166534" }}>
+                  เงินเข้า <b>{grandTotal.inCount.toLocaleString("th-TH")} ครั้ง · {money(grandTotal.inTotal)}</b>
+                </span>
+                <span style={{ color: "#b91c1c" }}>
+                  เงินออก <b>{grandTotal.outCount.toLocaleString("th-TH")} ครั้ง · {money(grandTotal.outTotal)}</b>
+                </span>
+                <span style={{ color: "#1d4ed8" }}>
+                  คงเหลือสุทธิ <b>{money(grandTotal.net)}</b>
+                </span>
+              </div>
+            </div>
+          </section>
 
           {/* ตารางธุรกรรม — แยกกอง "เงินเข้า" / "เงินออก" (requirement 2026-09-01) + คอลัมน์กระทบกับบิล */}
           <section className="stmt-section">
