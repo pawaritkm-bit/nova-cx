@@ -114,7 +114,9 @@ export async function createStatementUploadUrlAction(input: {
 import {
   saleDraftsFromStatementTxns,
   createSaleBillDrafts,
+  createConfirmedBillsFromRecon,
   type CreateSaleBillsResult,
+  type ReconPostRow,
 } from "@/lib/accounting/statement-to-bills";
 import type { StatementTxn } from "@/lib/accounting/statement-analyze";
 
@@ -302,6 +304,61 @@ export async function loadSavedStatementAction(input: {
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "โหลดผลที่เซฟไว้ไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/** ★ 2026-09-02 — "ลงบัญชี" แถวกระทบยอดที่กรอกบัญชีครบ: สร้างบิลยืนยัน → สมุดรายวัน 5 เล่ม →
+ *  แยกประเภท → งบ (engine เดิม) · idempotent (คีย์ ⚙sib กันซ้ำ — กดซ้ำ/ปิดเปิดใหม่ไม่เบิ้ล) */
+export async function postStatementAccountRowsAction(input: {
+  customerId: string;
+  rows: unknown[];
+}): Promise<{ ok: true; message: string; created: number } | { ok: false; message: string }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(input.customerId)) return { ok: false, message: "กรุณาเลือกลูกค้า" };
+    if (!customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" };
+    }
+    if (!Array.isArray(input.rows) || input.rows.length === 0) return { ok: false, message: "ไม่มีรายการให้ลงบัญชี" };
+
+    const rows: ReconPostRow[] = [];
+    for (const raw of input.rows.slice(0, MAX_TXNS_INPUT)) {
+      if (!raw || typeof raw !== "object") continue;
+      const r = raw as Record<string, unknown>;
+      const t = sanitizeTxn(r);
+      const accountCode = (typeof r.accountCode === "string" ? r.accountCode : "").trim().slice(0, 12);
+      const accountName = typeof r.accountName === "string" ? r.accountName.slice(0, 120) : null;
+      if (!t || !t.date || t.amount == null || !(t.amount > 0) || !accountCode) continue;
+      if (t.direction !== "in" && t.direction !== "out") continue;
+      rows.push({
+        date: t.date,
+        amount: t.amount,
+        direction: t.direction,
+        counterpartyName: t.counterparty_name,
+        accountNo: t.counterparty_account_no,
+        description: t.description,
+        time: t.time ?? null,
+        accountCode,
+        accountName,
+      });
+    }
+    if (rows.length === 0) return { ok: false, message: "ไม่มีรายการที่ครบ (ต้องมีวันที่ ยอด ทิศทาง และบัญชี)" };
+
+    const r = await createConfirmedBillsFromRecon(service, {
+      tenantId: ctx.tenantId,
+      customerId: input.customerId,
+      rows,
+      sourceLabel: "หน้ากระทบยอดบิลกับสเตทเมนต์",
+    });
+    const parts = [`ลงบัญชีแล้ว ${r.created.toLocaleString("th-TH")} รายการ`];
+    if (r.skippedDup > 0) parts.push(`ข้ามที่เคยลงแล้ว ${r.skippedDup.toLocaleString("th-TH")}`);
+    if (r.failed > 0) parts.push(`พลาด ${r.failed.toLocaleString("th-TH")}`);
+    return { ok: true, message: parts.join(" · ") + " — เข้าสมุดรายวัน → แยกประเภท → งบ แล้ว", created: r.created };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ลงบัญชีไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
 

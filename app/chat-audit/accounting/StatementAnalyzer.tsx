@@ -6,6 +6,7 @@ import {
   createStatementUploadUrlAction,
   matchStatementWithBillsAction,
   learnStatementAccountAction,
+  postStatementAccountRowsAction,
   type AccountSuggestion,
   listSavedStatementsAction,
   loadSavedStatementAction,
@@ -354,6 +355,9 @@ export default function StatementAnalyzer({
       window.removeEventListener("focus", onWake);
     };
   }, []);
+
+  // กำลังลงบัญชีแถวที่กรอกบัญชีครบ (ปุ่มหัวรายการ)
+  const [posting, setPosting] = useState(false);
 
   // แถวที่กำลังอัปรูปบิลเพิ่ม (-1 = ไม่มี) — ปุ่มบนการ์ด "ไม่พบบิล"
   const [uploadingRow, setUploadingRow] = useState<number>(-1);
@@ -957,6 +961,49 @@ export default function StatementAnalyzer({
               <button type="button" className="btn btn-ghost" disabled={matching} onClick={() => void runBillMatch(txns)}>
                 {matching ? "กำลังกระทบกับบิล…" : "🔄 กระทบกับบิลอีกครั้ง"}
               </button>
+              {(() => {
+                // แถวพร้อมลงบัญชี: กรอกบัญชีแล้ว + ยังไม่มีบิล (ลงแล้วกลายเป็นบิลยืนยัน → จับคู่เขียวเอง)
+                const postable = txns
+                  .map((t, i) => ({ t, i, k: txnKey(t) }))
+                  .filter(
+                    (x) =>
+                      accountPick.has(x.k) &&
+                      !(matches && matches[x.i]) &&
+                      !manualPick.has(x.k) &&
+                      (x.t.direction === "in" || x.t.direction === "out")
+                  );
+                if (postable.length === 0) return null;
+                return (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={posting}
+                    title="สร้างบิลยืนยันพร้อมบัญชีที่เลือก → เข้าสมุดรายวัน 5 เล่ม → แยกประเภท → งบ ทันที (กดซ้ำไม่เบิ้ล)"
+                    onClick={() => {
+                      setPosting(true);
+                      setBillsMsg(null);
+                      const rows = postable.map(({ t, k }) => {
+                        const [code, ...nm] = (accountPick.get(k) ?? "").split("|");
+                        return { ...t, accountCode: code, accountName: nm.join("|") || null };
+                      });
+                      postStatementAccountRowsAction({ customerId, rows })
+                        .then((r) => {
+                          setBillsMsg({ ok: r.ok, text: r.message });
+                          if (r.ok) {
+                            wantMatchRef.current = true;
+                            setTxns((prev) => [...prev]); // กระทบใหม่ — แถวที่ลงแล้วจับคู่บิลยืนยันเป็นเขียว
+                          }
+                        })
+                        .catch(() => setBillsMsg({ ok: false, text: "ลงบัญชีไม่สำเร็จ กรุณาลองใหม่" }))
+                        .finally(() => setPosting(false));
+                    }}
+                  >
+                    {posting
+                      ? "กำลังลงบัญชี…"
+                      : `🧾 ลงบัญชี ${postable.length.toLocaleString("th-TH")} รายการ (เข้าสมุดรายวัน→แยกประเภท→งบ)`}
+                  </button>
+                );
+              })()}
               {matches ? (
                 <span className="muted" style={{ fontSize: 12 }}>
                   เคลียร์แล้ว (มีบิล/ลงบัญชีคู่){" "}
@@ -1175,12 +1222,10 @@ function BillSideCard({
         <TransferWhen t={t} />
         <BillAttachment bill={bills.find((b) => b.id === billId)} />
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+          {/* ★ 2026-09-02 ผู้ใช้: จับคู่แล้วคือจบ — เหลือปุ่ม "แก้ไข" ไว้แก้เฉพาะบิลที่ผิด */}
           <a className="btn btn-ghost" href={`/chat-audit/accounting?edit=${billId}${accountant ? `&accountant=${encodeURIComponent(accountant)}` : ""}`} target="_blank" rel="noopener">
-            เปิดบิล ↗
+            แก้ไข ↗
           </a>
-          <button type="button" className={isReviewed ? "btn" : "btn btn-ghost"} onClick={() => onToggleReviewed(rowKey)}>
-            {isReviewed ? "✓ ตรวจแล้ว" : "ติ๊กว่าตรวจแล้ว"}
-          </button>
         </div>
       </div>
     );
@@ -1269,9 +1314,6 @@ function BillSideCard({
           placeholder="ค้นบิลด้วยชื่อ/เลขที่/ยอด…"
           style={{ maxWidth: 180 }}
         />
-        <button type="button" className={isReviewed ? "btn" : "btn btn-ghost"} onClick={() => onToggleReviewed(rowKey)}>
-          {isReviewed ? "✓ ตรวจแล้ว" : "ไม่ต้องมีบิล"}
-        </button>
       </div>
       {hits.length > 0 ? (
         <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0, fontSize: 13 }}>

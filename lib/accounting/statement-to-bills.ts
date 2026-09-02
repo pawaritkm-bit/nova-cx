@@ -232,3 +232,138 @@ export async function createSaleBillDrafts(
 
   return { created, skippedDup, incomeAccountCode: incomeAcc?.code ?? null };
 }
+
+// ---------------------------------------------------------------------
+// ★ 2026-09-02 — "ลงบัญชี" จากหน้ากระทบยอดบิลกับสเตทเมนต์:
+//   แถวที่ไม่มีบิลแต่นักบัญชีกรอกบัญชีคู่แล้ว → สร้างเป็น "บิลยืนยัน" พร้อมรหัสบัญชีทันที
+//   → ไหลเข้าสมุดรายวัน 5 เล่ม → แยกประเภท → งบ ด้วย engine เดิม (journal.ts)
+//   เข้า = บิลขาย (Dr 1020 / Cr บัญชีที่เลือก) · ออก = บิลซื้อ (Dr บัญชีที่เลือก / Cr 1020)
+//   idempotent ด้วย DEDUP_MARK เดียวกับ sale drafts (กันซ้ำข้ามฟีเจอร์)
+// ---------------------------------------------------------------------
+
+export type ReconPostRow = {
+  /** YYYY-MM-DD */
+  date: string;
+  amount: number;
+  direction: "in" | "out";
+  counterpartyName: string | null;
+  accountNo: string | null;
+  description: string | null;
+  time: string | null;
+  /** บัญชีที่นักบัญชีเลือก (รายได้/ค่าใช้จ่าย) — บรรทัดบิล · บัญชีคู่ 1020 journal จัดให้เอง */
+  accountCode: string;
+  accountName: string | null;
+};
+
+export type PostReconResult = { created: number; skippedDup: number; failed: number };
+
+/** สร้างบิล "ยืนยันแล้ว" จากแถวกระทบยอดที่กรอกบัญชีครบ — idempotent */
+export async function createConfirmedBillsFromRecon(
+  db: DB,
+  args: { tenantId: string; customerId: string; rows: ReconPostRow[]; sourceLabel: string }
+): Promise<PostReconResult> {
+  const rows = args.rows.slice(0, MAX_BILLS_PER_RUN);
+  if (rows.length === 0) return { created: 0, skippedDup: 0, failed: 0 };
+
+  // วิธีรับ/จ่ายเงิน: โอนเสมอ (มาจากสเตทเมนต์ธนาคาร) — บัญชีเงินฝากผูกเมื่อมีบัญชีเดียวพอดี
+  let paymentBankAccountId: string | null = null;
+  try {
+    const { data: banks } = await db
+      .from("customer_bank_accounts")
+      .select("id")
+      .eq("tenant_id", args.tenantId)
+      .eq("customer_id", args.customerId)
+      .is("deleted_at", null)
+      .limit(2);
+    if ((banks ?? []).length === 1) paymentBankAccountId = (banks![0] as { id: string }).id;
+  } catch {
+    // best-effort
+  }
+
+  // คีย์ที่เคยสร้างแล้ว (รวมร่างจากฟีเจอร์เก่า) — กันซ้ำ
+  const seen = new Set<string>();
+  try {
+    const { data } = await db
+      .from("bill_entries")
+      .select("notes")
+      .eq("tenant_id", args.tenantId)
+      .eq("customer_id", args.customerId)
+      .like("notes", `%${DEDUP_MARK}%`)
+      .limit(5000);
+    for (const r of (data ?? []) as { notes: string | null }[]) {
+      const m = r.notes?.match(/⚙sib\|(.+)$/m);
+      if (m) seen.add(m[1].trim());
+    }
+  } catch {
+    // อ่านคีย์เดิมไม่ได้ → สร้างต่อ (นักบัญชีเห็น/ลบใบซ้ำได้)
+  }
+
+  const now = new Date().toISOString();
+  let created = 0;
+  let skippedDup = 0;
+  let failed = 0;
+
+  for (const r of rows) {
+    const day = isoDay(r.date);
+    const amount = round2(r.amount);
+    if (!day || !(amount > 0) || !r.accountCode.trim()) {
+      failed++;
+      continue;
+    }
+    const ref = refOf(r.accountNo, r.counterpartyName, r.description);
+    const dedupKey = `${day}|${amount.toFixed(2)}|${ref}`;
+    if (seen.has(dedupKey)) {
+      skippedDup++;
+      continue;
+    }
+    seen.add(dedupKey);
+
+    const isIn = r.direction === "in";
+    const timeNote = r.time ? ` · โอน ${r.time} น.` : "";
+    const { data: ins, error } = await db
+      .from("bill_entries")
+      .insert({
+        tenant_id: args.tenantId,
+        customer_id: args.customerId,
+        entry_type: isIn ? "sale" : "purchase",
+        status: "confirmed", // ★ ยืนยันทันที → เข้าสมุดรายวัน/แยกประเภท/งบเลย (นักบัญชีเลือกบัญชีเองแล้ว)
+        confirmed_at: now,
+        source: "manual",
+        doc_date: day,
+        counterparty_name: r.counterpartyName,
+        payment_method: "transfer",
+        payment_bank_account_id: paymentBankAccountId,
+        notes: `ลงบัญชีจาก${args.sourceLabel}${timeNote}\n${DEDUP_MARK}${dedupKey}`,
+      })
+      .select("id")
+      .single();
+    if (error || !ins) {
+      failed++;
+      continue;
+    }
+
+    const { error: lineErr } = await db.from("bill_entry_lines").insert({
+      tenant_id: args.tenantId,
+      entry_id: (ins as { id: string }).id,
+      line_no: 1,
+      vat_type: "novat",
+      description: (r.description?.trim() || (isIn ? "เงินเข้าจากสเตทเมนต์" : "เงินออกจากสเตทเมนต์")).slice(0, 180) + timeNote,
+      account_code: r.accountCode,
+      account_name: r.accountName,
+      amount,
+      vat_amount: 0,
+      wht_rate: 0,
+      wht_amount: 0,
+      ai_filled: false,
+    });
+    if (lineErr) {
+      // บรรทัดพลาด = บิลยืนยันเปล่าจะทำงบเพี้ยน → ถอนหัวบิลทิ้ง (best-effort)
+      await db.from("bill_entries").delete().eq("id", (ins as { id: string }).id).eq("tenant_id", args.tenantId);
+      failed++;
+      continue;
+    }
+    created++;
+  }
+
+  return { created, skippedDup, failed };
+}
