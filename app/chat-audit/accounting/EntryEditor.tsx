@@ -919,7 +919,25 @@ export default function EntryEditor({
                     (บิลบรรทัดเดียวแก้ตรงนี้ = แก้บรรทัดให้เลย · หลายบรรทัดชี้ไปแก้ที่ตาราง) */}
               {(
                 <div className="acc-field acc-field-wide">
-                  <span>การลงบัญชี (บัญชีคู่)</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    การลงบัญชี (บัญชีคู่)
+                    {/* ★ 2026-09-02 ผู้ใช้: ปุ่มสลับซื้อ↔ขาย ในหน้านี้ด้วย (สลับ Dr/Cr ทั้งใบ + คู่ค้าตามฝั่งใหม่) */}
+                    {!locked && (entryType === "sale" || entryType === "purchase") ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        title="สลับซื้อ↔ขาย (สลับฝั่งเดบิต/เครดิตทั้งใบ)"
+                        onClick={() => {
+                          const nt = entryType === "sale" ? "purchase" : "sale";
+                          setEntryType(nt);
+                          const cp = nt === "sale" ? entry.buyerName : entry.sellerName;
+                          if (cp && cp.trim()) setPartyName(cp.trim());
+                        }}
+                      >
+                        ⇄ {entryType === "sale" ? "สลับเป็นซื้อ" : "สลับเป็นขาย"}
+                      </button>
+                    ) : null}
+                  </span>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px" }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: entryType === "sale" ? "#166534" : "#b91c1c" }}>
