@@ -572,14 +572,16 @@ export default async function AccountingReportsPage({
                 <div className="acc-review-warn-body">
                   <div className="acc-review-warn-title">ตรวจก่อนใช้งบ</div>
                   <ul className="acc-review-warn-list">
+                    {/* ★ 2026-09-02 ผู้ใช้: ปุ่มลิงก์ไปหน้าบิลที่ยังไม่ปิด — จัดเป็นแถว flex กันปุ่มทับข้อความ */}
                     {statements.journal.skipped.length > 0 ? (
-                      <li>
-                        มี <strong>{statements.journal.skipped.length.toLocaleString("th-TH")}</strong> บิลที่
-                        <strong>ยังไม่เข้างบ</strong> (ตกหล่น) — ดูรายละเอียด/เหตุผลด้านล่าง
-                        {/* ★ 2026-09-02 ผู้ใช้: ปุ่มลิงก์ไปหน้าบิลที่ยังไม่ปิด */}
+                      <li style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span>
+                          มี <strong>{statements.journal.skipped.length.toLocaleString("th-TH")}</strong> บิลที่
+                          <strong>ยังไม่เข้างบ</strong> (ตกหล่น) — ดูรายละเอียด/เหตุผลด้านล่าง
+                        </span>
                         <a
-                          className="btn btn-ghost"
-                          style={{ marginLeft: 8 }}
+                          className="btn btn-sm btn-ghost"
+                          style={{ flexShrink: 0 }}
                           href={`/chat-audit/accounting?edit=${statements.journal.skipped[0].entryId}`}
                           target="_blank"
                           rel="noopener"
@@ -589,11 +591,13 @@ export default async function AccountingReportsPage({
                       </li>
                     ) : null}
                     {includeDraft && draftCount > 0 ? (
-                      <li>
-                        รวมบิล <strong>ร่าง {draftCount.toLocaleString("th-TH")}</strong> ใบในงบนี้ (ติ๊ก “เฉพาะที่ยืนยันแล้ว” เพื่อตัดออก)
+                      <li style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span>
+                          รวมบิล <strong>ร่าง {draftCount.toLocaleString("th-TH")}</strong> ใบในงบนี้ (ติ๊ก “เฉพาะที่ยืนยันแล้ว” เพื่อตัดออก)
+                        </span>
                         <a
-                          className="btn btn-ghost"
-                          style={{ marginLeft: 8 }}
+                          className="btn btn-sm btn-ghost"
+                          style={{ flexShrink: 0 }}
                           href={`/chat-audit/accounting?open=${customerId}`}
                           target="_blank"
                           rel="noopener"
