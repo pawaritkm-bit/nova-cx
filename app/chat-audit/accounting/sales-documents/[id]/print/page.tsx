@@ -79,6 +79,17 @@ export default async function SalesDocumentPrintPage({ params }: { params: Promi
 
   const businessName = (cust?.business_name || cust?.name || "").trim();
 
+  // ★ 2026-09-02 — โลโก้บริษัท (อัปโหลดที่หน้าแก้ไขข้อมูลลูกค้า) — best-effort: ไม่มี = กล่องอักษรย่อ
+  let logoUrl = "";
+  try {
+    const { data: signedLogo } = await service.storage
+      .from("bills")
+      .createSignedUrl(`${access.tenantId}/customer-logos/${doc.customerId}`, 3600);
+    logoUrl = signedLogo?.signedUrl ?? "";
+  } catch {
+    // ไม่มีโลโก้ — ใช้กล่องอักษรย่อ
+  }
+
   return (
     <SalesDocumentPrintDoc
       document={doc}
@@ -86,6 +97,7 @@ export default async function SalesDocumentPrintPage({ params }: { params: Promi
       issuerTaxId={cust?.tax_id ?? ""}
       issuerAddress={businessAddress}
       issuerPhone={businessPhone}
+      logoUrl={logoUrl}
       backHref="/chat-audit/accounting/sales-documents"
     />
   );

@@ -422,3 +422,71 @@ export async function pullCustomerFromNovaSalesAction(
     return { ok: false, message: "ดึงข้อมูลจาก NOVA Sales ไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
+
+// ---------------------------------------------------------------------
+// โลโก้บริษัทลูกค้า (★ 2026-09-02 — ขึ้นหัวเอกสารขาย ตามฟอร์มตัวอย่าง PAMEE)
+//   เก็บที่ path ตายตัว `${tenant}/customer-logos/${customerId}` (ไม่ต้อง migrate DB)
+//   ฟอร์มพิมพ์เช็ค/เซ็น URL จาก path นี้เอง — อัปใหม่ทับของเดิม · ลบ = เอาไฟล์ออก
+// ---------------------------------------------------------------------
+
+const LOGO_MAX_BYTES = 2 * 1024 * 1024; // 2MB พอสำหรับโลโก้
+
+function customerLogoPath(tenantId: string, customerId: string): string {
+  return `${tenantId}/customer-logos/${customerId}`;
+}
+
+export async function uploadCustomerLogoAction(
+  customerId: string,
+  formData: FormData
+): Promise<SaveResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    if (!(await customerBelongsToTenant(service, ctx.tenantId, customerId))) {
+      return { ok: false, message: "ไม่พบลูกค้าในสำนักงานนี้" };
+    }
+    assertCustomerInScope(ctx, customerId);
+
+    const file = formData.get("logo");
+    if (!(file instanceof File) || file.size === 0) return { ok: false, message: "กรุณาเลือกไฟล์รูปโลโก้" };
+    if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
+      return { ok: false, message: "โลโก้ต้องเป็นรูป PNG / JPG / WebP" };
+    }
+    if (file.size > LOGO_MAX_BYTES) return { ok: false, message: "ไฟล์ใหญ่เกิน 2MB" };
+
+    const buf = Buffer.from(await file.arrayBuffer());
+    const { error } = await service.storage
+      .from("bills")
+      .upload(customerLogoPath(ctx.tenantId, customerId), buf, {
+        contentType: file.type,
+        upsert: true,
+        cacheControl: "0", // เปลี่ยนโลโก้แล้วเห็นทันที (กัน CDN cache — บทเรียน 2026-09-02)
+      });
+    if (error) return { ok: false, message: "อัปโหลดโลโก้ไม่สำเร็จ กรุณาลองใหม่" };
+    return { ok: true, message: "บันทึกโลโก้แล้ว — จะขึ้นหัวเอกสารขาย (ใบวางบิล/ใบเสนอราคา/PO) ทันที" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "อัปโหลดโลโก้ไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+export async function removeCustomerLogoAction(customerId: string): Promise<SaveResult> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(customerId)) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
+    if (!(await customerBelongsToTenant(service, ctx.tenantId, customerId))) {
+      return { ok: false, message: "ไม่พบลูกค้าในสำนักงานนี้" };
+    }
+    assertCustomerInScope(ctx, customerId);
+    const { error } = await service.storage.from("bills").remove([customerLogoPath(ctx.tenantId, customerId)]);
+    if (error) return { ok: false, message: "ลบโลโก้ไม่สำเร็จ กรุณาลองใหม่" };
+    return { ok: true, message: "ลบโลโก้แล้ว — เอกสารกลับไปใช้กล่องอักษรย่อ" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ลบโลโก้ไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}

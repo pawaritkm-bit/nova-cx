@@ -297,3 +297,6 @@
 .sd-foot-inname { font-size: 12.5px; margin-bottom: 34px; }
 .sd-foot-signs { display: flex; gap: 18px; }
 .sd-foot-signs .sd-sign-box { flex: 1; }
+.sd-logo-img { width: 64px; height: 64px; object-fit: contain; border-radius: 8px; flex-shrink: 0; }
+.sd-watermark { text-align: center; margin-top: 40px; }
+.sd-watermark img { max-height: 90px; opacity: 0.5; }

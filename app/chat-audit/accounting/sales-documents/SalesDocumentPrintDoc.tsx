@@ -34,6 +34,7 @@ export default function SalesDocumentPrintDoc({
   issuerTaxId,
   issuerAddress,
   issuerPhone = "",
+  logoUrl = "",
   backHref,
 }: {
   document: SalesDocument;
@@ -42,6 +43,8 @@ export default function SalesDocumentPrintDoc({
   issuerTaxId: string;
   issuerAddress: string;
   issuerPhone?: string;
+  /** โลโก้บริษัท (signed URL) — ว่าง = กล่องอักษรย่อ */
+  logoUrl?: string;
   backHref: string;
 }) {
   const total = lineTotal(doc.lines);
@@ -77,7 +80,12 @@ export default function SalesDocumentPrintDoc({
         {/* ---- หัวเอกสาร: ซ้าย=ผู้ออก · ขวา=ชื่อเอกสาร + meta ---- */}
         <div className="sd-head">
           <div className="sd-head-left">
-            <div className="sd-logo" aria-hidden="true">{initial}</div>
+            {logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img className="sd-logo-img" src={logoUrl} alt="โลโก้บริษัท" />
+            ) : (
+              <div className="sd-logo" aria-hidden="true">{initial}</div>
+            )}
             <div className="sd-issuer">
               <div className="sd-issuer-name">{issuerName || "—"}</div>
               {issuerAddress ? <div>{issuerAddress}</div> : null}
@@ -159,6 +167,13 @@ export default function SalesDocumentPrintDoc({
           <div className="sd-notes-block">
             <div className="sd-cust-title">หมายเหตุ</div>
             <div>{doc.notes}</div>
+          </div>
+        ) : null}
+
+        {logoUrl ? (
+          <div className="sd-watermark" aria-hidden="true">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={logoUrl} alt="" />
           </div>
         ) : null}
 

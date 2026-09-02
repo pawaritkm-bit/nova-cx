@@ -6,6 +6,8 @@ import {
   reassignCustomerAction,
   updateCustomerFieldsAction,
   pullCustomerFromNovaSalesAction,
+  uploadCustomerLogoAction,
+  removeCustomerLogoAction,
 } from "./customer-admin-actions";
 
 /** นักบัญชี 1 คนสำหรับ dropdown */
@@ -295,6 +297,42 @@ export default function CustomerAdminControls({
               disabled={pending}
               style={{ width: "100%", resize: "vertical" }}
             />
+          </label>
+          {/* ★ 2026-09-02 — โลโก้บริษัท (ขึ้นหัวเอกสารขาย ตามฟอร์มตัวอย่าง PAMEE) */}
+          <label className="acc-taxid-field" style={{ margin: 0, flexBasis: "100%" }}>
+            <span className="acc-taxid-label">โลโก้บริษัท (ขึ้นหัวใบวางบิล/ใบเสนอราคา/PO)</span>
+            <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                disabled={pending}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!file) return;
+                  const fd = new FormData();
+                  fd.set("logo", file);
+                  startTransition(async () => {
+                    const r = await uploadCustomerLogoAction(customerId, fd);
+                    setEditMsg({ ok: r.ok, text: r.message });
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={pending}
+                onClick={() =>
+                  startTransition(async () => {
+                    const r = await removeCustomerLogoAction(customerId);
+                    setEditMsg({ ok: r.ok, text: r.message });
+                  })
+                }
+              >
+                ลบโลโก้
+              </button>
+              <span style={{ fontSize: 11, color: "#64748b" }}>PNG/JPG/WebP ≤ 2MB — อัปใหม่ทับของเดิมได้</span>
+            </span>
           </label>
           {/* ดึงจาก NOVA Sales: เติม ชื่อ/ที่อยู่/เบอร์ ด้วยเลขภาษี — ผู้ใช้ตรวจแล้วกดบันทึกเอง */}
           <button
