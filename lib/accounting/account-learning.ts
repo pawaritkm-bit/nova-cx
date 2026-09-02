@@ -31,6 +31,8 @@ export async function recordAccountRules(
   db: SupabaseClient,
   args: {
     tenantId: string;
+    /** ★ 0129 — กฎแยกตามลูกค้า (พฤติกรรมการคีย์ของแต่ละบริษัทไม่เหมือนกัน) · null = ไม่ผูก (ไม่แนะนำให้ใช้) */
+    customerId: string | null;
     entryType: EntryType;
     counterpartyTaxId: string | null;
     counterpartyName: string | null;
@@ -53,15 +55,16 @@ export async function recordAccountRules(
       if (seen.has(dedup)) continue;
       seen.add(dedup);
       try {
-        const { data: existing } = await db
+        let sel = db
           .from("line_account_rules")
           .select("id, hit_count")
           .eq("tenant_id", args.tenantId)
           .eq("entry_type", args.entryType)
           .eq("match_type", k.match_type)
           .eq("match_key", k.match_key)
-          .eq("account_code", code)
-          .maybeSingle();
+          .eq("account_code", code);
+        sel = args.customerId ? sel.eq("customer_id", args.customerId) : sel.is("customer_id", null);
+        const { data: existing } = await sel.maybeSingle();
         if (existing && (existing as { id?: string }).id) {
           await db
             .from("line_account_rules")
@@ -74,6 +77,7 @@ export async function recordAccountRules(
         } else {
           await db.from("line_account_rules").insert({
             tenant_id: args.tenantId,
+            customer_id: args.customerId,
             entry_type: args.entryType,
             match_type: k.match_type,
             match_key: k.match_key,
@@ -95,6 +99,8 @@ export async function recordAccountRules(
 export async function suggestAccountCode(
   db: SupabaseClient,
   tenantId: string,
+  /** ★ 0129 — กฎของลูกค้ารายนี้เท่านั้น (name/amount) · tax key fallback ระดับสำนักงานได้ (เลขภาษี=ข้อเท็จจริง) */
+  customerId: string | null,
   entryType: EntryType,
   counterpartyTaxId: string | null,
   counterpartyName: string | null,
@@ -102,17 +108,36 @@ export async function suggestAccountCode(
 ): Promise<{ accountCode: string; accountName: string | null } | null> {
   for (const k of keysOf(counterpartyTaxId, counterpartyName, amount)) {
     try {
-      const { data } = await db
-        .from("line_account_rules")
-        .select("account_code, account_name, hit_count")
-        .eq("tenant_id", tenantId)
-        .eq("entry_type", entryType)
-        .eq("match_type", k.match_type)
-        .eq("match_key", k.match_key)
-        .order("hit_count", { ascending: false })
-        .limit(1);
-      const row = (data ?? [])[0] as { account_code: string; account_name: string | null } | undefined;
-      if (row?.account_code) return { accountCode: row.account_code, accountName: row.account_name ?? null };
+      // 1) กฎของลูกค้ารายนี้ก่อนเสมอ
+      if (customerId) {
+        const { data } = await db
+          .from("line_account_rules")
+          .select("account_code, account_name, hit_count")
+          .eq("tenant_id", tenantId)
+          .eq("customer_id", customerId)
+          .eq("entry_type", entryType)
+          .eq("match_type", k.match_type)
+          .eq("match_key", k.match_key)
+          .order("hit_count", { ascending: false })
+          .limit(1);
+        const row = (data ?? [])[0] as { account_code: string; account_name: string | null } | undefined;
+        if (row?.account_code) return { accountCode: row.account_code, accountName: row.account_name ?? null };
+      }
+      // 2) fallback ระดับสำนักงาน: เฉพาะคีย์เลขภาษี (คู่ค้าคนเดียวกันจริง ๆ) —
+      //    name/amount ห้ามข้ามลูกค้า (แต่ละบริษัทลงบัญชีไม่เหมือนกัน — กติกา 2026-09-02)
+      if (k.match_type === "tax") {
+        const { data } = await db
+          .from("line_account_rules")
+          .select("account_code, account_name, hit_count")
+          .eq("tenant_id", tenantId)
+          .eq("entry_type", entryType)
+          .eq("match_type", "tax")
+          .eq("match_key", k.match_key)
+          .order("hit_count", { ascending: false })
+          .limit(1);
+        const row = (data ?? [])[0] as { account_code: string; account_name: string | null } | undefined;
+        if (row?.account_code) return { accountCode: row.account_code, accountName: row.account_name ?? null };
+      }
     } catch {
       /* ตารางยังไม่ apply → ลอง key ถัดไป/คืน null */
     }

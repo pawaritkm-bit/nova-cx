@@ -178,3 +178,23 @@
 .type-guess{background:#fffbeb;color:#b45309;border:1px solid #fde68a;border-radius:6px;font-size:11px;font-weight:700;padding:1px 7px;white-space:nowrap}
 .anom-err{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:6px;font-size:11px;font-weight:700;padding:1px 7px;white-space:nowrap;cursor:help}
 .anom-warn{background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;border-radius:6px;font-size:11px;font-weight:700;padding:1px 7px;white-space:nowrap;cursor:help}
+
+/* ★ 2026-09-02 — แผงแก้ไขด่วนบนการ์ดบิล (คู่ค้า / สลับ Dr-Cr / บัญชี) */
+.wsp-quickfix {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #e2e8f0;
+}
+.wsp-quickfix > input {
+  flex: 1 1 160px;
+  min-width: 140px;
+  padding: 4px 8px;
+  border: 1px solid var(--line, #dbe3ee);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.wsp-quickfix-acct { flex: 1 1 200px; min-width: 180px; font-size: 12.5px; }

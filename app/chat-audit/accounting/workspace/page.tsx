@@ -11,6 +11,8 @@ import { groupEntriesByCustomer, UNASSIGNED_CUSTOMER } from "@/lib/accounting/gr
 import { monthKeyOf } from "@/lib/accounting/monthly";
 import { formatMoney } from "@/lib/accounting/calc";
 import ChatAuditFrame from "../../_Frame";
+import QuickFixBill from "./QuickFixBill";
+import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import DeleteBillButton from "./DeleteBillButton";
 import RenameCustomerButton from "./RenameCustomerButton";
 import UploadFileButton from "../UploadFileButton";
@@ -381,10 +383,11 @@ export default async function AccountingWorkspacePage({
     ? openGroup.entries.filter(matchView).sort((a, b) => (isPending(b) ? 1 : 0) - (isPending(a) ? 1 : 0))
     : [];
 
-  // ★ perf: ยิง 2 query ที่ไม่ขึ้นต่อกัน พร้อมกัน (รหัสลูกค้า + sign รูปเฉพาะลูกค้าที่เปิด)
-  const [codeMap, signed] = await Promise.all([
+  // ★ perf: ยิง query ที่ไม่ขึ้นต่อกัน พร้อมกัน (รหัสลูกค้า + sign รูป + ผังบัญชีสำหรับแผงแก้ด่วน)
+  const [codeMap, signed, chart] = await Promise.all([
     fetchCodes(service, tenantId, [...new Set(groups.map((g) => g.customerId).filter((x): x is string => !!x))]),
     signPaths(service, reviewList.map(entryPath).filter((p): p is string => !!p)),
+    listChartOfAccounts(service, tenantId),
   ]);
 
   // ---- จัดการลูกค้า + ประเภทลูกค้า + วงแชร์ (เฉพาะลูกค้าที่กางอยู่ = perf) ----
@@ -708,6 +711,19 @@ export default async function AccountingWorkspacePage({
                           <span>VAT <b>฿{formatMoney(s.vat)}</b></span>
                           <span>รวมจ่าย <b className="net">฿{formatMoney(s.net)}</b></span>
                         </div>
+                        {/* ★ 2026-09-02 ผู้ใช้: แก้ด่วนบนการ์ด — คู่ค้า / ⇄ สลับเดบิต-เครดิต / บัญชี (เฉพาะร่าง) */}
+                        {pend && e.customerId ? (
+                          <QuickFixBill
+                            customerId={e.customerId}
+                            entryId={e.id}
+                            entryType={e.entryType}
+                            counterpartyName={e.counterpartyName}
+                            accountCode={e.lines[0]?.accountCode ?? null}
+                            accountName={e.lines[0]?.accountName ?? null}
+                            lineAmount={e.lines[0]?.amount ?? null}
+                            chart={chart}
+                          />
+                        ) : null}
                       </div>
                       <div className="wsp-act">
                         <Link href={editHref(e)} className="wsp-btn primary">ตรวจ / ยืนยัน →</Link>

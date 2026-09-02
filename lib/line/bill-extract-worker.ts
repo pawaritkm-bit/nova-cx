@@ -55,6 +55,13 @@ const EXTRACT_ELIGIBLE_DOC_KINDS = [...BILL_DOC_KINDS, "file"];
  */
 const ROUTE_GROUP_DOC_KINDS = [...EXTRACT_ELIGIBLE_DOC_KINDS, "slip"];
 
+/**
+ * ★ 2026-09-02 ผู้ใช้: "ในอนาคตให้จับสลิปทุกกลุ่มเหมือนของพี่สวย แต่ไม่ backfill" —
+ *   สลิปของกลุ่มลูกค้าปกติ eligible เฉพาะที่ส่งเข้ามา "หลัง" เวลานี้ (ของเก่า 1,770 ใบไม่ถูกอ่าน)
+ *   กลุ่มรวม (route_by_slip) ไม่ติด epoch (เปิดมาก่อนแล้ว)
+ */
+const OFFICE_SLIP_EPOCH = "2026-09-02T14:30:00Z";
+
 /** doc_kind ที่ "ไม่ใช่ใบกำกับภาษี" → ไม่มี VAT แน่นอน (บังคับ novat ทุก line ไม่ต้องเดา) */
 const NONVAT_DOC_KINDS = new Set(["handwritten", "cash", "slip"]);
 
@@ -82,7 +89,9 @@ type QueueRow = {
   drive_file_id: string | null;
   chat_message_id: string | null;
   sha256: string | null;
-  original_name: string | null; // ★ ชื่อไฟล์จริง — ใช้ตัดสินนามสกุล (drive_file_id เก่าเก็บ ext แบบ "_pdf")
+  original_name: string | null;
+  /** ★ epoch gate สลิปกลุ่มปกติ (OFFICE_SLIP_EPOCH) */
+  created_at?: string | null; // ★ ชื่อไฟล์จริง — ใช้ตัดสินนามสกุล (drive_file_id เก่าเก็บ ext แบบ "_pdf")
 };
 
 /** เดา mime จากนามสกุลไฟล์ (fallback image/jpeg) */
@@ -706,24 +715,25 @@ export async function selectExtractionCandidates(
 
   // ★ group-scoped (ใช้ตอน "ผูกลูกค้าทีหลัง" → ดึงบิลของกลุ่มนั้นทันที): กรองด้วย inner join chat_messages
   if (chatGroupId) {
-    // กลุ่มรวมหลายบริษัท (route_by_slip) → สลิปต้องเข้าคิวด้วย (best-effort: อ่านธงพลาด = ชนิดปกติ)
-    let kinds = EXTRACT_ELIGIBLE_DOC_KINDS;
+    // ★ 2026-09-02: สลิป eligible ทุกกลุ่ม — กลุ่มปกติเฉพาะสลิปหลัง OFFICE_SLIP_EPOCH (ไม่ backfill)
+    //   กลุ่มรวม (route_by_slip) ไม่ติด epoch
+    let isRouteGroup = false;
     try {
       const { data: g } = await db
         .from("chat_groups")
         .select("route_by_slip")
         .eq("id", chatGroupId)
         .maybeSingle();
-      if ((g as { route_by_slip?: boolean | null } | null)?.route_by_slip) kinds = ROUTE_GROUP_DOC_KINDS;
+      isRouteGroup = !!(g as { route_by_slip?: boolean | null } | null)?.route_by_slip;
     } catch {
-      /* เงียบ — ใช้ชนิดปกติ */
+      /* เงียบ — ถือเป็นกลุ่มปกติ */
     }
     const { data, error } = await db
       .from("message_attachments")
-      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, original_name, chat_messages!inner(chat_group_id)")
+      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, original_name, created_at, chat_messages!inner(chat_group_id)")
       .eq("fetch_status", "stored")
       .in("attachment_type", ["image", "file"])
-      .in("doc_kind", kinds)
+      .in("doc_kind", ROUTE_GROUP_DOC_KINDS)
       .not("drive_file_id", "is", null)
       .eq("chat_messages.chat_group_id", chatGroupId)
       .order("created_at", { ascending: true })
@@ -732,7 +742,9 @@ export async function selectExtractionCandidates(
       console.warn(`[bill-extract-worker] select group queue error code=${(error as { code?: string }).code ?? "?"}`);
       return [];
     }
-    const eligible = (data ?? []) as unknown as QueueRow[];
+    const eligible = ((data ?? []) as unknown as QueueRow[]).filter(
+      (r) => isRouteGroup || r.doc_kind !== "slip" || (r.created_at ?? "") >= OFFICE_SLIP_EPOCH
+    );
     return eligible.filter((r) => !done.has(r.id)).slice(0, limit);
   }
 
@@ -746,10 +758,10 @@ export async function selectExtractionCandidates(
   for (let from = 0; from < CANDIDATE_SCAN_LIMIT && collected.length < limit; from += PAGE) {
     const { data, error } = await db
       .from("message_attachments")
-      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, original_name, chat_messages!inner(chat_groups!inner(customer_id))")
+      .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, original_name, created_at, chat_messages!inner(chat_groups!inner(customer_id))")
       .eq("fetch_status", "stored")
       .in("attachment_type", ["image", "file"])
-      .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
+      .in("doc_kind", ROUTE_GROUP_DOC_KINDS)
       .not("drive_file_id", "is", null)
       // ★ เฉพาะกลุ่มที่ผูกลูกค้าแล้ว — กลุ่มยังไม่ผูกไม่ให้ติดคิว (กันกินสล็อตหน้าคิว = created 0)
       .not("chat_messages.chat_groups.customer_id", "is", null)
@@ -764,6 +776,8 @@ export async function selectExtractionCandidates(
     const page = (data ?? []) as unknown as QueueRow[];
     if (page.length === 0) break; // หมดกอง
     for (const r of page) {
+      // ★ สลิปกลุ่มปกติ: เฉพาะหลัง epoch (ไม่ backfill 1,770 ใบเก่า — ผู้ใช้สั่ง 2026-09-02)
+      if (r.doc_kind === "slip" && (r.created_at ?? "") < OFFICE_SLIP_EPOCH) continue;
       if (!done.has(r.id)) collected.push(r);
       if (collected.length >= limit) break;
     }
@@ -1099,6 +1113,7 @@ export async function processBillExtraction(
       const suggest = await suggestAccountCode(
         db,
         row.tenant_id,
+        effCustomerId, // ★ 0129 — กฎของลูกค้ารายนี้ (name/amount) · tax fallback ทั้งสำนักงาน
         decision.entryType,
         decision.counterpartyTaxId,
         decision.counterpartyName

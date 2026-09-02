@@ -384,6 +384,7 @@ export async function learnStatementAccountAction(input: {
     if ((!name && !amt) || !code || (input.direction !== "in" && input.direction !== "out")) return { ok: false };
     await recordAccountRules(service, {
       tenantId: ctx.tenantId,
+      customerId: input.customerId,
       entryType: input.direction === "in" ? "sale" : "purchase",
       counterpartyTaxId: null,
       counterpartyName: name || null,
@@ -671,7 +672,7 @@ export async function matchStatementWithBillsAction(input: {
         const entryType = t.direction === "in" ? "sale" : "purchase";
         const cacheKey = `${entryType}|${name}|${amt ?? ""}`;
         if (sugCache.has(cacheKey)) return sugCache.get(cacheKey) ?? null;
-        const sug = await suggestAccountCode(service, ctx.tenantId, entryType, null, name || null, amt).catch(() => null);
+        const sug = await suggestAccountCode(service, ctx.tenantId, input.customerId, entryType, null, name || null, amt).catch(() => null);
         const out: AccountSuggestion = sug ? { code: sug.accountCode, name: sug.accountName } : null;
         sugCache.set(cacheKey, out);
         return out;
@@ -753,6 +754,7 @@ export async function applyStatementAccountToBillAction(input: {
     if (entryType && (cpName || amt)) {
       await recordAccountRules(service, {
         tenantId: ctx.tenantId,
+        customerId: input.customerId,
         entryType,
         counterpartyTaxId: null,
         counterpartyName: cpName || null,

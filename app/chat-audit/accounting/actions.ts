@@ -425,6 +425,7 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
         try {
           await recordAccountRules(service, {
             tenantId: ctx.tenantId,
+            customerId: input.customerId ?? null,
             entryType: etLearn,
             counterpartyTaxId: clampText(input.counterpartyTaxId, 20),
             counterpartyName: clampText(input.counterpartyName, 200),
