@@ -46,7 +46,10 @@ export async function GET(request: NextRequest) {
 
     // path: ไฟล์แนบไลน์ (message_attachments) มาก่อน — ตรงกับ entryPath ของโต๊ะทำงาน
     let path: string | null = null;
-    if (entry.attachment_id) {
+    // ★ 2026-09-02 — บิลที่ตัดหน้า PDF เป็นรูปแล้ว (upload_mime=image): ใช้รูปนั้นก่อนไฟล์แนบ
+    if ((entry.upload_mime ?? "").startsWith("image/") && entry.upload_path) {
+      path = entry.upload_path;
+    } else if (entry.attachment_id) {
       const { data: att } = await service
         .from("message_attachments")
         .select("drive_file_id")

@@ -110,6 +110,8 @@ function formatDate(iso: string | null): string {
 
 /** object path ของไฟล์บิลของ entry (บิลไลน์ ก่อน แล้วไฟล์อัปเอง) — null = ไม่มีไฟล์ */
 function entryObjectPath(e: BillEntry): string | null {
+  // ★ 2026-09-02 — บิล PDF ที่ "ตัดหน้าเป็นรูป" แล้ว (upload_mime=image): ใช้รูปก่อนไฟล์แนบต้นทาง
+  if ((e.uploadMime ?? "").startsWith("image/") && e.uploadPath) return e.uploadPath;
   return e.attachmentObjectPath ?? e.uploadPath;
 }
 
@@ -120,6 +122,7 @@ const DOC_EXT_RE = /\.(pdf|xlsx?|docx?|pptx?|csv|txt|zip)$/i;
 function entryIsImage(e: BillEntry): boolean {
   // ★ ไฟล์ไลน์ (attachmentObjectPath): เดิมเป็นรูปเสมอ · ตอนนี้อาจเป็นเอกสาร (PDF/Excel) →
   //   นามสกุลเป็นเอกสาร = ไม่ใช่รูป (โชว์ thumbnail ไฟล์), อื่น ๆ ถือเป็นรูป (คงพฤติกรรมเดิม)
+  if ((e.uploadMime ?? "").startsWith("image/") && e.uploadPath) return true; // รูปหน้า PDF ที่ตัดแล้ว
   if (e.attachmentObjectPath) return !DOC_EXT_RE.test(e.attachmentObjectPath);
   return (e.uploadMime ?? "").startsWith("image/");
 }

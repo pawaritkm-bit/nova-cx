@@ -53,9 +53,12 @@ function formatDate(iso: string | null): string {
   return m ? `${m[3]}/${m[2]}/${Number(m[1]) + 543}` : iso;
 }
 function entryPath(e: BillEntry): string | null {
+  // ★ 2026-09-02 — บิล PDF ที่ตัดหน้าเป็นรูปแล้ว: ใช้รูปก่อนไฟล์แนบต้นทาง (OneDrive เซ็น URL ไม่ได้)
+  if ((e.uploadMime ?? "").startsWith("image/") && e.uploadPath) return e.uploadPath;
   return e.attachmentObjectPath ?? e.uploadPath;
 }
 function entryIsImage(e: BillEntry): boolean {
+  if ((e.uploadMime ?? "").startsWith("image/") && e.uploadPath) return true; // รูปหน้า PDF ที่ตัดแล้ว
   if (e.attachmentObjectPath) return IMG_EXT_RE.test(e.attachmentObjectPath);
   return (e.uploadMime ?? "").startsWith("image/");
 }

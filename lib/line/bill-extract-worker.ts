@@ -936,6 +936,10 @@ export async function processBillExtraction(
 
     // 4) รูป/PDF → ดาวน์โหลด + AI สกัด · เอกสารอื่น (Excel/doc) → draft ว่าง (มีไฟล์แนบให้เปิด/ดาวน์โหลด)
     let bill = null as ExtractedBill | null;
+    // ★ 2026-09-02 ผู้ใช้: "ตัดไฟล์เป็นรูปเหมือนหน้าอัปโหลด" — PDF จาก LINE ตัดหน้าแรกเก็บ PNG
+    //   ลง Supabase แล้วให้บิลชี้รูปนี้ (upload_path/mime) → ทุกหน้าโชว์/ซูม/ย่อเหมือนบิลรูปถ่าย
+    //   (ไฟล์ต้นทางอาจอยู่ OneDrive ซึ่งเซ็น URL/ย่อรูปไม่ได้) · พลาด = ใช้ไฟล์เดิม (best-effort)
+    let pageImage: { path: string; name: string } | null = null;
     if (aiReadable) {
       let buf: Buffer | null = preBuf; // ★ reuse ถ้าดาวน์โหลดไปแล้ว (share-circle image branch)
       if (!buf) {
@@ -951,6 +955,22 @@ export async function processBillExtraction(
         //   (1 attachment = 1 entry เพราะ attachment_id unique) · อ่านไม่ได้ = [] → bill=null (draft ว่าง)
         const bills = await extractBillsData(buf, mime, chart);
         bill = bills[0] ?? null;
+        try {
+          const { renderPdfPagesToPng } = await import("@/lib/accounting/pdf-page-images");
+          const pngs = await renderPdfPagesToPng(buf, { maxPages: 1 });
+          if (pngs?.[0]) {
+            const pngPath = `${row.tenant_id}/line-pdf-pages/${row.id}.p1.png`;
+            const { error: upErr } = await db.storage
+              .from(BILLS_BUCKET)
+              .upload(pngPath, pngs[0], { contentType: "image/png", upsert: true });
+            if (!upErr) {
+              const base = (row.original_name || "บิล").replace(/\.pdf$/i, "");
+              pageImage = { path: pngPath, name: `${base} (หน้า 1).png` };
+            }
+          }
+        } catch {
+          // เรนเดอร์ไม่ได้ → ใช้ PDF เดิม
+        }
       } else {
         // ★ ประหยัด: รูปเล็กเกินกว่าจะเป็นบิล (สติกเกอร์/emoji/ธัมบ์เนล) → ข้าม ไม่เสีย vision call ทิ้ง
         //   conservative (ขอบยาว <350px) · บิลจริงขอบยาว >1000px เสมอ → ไม่มีทางพลาดบิลจริง
@@ -1024,6 +1044,10 @@ export async function processBillExtraction(
       ai_confidence: bill?.overall_confidence ?? null,
       // ★ กันบิลซ้ำระดับ DB (0120): ไฟล์เดียว+ลูกค้าเดียว = 1 บิล · null = ไม่บังคับ
       dedup_key: row.sha256 ?? null,
+      // ★ 2026-09-02 — PDF ที่ตัดหน้าเป็นรูปแล้ว: บิลชี้รูป PNG (โชว์เหมือนบิลรูปทุกหน้า)
+      ...(pageImage
+        ? { upload_path: pageImage.path, upload_name: pageImage.name, upload_mime: "image/png" }
+        : {}),
     };
     let { data: entryIns, error: entryErr } = await db
       .from("bill_entries")
