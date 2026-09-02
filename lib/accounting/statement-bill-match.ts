@@ -98,6 +98,10 @@ export function matchTxnsWithBills(txns: TxnForMatch[], bills: BillForMatch[]): 
       const daysApart = b.docDate ? daysBetween(t.date, b.docDate) : null;
       if (daysApart == null || daysApart > MAX_DAYS_APART) continue;
       const nameHit = namesMatch(t.counterparty_name, b.counterparty);
+      // ★ 2026-09-02 (ผู้ใช้พบจับคู่สลับคน): ทั้งสองฝั่ง "มีชื่อ" แต่ชื่อไม่ตรงกัน = คนละคนแน่
+      //   → ห้ามจับคู่ (ยอดโอนยอดนิยม 2,000/3,000/5,000 ซ้ำกันวันเดียวหลายคน แค่ยอด+วันไม่พอ)
+      //   ฝั่งใดฝั่งหนึ่งไม่มีชื่อ (เทียบไม่ได้) → ยังจับด้วยยอด+วันตามเดิม
+      if (!nameHit && normalizeNameForMatch(t.counterparty_name) && normalizeNameForMatch(b.counterparty)) continue;
       if (
         !best ||
         (nameHit && !best.nameHit) ||

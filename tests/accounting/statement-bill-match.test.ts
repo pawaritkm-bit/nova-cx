@@ -99,3 +99,30 @@ describe("matchTxnsWithBills", () => {
     expect(m[0]?.billId).toBe("c");
   });
 });
+
+// ★ 2026-09-02 (ผู้ใช้พบจับคู่สลับคน) — ชื่อชนกันชัด ๆ ห้ามจับคู่
+describe("matchTxnsWithBills — ชื่อไม่ตรง = คนละคน ไม่จับคู่", () => {
+  it("ยอด+วันตรง แต่ชื่อทั้งสองฝั่งมีและไม่ตรงกัน → ไม่จับ (กันจับสลับคน)", () => {
+    const b = bill({ counterparty: "นาง สมหญิง รักงาน" });
+    const m = matchTxnsWithBills([txn({ counterparty_name: "นาย จิรายุ ปราณี" })], [b]);
+    expect(m[0]).toBeNull();
+  });
+
+  it("ยอดยอดนิยมซ้ำวันเดียวกัน 2 คน → แต่ละคนจับบิลของตัวเองถูก (ไม่สลับ)", () => {
+    const b1 = bill({ id: "b1", counterparty: "จิรายุ ปราณี" });
+    const b2 = bill({ id: "b2", counterparty: "สมหญิง รักงาน" });
+    const m = matchTxnsWithBills(
+      [txn({ counterparty_name: "นาง สมหญิง รักงาน" }), txn({ counterparty_name: "นาย จิรายุ ปราณี" })],
+      [b1, b2]
+    );
+    expect(m[0]?.billId).toBe("b2");
+    expect(m[1]?.billId).toBe("b1");
+  });
+
+  it("ฝั่งบิลไม่มีชื่อ (เทียบไม่ได้) → ยังจับด้วยยอด+วันตามเดิม", () => {
+    const b = bill({ counterparty: null });
+    const m = matchTxnsWithBills([txn({ counterparty_name: "นาย จิรายุ ปราณี" })], [b]);
+    expect(m[0]?.billId).toBe("b1");
+    expect(m[0]?.nameHit).toBe(false);
+  });
+});

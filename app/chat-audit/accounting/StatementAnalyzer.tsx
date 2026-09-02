@@ -161,6 +161,7 @@ export default function StatementAnalyzer({
   //   (เลื่อนดูง่าย) · คลิกซ้ำ/กดล้าง = กลับมาทุกเดือน · null = ไม่กรอง
   const [monthFilter, setMonthFilter] = useState<string | null>(null);
   const txnSectionRef = useRef<HTMLElement | null>(null);
+  const monthSectionRef = useRef<HTMLElement | null>(null);
   const inMonth = useCallback(
     (t: StatementTxn) => !monthFilter || (bkkMonthKey(t.date) ?? "") === monthFilter,
     [monthFilter]
@@ -764,7 +765,7 @@ export default function StatementAnalyzer({
       {txns.length > 0 ? (
         <>
           {/* การ์ดสรุปรายเดือน (รวมทุกไฟล์) */}
-          <section className="stmt-section">
+          <section className="stmt-section" ref={monthSectionRef}>
             <h3 className="stmt-h">สรุปรายเดือน{fileResults.length > 1 ? " (รวมทุกไฟล์)" : ""}</h3>
             <div className="stmt-month-cards">
               {monthly.map((m) => (
@@ -902,7 +903,10 @@ export default function StatementAnalyzer({
                   type="button"
                   className="btn"
                   style={{ background: "#eff6ff", borderColor: "#2563eb", color: "#1d4ed8" }}
-                  onClick={() => setMonthFilter(null)}
+                  onClick={() => {
+                    setMonthFilter(null);
+                    monthSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
                 >
                   📅 เฉพาะ {monthLabel(monthFilter)} — กดเพื่อดูทุกเดือน ✕
                 </button>
