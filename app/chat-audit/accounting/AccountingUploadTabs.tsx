@@ -36,7 +36,7 @@ export default function AccountingUploadTabs({
       {/* ทั้งสองแท็บอยู่ใน DOM ตลอด (ซ่อนด้วย display:none) — สลับแท็บไปดูอีกฝั่งแล้วสลับกลับ
           ข้อมูลที่อ่าน/แก้ไว้จะไม่หาย (ยังไม่รีเฟรชหน้า) */}
       <div style={{ display: tab === "statement" ? undefined : "none" }}>
-        <StatementAnalyzer customerId={customerId} customerLabel={customerLabel} />
+        <StatementAnalyzer customerId={customerId} customerLabel={customerLabel} chart={chart} />
       </div>
       <div style={{ display: tab === "platform" ? undefined : "none" }}>
         <PlatformReportAnalyzer customerId={customerId} customerLabel={customerLabel} chart={chart} />

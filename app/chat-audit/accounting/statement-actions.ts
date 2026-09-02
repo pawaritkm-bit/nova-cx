@@ -305,6 +305,35 @@ export async function loadSavedStatementAction(input: {
   }
 }
 
+/** ★ 2026-09-02 — นักบัญชีเลือกบัญชีคู่บนแถวกระทบยอด → สอน learning map (ครั้งหน้าแนะนำเอง) */
+export async function learnStatementAccountAction(input: {
+  customerId: string;
+  direction: "in" | "out";
+  counterpartyName: string;
+  accountCode: string;
+  accountName?: string | null;
+}): Promise<{ ok: boolean }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!isUuid(input.customerId) || !customerInScope(ctx, input.customerId)) return { ok: false };
+    const name = (typeof input.counterpartyName === "string" ? input.counterpartyName : "").trim().slice(0, 200);
+    const code = (typeof input.accountCode === "string" ? input.accountCode : "").trim().slice(0, 12);
+    if (!name || !code || (input.direction !== "in" && input.direction !== "out")) return { ok: false };
+    await recordAccountRules(service, {
+      tenantId: ctx.tenantId,
+      entryType: input.direction === "in" ? "sale" : "purchase",
+      counterpartyTaxId: null,
+      counterpartyName: name,
+      lines: [{ accountCode: code, accountName: (input.accountName ?? "").slice(0, 120) || null }],
+    });
+    return { ok: true };
+  } catch {
+    return { ok: false }; // best-effort — แค่ไม่ได้สอน map รอบนี้
+  }
+}
+
 // ---------------------------------------------------------------------
 // "จำติ๊ก" (requirement 2026-09-01): สถานะ "✓ ตรวจแล้ว" + จับคู่มือ ต่อลูกค้า เก็บเป็นไฟล์
 //   review-state.json ใต้โฟลเดอร์สเตทเมนต์ (แบบเดียวกับ sidecar ผลอ่าน — ไม่ต้อง migrate DB)
@@ -316,6 +345,8 @@ export type StatementReviewState = {
   reviewed: string[];
   /** คีย์รายการ → billId ที่เลือกจับคู่มือ */
   manual: Record<string, string>;
+  /** ★ 2026-09-02 — คีย์รายการ → บัญชีคู่ที่นักบัญชีเลือกบนแถวกระทบยอด ("code|name") */
+  accounts?: Record<string, string>;
 };
 
 /** เพดานจำนวนคีย์ (กันไฟล์บวม) */
@@ -341,7 +372,18 @@ function sanitizeReviewState(raw: unknown): StatementReviewState {
       }
     }
   }
-  return { reviewed, manual };
+  const accounts: Record<string, string> = {};
+  const rAcc = (r as { accounts?: unknown }).accounts;
+  if (rAcc && typeof rAcc === "object") {
+    for (const [k, v] of Object.entries(rAcc as Record<string, unknown>)) {
+      // ค่า "code|name" — code เป็นเลขบัญชีสั้น ๆ · name ตัดที่ 120
+      if (typeof v === "string" && /^[0-9A-Za-z.\-]{1,12}\|/.test(v) && k.length > 0) {
+        accounts[k.slice(0, REVIEW_KEY_LEN)] = v.slice(0, 140);
+        if (Object.keys(accounts).length >= REVIEW_KEYS_MAX) break;
+      }
+    }
+  }
+  return { reviewed, manual, accounts };
 }
 
 export async function loadStatementReviewStateAction(input: {
@@ -397,9 +439,20 @@ export async function saveStatementReviewStateAction(input: {
 //   เงินเข้า ↔ บิลขาย · เงินออก ↔ บิลซื้อ · เทียบยอด (เต็ม/หลังหัก ณ ที่จ่าย) + วัน + ชื่อผู้โอน↔คู่ค้า
 // ---------------------------------------------------------------------
 import { matchTxnsWithBills, type BillForMatch, type BillMatch } from "@/lib/accounting/statement-bill-match";
+import { suggestAccountCode, recordAccountRules } from "@/lib/accounting/account-learning";
+
+/** คำแนะนำบัญชีคู่ต่อรายการ (จาก learning map ที่เรียนรู้จากนักบัญชี) */
+export type AccountSuggestion = { code: string; name: string | null } | null;
 
 export type MatchBillsResult =
-  | { ok: true; matches: (BillMatch | null)[]; billCount: number; bills: BillForMatch[] }
+  | {
+      ok: true;
+      matches: (BillMatch | null)[];
+      billCount: number;
+      bills: BillForMatch[];
+      /** index ตรงกับ txns — มีค่าเฉพาะรายการที่ไม่พบบิล (แนะนำหมวดบัญชีจากผู้โอนคนเดิม) */
+      accountSuggestions: AccountSuggestion[];
+    }
   | { ok: false; message: string };
 
 /** เพดานจำนวนบิลที่ดึงมาเทียบ (ลูกค้ารายใหญ่สุดยังห่างจากนี้มาก) */
@@ -491,7 +544,28 @@ export async function matchStatementWithBillsAction(input: {
       };
     }).filter((b) => b.totalGross > 0 || b.totalNet > 0);
 
-    return { ok: true, matches: matchTxnsWithBills(txns, bills), billCount: bills.length, bills };
+    const matches = matchTxnsWithBills(txns, bills);
+
+    // ★ 2026-09-02 — แนะนำบัญชีคู่ให้รายการที่ "ไม่พบบิล" จาก learning map (เรียนรู้จากที่
+    //   นักบัญชีเคยกรอก — ทั้งบนแถวกระทบยอดนี้และตอนยืนยันบิล) · cache ต่อ (ฝั่ง|ชื่อ) กัน query ซ้ำ
+    const sugCache = new Map<string, AccountSuggestion>();
+    const accountSuggestions: AccountSuggestion[] = await Promise.all(
+      txns.map(async (t, i) => {
+        if (matches[i]) return null; // มีบิลแล้ว — บัญชีตามบิล
+        if (t.direction !== "in" && t.direction !== "out") return null;
+        const name = (t.counterparty_name ?? "").trim();
+        if (!name) return null;
+        const entryType = t.direction === "in" ? "sale" : "purchase";
+        const cacheKey = `${entryType}|${name}`;
+        if (sugCache.has(cacheKey)) return sugCache.get(cacheKey) ?? null;
+        const sug = await suggestAccountCode(service, ctx.tenantId, entryType, null, name).catch(() => null);
+        const out: AccountSuggestion = sug ? { code: sug.accountCode, name: sug.accountName } : null;
+        sugCache.set(cacheKey, out);
+        return out;
+      })
+    );
+
+    return { ok: true, matches, billCount: bills.length, bills, accountSuggestions };
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "กระทบกับบิลไม่สำเร็จ กรุณาลองใหม่" };

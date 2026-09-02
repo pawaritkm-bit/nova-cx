@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import {
   createStatementUploadUrlAction,
   matchStatementWithBillsAction,
+  learnStatementAccountAction,
+  type AccountSuggestion,
   listSavedStatementsAction,
   loadSavedStatementAction,
   loadStatementReviewStateAction,
@@ -24,6 +26,8 @@ import {
 } from "@/lib/accounting/statement-analyze";
 import { toCsv } from "@/lib/accounting/csv-export";
 import NovaMascot from "../../liff/survey/[token]/NovaMascot";
+import AccountCombobox from "./AccountCombobox";
+import type { ChartAccount } from "@/lib/accounting/chart-of-accounts";
 
 /** bucket เดียวกับบิล (ต้องตรงกับ STATEMENT actions / route) */
 const BILLS_BUCKET = "bills";
@@ -123,9 +127,12 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 export default function StatementAnalyzer({
   customerId,
   customerLabel,
+  chart,
 }: {
   customerId: string;
   customerLabel: string;
+  /** ผังบัญชีของ tenant (จาก page.tsx) — ช่องบัญชีคู่บนแถวกระทบยอด (2026-09-02) */
+  chart: ChartAccount[];
 }) {
   const [pending, startTransition] = useTransition();
   // accountant param จาก URL (overlay แนบมา) — ติดไปกับลิงก์ "เปิดบิล" ให้ปุ่มปิดพากลับบริบทเดิม
@@ -151,6 +158,10 @@ export default function StatementAnalyzer({
   const [reviewed, setReviewed] = useState<Set<string>>(new Set());
   // จับคู่มือ: คีย์รายการ → billId (ตัวบิลดูจาก bills ที่กระทบล่าสุด)
   const [manualPick, setManualPick] = useState<Map<string, string>>(new Map());
+  // ★ บัญชีคู่ที่นักบัญชีเลือกบนแถวกระทบยอด (คีย์รายการ → "code|name") — จำถาวรใน review-state
+  const [accountPick, setAccountPick] = useState<Map<string, string>>(new Map());
+  // คำแนะนำบัญชีจาก learning map (index ตรง txns) — เฉพาะรายการไม่พบบิล
+  const [accountSuggestions, setAccountSuggestions] = useState<AccountSuggestion[] | null>(null);
   // โหลดสถานะติ๊กเสร็จแล้ว (กันเซฟทับด้วยค่าว่างก่อนโหลด)
   const reviewLoadedRef = useRef(false);
   // ★ "ระบบจำไว้" (2026-09-01): ไฟล์ที่เคยอัปของลูกค้า — ผลอ่านที่เซฟไว้โหลดขึ้นเองตอนเปิดหน้า
@@ -179,7 +190,10 @@ export default function StatementAnalyzer({
       try {
         const r = await matchStatementWithBillsAction({ customerId, txns: list });
         setMatches(r.ok ? r.matches : null);
-        if (r.ok) setBills(r.bills); // จับคู่มือคีย์ด้วยเนื้อหารายการ — คงไว้ได้ (ไม่อิงลำดับแล้ว)
+        if (r.ok) {
+          setBills(r.bills); // จับคู่มือคีย์ด้วยเนื้อหารายการ — คงไว้ได้ (ไม่อิงลำดับแล้ว)
+          setAccountSuggestions(r.accountSuggestions ?? null);
+        }
       } catch {
         setMatches(null);
       } finally {
@@ -263,6 +277,7 @@ export default function StatementAnalyzer({
         if (cancelled || !r.ok) return;
         setReviewed(new Set(r.state.reviewed));
         setManualPick(new Map(Object.entries(r.state.manual)));
+        setAccountPick(new Map(Object.entries(r.state.accounts ?? {})));
         reviewLoadedRef.current = true;
       })
       .catch(() => {
@@ -308,9 +323,13 @@ export default function StatementAnalyzer({
     if (!reviewLoadedRef.current) return;
     void saveStatementReviewStateAction({
       customerId,
-      state: { reviewed: Array.from(reviewed), manual: Object.fromEntries(manualPick) },
+      state: {
+        reviewed: Array.from(reviewed),
+        manual: Object.fromEntries(manualPick),
+        accounts: Object.fromEntries(accountPick),
+      },
     });
-  }, [reviewed, manualPick, customerId]);
+  }, [reviewed, manualPick, accountPick, customerId]);
 
   // ★ บิลที่อัปจากหน้าอื่น (เช่นกล่องอัปโหลดบิล/แท็บเปิดบิล) โผล่มาจับคู่เองเมื่อกลับมาหน้านี้ —
   //   กระทบใหม่ตอนหน้าถูกโฟกัส/สลับแท็บกลับมา (throttle 15 วิ · ข้ามตอนเพิ่งเปิดหน้า)
@@ -403,6 +422,30 @@ export default function StatementAnalyzer({
       setUploadingRow(-1);
     }
   }
+
+  /** เลือกบัญชีคู่บนแถวกระทบยอด: จำถาวร (review-state) + สอน learning map ให้แนะนำเองรอบหน้า */
+  const pickAccount = useCallback(
+    (k: string, t: StatementTxn, code: string, name: string) => {
+      setAccountPick((prev) => new Map(prev).set(k, `${code}|${name}`));
+      if (t.counterparty_name && (t.direction === "in" || t.direction === "out")) {
+        void learnStatementAccountAction({
+          customerId,
+          direction: t.direction,
+          counterpartyName: t.counterparty_name,
+          accountCode: code,
+          accountName: name,
+        });
+      }
+    },
+    [customerId]
+  );
+  const clearAccount = useCallback((k: string) => {
+    setAccountPick((prev) => {
+      const next = new Map(prev);
+      next.delete(k);
+      return next;
+    });
+  }, []);
 
   /** อ่านไฟล์ที่อยู่ใน storage อยู่แล้วอีกครั้ง (ไฟล์เก่าที่ยังไม่มีผลเซฟ) — ไม่ต้องอัปโหลดใหม่ */
   function rereadStored(f: SavedStatementFile) {
@@ -927,6 +970,11 @@ export default function StatementAnalyzer({
               matches={matches}
               bills={bills}
               accountant={accountant}
+              chart={chart}
+              accountPick={accountPick}
+              accountSuggestions={accountSuggestions}
+              onPickAccount={pickAccount}
+              onClearAccount={clearAccount}
               reviewed={reviewed}
               manualPick={manualPick}
               uploadingRow={uploadingRow}
@@ -950,6 +998,11 @@ export default function StatementAnalyzer({
               matches={matches}
               bills={bills}
               accountant={accountant}
+              chart={chart}
+              accountPick={accountPick}
+              accountSuggestions={accountSuggestions}
+              onPickAccount={pickAccount}
+              onClearAccount={clearAccount}
               reviewed={reviewed}
               manualPick={manualPick}
               uploadingRow={uploadingRow}
@@ -973,6 +1026,11 @@ export default function StatementAnalyzer({
               matches={matches}
               bills={bills}
               accountant={accountant}
+              chart={chart}
+              accountPick={accountPick}
+              accountSuggestions={accountSuggestions}
+              onPickAccount={pickAccount}
+              onClearAccount={clearAccount}
               reviewed={reviewed}
               manualPick={manualPick}
               uploadingRow={uploadingRow}
@@ -1049,6 +1107,11 @@ function BillSideCard({
   idx,
   rowKey,
   t,
+  chart,
+  accountPicked,
+  accountSuggestion,
+  onPickAccount,
+  onClearAccount,
   match,
   matchesReady,
   bills,
@@ -1062,6 +1125,13 @@ function BillSideCard({
   idx: number;
   rowKey: string;
   t: StatementTxn;
+  chart: ChartAccount[];
+  /** บัญชีที่นักบัญชีเลือกไว้ ("code|name") · null = ยังไม่เลือก */
+  accountPicked: string | null;
+  /** คำแนะนำจาก learning map (เฉพาะแถวไม่พบบิล) */
+  accountSuggestion: AccountSuggestion;
+  onPickAccount: (code: string, name: string) => void;
+  onClearAccount: () => void;
   match: BillMatch | BillForMatch | null;
   matchesReady: boolean;
   bills: BillForMatch[];
@@ -1130,6 +1200,35 @@ function BillSideCard({
     <div style={{ ...base, border: "1px solid #fcd34d", background: "#fffbeb" }}>
       <div style={{ color: "#b45309", fontWeight: 600, fontSize: 13 }}>⚠ ไม่พบบิลที่ยอด/วัน/ชื่อตรง</div>
       <TransferWhen t={t} />
+      {/* ★ 2026-09-02 บัญชีคู่บนแถวกระทบยอด: 🤖 แนะนำจากที่เคยเรียนรู้ · นักบัญชีพิมพ์เลข/เลื่อนหา
+          แก้ได้เอง (combobox เดียวกับหน้าตรวจ/แก้บิล) · เลือกแล้วระบบจำ + ใช้สอนการแนะนำรอบหน้า */}
+      {(() => {
+        const picked = accountPicked ? accountPicked.split("|") : null;
+        const code = picked ? picked[0] : accountSuggestion?.code ?? "";
+        const name = picked ? picked.slice(1).join("|") : accountSuggestion?.name ?? "";
+        return (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>บัญชี{t.direction === "in" ? " (รายได้)" : t.direction === "out" ? " (ค่าใช้จ่าย)" : ""}:</span>
+            <div style={{ minWidth: 220, flex: 1 }}>
+              <AccountCombobox
+                accountCode={code}
+                accountName={name}
+                chart={chart}
+                readOnly={false}
+                onSelect={(c, n) => onPickAccount(c, n)}
+                onNameChange={(n) => code && onPickAccount(code, n)}
+                onClear={onClearAccount}
+              />
+            </div>
+            {!picked && accountSuggestion ? (
+              <span style={{ fontSize: 11, background: "#eff6ff", color: "#1d4ed8", borderRadius: 8, padding: "1px 8px" }}
+                title="แนะนำจากที่นักบัญชีเคยเลือกให้ผู้โอนคนนี้ — เลือก/แก้เพื่อยืนยัน">
+                🤖 แนะนำ
+              </span>
+            ) : null}
+          </div>
+        );
+      })()}
       <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
         {/* อัปรูป/ไฟล์บิลจริงเข้าแถวนี้เลย (requirement 2026-09-01) — บิลใหม่จะจับคู่เองถ้ายอด/วันตรง */}
         <input
@@ -1187,6 +1286,11 @@ function TxnPile({
   matches,
   bills,
   accountant,
+  chart,
+  accountPick,
+  accountSuggestions,
+  onPickAccount,
+  onClearAccount,
   reviewed,
   manualPick,
   uploadingRow,
@@ -1203,6 +1307,11 @@ function TxnPile({
   matches: (BillMatch | null)[] | null;
   bills: BillForMatch[];
   accountant: string | null;
+  chart: ChartAccount[];
+  accountPick: Map<string, string>;
+  accountSuggestions: AccountSuggestion[] | null;
+  onPickAccount: (k: string, t: StatementTxn, code: string, name: string) => void;
+  onClearAccount: (k: string) => void;
   reviewed: Set<string>;
   manualPick: Map<string, string>;
   uploadingRow: number;
@@ -1298,6 +1407,11 @@ function TxnPile({
                   matchesReady={!!matches}
                   bills={bills}
                   accountant={accountant}
+                  chart={chart}
+                  accountPicked={accountPick.get(k) ?? null}
+                  accountSuggestion={accountSuggestions ? accountSuggestions[i] ?? null : null}
+                  onPickAccount={(code, name) => onPickAccount(k, t, code, name)}
+                  onClearAccount={() => onClearAccount(k)}
                   isReviewed={reviewed.has(k)}
                   uploading={uploadingRow === i}
                   onToggleReviewed={onToggleReviewed}
