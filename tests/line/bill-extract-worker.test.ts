@@ -1226,3 +1226,45 @@ describe("reExtractIncompleteEntries — mark attempted กันวนบิล
     expect(updates.find((u) => (u.filters as Rec).id === "L1")).toBeTruthy();
   });
 });
+
+// ★ 0126 (2026-09-02) — กลุ่มรวมหลายบริษัท: เลือกบริษัทจากสลิป (ตรงรายเดียวเท่านั้นถึงผูก)
+import { routeBillToCustomer } from "@/lib/line/bill-extract-worker";
+
+describe("routeBillToCustomer — แยกบริษัทอัตโนมัติตามสลิป", () => {
+  const cands = [
+    { id: "c1", name: "บริษัท พามี แท็กซ์ จำกัด", businessName: null, taxId: "0135569008470" },
+    { id: "c2", name: "บริษัท เจริญดี การบัญชี จำกัด", businessName: null, taxId: "0735568005099" },
+    { id: "c3", name: "บริษัท วรรณวนัช เบเกอรี่ จำกัด", businessName: null, taxId: "0735562002462" },
+  ];
+
+  it("สลิปเงินเข้า: ผู้รับ = พามี แท็กซ์ → ผูก c1 เป็นบิลขาย คู่ค้า = ผู้โอน", () => {
+    const r = routeBillToCustomer(cands, { name: "บริษัท พามี แท็กซ์ จำกัด", taxId: null }, { name: "นาย จิรายุ ปราณี", taxId: null });
+    expect(r?.customerId).toBe("c1");
+    expect(r?.decision.entryType).toBe("sale");
+    expect(r?.decision.counterpartyName).toBe("นาย จิรายุ ปราณี");
+  });
+
+  it("ผู้รับ = เจริญดี → ผูก c2 (ไม่ปนบริษัทอื่น)", () => {
+    const r = routeBillToCustomer(cands, { name: "บริษัท เจริญดี การบัญชี จำกัด", taxId: null }, { name: "นาง สมหญิง", taxId: null });
+    expect(r?.customerId).toBe("c2");
+  });
+
+  it("สลิปที่ไม่ตรงบริษัทไหนเลย → null (เข้ายังไม่จับคู่ ไม่เดา)", () => {
+    const r = routeBillToCustomer(cands, { name: "ร้านกาแฟทั่วไป", taxId: null }, { name: "นาย ทั่วไป", taxId: null });
+    expect(r).toBeNull();
+  });
+
+  it("กำกวม (ชื่อคล้ายจนตรง >1 ราย) → null", () => {
+    const twins = [
+      { id: "a", name: "บริษัท พามี แท็กซ์ จำกัด", businessName: null, taxId: null },
+      { id: "b", name: "พามี แท็กซ์", businessName: null, taxId: null },
+    ];
+    const r = routeBillToCustomer(twins, { name: "บริษัท พามี แท็กซ์ จำกัด", taxId: null }, { name: "นาย ก", taxId: null });
+    expect(r).toBeNull();
+  });
+
+  it("เทียบด้วยเลขภาษี (แม่นสุด) — ชื่อบนสลิปสะกดเพี้ยนก็ยังผูกถูก", () => {
+    const r = routeBillToCustomer(cands, { name: "บ.พามี แท๊กส์", taxId: "0135569008470" }, { name: "นาย ข", taxId: null });
+    expect(r?.customerId).toBe("c1");
+  });
+});

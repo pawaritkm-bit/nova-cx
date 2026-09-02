@@ -6,6 +6,7 @@ import { suggestWhtRate, suggestWhtForm } from "@/lib/accounting/wht";
 import { calcVat } from "@/lib/accounting/calc";
 import { suggestPaymentMethod } from "@/lib/accounting/payment";
 import { getCustomerShareCircleFlag } from "@/lib/share-circles/queries";
+import { customerIdsForAccountant } from "@/lib/accounting/accountant-scope";
 import { suggestAccountCode } from "@/lib/accounting/account-learning";
 import { classifyShareCircleImage } from "@/lib/ai/bill-classify";
 import { isTooSmallToBeBill } from "@/lib/accounting/image-prep";
@@ -423,7 +424,7 @@ const EMPTY_CUSTOMER: CustomerIdentity & { id: null } = {
 async function resolveCustomer(
   db: SupabaseClient,
   chatMessageId: string | null
-): Promise<CustomerIdentity & { id: string | null }> {
+): Promise<CustomerIdentity & { id: string | null; routeBySlip?: boolean; responsibleEmployeeId?: string | null }> {
   if (!chatMessageId) return EMPTY_CUSTOMER;
   try {
     const { data: msg } = await db
@@ -439,7 +440,25 @@ async function resolveCustomer(
       .eq("id", groupId)
       .maybeSingle();
     const customerId = (grp as { customer_id?: string | null } | null)?.customer_id ?? null;
-    if (!customerId) return EMPTY_CUSTOMER;
+    if (!customerId) {
+      // ★ กลุ่มรวมหลายบริษัท (0126 route_by_slip): ไม่ผูกลูกค้าตายตัว → คืนธง+ผู้ดูแล
+      //   ให้ caller แยกบริษัทตามสลิป · query แยกอีกจังหวะ (คอลัมน์ยังไม่ apply → พังเฉพาะจังหวะนี้
+      //   คืน EMPTY เหมือนเดิม ไม่ลาก flow ปกติพัง)
+      try {
+        const { data: rg } = await db
+          .from("chat_groups")
+          .select("route_by_slip, responsible_employee_id")
+          .eq("id", groupId)
+          .maybeSingle();
+        const r = rg as { route_by_slip?: boolean | null; responsible_employee_id?: string | null } | null;
+        if (r?.route_by_slip) {
+          return { ...EMPTY_CUSTOMER, routeBySlip: true, responsibleEmployeeId: r.responsible_employee_id ?? null };
+        }
+      } catch {
+        // เงียบ — พฤติกรรมเดิม
+      }
+      return EMPTY_CUSTOMER;
+    }
 
     const { data: cust } = await db
       .from("customers")
@@ -455,6 +474,58 @@ async function resolveCustomer(
     };
   } catch {
     return EMPTY_CUSTOMER;
+  }
+}
+
+/**
+ * ★ 0126 — เลือกบริษัทจากสลิป: เทียบ seller/buyer ที่ AI อ่าน กับลูกค้า candidate ทุกราย
+ *   ตรง "รายเดียวเท่านั้น" ถึงผูก (0 หรือ >1 = กำกวม → null ให้คนเลือก — ไม่เดา)
+ *   pure — มี unit test ประกบ
+ */
+export function routeBillToCustomer(
+  candidates: (CustomerIdentity & { id: string })[],
+  seller: BillParty,
+  buyer: BillParty
+): { customerId: string; decision: SideDecision } | null {
+  const hits: { customerId: string; decision: SideDecision }[] = [];
+  for (const c of candidates) {
+    const d = decideEntrySide(c, seller, buyer);
+    if (d.entryType !== "unspecified") hits.push({ customerId: c.id, decision: d });
+  }
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** โหลด candidate ของกลุ่ม route_by_slip = ลูกค้าในความดูแลของ responsible_employee_id (มี cache ต่อรอบ) */
+async function loadRouteCandidates(
+  db: SupabaseClient,
+  tenantId: string,
+  employeeId: string | null,
+  cache: Map<string, (CustomerIdentity & { id: string })[]>
+): Promise<(CustomerIdentity & { id: string })[]> {
+  if (!employeeId) return [];
+  const key = `${tenantId}|${employeeId}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  try {
+    const ids = await customerIdsForAccountant(db, tenantId, employeeId);
+    if (ids.length === 0) {
+      cache.set(key, []);
+      return [];
+    }
+    const { data } = await db
+      .from("customers")
+      .select("id, name, business_name, tax_id")
+      .eq("tenant_id", tenantId)
+      .in("id", ids.slice(0, 200))
+      .is("deleted_at", null);
+    const out = ((data ?? []) as { id: string; name: string | null; business_name: string | null; tax_id: string | null }[]).map(
+      (c) => ({ id: c.id, name: c.name, businessName: c.business_name, taxId: c.tax_id })
+    );
+    cache.set(key, out);
+    return out;
+  } catch {
+    cache.set(key, []);
+    return [];
   }
 }
 
@@ -677,6 +748,32 @@ export async function selectExtractionCandidates(
       if (collected.length >= limit) break;
     }
   }
+
+  // ★ 0126 กลุ่มรวมหลายบริษัท (route_by_slip): customer_id เป็น null โดยตั้งใจ — query หลักกรองทิ้ง
+  //   → เก็บเพิ่มอีกจังหวะ (best-effort: คอลัมน์ยังไม่ apply/พัง → ข้ามเงียบ ไม่กระทบคิวปกติ)
+  if (collected.length < limit) {
+    try {
+      const { data } = await db
+        .from("message_attachments")
+        .select("id, tenant_id, attachment_type, doc_kind, drive_file_id, chat_message_id, sha256, original_name, chat_messages!inner(chat_groups!inner(customer_id, route_by_slip))")
+        .eq("fetch_status", "stored")
+        .in("attachment_type", ["image", "file"])
+        .in("doc_kind", EXTRACT_ELIGIBLE_DOC_KINDS)
+        .not("drive_file_id", "is", null)
+        .is("chat_messages.chat_groups.customer_id", null)
+        .eq("chat_messages.chat_groups.route_by_slip", true)
+        .gte("created_at", recentCutoff)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      const have = new Set(collected.map((r) => r.id));
+      for (const r of (data ?? []) as unknown as QueueRow[]) {
+        if (!done.has(r.id) && !have.has(r.id)) collected.push(r);
+        if (collected.length >= limit) break;
+      }
+    } catch {
+      // เงียบ — flow ปกติไม่กระทบ
+    }
+  }
   return collected.slice(0, limit);
 }
 
@@ -709,6 +806,7 @@ export async function processBillExtraction(
   let blank = 0;
   let duplicate = 0;
   const seenSha = new Set<string>(); // กันบิลไบต์เดียวกันซ้ำ "ในรอบเดียวกัน"
+  const routeCandCache = new Map<string, (CustomerIdentity & { id: string })[]>(); // 0126 candidate ต่อผู้ดูแล/รอบ
   const seenContent = new Set<string>(); // กันบิลเนื้อหาเดียวกัน (ลูกค้า|เลขที่|วันที่) ซ้ำ "ในรอบเดียวกัน" (ข้ามรูปแบบไฟล์)
 
   for (const row of rows) {
@@ -765,7 +863,8 @@ export async function processBillExtraction(
     // 3) จับคู่ลูกค้าเราจาก chat_group (best-effort) — ทำก่อนดาวน์โหลด/AI เพื่อเช็คธงท้าวแชร์
     const customer = await resolveCustomer(db, row.chat_message_id);
     // ★ กฎ: ดึงบิลเข้าบัญชี "เฉพาะกลุ่มที่ผูกลูกค้าแล้ว" — ยังไม่ผูก → รอผูกก่อน (ไม่สร้าง entry · คงในคิว)
-    if (!customer.id) continue;
+    //   ยกเว้นกลุ่มรวมหลายบริษัท (route_by_slip 0126) — อ่านแล้วแยกบริษัทจากสลิปด้านล่าง
+    if (!customer.id && !customer.routeBySlip) continue;
     const shareFlag = customer.id
       ? await getCustomerShareCircleFlag(db, row.tenant_id, customer.id)
       : false;
@@ -851,21 +950,32 @@ export async function processBillExtraction(
     // 5) ตัดสินฝั่งซื้อ/ขาย จากลูกค้าเรา (resolve แล้วด้านบน)
     const seller: BillParty = { name: bill?.seller_name ?? null, taxId: bill?.seller_tax_id ?? null };
     const buyer: BillParty = { name: bill?.buyer_name ?? null, taxId: bill?.buyer_tax_id ?? null };
-    const decision = decideEntrySide(customer, seller, buyer);
+    let decision = decideEntrySide(customer, seller, buyer);
+    // ★ 0126 กลุ่มรวมหลายบริษัท: เทียบสลิปกับลูกค้าของผู้ดูแล — ตรงรายเดียว = ผูกบิลรายนั้น
+    //   กำกวม/ไม่ตรง → effCustomerId = null (บิลเข้า "ยังไม่จับคู่" ให้คนเลือก — ไม่เดา)
+    let effCustomerId = customer.id;
+    if (!effCustomerId && customer.routeBySlip) {
+      const cands = await loadRouteCandidates(db, row.tenant_id, customer.responsibleEmployeeId ?? null, routeCandCache);
+      const routed = routeBillToCustomer(cands, seller, buyer);
+      if (routed) {
+        effCustomerId = routed.customerId;
+        decision = routed.decision;
+      }
+    }
 
     // 5.5) กันบิลซ้ำ "ข้ามรูปแบบไฟล์" (บิลใบเดิมส่งทั้ง PDF + ถ่ายรูป = คนละ sha แต่เนื้อหาเดียว)
     //   → ตรวจ signature (ลูกค้า|เลขที่|วันที่) · ทำเฉพาะเมื่อมีเลขที่+วันที่ชัด (ว่าง = ไม่ dedup เสี่ยงพลาดบิลจริง)
     //   ★ ปลอดภัย: แค่ไม่สร้างใบใหม่ (ของเดิมอยู่ครบ) ไม่ลบอะไร
     const docNoNorm = normalizeDocNo(bill?.doc_no ?? null);
     const docDateVal = bill?.doc_date ?? null;
-    if (customer.id && docNoNorm.length >= 3 && docDateVal) {
-      const contentKey = `${customer.id}|${docNoNorm}|${docDateVal}`;
+    if (effCustomerId && docNoNorm.length >= 3 && docDateVal) {
+      const contentKey = `${effCustomerId}|${docNoNorm}|${docDateVal}`;
       if (seenContent.has(contentKey)) {
         await db.from("message_attachments").update({ fetch_status: "skipped", fetch_error: "dup_content" }).eq("id", row.id).eq("tenant_id", row.tenant_id);
         duplicate++;
         continue;
       }
-      if (await hasEntryForSameContent(db, row.tenant_id, customer.id, bill?.doc_no ?? "", docDateVal, row.id)) {
+      if (await hasEntryForSameContent(db, row.tenant_id, effCustomerId, bill?.doc_no ?? "", docDateVal, row.id)) {
         await db.from("message_attachments").update({ fetch_status: "skipped", fetch_error: "dup_content" }).eq("id", row.id).eq("tenant_id", row.tenant_id);
         duplicate++;
         continue;
@@ -877,7 +987,7 @@ export async function processBillExtraction(
     const entryPayload: Record<string, unknown> = {
       tenant_id: row.tenant_id,
       attachment_id: row.id,
-      customer_id: customer.id,
+      customer_id: effCustomerId,
       entry_type: decision.entryType,
       doc_date: bill?.doc_date ?? null,
       doc_no: bill?.doc_no ?? null,
