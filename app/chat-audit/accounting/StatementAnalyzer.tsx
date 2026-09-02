@@ -431,13 +431,14 @@ export default function StatementAnalyzer({
   const pickAccount = useCallback(
     (k: string, t: StatementTxn, code: string, name: string) => {
       setAccountPick((prev) => new Map(prev).set(k, `${code}|${name}`));
-      if (t.counterparty_name && (t.direction === "in" || t.direction === "out")) {
+      if ((t.counterparty_name || (t.amount ?? 0) > 0) && (t.direction === "in" || t.direction === "out")) {
         void learnStatementAccountAction({
           customerId,
           direction: t.direction,
           counterpartyName: t.counterparty_name,
           accountCode: code,
           accountName: name,
+          amount: t.amount, // จำยอดซ้ำ (ค่าบริการฟิกราคา) ด้วย — 0128
         });
       }
     },

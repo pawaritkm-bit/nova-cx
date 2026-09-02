@@ -366,9 +366,11 @@ export async function postStatementAccountRowsAction(input: {
 export async function learnStatementAccountAction(input: {
   customerId: string;
   direction: "in" | "out";
-  counterpartyName: string;
+  counterpartyName: string | null;
   accountCode: string;
   accountName?: string | null;
+  /** ยอดรายการ (จำ "ยอดซ้ำ" — ค่าบริการฟิกราคา 0128) */
+  amount?: number | null;
 }): Promise<{ ok: boolean }> {
   try {
     const authed = await createClient();
@@ -377,13 +379,19 @@ export async function learnStatementAccountAction(input: {
     if (!isUuid(input.customerId) || !customerInScope(ctx, input.customerId)) return { ok: false };
     const name = (typeof input.counterpartyName === "string" ? input.counterpartyName : "").trim().slice(0, 200);
     const code = (typeof input.accountCode === "string" ? input.accountCode : "").trim().slice(0, 12);
-    if (!name || !code || (input.direction !== "in" && input.direction !== "out")) return { ok: false };
+    const amt = typeof input.amount === "number" && isFinite(input.amount) && input.amount > 0 ? input.amount : null;
+    // ชื่อ "หรือ" ยอด อย่างใดอย่างหนึ่ง (กติกา 0128)
+    if ((!name && !amt) || !code || (input.direction !== "in" && input.direction !== "out")) return { ok: false };
     await recordAccountRules(service, {
       tenantId: ctx.tenantId,
       entryType: input.direction === "in" ? "sale" : "purchase",
       counterpartyTaxId: null,
-      counterpartyName: name,
-      lines: [{ accountCode: code, accountName: (input.accountName ?? "").slice(0, 120) || null }],
+      counterpartyName: name || null,
+      lines: [{
+        accountCode: code,
+        accountName: (input.accountName ?? "").slice(0, 120) || null,
+        amount: amt,
+      }],
     });
     return { ok: true };
   } catch {
@@ -611,11 +619,12 @@ export async function matchStatementWithBillsAction(input: {
         if (matches[i]) return null; // มีบิลแล้ว — บัญชีตามบิล
         if (t.direction !== "in" && t.direction !== "out") return null;
         const name = (t.counterparty_name ?? "").trim();
-        if (!name) return null;
+        const amt = typeof t.amount === "number" && t.amount > 0 ? t.amount : null;
+        if (!name && !amt) return null; // ชื่อ "หรือ" ยอด อย่างใดอย่างหนึ่ง (กติกา 0128)
         const entryType = t.direction === "in" ? "sale" : "purchase";
-        const cacheKey = `${entryType}|${name}`;
+        const cacheKey = `${entryType}|${name}|${amt ?? ""}`;
         if (sugCache.has(cacheKey)) return sugCache.get(cacheKey) ?? null;
-        const sug = await suggestAccountCode(service, ctx.tenantId, entryType, null, name).catch(() => null);
+        const sug = await suggestAccountCode(service, ctx.tenantId, entryType, null, name || null, amt).catch(() => null);
         const out: AccountSuggestion = sug ? { code: sug.accountCode, name: sug.accountName } : null;
         sugCache.set(cacheKey, out);
         return out;

@@ -902,14 +902,50 @@ export default function EntryEditor({
               ) : null}
               {fxMsg ? <div className="acc-field acc-field-wide action-msg err">{fxMsg}</div> : null}
 
-              {/* hint บัญชีคู่ (ช่วยตรวจ — ยังไม่ลงจริง แค่บอกให้เห็น) · เงินโอน → 1020 เงินฝากธนาคาร
-                  ★ ฝั่งตามประเภทบิล (กติกาผู้ใช้ 2026-09-02 — ตรงกับ journal.ts ที่ลงจริงอยู่แล้ว):
-                    ขาย = เงินเข้า → บัญชีคู่ฝั่ง "เดบิต" · ซื้อ = เงินออก → ฝั่ง "เครดิต"
-                    (เดิมป้ายเขียน "เครดิต" ตายตัวทุกกรณี ทำให้บิลขายอ่านแล้วสับสน) */}
+              {/* ★ การลงบัญชี 2 ฝั่ง (แบบผู้ใช้อนุมัติ 2026-09-02):
+                    ซ้าย = ฝั่งเงิน (จากวิธีจ่าย เช่น โอน→1020) ขาย=เดบิต ซื้อ=เครดิต — ตรง journal.ts จริง
+                    ขวา = ฝั่งตรงข้าม "เว้นว่างให้นักบัญชีกรอก" (ไม่ auto-fill — ระบบจำชื่อ/ยอดซ้ำจากที่
+                    กรอกไว้ผ่าน learning ตอนบันทึก · อนาคต AI แม่นค่อยเติมเอง) = บัญชีของบรรทัดรายการ
+                    (บิลบรรทัดเดียวแก้ตรงนี้ = แก้บรรทัดให้เลย · หลายบรรทัดชี้ไปแก้ที่ตาราง) */}
               {contraHint ? (
-                <div className="acc-field acc-field-wide acc-contra-hint">
-                  บัญชีคู่{entryType === "sale" ? " (เดบิต)" : entryType === "purchase" ? " (เครดิต)" : ""}:{" "}
-                  {contraHint.code ? <b>{contraHint.code}</b> : null} {contraHint.name}
+                <div className="acc-field acc-field-wide">
+                  <span>การลงบัญชี (บัญชีคู่)</span>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px" }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: entryType === "sale" ? "#166534" : "#b91c1c" }}>
+                        {entryType === "sale" ? "เดบิต (เงินเข้า)" : entryType === "purchase" ? "เครดิต (เงินออก)" : "บัญชีคู่"}
+                      </div>
+                      <div style={{ fontSize: 14, marginTop: 2 }}>
+                        {contraHint.code ? <b>{contraHint.code}</b> : null} {contraHint.name}
+                      </div>
+                      <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>อัตโนมัติตามวิธีรับ/จ่ายเงิน</div>
+                    </div>
+                    <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px" }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: entryType === "sale" ? "#b91c1c" : "#166534" }}>
+                        {entryType === "sale" ? "เครดิต (ฝั่งตรงข้าม)" : entryType === "purchase" ? "เดบิต (ฝั่งตรงข้าม)" : "ฝั่งตรงข้าม"}
+                      </div>
+                      {lines.length === 1 ? (
+                        <div style={{ marginTop: 4 }}>
+                          <AccountCombobox
+                            accountCode={lines[0].accountCode}
+                            accountName={lines[0].accountName}
+                            chart={chart}
+                            readOnly={locked}
+                            onSelect={(code, name) => patchLine(lines[0].key, { accountCode: code, accountName: name })}
+                            onNameChange={(name) => patchLine(lines[0].key, { accountName: name })}
+                            onClear={() => patchLine(lines[0].key, { accountCode: "", accountName: "" })}
+                          />
+                          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                            เว้นว่างให้กรอกเอง — ระบบจำชื่อผู้โอน/ยอดซ้ำที่กรอก ไว้เติมให้อัตโนมัติเมื่อแม่น
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                          หลายบรรทัด — เลือกบัญชีที่ตารางรายการด้านล่าง
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               ) : null}
               <label className="acc-field acc-field-wide">

@@ -8,13 +8,18 @@ import { normalizeName, digitsOnly } from "@/lib/line/bill-extract-worker";
 
 type EntryType = "purchase" | "sale";
 
-/** สร้าง key ที่ใช้ match (tax แม่นกว่า name) จากคู่ค้า */
-function keysOf(counterpartyTaxId: string | null, counterpartyName: string | null) {
-  const keys: { match_type: "tax" | "name"; match_key: string }[] = [];
+/** สร้าง key ที่ใช้ match จากคู่ค้า/ยอด — เรียงแม่น→หยาบ: tax → name → amount
+ *  ★ 2026-09-02 กติกาผู้ใช้: ชื่อผู้โอน "หรือ" ยอดซ้ำ อย่างใดอย่างหนึ่งก็จับได้
+ *    (ยอดซ้ำ = ค่าบริการฟิกราคา เช่น 5,000 = ค่าทำบัญชีรายเดือน) */
+function keysOf(counterpartyTaxId: string | null, counterpartyName: string | null, amount?: number | null) {
+  const keys: { match_type: "tax" | "name" | "amount"; match_key: string }[] = [];
   const tax = digitsOnly(counterpartyTaxId);
   if (tax.length >= 10) keys.push({ match_type: "tax", match_key: tax });
   const name = normalizeName(counterpartyName);
   if (name.length >= 3) keys.push({ match_type: "name", match_key: name });
+  if (typeof amount === "number" && Number.isFinite(amount) && amount > 0) {
+    keys.push({ match_type: "amount", match_key: amount.toFixed(2) });
+  }
   return keys;
 }
 
@@ -29,15 +34,20 @@ export async function recordAccountRules(
     entryType: EntryType;
     counterpartyTaxId: string | null;
     counterpartyName: string | null;
-    lines: { accountCode: string | null; accountName?: string | null }[];
+    lines: { accountCode: string | null; accountName?: string | null; amount?: number | null }[];
   }
 ): Promise<void> {
-  const keys = keysOf(args.counterpartyTaxId, args.counterpartyName);
-  if (keys.length === 0) return;
+  const baseKeys = keysOf(args.counterpartyTaxId, args.counterpartyName);
+  // ไม่ return ตอน baseKeys ว่าง — บรรทัดที่มียอดยังสร้างคีย์ 'amount' ได้ (กติกา 0128: ชื่อหรือยอด)
   const seen = new Set<string>(); // กันซ้ำ (code เดียวกันหลาย line ในบิลเดียว)
   for (const line of args.lines) {
     const code = (line.accountCode ?? "").trim();
     if (!code) continue;
+    // คีย์ยอดของบรรทัดนี้ (ยอดฟิกราคา) — ต่อท้าย tax/name
+    const keys = [...baseKeys];
+    if (typeof line.amount === "number" && Number.isFinite(line.amount) && line.amount > 0) {
+      keys.push({ match_type: "amount", match_key: line.amount.toFixed(2) });
+    }
     for (const k of keys) {
       const dedup = `${k.match_type}|${k.match_key}|${code}`;
       if (seen.has(dedup)) continue;
@@ -87,9 +97,10 @@ export async function suggestAccountCode(
   tenantId: string,
   entryType: EntryType,
   counterpartyTaxId: string | null,
-  counterpartyName: string | null
+  counterpartyName: string | null,
+  amount?: number | null
 ): Promise<{ accountCode: string; accountName: string | null } | null> {
-  for (const k of keysOf(counterpartyTaxId, counterpartyName)) {
+  for (const k of keysOf(counterpartyTaxId, counterpartyName, amount)) {
     try {
       const { data } = await db
         .from("line_account_rules")

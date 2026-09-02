@@ -428,7 +428,12 @@ export async function saveEntryAction(input: SaveEntryInput): Promise<SaveResult
             entryType: etLearn,
             counterpartyTaxId: clampText(input.counterpartyTaxId, 20),
             counterpartyName: clampText(input.counterpartyName, 200),
-            lines: input.lines.map((l) => ({ accountCode: l.accountCode ?? null, accountName: l.accountName ?? null })),
+            lines: input.lines.map((l) => ({
+              accountCode: l.accountCode ?? null,
+              accountName: l.accountName ?? null,
+              // ยอดบรรทัด (ฟิกราคา) — คีย์ learning แบบ "ยอดซ้ำ" (0128)
+              amount: typeof l.amount === "number" && isFinite(l.amount) ? l.amount : Number(l.amount) || null,
+            })),
           });
         } catch {
           /* ไม่ให้กระทบการบันทึกบิล */
