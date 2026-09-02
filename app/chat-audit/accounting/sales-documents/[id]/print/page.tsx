@@ -63,6 +63,19 @@ export default async function SalesDocumentPrintPage({ params }: { params: Promi
   } catch {
     // คอลัมน์ยังไม่ apply → ปล่อยว่าง
   }
+  // โทรศัพท์ผู้ออก — best-effort (โชว์หัวกระดาษตามฟอร์มตัวอย่าง 2026-09-02)
+  let businessPhone = "";
+  try {
+    const { data, error } = await service
+      .from("customers")
+      .select("phone")
+      .eq("id", doc.customerId)
+      .eq("tenant_id", access.tenantId)
+      .maybeSingle();
+    if (!error) businessPhone = ((data as { phone: string | null } | null)?.phone ?? "").trim();
+  } catch {
+    // คอลัมน์ยังไม่ apply → ปล่อยว่าง
+  }
 
   const businessName = (cust?.business_name || cust?.name || "").trim();
 
@@ -72,6 +85,7 @@ export default async function SalesDocumentPrintPage({ params }: { params: Promi
       issuerName={businessName}
       issuerTaxId={cust?.tax_id ?? ""}
       issuerAddress={businessAddress}
+      issuerPhone={businessPhone}
       backHref="/chat-audit/accounting/sales-documents"
     />
   );
