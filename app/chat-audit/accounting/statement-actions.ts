@@ -19,6 +19,7 @@ import {
   AccountingAuthError,
 } from "@/lib/accounting/access";
 import { validateUpload, sanitizeUploadName, extOf } from "@/lib/accounting/upload";
+import { getSupabaseEnv } from "@/lib/env";
 
 /** bucket เดียวกับบิล (private) */
 const BILLS_BUCKET = "bills";
@@ -284,11 +285,9 @@ export async function loadSavedStatementAction(input: {
       return { ok: false, message: "ไฟล์ไม่ถูกต้อง" };
     }
 
-    const { data: blob, error } = await service.storage
-      .from(BILLS_BUCKET)
-      .download(p.endsWith(".txns.json") ? p : `${p}.txns.json`);
-    if (error || !blob) return { ok: false, message: "ไฟล์นี้ยังไม่มีผลอ่านเซฟไว้ — กด “อ่านอีกครั้ง”" };
-    const parsed = JSON.parse(await blob.text()) as {
+    const text = await downloadStorageFresh(p.endsWith(".txns.json") ? p : `${p}.txns.json`);
+    if (text === null) return { ok: false, message: "ไฟล์นี้ยังไม่มีผลอ่านเซฟไว้ — กด “อ่านอีกครั้ง”" };
+    const parsed = JSON.parse(text) as {
       fileName?: string;
       transactions?: unknown[];
     };
@@ -422,6 +421,35 @@ function reviewStatePath(tenantId: string, folderCode: string): string {
   return `${tenantId}/${STATEMENT_PREFIX}/${folderCode}/review-state.json`;
 }
 
+/**
+ * อ่านไฟล์จาก storage แบบ "สดเสมอ" (bypass CDN cache)
+ * ★ บั๊กที่ผู้ใช้เจอ 2026-09-02: storage.download() ผ่าน CDN ที่แคชไฟล์ไว้ได้ถึง 1 ชม. →
+ *   หน้าเว็บโหลด review-state ฉบับเก่า แล้วเซฟทับค่าที่เพิ่งแก้ (4010→4030 เด้งกลับ)
+ *   แก้โดย fetch ตรงพร้อม cache-buster + no-store — ไฟล์สถานะห้ามได้ฉบับแคชเด็ดขาด
+ * คืน null เมื่อไฟล์ไม่มี/อ่านไม่ได้ (caller เริ่มจากสถานะว่างเอง)
+ */
+async function downloadStorageFresh(path: string): Promise<string | null> {
+  const env = getSupabaseEnv();
+  if (!env?.serviceRoleKey) return null;
+  try {
+    const res = await fetch(
+      `${env.url}/storage/v1/object/${BILLS_BUCKET}/${path}?fresh=${Date.now()}`,
+      {
+        headers: {
+          apikey: env.serviceRoleKey,
+          Authorization: `Bearer ${env.serviceRoleKey}`,
+          "Cache-Control": "no-cache",
+        },
+        cache: "no-store",
+      },
+    );
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
 function sanitizeReviewState(raw: unknown): StatementReviewState {
   const r = (raw ?? {}) as { reviewed?: unknown; manual?: unknown };
   const reviewed = (Array.isArray(r.reviewed) ? r.reviewed : [])
@@ -463,11 +491,9 @@ export async function loadStatementReviewStateAction(input: {
     }
     const folderCode = await resolveFolderCode(service, ctx.tenantId, input.customerId);
     if (!folderCode) return { ok: false, message: "ไม่พบลูกค้าที่เลือก" };
-    const { data: blob } = await service.storage
-      .from(BILLS_BUCKET)
-      .download(reviewStatePath(ctx.tenantId, folderCode));
-    if (!blob) return { ok: true, state: { reviewed: [], manual: {} } }; // ยังไม่เคยติ๊ก
-    return { ok: true, state: sanitizeReviewState(JSON.parse(await blob.text())) };
+    const text = await downloadStorageFresh(reviewStatePath(ctx.tenantId, folderCode));
+    if (text === null) return { ok: true, state: { reviewed: [], manual: {} } }; // ยังไม่เคยติ๊ก
+    return { ok: true, state: sanitizeReviewState(JSON.parse(text)) };
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: true, state: { reviewed: [], manual: {} } }; // อ่านพัง = เริ่มว่าง (ไม่ block หน้า)
@@ -492,6 +518,7 @@ export async function saveStatementReviewStateAction(input: {
       .upload(reviewStatePath(ctx.tenantId, folderCode), Buffer.from(body, "utf8"), {
         contentType: "application/json",
         upsert: true,
+        cacheControl: "0", // ★ ห้าม CDN แคช — บั๊ก 2026-09-02: ฉบับแคชเก่าถูกโหลดกลับมาแล้วเซฟทับค่าที่แก้ไปแล้ว
       });
     return { ok: !error };
   } catch {

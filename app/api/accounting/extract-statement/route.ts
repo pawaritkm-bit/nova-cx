@@ -183,6 +183,7 @@ export async function POST(request: NextRequest) {
           .upload(`${path}.txns.json`, Buffer.from(sidecar, "utf8"), {
             contentType: "application/json",
             upsert: true,
+            cacheControl: "0", // ★ ห้าม CDN แคชไฟล์สถานะ (บั๊กฉบับแคชเก่าทับของใหม่ 2026-09-02)
           });
         saved = !up.error;
       } catch {
