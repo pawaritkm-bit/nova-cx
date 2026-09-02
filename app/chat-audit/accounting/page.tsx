@@ -912,6 +912,11 @@ export default async function AccountingPage({
       // lead: ตัดลูกค้าที่อยู่นอกทีมออก (กัน override ผ่าน query param คนนอกทีม)
       scopeCustomerIds = teamScope ? ids.filter((id) => teamScope.has(id)) : ids;
       selectedAccountantName = await getEmployeeName(service, tenantId, accountantParam);
+    } else if (sp.edit && UUID_RE.test(sp.edit)) {
+      // ★ 2026-09-02 บั๊กที่ผู้ใช้เจอ: ลิงก์ "แก้บิลที่ตกหล่น" (?edit=) จากหน้างบ ไม่มี accountant
+      //   → เด้งหน้า "เลือกนักบัญชี" แทนตัวแก้บิล · แก้: มี edit = ข้ามหน้าเลือกไปเปิดตัวแก้เลย
+      //   สิทธิ์ยังคุมครบ: lead จำกัดสโคปทีม + fast-path ด้านล่างแคบเหลือลูกค้าของบิลใบนั้น
+      scopeCustomerIds = teamScope ? [...teamScope] : undefined;
     } else if (access.mode === "lead") {
       // หัวหน้าทีม ยังไม่เลือก → หน้าแรก = การ์ดนักบัญชีในทีม
       const cards = await listTeamAccountantCards(service, tenantId, access.employeeId!);

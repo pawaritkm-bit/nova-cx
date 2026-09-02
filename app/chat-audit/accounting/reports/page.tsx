@@ -590,20 +590,10 @@ export default async function AccountingReportsPage({
                         </a>
                       </li>
                     ) : null}
+                    {/* ★ 2026-09-02 ผู้ใช้: เหลือปุ่มเดียว (แก้บิลที่ตกหล่น) — บรรทัดร่างเป็นข้อความเฉย ๆ */}
                     {includeDraft && draftCount > 0 ? (
-                      <li style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <span>
-                          รวมบิล <strong>ร่าง {draftCount.toLocaleString("th-TH")}</strong> ใบในงบนี้ (ติ๊ก “เฉพาะที่ยืนยันแล้ว” เพื่อตัดออก)
-                        </span>
-                        <a
-                          className="btn btn-sm btn-ghost"
-                          style={{ flexShrink: 0 }}
-                          href={`/chat-audit/accounting?open=${customerId}`}
-                          target="_blank"
-                          rel="noopener"
-                        >
-                          ไปหน้าตรวจ/ยืนยันบิล ↗
-                        </a>
+                      <li>
+                        รวมบิล <strong>ร่าง {draftCount.toLocaleString("th-TH")}</strong> ใบในงบนี้ (ติ๊ก “เฉพาะที่ยืนยันแล้ว” เพื่อตัดออก)
                       </li>
                     ) : null}
                   </ul>
