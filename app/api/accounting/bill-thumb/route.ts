@@ -58,7 +58,26 @@ export async function GET(request: NextRequest) {
     if (!path) path = entry.upload_path;
     if (!path) return NextResponse.json({ ok: false }, { status: 404 });
     const isImage = (entry.upload_mime ?? "").startsWith("image/") || IMG_EXT_RE.test(path);
-    if (!isImage) return NextResponse.json({ ok: false }, { status: 404 });
+    const isPdf =
+      !isImage && ((entry.upload_mime ?? "") === "application/pdf" || /\.pdf($|\?)/i.test(path));
+    if (!isImage && !isPdf) return NextResponse.json({ ok: false }, { status: 404 });
+
+    // ★ 2026-09-02 ผู้ใช้: "รูปต้องเป็นรูปจากไฟล์ แต่ยังเป็น pdf อยู่" — บิล PDF เรนเดอร์หน้าแรก
+    //   เป็นรูปเหมือนบิลรูปถ่าย (ใช้ renderPdfPagesToPng ตัวเดียวกับฟีเจอร์ตัดหน้า) · เรนเดอร์ไม่ได้ → 404
+    //   (หน้าเว็บโชว์ป้าย PDF ตามเดิม) · เบราว์เซอร์ cache 1 ชม. เหมือนรูปปกติ
+    if (isPdf) {
+      const { data: blob } = await service.storage.from(BILLS_BUCKET).download(path);
+      if (!blob) return NextResponse.json({ ok: false }, { status: 404 });
+      const { renderPdfPagesToPng } = await import("@/lib/accounting/pdf-page-images");
+      const scale = width <= 480 ? 0.7 : 1.6; // thumb เล็กไม่ต้องคม 2x — เร็วกว่า
+      const pages = await renderPdfPagesToPng(Buffer.from(await blob.arrayBuffer()), { maxPages: 1, scale });
+      const png = pages?.[0];
+      if (!png) return NextResponse.json({ ok: false }, { status: 404 });
+      return new NextResponse(new Uint8Array(png), {
+        status: 200,
+        headers: { "content-type": "image/png", "cache-control": "private, max-age=3600" },
+      });
+    }
 
     // ย่อฝั่ง storage ผ่าน render endpoint ตรง ๆ (Accept: webp → ได้ webp เล็กกว่า PNG ~5-10 เท่า
     //   download({transform}) ของ supabase-js ไม่ส่ง Accept เลยได้ PNG กลับมา — ทดสอบจริง 2026-09-01)

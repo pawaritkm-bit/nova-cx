@@ -44,7 +44,11 @@ export async function pdfPageCount(buf: Buffer): Promise<number | null> {
 /**
  * เรนเดอร์ทุกหน้าเป็น PNG (เรียงตามหน้า) — null = เรนเดอร์ไม่ได้/หน้าเกินเพดาน/ได้แต่หน้าขาวล้วน
  */
-export async function renderPdfPagesToPng(buf: Buffer): Promise<Buffer[] | null> {
+export async function renderPdfPagesToPng(
+  buf: Buffer,
+  // ★ 2026-09-02 (thumbnail PDF): จำกัดหน้าที่เรนเดอร์ + scale เอง — bill-thumb ใช้หน้าแรกหน้าเดียว
+  opts: { maxPages?: number; scale?: number } = {}
+): Promise<Buffer[] | null> {
   try {
     const pdfjs = await loadPdfjs();
     const { createCanvas } = await import("@napi-rs/canvas");
@@ -54,12 +58,14 @@ export async function renderPdfPagesToPng(buf: Buffer): Promise<Buffer[] | null>
       await doc.destroy();
       return null;
     }
+    const renderPages = Math.min(pages, Math.max(1, opts.maxPages ?? pages));
+    const scale = opts.scale && opts.scale > 0 ? opts.scale : RENDER_SCALE;
 
     const out: Buffer[] = [];
     let anyInk = false;
-    for (let p = 1; p <= pages; p++) {
+    for (let p = 1; p <= renderPages; p++) {
       const page = await doc.getPage(p);
-      const vp = page.getViewport({ scale: RENDER_SCALE });
+      const vp = page.getViewport({ scale });
       const canvas = createCanvas(Math.ceil(vp.width), Math.ceil(vp.height));
       const ctx = canvas.getContext("2d");
       // พื้นหลังขาว (หน้า PDF โปร่งใส → PNG ดำทั้งหน้า)

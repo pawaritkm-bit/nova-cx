@@ -124,6 +124,12 @@ function entryIsImage(e: BillEntry): boolean {
   return (e.uploadMime ?? "").startsWith("image/");
 }
 
+/** ★ 2026-09-02 — บิล PDF โชว์รูปหน้าแรกผ่าน bill-thumb เหมือนบิลรูป */
+function entryIsPdfThumb(e: BillEntry): boolean {
+  const p = entryObjectPath(e) ?? "";
+  return (e.uploadMime ?? "") === "application/pdf" || /\.pdf($|\?)/i.test(p);
+}
+
 /** ป้ายนามสกุลไฟล์ (PDF/XLSX/CSV…) สำหรับ thumbnail ของไฟล์ที่ไม่ใช่รูป */
 function fileExtLabel(name: string | null, objectPath: string | null): string {
   const ext = extOf(name || objectPath || "");
@@ -553,7 +559,7 @@ function EntryTable({
             tNet += s.net;
             const multi = e.lines.length > 1;
             const objectPath = entryObjectPath(e);
-            const isImg = entryIsImage(e);
+            const isImg = entryIsImage(e) || entryIsPdfThumb(e); // ★ PDF = รูปหน้าแรกผ่าน bill-thumb
             const viewUrl = objectPath ? signed.get(objectPath) ?? null : null;
             const editHref = editHrefOf(e.id);
             const single = e.lines[0] ?? null;

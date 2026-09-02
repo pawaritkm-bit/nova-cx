@@ -59,6 +59,11 @@ function entryIsImage(e: BillEntry): boolean {
   if (e.attachmentObjectPath) return IMG_EXT_RE.test(e.attachmentObjectPath);
   return (e.uploadMime ?? "").startsWith("image/");
 }
+/** ★ 2026-09-02 ผู้ใช้: บิล PDF ต้องโชว์เป็น "รูป" เหมือนบิลรูปถ่าย — bill-thumb เรนเดอร์หน้าแรกให้ */
+function entryIsPdf(e: BillEntry): boolean {
+  const p = e.attachmentObjectPath ?? e.uploadPath ?? "";
+  return (e.uploadMime ?? "") === "application/pdf" || /\.pdf($|\?)/i.test(p);
+}
 
 async function signPaths(service: SupabaseClient, paths: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
@@ -650,8 +655,9 @@ export default async function AccountingWorkspacePage({
                   const warnAnoms = anomalies.filter((a) => a.severity === "warn");
                   const path = entryPath(e);
                   const url = path ? signed.get(path) ?? null : null;
-                  const img = entryIsImage(e);
+                  const img = entryIsImage(e) || entryIsPdf(e); // PDF = รูปหน้าแรกผ่าน bill-thumb
                   const pend = isPending(e);
+                  const lightboxSrc = entryIsImage(e) ? url : `/api/accounting/bill-thumb?entry=${e.id}&w=1300&v=2`;
                   return (
                     <div key={e.id} className={`wsp-card${pend ? " pend" : " done"}`}>
                       <div className="wsp-thumb">
@@ -677,7 +683,7 @@ export default async function AccountingWorkspacePage({
                           {/* ★ perf: loading=lazy — lightbox ซ่อนด้วย display:none จึงไม่ intersect
                               → รูปเต็มโหลด "ตอนกดขยาย" เท่านั้น (เดิมโหลดเต็มทุกใบตั้งแต่เปิดหน้า) */}
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={url} alt="บิล (ขยาย)" loading="lazy" decoding="async" />
+                          <img src={lightboxSrc ?? undefined} alt="บิล (ขยาย)" loading="lazy" decoding="async" />
                           <span className="wsp-lightbox-close">✕ ปิด</span>
                         </a>
                       ) : null}

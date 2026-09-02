@@ -641,7 +641,12 @@ export async function matchStatementWithBillsAction(input: {
         totalGross: Math.round(t.gross * 100) / 100,
         totalNet: Math.round(t.net * 100) / 100,
         uploadUrl,
-        uploadIsImage: !!uploadUrl && /^image\//i.test(r.upload_mime ?? ""),
+        // ★ 2026-09-02: PDF ก็โชว์เป็นรูปได้ (bill-thumb เรนเดอร์หน้าแรกเป็น PNG ให้)
+        uploadIsImage:
+          !!uploadUrl &&
+          (/^image\//i.test(r.upload_mime ?? "") ||
+            r.upload_mime === "application/pdf" ||
+            /\.pdf$/i.test(r.upload_path ?? "")),
         accountCode: t.acctCode,
         accountName: t.acctName,
         accountMissing: t.missing,
