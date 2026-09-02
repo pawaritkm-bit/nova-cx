@@ -452,7 +452,8 @@ export default function StatementAnalyzer({
     return [...monthly]
       .sort((a, b) => (b.month || "").localeCompare(a.month || "")) // ใหม่ → เก่า
       .map((m) => {
-        const rep = findRepeatCounterparties(byMonth.get(m.month || "") ?? []);
+        // minCount 1 = ทุกคน (โอนซ้ำเรียงอยู่บนสุด — requirement 2026-09-02)
+        const rep = findRepeatCounterparties(byMonth.get(m.month || "") ?? [], { minCount: 1 });
         return {
           ...m,
           repeatIn: rep.filter((r) => r.direction === "in"),
@@ -830,7 +831,7 @@ export default function StatementAnalyzer({
 
           {/* ★ คนโอนซ้ำ แยกรายเดือน + สรุปท้ายเดือน/รวมทุกเดือน (แบบผู้ใช้อนุมัติ 2026-09-02) */}
           <section className="stmt-section">
-            <h3 className="stmt-h">คนที่โอนซ้ำ (ตั้งแต่ 2 ครั้งขึ้นไป) — แยกรายเดือน</h3>
+            <h3 className="stmt-h">ผู้โอนเข้า/ออก ทุกคน (คนโอนซ้ำอยู่บนสุด) — แยกรายเดือน</h3>
             {monthlyRepeats.map((m) => (
               <div
                 key={m.month || "none"}
@@ -838,8 +839,8 @@ export default function StatementAnalyzer({
               >
                 <div style={{ fontWeight: 700, marginBottom: 6 }}>📅 {monthLabel(m.month)}</div>
                 <div className="stmt-repeat-grid">
-                  <RepeatTable title="โอนเข้าซ้ำ (ลูกค้าประจำ?)" rows={m.repeatIn} tone="in" />
-                  <RepeatTable title="โอนออกซ้ำ (จ่ายประจำ?)" rows={m.repeatOut} tone="out" />
+                  <RepeatTable title="โอนเข้า (ซ้ำ ≥2 ครั้ง อยู่บนสุด)" rows={m.repeatIn} tone="in" />
+                  <RepeatTable title="โอนออก (ซ้ำ ≥2 ครั้ง อยู่บนสุด)" rows={m.repeatOut} tone="out" />
                 </div>
                 <div
                   style={{
@@ -1322,7 +1323,7 @@ function RepeatTable({
     return (
       <div className="stmt-repeat-col">
         <div className={`stmt-repeat-title ${tone}`}>{title}</div>
-        <p className="empty">ไม่พบคนที่โอนซ้ำ</p>
+        <p className="empty">ไม่มีรายการ (หรือระบุตัวผู้โอนไม่ได้)</p>
       </div>
     );
   }

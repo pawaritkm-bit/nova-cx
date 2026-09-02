@@ -200,7 +200,15 @@ function pickMostCommon(m: Map<string, number>): string {
  *   คืนเฉพาะกลุ่มที่ count >= MIN_REPEAT · เรียงจำนวนครั้งมาก→น้อย แล้วยอดรวมมาก→น้อย
  *   ★ รายการที่ไม่มีทั้งชื่อคู่ค้าและเลขบัญชี/ระบุทิศทางไม่ได้ = ข้าม (จับคู่ไม่ได้)
  */
-export function findRepeatCounterparties(txns: StatementTxn[]): RepeatParty[] {
+export function findRepeatCounterparties(
+  txns: StatementTxn[],
+  opts: {
+    /** จำนวนครั้งขั้นต่ำ (default MIN_REPEAT=2) — ★ 2026-09-02 ส่ง 1 = โชว์ผู้โอน "ทุกคน"
+     *  (คนโอนครั้งเดียวด้วย) — การเรียง ครั้งมาก→น้อย ทำให้คนโอนซ้ำอยู่บนสุดเอง */
+    minCount?: number;
+  } = {}
+): RepeatParty[] {
+  const minCount = opts.minCount ?? MIN_REPEAT;
   // ผ่านรอบแรก: หาว่าชื่อ (normalize) ไหนผูกกับเลขบัญชีไหนบ่อยที่สุด (โหวตจากแถวที่มีทั้งคู่)
   const nameToAcctVotes = new Map<string, Map<string, number>>(); // key: `${direction} ${nameNorm}`
   for (const t of txns) {
@@ -260,7 +268,7 @@ export function findRepeatCounterparties(txns: StatementTxn[]): RepeatParty[] {
 
   const result: RepeatParty[] = [];
   for (const agg of map.values()) {
-    if (agg.count < MIN_REPEAT) continue;
+    if (agg.count < minCount) continue;
     const bestName = pickMostCommon(agg.names);
     const bestAcct = pickMostCommon(agg.accountNos);
     result.push({
