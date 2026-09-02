@@ -62,10 +62,15 @@ export function visibleBooks(selected: string): BookKind[] {
  */
 export function classifyBook(
   entryType: BillEntry["entryType"],
-  _paymentMethod: PaymentMethod | null
+  paymentMethod: PaymentMethod | null
 ): BookKind {
-  if (entryType === "purchase") return "purchase";
-  if (entryType === "sale") return "sale";
+  // ★ 2026-09-02 ผู้ใช้ยืนยันกติกาบัญชีมาตรฐาน (แทนกติกาเดิม 2026-08-04 ที่จัดตามชนิดเอกสารล้วน):
+  //   บิลที่ "รับ/จ่ายเงินแล้ว" (เงินสด/โอน) → เล่มรับเงิน (ขาย) / เล่มจ่ายเงิน (ซื้อ)
+  //   บิลเชื่อ/ยังไม่ระบุวิธีชำระ (ตั้งลูกหนี้-เจ้าหนี้) → เล่มขาย / เล่มซื้อ ตามเดิม
+  //   ใบละเล่มเดียวเหมือนเดิม (ไม่นับซ้ำ) — ยอดรวมงบไม่เปลี่ยน แค่ย้ายเล่ม
+  const paid = paymentMethod === "cash" || paymentMethod === "transfer";
+  if (entryType === "purchase") return paid ? "payment" : "purchase";
+  if (entryType === "sale") return paid ? "receipt" : "sale";
   // unspecified/อื่น ๆ → ทั่วไป (ในทางปฏิบัติ journal.ts กรอง unspecified ออกก่อนแล้ว)
   return "general";
 }
