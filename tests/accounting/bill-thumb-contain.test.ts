@@ -18,4 +18,22 @@ describe("bill-thumb: render ต้องใช้ resize=contain (กันค�
     expect(calls.length).toBeGreaterThan(0);
     for (const c of calls) expect(c).toContain("resize=contain");
   });
+
+  it("createSignedUrl แบบ transform (หน้าตรวจ/แก้) ต้องมี resize: contain ด้วย", () => {
+    const s = readFileSync(
+      join(__dirname, "..", "..", "app/chat-audit/accounting/page.tsx"),
+      "utf8"
+    );
+    const transforms = s.match(/transform:\s*\{[^}]*\}/g) ?? [];
+    expect(transforms.length).toBeGreaterThan(0);
+    for (const t of transforms) expect(t).toMatch(/resize:\s*"contain"/);
+  });
+
+  it("thumbnail ลิสต์หน้าตรวจ/ยืนยัน ใช้ bill-thumb (รูปย่อ) ไม่ใช่ signed URL รูปเต็ม", () => {
+    const s = readFileSync(
+      join(__dirname, "..", "..", "app/chat-audit/accounting/page.tsx"),
+      "utf8"
+    );
+    expect(s).toMatch(/acc-thumb[\s\S]{0,600}bill-thumb\?entry=/);
+  });
 });

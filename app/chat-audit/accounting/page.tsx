@@ -473,7 +473,8 @@ async function signResizedImage(service: SupabaseClient, path: string): Promise<
   try {
     const { data, error } = await service.storage
       .from(BILLS_BUCKET)
-      .createSignedUrl(path, SIGNED_URL_TTL_SEC, { transform: { width: 1300, quality: 66 } });
+      // ★ resize:"contain" จำเป็น — ไม่ระบุ = cover ครอปข้างรูป (บั๊กเดียวกับ bill-thumb 2026-09-02)
+      .createSignedUrl(path, SIGNED_URL_TTL_SEC, { transform: { width: 1300, quality: 66, resize: "contain" } });
     if (!error && data?.signedUrl) return data.signedUrl;
   } catch {
     // transform ไม่รองรับ → fallback รูปเต็ม
@@ -562,11 +563,13 @@ function EntryTable({
                 {/* ---- docrow (หัวเอกสาร) ---- */}
                 <tr className={`acc-docrow${e.status === "confirmed" ? " is-confirmed" : ""}`}>
                   <td>
-                    {viewUrl && isImg ? (
+                    {(viewUrl || objectPath) && isImg ? (
                       <Link href={editHref} className="acc-thumb" aria-label="เปิดตรวจ/แก้บิล" scroll={false}>
                         {/* ★ perf: lazy — โหลดเฉพาะรูปที่เห็นในจอ (ลูกค้าบิลเยอะ 100+ ใบ ไม่โหลดพร้อมกันหมด/ไม่โหลดแท็บที่ซ่อน) */}
+                        {/* ★ perf 2026-09-02 (ผู้ใช้สั่ง): thumbnail ลิสต์ใช้รูปย่อ bill-thumb (~12KB)
+                            แทน signed URL รูปเต็ม (หลายร้อย KB ต่อใบ ×48 ใบ = โหลดช้า) */}
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={viewUrl} alt="บิล" loading="lazy" decoding="async" />
+                        <img src={`/api/accounting/bill-thumb?entry=${e.id}&w=360&v=2`} alt="บิล" loading="lazy" decoding="async" />
                       </Link>
                     ) : objectPath ? (
                       <Link href={editHref} className="acc-thumb acc-thumb-file" aria-label="เปิดตรวจ/แก้ไฟล์" scroll={false}>
