@@ -157,6 +157,14 @@ export default function StatementAnalyzer({
   const [savedFiles, setSavedFiles] = useState<SavedStatementFile[] | null>(null);
   // กำลังโหลดผลที่จำไว้ตอนเปิดหน้า (โชว์น้อง NOVA วิ่ง)
   const [autoLoading, setAutoLoading] = useState(true);
+  // ★ กรองรายเดือน (2026-09-02): คลิกการ์ดเดือน → รายการจับคู่ด้านล่างเหลือเฉพาะเดือนนั้น
+  //   (เลื่อนดูง่าย) · คลิกซ้ำ/กดล้าง = กลับมาทุกเดือน · null = ไม่กรอง
+  const [monthFilter, setMonthFilter] = useState<string | null>(null);
+  const txnSectionRef = useRef<HTMLElement | null>(null);
+  const inMonth = useCallback(
+    (t: StatementTxn) => !monthFilter || (bkkMonthKey(t.date) ?? "") === monthFilter,
+    [monthFilter]
+  );
   // path ที่กำลังอ่านซ้ำจาก storage (ไฟล์เก่าที่ยังไม่มีผลเซฟ)
   const [rereading, setRereading] = useState<string | null>(null);
   /** กระทบ txns ชุดที่ให้กับบิลของลูกค้า (เรียกอัตโนมัติหลังอ่าน/สร้างบิล + ปุ่ม manual) */
@@ -759,7 +767,33 @@ export default function StatementAnalyzer({
             <h3 className="stmt-h">สรุปรายเดือน{fileResults.length > 1 ? " (รวมทุกไฟล์)" : ""}</h3>
             <div className="stmt-month-cards">
               {monthly.map((m) => (
-                <div key={m.month || "none"} className="stmt-month-card">
+                <div
+                  key={m.month || "none"}
+                  className="stmt-month-card"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={monthFilter === (m.month || "")}
+                  title="คลิกเพื่อดูรายการเฉพาะเดือนนี้ (คลิกซ้ำเพื่อดูทุกเดือน)"
+                  style={{
+                    cursor: "pointer",
+                    ...(monthFilter === (m.month || "")
+                      ? { border: "2px solid #2563eb", boxShadow: "0 0 0 3px #dbeafe" }
+                      : undefined),
+                  }}
+                  onClick={() => {
+                    const key = m.month || "";
+                    const next = monthFilter === key ? null : key;
+                    setMonthFilter(next);
+                    if (next) txnSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      const key = m.month || "";
+                      setMonthFilter((prev) => (prev === key ? null : key));
+                    }
+                  }}
+                >
                   <div className="stmt-month-title">{monthLabel(m.month)}</div>
                   <div className="stmt-month-row in">
                     <span>เงินเข้า ({m.inCount})</span>
@@ -827,9 +861,22 @@ export default function StatementAnalyzer({
           </section>
 
           {/* ตารางธุรกรรม — แยกกอง "เงินเข้า" / "เงินออก" (requirement 2026-09-01) + คอลัมน์กระทบกับบิล */}
-          <section className="stmt-section">
+          <section className="stmt-section" ref={txnSectionRef}>
             <div className="stmt-upload-bar" style={{ marginBottom: 6 }}>
-              <h3 className="stmt-h" style={{ margin: 0 }}>รายการธุรกรรม ({txns.length}) — แก้ได้</h3>
+              <h3 className="stmt-h" style={{ margin: 0 }}>
+                รายการธุรกรรม ({txns.filter(inMonth).length.toLocaleString("th-TH")}
+                {monthFilter ? `/${txns.length.toLocaleString("th-TH")}` : ""}) — แก้ได้
+              </h3>
+              {monthFilter ? (
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ background: "#eff6ff", borderColor: "#2563eb", color: "#1d4ed8" }}
+                  onClick={() => setMonthFilter(null)}
+                >
+                  📅 เฉพาะ {monthLabel(monthFilter)} — กดเพื่อดูทุกเดือน ✕
+                </button>
+              ) : null}
               <button type="button" className="btn btn-ghost" disabled={matching} onClick={() => void runBillMatch(txns)}>
                 {matching ? "กำลังกระทบกับบิล…" : "🔄 กระทบกับบิลอีกครั้ง"}
               </button>
@@ -849,7 +896,7 @@ export default function StatementAnalyzer({
               reviewed={reviewed}
               manualPick={manualPick}
               uploadingRow={uploadingRow}
-              filter={(t) => t.direction === "in"}
+              filter={(t) => t.direction === "in" && inMonth(t)}
               updateTxn={updateTxn}
               onToggleReviewed={(k) =>
                 setReviewed((prev) => {
@@ -872,7 +919,7 @@ export default function StatementAnalyzer({
               reviewed={reviewed}
               manualPick={manualPick}
               uploadingRow={uploadingRow}
-              filter={(t) => t.direction === "out"}
+              filter={(t) => t.direction === "out" && inMonth(t)}
               updateTxn={updateTxn}
               onToggleReviewed={(k) =>
                 setReviewed((prev) => {
@@ -895,7 +942,7 @@ export default function StatementAnalyzer({
               reviewed={reviewed}
               manualPick={manualPick}
               uploadingRow={uploadingRow}
-              filter={(t) => t.direction !== "in" && t.direction !== "out"}
+              filter={(t) => t.direction !== "in" && t.direction !== "out" && inMonth(t)}
               updateTxn={updateTxn}
               onToggleReviewed={(k) =>
                 setReviewed((prev) => {
