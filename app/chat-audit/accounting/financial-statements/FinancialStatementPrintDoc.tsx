@@ -271,7 +271,8 @@ export default function FinancialStatementPrintDoc({
   backHref: string;
 }) {
   // ★ 2026-09-02 ผู้ใช้: "หน้าปิดงบเปิดให้แก้ไขได้เหมือนหน้ารายงานสมุดบัญชี" —
-  //   ทุกหน้าเอกสารเป็น contentEditable: คลิกแก้ตัวเลข/ข้อความ/ชื่อผู้จัดทำ/หมายเหตุตรงบนเอกสาร
+  //   ★ 2026-09-03 ผู้ใช้: "ปรับให้หน้าสมุดบัญชีกับปิดงบไม่สามารถแก้ได้" — เอกสารอ่านอย่างเดียว
+  //     (เดิมเป็น contentEditable ทุกหน้า — ถูกถอดออก ตัวเลขต้องตรงข้อมูลจริงเสมอ)
   //   ได้เลยก่อนพิมพ์ (ไม่บันทึกลง DB) — component นี้จึงไม่มี state (state เปลี่ยน = React
   //   วาดใหม่ทับที่ผู้ใช้แก้บนเอกสารหาย)
   const notes: { title: string; text: string }[] = [
@@ -308,7 +309,7 @@ export default function FinancialStatementPrintDoc({
         <a href={backHref} className="fs-btn fs-btn-ghost">
           ← กลับ
         </a>
-        <span className="fs-toolbar-hint">★ คลิกแก้ตัวเลข/ข้อความได้ทุกจุดบนเอกสาร (เหมือนหน้าสมุดรายวัน) — ใช้เฉพาะตอนพิมพ์ ไม่กระทบข้อมูลจริง · ยอดรวมไม่คำนวณใหม่อัตโนมัติ</span>
+        <span className="fs-toolbar-hint">เอกสารคำนวณสดจากข้อมูลบิลจริง (อ่านอย่างเดียว) — ต้องการแก้ตัวเลขให้ไปแก้ที่บิล/รายการปรับปรุง</span>
         <button type="button" className="fs-btn fs-btn-primary" onClick={() => window.print()}>
           🖨 พิมพ์ / บันทึก PDF
         </button>
@@ -321,7 +322,7 @@ export default function FinancialStatementPrintDoc({
       ) : null}
 
       {/* ================= ตัวเอกสาร (A4) — งบกำไรขาดทุน ================= */}
-      <div className="fs-page" contentEditable suppressContentEditableWarning spellCheck={false}>
+      <div className="fs-page">
         <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
         <h1 className="fs-title">งบกำไรขาดทุน</h1>
         <p className="fs-period">สำหรับงวด {periodLabel}</p>
@@ -330,7 +331,7 @@ export default function FinancialStatementPrintDoc({
       </div>
 
       {/* ================= ตัวเอกสาร (A4) — งบแสดงฐานะการเงิน (ขึ้นหน้าใหม่ตอนพิมพ์) ================= */}
-      <div className="fs-page fs-page-break" contentEditable suppressContentEditableWarning spellCheck={false}>
+      <div className="fs-page fs-page-break">
         <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
         <h1 className="fs-title">งบแสดงฐานะการเงิน</h1>
         <p className="fs-period">ณ วันสิ้นงวด {periodLabel}</p>
@@ -344,7 +345,7 @@ export default function FinancialStatementPrintDoc({
       </div>
 
       {/* ================= ตัวเอกสาร (A4) — งบการเปลี่ยนแปลงส่วนของผู้ถือหุ้น (★ 2026-09-02 ขั้น 8 ครบ) ================= */}
-      <div className="fs-page fs-page-break" contentEditable suppressContentEditableWarning spellCheck={false}>
+      <div className="fs-page fs-page-break">
         <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
         <h1 className="fs-title">งบการเปลี่ยนแปลงส่วนของผู้ถือหุ้น</h1>
         <p className="fs-period">สำหรับงวด {periodLabel}</p>
@@ -384,7 +385,7 @@ export default function FinancialStatementPrintDoc({
       </div>
 
       {/* ================= ตัวเอกสาร (A4) — หมายเหตุประกอบงบการเงิน (แก้ไขได้ก่อนพิมพ์) ================= */}
-      <div className="fs-page fs-page-break" contentEditable suppressContentEditableWarning spellCheck={false}>
+      <div className="fs-page fs-page-break">
         <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
         <h1 className="fs-title">หมายเหตุประกอบงบการเงิน</h1>
         <p className="fs-period">สำหรับงวด {periodLabel}</p>
@@ -401,7 +402,7 @@ export default function FinancialStatementPrintDoc({
       </div>
 
       {/* ================= ตัวเอกสาร (A4) — งบกระแสเงินสด (ขึ้นหน้าใหม่ตอนพิมพ์, ส่วน O4) ================= */}
-      <div className="fs-page fs-page-break" contentEditable suppressContentEditableWarning spellCheck={false}>
+      <div className="fs-page fs-page-break">
         <FsLetterhead businessName={businessName} taxId={taxId} address={address} />
         <h1 className="fs-title">งบกระแสเงินสด</h1>
         <p className="fs-period">สำหรับงวด {periodLabel}</p>

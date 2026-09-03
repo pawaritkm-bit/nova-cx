@@ -63,7 +63,8 @@ function countDocs(rows: JbEditRow[]): number {
 /**
  * สมุดรายวัน 5 เล่ม — เอกสารพิมพ์/บันทึก PDF/Excel (ต่อลูกค้า/เดือน)
  *   แต่ละเล่ม: วันที่ | เลขที่ | คำอธิบาย | บัญชี(เดบิต) | เดบิต | บัญชี(เครดิต) | เครดิต + รวมเดบิต/เครดิต
- *   ★ ทุกช่องแก้ได้ (client-only) — พิมพ์และ Excel = ตามที่แก้บนจอ · ไม่บันทึกกลับบิลจริง
+ *   ★ 2026-09-03 ผู้ใช้: "ปรับให้หน้าสมุดบัญชีกับปิดงบไม่สามารถแก้ได้" — อ่านอย่างเดียวทั้งหน้า
+ *     (พิมพ์/Excel = ตามข้อมูลบิลจริง · ต้องการแก้ = ไปแก้ที่บิล)
  *   ★ reuse สไตล์ vr-* (vat-report.css) + jb-* (journal-books.css) · แต่ละเล่มขึ้นหน้าใหม่ตอนพิมพ์
  *   ★ ไม่ยิง network ตอนแก้ · Excel ยิง POST ตอนกดปุ่มเท่านั้น · PDPA: ไม่ log ค่า
  */
@@ -114,14 +115,12 @@ export default function JournalBooksDoc({
   );
   const shownBooks = visibleBooks(book);
 
-  // ---- แถวแก้ได้ต่อเล่ม (client-only) — init ครั้งเดียวจาก props books ----
-  const [bookRows, setBookRows] = useState<Record<BookKind, JbEditRow[]>>(() => {
+  // ---- แถวต่อเล่ม (อ่านอย่างเดียว — ★ 2026-09-03 ผู้ใช้สั่งปิดการแก้) — init จาก props books ----
+  const [bookRows] = useState<Record<BookKind, JbEditRow[]>>(() => {
     const rec = {} as Record<BookKind, JbEditRow[]>;
     for (const k of BOOK_ORDER) rec[k] = initRows(books[k]);
     return rec;
   });
-  // เริ่ม key เพิ่มใหม่ที่เลขสูง ๆ กันชนกับ key เริ่มต้น (0..n ต่อเล่ม)
-  const [nextKey, setNextKey] = useState(1_000_000);
 
   // ยอดรวมเดบิต/เครดิต + จำนวนรายการต่อเล่ม — คิดใหม่สดจากที่แก้บนจอ
   const bookTotals = useMemo(() => {
@@ -138,26 +137,6 @@ export default function JournalBooksDoc({
     return rec;
   }, [bookRows]);
 
-  function updateRow(kind: BookKind, key: number, patch: Partial<JbEditRow>) {
-    setBookRows((prev) => ({
-      ...prev,
-      [kind]: prev[kind].map((r) => (r.key === key ? { ...r, ...patch } : r)),
-    }));
-  }
-  function addRow(kind: BookKind) {
-    const nk = nextKey;
-    setNextKey((k) => k + 1);
-    setBookRows((prev) => ({
-      ...prev,
-      [kind]: [
-        ...prev[kind],
-        { key: nk, dateText: "", docNo: "", description: "", debitAcct: "", debit: "", creditAcct: "", credit: "" },
-      ],
-    }));
-  }
-  function removeRow(kind: BookKind, key: number) {
-    setBookRows((prev) => ({ ...prev, [kind]: prev[kind].filter((r) => r.key !== key) }));
-  }
 
   /** นำทางไปช่วงวันใหม่ (คง customer + เล่มที่เลือกอยู่) */
   function pushRange(from: string, to: string) {
@@ -305,7 +284,7 @@ export default function JournalBooksDoc({
           </select>
         </label>
         <span className="vr-toolbar-hint">
-          แก้ตัวเลข/ข้อความในตารางได้ แล้วพิมพ์/บันทึก PDF หรือ Excel (ทั้งพิมพ์และ Excel = ตามที่แก้บนจอ)
+          สมุดรายวันคำนวณสดจากบิลจริง (อ่านอย่างเดียว) — พิมพ์/บันทึก PDF หรือ Excel ได้เลย
         </span>
         <button
           type="button"
@@ -344,10 +323,7 @@ export default function JournalBooksDoc({
         </div>
 
         {/* ข้อความเตือน (ซ่อนตอนพิมพ์): แก้ในหน้านี้ไม่กระทบข้อมูลบิลจริง */}
-        <div className="vr-editnote no-print" style={{ marginBottom: 10 }}>
-          การแก้ในหน้านี้ใช้เฉพาะตอนพิมพ์/ออก Excel เท่านั้น — ไม่กระทบข้อมูลบิลจริง
-          (ต้องการแก้ข้อมูลจริงให้ไปที่ “ตรวจ/แก้” ที่บิล)
-        </div>
+
 
         {shownBooks.map((kind) => (
           <BookSection
@@ -355,9 +331,6 @@ export default function JournalBooksDoc({
             label={BOOK_LABELS[kind]}
             rows={bookRows[kind]}
             totals={bookTotals[kind]}
-            onUpdate={(key, patch) => updateRow(kind, key, patch)}
-            onAdd={() => addRow(kind)}
-            onRemove={(key) => removeRow(kind, key)}
           />
         ))}
 
@@ -366,21 +339,17 @@ export default function JournalBooksDoc({
   );
 }
 
-/** 1 เล่ม = หัวข้อ + ตารางแก้ได้ + แถวรวม (ขึ้นหน้าใหม่ตอนพิมพ์) */
+/** 1 เล่ม = หัวข้อ + ตาราง "อ่านอย่างเดียว" + แถวรวม (ขึ้นหน้าใหม่ตอนพิมพ์)
+ *  ★ 2026-09-03 ผู้ใช้: "ปรับให้หน้าสมุดบัญชีกับปิดงบไม่สามารถแก้ได้" — ถอดช่องกรอก/เพิ่ม/ลบ
+ *    บรรทัดออกทั้งหมด ตัวเลขมาจากบิลจริงเสมอ (ต้องแก้ = ไปแก้ที่บิล) */
 function BookSection({
   label,
   rows,
   totals,
-  onUpdate,
-  onAdd,
-  onRemove,
 }: {
   label: string;
   rows: JbEditRow[];
   totals: { debit: number; credit: number; docs: number };
-  onUpdate: (key: number, patch: Partial<JbEditRow>) => void;
-  onAdd: () => void;
-  onRemove: (key: number) => void;
 }) {
   return (
     <section className="jb-book">
@@ -395,90 +364,23 @@ function BookSection({
             <th className="vr-col-money">เดบิต</th>
             <th className="jb-col-acct">บัญชี (เครดิต)</th>
             <th className="vr-col-money">เครดิต</th>
-            <th className="vr-col-del no-print" aria-label="ลบ" />
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={7} className="vr-empty">ไม่มีรายการในเล่มนี้ — กด “＋ เพิ่มบรรทัด” เพื่อพิมพ์เพิ่มได้</td>
-              <td className="vr-col-del no-print" />
+              <td colSpan={7} className="vr-empty">ไม่มีรายการในเล่มนี้</td>
             </tr>
           ) : (
-            rows.map((r, i) => (
+            rows.map((r) => (
               <tr key={r.key}>
-                <td className="jb-c-date">
-                  <input
-                    className="vr-in vr-cell vr-cell-center"
-                    value={r.dateText}
-                    onChange={(e) => onUpdate(r.key, { dateText: e.target.value })}
-                    placeholder="วว/ดด/ปปปป"
-                    aria-label={`วันที่บรรทัดที่ ${i + 1}`}
-                  />
-                </td>
-                <td className="jb-c-no">
-                  <input
-                    className="vr-in vr-cell vr-cell-center"
-                    value={r.docNo}
-                    onChange={(e) => onUpdate(r.key, { docNo: e.target.value })}
-                    aria-label={`เลขที่บรรทัดที่ ${i + 1}`}
-                  />
-                </td>
-                <td className="jb-c-desc">
-                  <input
-                    className="vr-in vr-cell"
-                    value={r.description}
-                    onChange={(e) => onUpdate(r.key, { description: e.target.value })}
-                    aria-label={`คำอธิบายบรรทัดที่ ${i + 1}`}
-                  />
-                </td>
-                <td className="jb-c-acct">
-                  <input
-                    className="vr-in vr-cell"
-                    value={r.debitAcct}
-                    onChange={(e) => onUpdate(r.key, { debitAcct: e.target.value })}
-                    aria-label={`บัญชีเดบิตบรรทัดที่ ${i + 1}`}
-                  />
-                </td>
-                <td className="vr-c-money">
-                  <input
-                    className="vr-in vr-cell vr-cell-money"
-                    value={r.debit}
-                    onChange={(e) => onUpdate(r.key, { debit: e.target.value })}
-                    inputMode="decimal"
-                    placeholder=""
-                    aria-label={`เดบิตบรรทัดที่ ${i + 1}`}
-                  />
-                </td>
-                <td className="jb-c-acct jb-c-credit">
-                  <input
-                    className="vr-in vr-cell"
-                    value={r.creditAcct}
-                    onChange={(e) => onUpdate(r.key, { creditAcct: e.target.value })}
-                    aria-label={`บัญชีเครดิตบรรทัดที่ ${i + 1}`}
-                  />
-                </td>
-                <td className="vr-c-money">
-                  <input
-                    className="vr-in vr-cell vr-cell-money"
-                    value={r.credit}
-                    onChange={(e) => onUpdate(r.key, { credit: e.target.value })}
-                    inputMode="decimal"
-                    placeholder=""
-                    aria-label={`เครดิตบรรทัดที่ ${i + 1}`}
-                  />
-                </td>
-                <td className="vr-col-del no-print">
-                  <button
-                    type="button"
-                    className="vr-row-del"
-                    onClick={() => onRemove(r.key)}
-                    aria-label="ลบบรรทัด"
-                    title="ลบบรรทัด"
-                  >
-                    ✕
-                  </button>
-                </td>
+                <td className="jb-c-date jb-ro-center">{r.dateText}</td>
+                <td className="jb-c-no jb-ro-center">{r.docNo}</td>
+                <td className="jb-c-desc">{r.description}</td>
+                <td className="jb-c-acct">{r.debitAcct}</td>
+                <td className="vr-c-money">{r.debit}</td>
+                <td className="jb-c-acct jb-c-credit">{r.creditAcct}</td>
+                <td className="vr-c-money">{r.credit}</td>
               </tr>
             ))
           )}
@@ -491,17 +393,9 @@ function BookSection({
             <td className="vr-c-money">{formatMoney(totals.debit)}</td>
             <td />
             <td className="vr-c-money">{formatMoney(totals.credit)}</td>
-            <td className="vr-col-del no-print" />
           </tr>
         </tfoot>
       </table>
-
-      {/* ปุ่มเพิ่มบรรทัด (ซ่อนตอนพิมพ์) */}
-      <div className="vr-addrow-wrap no-print">
-        <button type="button" className="vr-btn vr-btn-ghost vr-btn-sm" onClick={onAdd}>
-          ＋ เพิ่มบรรทัด
-        </button>
-      </div>
     </section>
   );
 }
