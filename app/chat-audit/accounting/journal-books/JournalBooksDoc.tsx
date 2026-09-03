@@ -13,7 +13,6 @@ import {
   type BookKind,
 } from "@/lib/accounting/journal-books";
 import type { SkippedEntry } from "@/lib/accounting/journal";
-import type { LedgerAccount } from "@/lib/accounting/ledger";
 
 /** วันที่ ISO → dd/mm/พ.ศ. (คืน "-" ถ้าไม่มี) */
 function thaiDate(iso: string | null): string {
@@ -68,13 +67,12 @@ function countDocs(rows: JbEditRow[]): number {
  *   ★ reuse สไตล์ vr-* (vat-report.css) + jb-* (journal-books.css) · แต่ละเล่มขึ้นหน้าใหม่ตอนพิมพ์
  *   ★ ไม่ยิง network ตอนแก้ · Excel ยิง POST ตอนกดปุ่มเท่านั้น · PDPA: ไม่ log ค่า
  */
-/** ตัวเลือกเล่มบน dropdown: ทั้งหมด + 5 เล่ม + บัญชีแยกประเภท
- *  ★ 2026-09-03 ผู้ใช้: "ทำสมุดบัญชีแยกประเภทด้วย … ไปอยู่ในแถบเลื่อนต่อจากเมนูสมุดรายวันทั่วไป" */
-const LEDGER_BOOK = "ledger";
+/** ตัวเลือกเล่มบน dropdown: ทั้งหมด + 5 เล่ม
+ *  ★ 2026-09-03 (รอบสอง) ผู้ใช้: "ย้ายบัญชีแยกประเภทไปหน้างบการเงิน ตัดออกจากหน้าสมุดรายวัน"
+ *    — บัญชีแยกประเภทอยู่ที่หน้ารายงาน/งบการเงิน (แท็บบัญชีแยกประเภท) ที่เดียว ไม่ซ้ำสองที่ */
 const BOOK_CHOICES: { value: string; label: string }[] = [
-  { value: "all", label: "ทุกเล่ม (5 เล่ม + แยกประเภท)" },
+  { value: "all", label: "ทุกเล่ม (5 เล่ม)" },
   ...BOOK_ORDER.map((k) => ({ value: k, label: BOOK_LABELS[k] })),
-  { value: LEDGER_BOOK, label: "สมุดบัญชีแยกประเภท" },
 ];
 
 export default function JournalBooksDoc({
@@ -88,7 +86,6 @@ export default function JournalBooksDoc({
   initialBook,
   printedAt,
   books,
-  ledgerAccounts = [],
   skipped,
   backHref,
 }: {
@@ -107,8 +104,6 @@ export default function JournalBooksDoc({
   initialBook: string;
   printedAt: string;
   books: Record<BookKind, JournalBook>;
-  /** บัญชีแยกประเภท (เล่มที่ 6) — ทุกบรรทัด Dr/Cr จากแหล่งเดียวกับ 5 เล่ม + ยอดยกมา */
-  ledgerAccounts?: LedgerAccount[];
   skipped: SkippedEntry[];
   backHref: string;
 }) {
@@ -117,8 +112,7 @@ export default function JournalBooksDoc({
   const [book, setBook] = useState<string>(
     BOOK_CHOICES.some((c) => c.value === initialBook) ? initialBook : "all"
   );
-  const showLedger = book === LEDGER_BOOK || book === "all";
-  const shownBooks = book === LEDGER_BOOK ? [] : visibleBooks(book);
+  const shownBooks = visibleBooks(book);
 
   // ---- แถวแก้ได้ต่อเล่ม (client-only) — init ครั้งเดียวจาก props books ----
   const [bookRows, setBookRows] = useState<Record<BookKind, JbEditRow[]>>(() => {
@@ -367,8 +361,6 @@ export default function JournalBooksDoc({
           />
         ))}
 
-        {/* ================= สมุดบัญชีแยกประเภท (เล่มที่ 6) ================= */}
-        {showLedger ? <LedgerSection accounts={ledgerAccounts} /> : null}
       </div>
     </div>
   );
@@ -511,92 +503,5 @@ function BookSection({
         </button>
       </div>
     </section>
-  );
-}
-
-/** วันที่ + คงเหลือของบัญชีแยกประเภท — โชว์ยอดคงเหลือ "ตามด้านปกติ" ของบัญชี */
-function ledgerBalanceLabel(balance: number, normalSide: "debit" | "credit"): string {
-  const v = normalSide === "debit" ? balance : -balance;
-  return formatMoney(v);
-}
-
-/**
- * สมุดบัญชีแยกประเภท (เล่มที่ 6) — ★ 2026-09-03 ผู้ใช้: "เอารายการด้านเดบิต เครดิต ทุกรายการไปลง
- *   … ให้ย้ายมาอยู่หน้าเดียวกับสมุดบัญชี (ต่อจากสมุดรายวันทั่วไป)"
- *   1 บัญชี = 1 ตาราง (ยกมา → รายการ Dr/Cr ตามวันที่ → รวม/คงเหลือปลายงวด) · ขึ้นหน้าใหม่ตอนพิมพ์
- *   ★ แก้ข้อความ/ตัวเลขได้ (contentEditable) เฉพาะตอนพิมพ์ — ไม่กระทบข้อมูลบิลจริง
- *   ★ Excel ของแยกประเภทอยู่หน้ารายงาน (แท็บบัญชีแยกประเภท) — หน้านี้เน้นดู/พิมพ์รวมกับ 5 เล่ม
- */
-function LedgerSection({ accounts }: { accounts: LedgerAccount[] }) {
-  if (accounts.length === 0) {
-    return (
-      <section className="jb-book">
-        <h2 className="jb-book-title">สมุดบัญชีแยกประเภท</h2>
-        <p className="vr-empty" style={{ padding: 12 }}>ไม่มีรายการในช่วงที่เลือก</p>
-      </section>
-    );
-  }
-  return (
-    <>
-      {accounts.map((a) => (
-        <section
-          className="jb-book jb-ledger"
-          key={a.code}
-          contentEditable
-          suppressContentEditableWarning
-        >
-          <h2 className="jb-book-title">
-            บัญชีแยกประเภท — {a.code} {a.name}
-            <span className="jb-ledger-cat"> ({a.category})</span>
-          </h2>
-          <table className="vr-table jb-table">
-            <thead>
-              <tr>
-                <th className="jb-col-date">วันที่</th>
-                <th className="jb-col-no">เลขที่</th>
-                <th className="jb-col-desc">คำอธิบาย</th>
-                <th className="vr-col-money">เดบิต</th>
-                <th className="vr-col-money">เครดิต</th>
-                <th className="vr-col-money">คงเหลือ</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Math.abs(a.opening) >= 0.005 ? (
-                <tr>
-                  <td className="jb-c-date" />
-                  <td className="jb-c-no" />
-                  <td className="jb-c-desc">ยอดยกมา</td>
-                  <td className="vr-c-money" />
-                  <td className="vr-c-money" />
-                  <td className="vr-c-money">{ledgerBalanceLabel(a.opening, a.normalSide)}</td>
-                </tr>
-              ) : null}
-              {a.txns.map((t, i) => (
-                <tr key={`${t.entryId}-${i}`}>
-                  <td className="jb-c-date" style={{ textAlign: "center" }}>{thaiDate(t.date)}</td>
-                  <td className="jb-c-no" style={{ textAlign: "center" }}>{t.docNo ?? ""}</td>
-                  <td className="jb-c-desc">{t.description ?? ""}</td>
-                  <td className="vr-c-money">{t.debit ? formatMoney(t.debit) : ""}</td>
-                  <td className="vr-c-money">{t.credit ? formatMoney(t.credit) : ""}</td>
-                  <td className="vr-c-money">{ledgerBalanceLabel(t.balance, a.normalSide)}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colSpan={3} className="vr-total-label">
-                  รวม {a.txns.length.toLocaleString("th-TH")} รายการ
-                </td>
-                <td className="vr-c-money">{formatMoney(a.totalDebit)}</td>
-                <td className="vr-c-money">{formatMoney(a.totalCredit)}</td>
-                <td className="vr-c-money">
-                  {ledgerBalanceLabel(a.balance, a.normalSide)} {a.normalSide === "debit" ? "(เดบิต)" : "(เครดิต)"}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </section>
-      ))}
-    </>
   );
 }
