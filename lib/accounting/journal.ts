@@ -41,7 +41,7 @@
  *   ตกหล่นอีกต่อไป: ลงด้วยบัญชีพัก 0000 "รอเลือกบัญชี (พัก)" ให้เดบิต=เครดิตสมดุล บิลไหลเข้า
  *   สมุด 5 เล่ม → แยกประเภท → งบ ทันที · เห็น 0000 ที่ไหน = จุดที่นักบัญชีต้องกลับไปเลือกบัญชีจริง
  */
-import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
+import { categoryDigitOf, type ChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { contraAccountFor } from "@/lib/accounting/payment";
 import { round2, type BillEntry } from "@/lib/accounting/queries";
 import {
@@ -54,8 +54,9 @@ import {
 
 export type JournalSide = "debit" | "credit";
 
-/** ขาใบสำคัญ (2026-09-03): invoice = ตั้งหนี้ (เล่มซื้อ/ขาย) · settlement = ตัดชำระ (เล่มจ่าย/รับ) */
-export type JournalLeg = "invoice" | "settlement";
+/** ขาใบสำคัญ (2026-09-03): invoice = ตั้งหนี้ (เล่มซื้อ/ขาย) · settlement = ตัดชำระ (เล่มจ่าย/รับ)
+ *  · direct = รายการเงินลงตรงตามเลขผังที่นักบัญชีกรอก (เล่มจ่าย/รับ — ไม่ผ่านลูกหนี้/เจ้าหนี้) */
+export type JournalLeg = "invoice" | "settlement" | "direct";
 
 /** บัญชีพักสำหรับบรรทัดที่ยังไม่เลือกบัญชี — เด่นชัดในสมุด/แยกประเภท ให้กลับไปเลือกบัญชีจริง */
 export const SUSPENSE_ACCOUNT_CODE = "0000";
@@ -169,6 +170,28 @@ export function buildJournalEntries(entries: BillEntry[], chartByCode: ChartByCo
       continue;
     }
 
+    // ★ 2026-09-03 ผู้ใช้: "เลขผังบัญชียึดที่พี่สวย (นักบัญชี) กรอกเป็นหลัก" — บิลที่นักบัญชีจงใจ
+    //   กรอกบรรทัดเป็นบัญชีที่ "ไม่ใช่แกนซื้อ/ขาย" ทั้งใบ (ขาย: ไม่มีหมวด 4 รายได้เลย ·
+    //   ซื้อ: ไม่มีหมวด 5 ค่าใช้จ่าย/หมวด 1 สินทรัพย์เลย) = รายการเงิน/พัก ไม่ใช่การขาย-ซื้อจริง
+    //   → ลง "ตรง" ตามเลขที่กรอก (Dr เงิน / Cr เลขที่กรอก ฝั่งขาย · กลับด้านฝั่งซื้อ)
+    //   ไม่แต่งขาลูกหนี้/เจ้าหนี้เพิ่ม และเข้าเล่มรับเงิน/จ่ายเงินโดยตรง (leg="direct")
+    //   เงื่อนไข: ต้องรับ/จ่ายเงินแล้ว (มีบัญชีเงิน) — บิลเชื่อยังใช้ขาตั้งหนี้ปกติ
+    //   บัญชี "เงิน" (เงินสด 1010 / บัญชีธนาคารในผัง bank=true) ไม่นับเป็นแกนทั้งสองฝั่ง —
+    //   บิลซื้อที่บรรทัดเป็นเงินสด = โอนเงินออกเป็นเงินสด ไม่ใช่การซื้อจริง (ห้ามผ่านเจ้าหนี้)
+    const isMoneyLine = (code: string) => code === "1010" || chartByCode[code]?.bank === true;
+    const isCoreLine = (code: string) => {
+      if (isMoneyLine(code)) return false;
+      const d = categoryDigitOf(code);
+      return e.entryType === "sale" ? d === "4" : d === "5" || d === "1";
+    };
+    const directMoney =
+      money !== null &&
+      e.lines.length > 0 &&
+      e.lines.every((l) => {
+        const code = (l.accountCode ?? "").trim();
+        return code !== "" && !isCoreLine(code);
+      });
+
     // 4) รวมยอด
     let sumAmount = 0;
     let sumVat = 0;
@@ -201,6 +224,26 @@ export function buildJournalEntries(entries: BillEntry[], chartByCode: ChartByCo
       buf.push({ ...base, accountCode: code, accountName: name, debit: 0, credit: v, side: "credit", leg });
     };
 
+    // ---- โหมดลงตรง (direct): เลขผังตามที่นักบัญชีกรอกล้วน ๆ + บัญชีเงิน — ขาเดียวจบ ----
+    if (directMoney && money) {
+      if (e.entryType === "purchase") {
+        for (const l of e.lines) {
+          const a = lineAccount(l);
+          pushDebit("direct", a.code, a.name, l.amount);
+        }
+        pushDebit("direct", INPUT_VAT, accountName(chartByCode, INPUT_VAT), sumVat);
+        pushCredit("direct", WHT_PAYABLE, accountName(chartByCode, WHT_PAYABLE), sumWht);
+        pushCredit("direct", money.code, money.name, contraAmount);
+      } else {
+        for (const l of e.lines) {
+          const a = lineAccount(l);
+          pushCredit("direct", a.code, a.name, l.amount);
+        }
+        pushCredit("direct", OUTPUT_VAT, accountName(chartByCode, OUTPUT_VAT), sumVat);
+        pushDebit("direct", WHT_RECEIVABLE, accountName(chartByCode, WHT_RECEIVABLE), sumWht);
+        pushDebit("direct", money.code, money.name, contraAmount);
+      }
+    } else {
     // ---- ขา 1: ตั้งหนี้ (เข้าสมุดรายวันซื้อ/ขายเสมอ) ----
     if (e.entryType === "purchase") {
       for (const l of e.lines) {
@@ -232,10 +275,11 @@ export function buildJournalEntries(entries: BillEntry[], chartByCode: ChartByCo
         pushCredit("settlement", arap.code, arap.name, contraAmount);
       }
     }
+    } // จบโหมดปกติ (ตั้งหนี้+ตัดชำระ)
 
     // 5) ยืนยันสมดุล "ต่อขา" (กันเคสตัวเลขบิลเพี้ยน) — ขาไหนไม่สมดุลก็ไม่ปล่อยทั้งบิล
     let balanced = true;
-    for (const leg of ["invoice", "settlement"] as const) {
+    for (const leg of ["invoice", "settlement", "direct"] as const) {
       const legLines = buf.filter((l) => l.leg === leg);
       const d = round2(legLines.reduce((s, l) => s + l.debit, 0));
       const c = round2(legLines.reduce((s, l) => s + l.credit, 0));

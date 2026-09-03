@@ -54,6 +54,11 @@ describe("journal-books: classifyBook (★★ 2026-09-03 หลักบัญ�
   it("unspecified → ทั่วไป", () => {
     expect(classifyBook("unspecified", "invoice")).toBe("general");
   });
+
+  it("ขา direct (เลขผังยึดที่นักบัญชีกรอก) → เล่มจ่าย/รับ เหมือนขาตัดชำระ", () => {
+    expect(classifyBook("purchase", "direct")).toBe("payment");
+    expect(classifyBook("sale", "direct")).toBe("receipt");
+  });
 });
 
 // ---------------------------------------------------------------------

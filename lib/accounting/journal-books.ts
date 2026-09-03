@@ -67,7 +67,8 @@ export function classifyBook(
   //                              ขาย → เล่มรับเงิน (Dr เงิน/Cr ลูกหนี้)
   //   บิลจ่ายแล้ว = เข้า 2 เล่ม (ตั้งหนี้+ตัดชำระ) — ยอดงบไม่เพี้ยน (เจ้าหนี้/ลูกหนี้หักล้างกันเอง)
   //   บิลเชื่อ = เล่มซื้อ/ขายขาเดียว — ขาตัดชำระมาจากหน้ารับ/จ่ายเงิน (bill-payments)
-  if (leg === "settlement") {
+  //   ขา direct (เลขผังยึดที่นักบัญชีกรอก — รายการเงินไม่ผ่านลูกหนี้/เจ้าหนี้) → เล่มจ่าย/รับเช่นกัน
+  if (leg === "settlement" || leg === "direct") {
     if (entryType === "purchase") return "payment";
     if (entryType === "sale") return "receipt";
     return "general";

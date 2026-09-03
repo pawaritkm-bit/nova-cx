@@ -163,6 +163,72 @@ describe("journal — ซื้อ โอน บิลผสม VAT + noVAT ไ�
   });
 });
 
+// ★ 2026-09-03 ผู้ใช้: "เลขผังบัญชียึดที่พี่สวยกรอกเป็นหลัก" — บิลที่บรรทัดไม่ใช่แกนซื้อ/ขายทั้งใบ
+//   (เช่น ขายแต่บรรทัดเป็น 1010 เงินสด/2046 สำรองผู้สอบ) = รายการเงิน → ลงตรงตามเลขที่กรอก
+describe("journal — โหมดลงตรง (direct): เลขผังตามที่นักบัญชีกรอก ไม่ผ่านลูกหนี้/เจ้าหนี้", () => {
+  it("ขายโอนเข้าธนาคาร บรรทัด 1010 เงินสด (นำฝาก) → Dr 1020 / Cr 1010 ขาเดียว ไม่มีลูกหนี้", () => {
+    const r = buildJournalEntries([
+      mkEntry({
+        id: "dm1", entryType: "sale", paymentMethod: "transfer", paymentBankAccountCode: "1020",
+        lines: [mkLine({ accountCode: "1010", amount: 500 })],
+      }),
+    ]);
+    expect(r.skipped).toHaveLength(0);
+    expect(r.lines.every((l) => l.leg === "direct")).toBe(true);
+    expect(r.lines.find((l) => l.accountCode === "1020")?.debit).toBe(500);
+    expect(r.lines.find((l) => l.accountCode === "1010")?.credit).toBe(500);
+    expect(r.lines.some((l) => l.accountCode === "1140")).toBe(false); // ไม่แต่งลูกหนี้
+    expect(r.totalDebit).toBe(500);
+    expect(r.totalCredit).toBe(500);
+  });
+
+  it("ขายเงินสด บรรทัดหมวดหนี้สิน (2046 สำรองผู้สอบ) → Dr 1010 / Cr 2046 ขาเดียว", () => {
+    const r = buildJournalEntries([
+      mkEntry({
+        id: "dm2", entryType: "sale", paymentMethod: "cash",
+        lines: [mkLine({ accountCode: "2046", amount: 300 })],
+      }),
+    ]);
+    expect(r.lines.find((l) => l.accountCode === "1010")?.debit).toBe(300);
+    expect(r.lines.find((l) => l.accountCode === "2046")?.credit).toBe(300);
+    expect(r.lines.every((l) => l.leg === "direct")).toBe(true);
+  });
+
+  it("บิลขายที่มีบรรทัดรายได้ (หมวด 4) แม้แต่บรรทัดเดียว → โหมดปกติ 2 ขา (ตั้งลูกหนี้)", () => {
+    const r = buildJournalEntries([
+      mkEntry({
+        id: "dm3", entryType: "sale", paymentMethod: "cash",
+        lines: [mkLine({ accountCode: "4030", amount: 700 }), mkLine({ accountCode: "2046", amount: 100 })],
+      }),
+    ]);
+    expect(r.lines.some((l) => l.accountCode === "1140")).toBe(true); // ผ่านลูกหนี้ปกติ
+    expect(r.lines.some((l) => l.leg === "direct")).toBe(false);
+  });
+
+  it("บิลเชื่อที่บรรทัดไม่ใช่แกน (ยังไม่มีบัญชีเงิน) → ใช้ขาตั้งหนี้ปกติ (รอตัดชำระ)", () => {
+    const r = buildJournalEntries([
+      mkEntry({
+        id: "dm4", entryType: "sale", paymentMethod: "credit",
+        lines: [mkLine({ accountCode: "2046", amount: 300 })],
+      }),
+    ]);
+    expect(r.lines.some((l) => l.accountCode === "1140" && l.debit === 300)).toBe(true);
+    expect(r.lines.some((l) => l.leg === "direct")).toBe(false);
+  });
+
+  it("ซื้อจ่ายโอน บรรทัดหมวดหนี้สิน (2210 เงินกู้) → Dr 2210 / Cr 1020 ขาเดียว ไม่ผ่านเจ้าหนี้", () => {
+    const r = buildJournalEntries([
+      mkEntry({
+        id: "dm5", entryType: "purchase", paymentMethod: "transfer", paymentBankAccountCode: "1020",
+        lines: [mkLine({ accountCode: "2210", amount: 900 })],
+      }),
+    ]);
+    expect(r.lines.find((l) => l.accountCode === "2210")?.debit).toBe(900);
+    expect(r.lines.find((l) => l.accountCode === "1020")?.credit).toBe(900);
+    expect(r.lines.some((l) => l.accountCode === "2010")).toBe(false);
+  });
+});
+
 describe("journal — คำอธิบาย (counterparty) fallback จากคำอธิบายบรรทัด (ผู้ใช้เจอ 2026-09-02)", () => {
   it("บิลไม่มีชื่อคู่ค้า → ใช้ description ของบรรทัดแรกที่มีข้อความ", () => {
     const r = buildJournalEntries([
