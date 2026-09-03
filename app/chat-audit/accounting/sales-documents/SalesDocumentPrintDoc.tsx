@@ -37,6 +37,7 @@ export default function SalesDocumentPrintDoc({
   logoUrl = "",
   stampUrl = "",
   backHref,
+  preview = false,
 }: {
   document: SalesDocument;
   /** ผู้ออกเอกสาร = ลูกค้าของสำนักงาน (NOVA-CX customer) เสมอทั้ง 3 ประเภท */
@@ -50,6 +51,9 @@ export default function SalesDocumentPrintDoc({
    *  ป้ายหัวกระดาษ + ตราตาชั่งกลางแถวลายเซ็น) — ว่าง = ไม่แสดง (และใช้ watermark แบบเดิมแทน) */
   stampUrl?: string;
   backHref: string;
+  /** ★ 2026-09-03 โหมดตัวอย่างสดข้างฟอร์มสร้างเอกสาร — ซ่อน toolbar + ลายน้ำ "ร่าง" เมื่อยังไม่ออกเลข
+   *  (ใช้ markup ฟอร์ม PAMEE ชุดเดียวกับหน้าพิมพ์ 100% — ตัวอย่างจึงตรงกับของจริงเป๊ะ) */
+  preview?: boolean;
 }) {
   const total = lineTotal(doc.lines);
   const totalAmount = doc.lines.reduce((s, l) => s + l.amount, 0);
@@ -62,24 +66,28 @@ export default function SalesDocumentPrintDoc({
   const initial = (issuerName || "—").replace(/^(บริษัท|บจก\.?|หจก\.?|ห้างหุ้นส่วนจำกัด)\s*/i, "").trim().slice(0, 2) || "—";
 
   return (
-    <div className="sd-shell">
-      <div className="sd-toolbar no-print">
-        <a href={backHref} className="sd-btn sd-btn-ghost">
-          ← กลับ
-        </a>
-        <span className="sd-toolbar-hint">
-          เอกสารนี้เป็นข้อมูลที่บันทึกไว้แล้ว — พิมพ์/บันทึก PDF ได้ทันที
-          {doc.status === "void" ? " · ⚠ เอกสารนี้ถูกยกเลิกแล้ว" : doc.status === "draft" ? " · ร่าง (ยังไม่ออกเลขที่)" : ""}
-        </span>
-        <button type="button" className="sd-btn sd-btn-primary" onClick={() => window.print()}>
-          🖨 พิมพ์ / บันทึก PDF
-        </button>
-      </div>
+    <div className={preview ? "sd-shell sd-shell-preview" : "sd-shell"}>
+      {!preview ? (
+        <div className="sd-toolbar no-print">
+          <a href={backHref} className="sd-btn sd-btn-ghost">
+            ← กลับ
+          </a>
+          <span className="sd-toolbar-hint">
+            เอกสารนี้เป็นข้อมูลที่บันทึกไว้แล้ว — พิมพ์/บันทึก PDF ได้ทันที
+            {doc.status === "void" ? " · ⚠ เอกสารนี้ถูกยกเลิกแล้ว" : doc.status === "draft" ? " · ร่าง (ยังไม่ออกเลขที่)" : ""}
+          </span>
+          <button type="button" className="sd-btn sd-btn-primary" onClick={() => window.print()}>
+            🖨 พิมพ์ / บันทึก PDF
+          </button>
+        </div>
+      ) : null}
 
       <div className="sd-page sd-form">
         {/* แถบสามเหลี่ยมมุมขวาบน (เลขหน้า) — ตามฟอร์มตัวอย่าง */}
         <div className="sd-corner" aria-hidden="true"><span>1</span></div>
         {doc.status === "void" ? <div className="sd-void-stamp">ยกเลิก</div> : null}
+        {/* ลายน้ำ "ร่าง" — เฉพาะตัวอย่างสดที่ยังไม่ออกเลขที่ (หายเมื่อออกเอกสาร) */}
+        {preview && doc.status === "draft" ? <div className="sd-draftmark" aria-hidden="true">ร่าง</div> : null}
 
         {/* ---- หัวเอกสาร: ซ้าย=ผู้ออก · ขวา=ชื่อเอกสาร + meta ---- */}
         <div className="sd-head">

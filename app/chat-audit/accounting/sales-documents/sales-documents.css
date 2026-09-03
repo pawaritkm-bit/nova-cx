@@ -135,6 +135,36 @@
 .sd-btn-primary:hover { background: #195ecb; }
 .sd-btn-ghost { background: transparent; }
 
+/* ---- ตัวอย่างสดข้างฟอร์ม (2026-09-03 "ระหว่างพิมพ์รายละเอียด มีตัวอย่างใบวางบิลข้าง ๆ") ---- */
+.sd-live-grid { display: grid; grid-template-columns: minmax(380px, 460px) 1fr; gap: 16px; align-items: start; }
+.sd-live-preview { position: sticky; top: 12px; min-width: 0; }
+.sd-live-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.sd-live-tag { font-size: 11.5px; font-weight: 800; color: #7a3daa; background: #f5edfb; border-radius: 999px; padding: 4px 12px; }
+.sd-live-dot { font-size: 11.5px; color: #16a34a; font-weight: 700; }
+.sd-live-print { background: #7a3daa; border-color: #7a3daa; color: #fff; font-weight: 800; }
+.sd-live-print:disabled { opacity: 0.45; cursor: not-allowed; }
+.sd-live-print.on:hover { background: #663391; }
+.sd-live-scroll { overflow-x: auto; }
+.sd-shell-preview { padding: 0; background: none; min-height: 0; }
+.sd-shell-preview .sd-page { box-shadow: 0 6px 22px rgba(15, 28, 51, 0.12); border: 1px solid #e5e9f2; }
+.sd-draftmark {
+  position: absolute; top: 42%; left: 50%;
+  transform: translate(-50%, -50%) rotate(-18deg);
+  font-size: 84px; font-weight: 900; letter-spacing: 10px;
+  color: rgba(148, 163, 184, 0.16); pointer-events: none; user-select: none;
+}
+.sd-issued-banner {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 10px;
+  padding: 10px 14px; margin-bottom: 12px; font-size: 13px; color: #065f46;
+}
+.sd-issued-banner .sd-live-print { text-decoration: none; }
+.sd-issue-hint { font-size: 11px; color: #94a3b8; }
+@media (max-width: 1080px) {
+  .sd-live-grid { grid-template-columns: 1fr; }
+  .sd-live-preview { position: static; }
+}
+
 .sd-page {
   width: 100%;
   max-width: 800px;

@@ -81,6 +81,13 @@ export default async function SalesDocumentsPage({
   let billingCandidates: Awaited<ReturnType<typeof listBillingCandidates>> = [];
   let products: Awaited<ReturnType<typeof listProducts>> = [];
   let loadError = false;
+  // ★ 2026-09-03 ตัวอย่างสดข้างฟอร์ม — ข้อมูลผู้ออก + โลโก้/ตรา (best-effort เหมือนหน้าพิมพ์)
+  let issuerName = "";
+  let issuerTaxId = "";
+  let issuerAddress = "";
+  let issuerPhone = "";
+  let logoUrl = "";
+  let stampUrl = "";
   if (validCustomerId) {
     try {
       [documents, billingCandidates, products] = await Promise.all([
@@ -90,6 +97,47 @@ export default async function SalesDocumentsPage({
       ]);
     } catch {
       loadError = true;
+    }
+    try {
+      const { data: custRow } = await service
+        .from("customers")
+        .select("name, business_name, tax_id")
+        .eq("id", validCustomerId)
+        .eq("tenant_id", access.tenantId)
+        .is("deleted_at", null)
+        .maybeSingle();
+      const cust = custRow as { name: string | null; business_name: string | null; tax_id: string | null } | null;
+      issuerName = (cust?.business_name || cust?.name || "").trim();
+      issuerTaxId = cust?.tax_id ?? "";
+    } catch {
+      // best-effort — หัวกระดาษตัวอย่างว่างได้
+    }
+    try {
+      const { data, error } = await service
+        .from("customers")
+        .select("address, phone")
+        .eq("id", validCustomerId)
+        .eq("tenant_id", access.tenantId)
+        .maybeSingle();
+      if (!error) {
+        const r = data as { address: string | null; phone: string | null } | null;
+        issuerAddress = r?.address ?? "";
+        issuerPhone = (r?.phone ?? "").trim();
+      }
+    } catch {
+      // คอลัมน์ยังไม่ apply → ปล่อยว่าง
+    }
+    try {
+      const { data: signedLogo } = await service.storage
+        .from("bills")
+        .createSignedUrl(`${access.tenantId}/customer-logos/${validCustomerId}`, 3600);
+      logoUrl = signedLogo?.signedUrl ?? "";
+      const { data: signedStamp } = await service.storage
+        .from("bills")
+        .createSignedUrl(`${access.tenantId}/customer-logos/${validCustomerId}.stamp`, 3600);
+      stampUrl = signedStamp?.signedUrl ?? "";
+    } catch {
+      // ไม่มีโลโก้ — ตัวอย่างใช้กล่องอักษรย่อ
     }
   }
 
@@ -140,6 +188,12 @@ export default async function SalesDocumentsPage({
               documents={documents}
               billingCandidates={billingCandidates}
               products={products}
+              issuerName={issuerName}
+              issuerTaxId={issuerTaxId}
+              issuerAddress={issuerAddress}
+              issuerPhone={issuerPhone}
+              logoUrl={logoUrl}
+              stampUrl={stampUrl}
             />
           </div>
         )}

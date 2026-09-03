@@ -17,6 +17,7 @@ import {
 import { lineTotal, type SalesDocument, type SalesDocumentLine, type BillingCandidate } from "@/lib/accounting/sales-documents";
 import { searchProducts, type Product } from "@/lib/accounting/products";
 import { parseAmountInput, formatMoney } from "@/lib/accounting/calc";
+import SalesDocumentPrintDoc from "./SalesDocumentPrintDoc";
 
 /**
  * SalesDocumentsPanel — สร้าง/แก้/ออกเอกสาร/ยกเลิก ใบเสนอราคา/ใบสั่งซื้อ/ใบวางบิล ของลูกค้า 1 ราย (เฟส 3 ส่วน K)
@@ -143,11 +144,24 @@ export default function SalesDocumentsPanel({
   documents,
   billingCandidates,
   products,
+  issuerName = "",
+  issuerTaxId = "",
+  issuerAddress = "",
+  issuerPhone = "",
+  logoUrl = "",
+  stampUrl = "",
 }: {
   customerId: string;
   documents: SalesDocument[];
   billingCandidates: BillingCandidate[];
   products: Product[];
+  /** ★ 2026-09-03 ตัวอย่างสดข้างฟอร์ม — ข้อมูลผู้ออก + โลโก้/ตรา (โหลดจาก server page) */
+  issuerName?: string;
+  issuerTaxId?: string;
+  issuerAddress?: string;
+  issuerPhone?: string;
+  logoUrl?: string;
+  stampUrl?: string;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -156,6 +170,8 @@ export default function SalesDocumentsPanel({
   const [form, setForm] = useState<FormState>(blankForm());
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [candidatesOpenFor, setCandidatesOpenFor] = useState(false);
+  // ★ เอกสารที่เพิ่งออกเลขจากฟอร์ม — โชว์แบนเนอร์ "พิมพ์ / บันทึก PDF" ทันที
+  const [justIssued, setJustIssued] = useState<{ id: string; docNo: string } | null>(null);
 
   const docsOfType = useMemo(
     () => documents.filter((d) => d.documentType === type).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
@@ -231,6 +247,79 @@ export default function SalesDocumentsPanel({
       ),
     [form.lines]
   );
+
+  // ★ 2026-09-03 ผู้ใช้: "ระหว่างพิมพ์รายละเอียด มีตัวอย่างใบวางบิลข้าง ๆ ให้ดู" —
+  //   ประกอบ SalesDocument จากค่าฟอร์มสด ๆ แล้วส่งเข้า SalesDocumentPrintDoc (markup เดียวกับ
+  //   หน้าพิมพ์จริง 100%) → พิมพ์ปุ๊บตัวอย่างขวาเปลี่ยนปั๊บ รวมคำนวณยอด/VAT
+  const previewDoc: SalesDocument = useMemo(() => {
+    const lines: SalesDocumentLine[] = form.lines.map((l, i) => ({
+      id: l.key,
+      lineNo: i + 1,
+      description: l.description || null,
+      productId: l.productId,
+      sourceBillEntryId: l.sourceBillEntryId,
+      quantity: l.quantity.trim() === "" ? 1 : parseAmountInput(l.quantity),
+      unit: l.unit || null,
+      unitPrice: parseAmountInput(l.unitPrice),
+      amount: computeLineAmount(l),
+      vatAmount: parseAmountInput(l.vatAmount),
+    }));
+    return {
+      id: form.editingId ?? "preview",
+      tenantId: "",
+      customerId,
+      documentType: type,
+      docNo: null,
+      docDate: form.docDate,
+      validUntil: type === "quotation" ? form.validUntil || null : null,
+      counterpartyName: form.counterpartyName || null,
+      counterpartyTaxId: form.counterpartyTaxId || null,
+      counterpartyAddress: form.counterpartyAddress || null,
+      notes: form.notes || null,
+      status: "draft",
+      createdAt: "",
+      updatedAt: "",
+      issuedAt: null,
+      lines,
+    };
+  }, [form, type, customerId]);
+
+  /** บันทึก (สร้าง/แก้) แล้วออกเอกสารต่อทันที — ปุ่ม "✓ ออกเอกสาร" ในฟอร์ม */
+  function saveAndIssue() {
+    if (!window.confirm("ออกเอกสารนี้? หลังออกเลขที่แล้วแก้ไขไม่ได้อีก (ผิดพลาดต้องยกเลิกแล้วสร้างใหม่)")) return;
+    setMsg(null);
+    const payload = {
+      documentType: type,
+      docDate: form.docDate,
+      validUntil: type === "quotation" ? form.validUntil || null : null,
+      counterpartyName: form.counterpartyName || null,
+      counterpartyTaxId: form.counterpartyTaxId || null,
+      counterpartyAddress: form.counterpartyAddress || null,
+      notes: form.notes || null,
+      lines: buildLinesPayload(),
+    };
+    startTransition(async () => {
+      const saved = form.editingId
+        ? await updateDraftAction(form.editingId, payload)
+        : await createDraftAction(customerId, payload);
+      if (!saved.ok || !saved.id) {
+        setMsg({ ok: false, text: saved.message });
+        return;
+      }
+      const issued = await issueDocumentAction(saved.id);
+      if (!issued.ok) {
+        // บันทึกร่างสำเร็จแต่ออกเลขไม่ผ่าน — คงฟอร์มไว้ให้แก้ (ร่างอยู่ในรายการแล้ว)
+        setForm((prev) => ({ ...prev, editingId: saved.id ?? prev.editingId }));
+        setMsg({ ok: false, text: issued.message });
+        router.refresh();
+        return;
+      }
+      setJustIssued({ id: saved.id, docNo: issued.docNo ?? "" });
+      setMsg(null);
+      setShowForm(false);
+      router.refresh();
+    });
+  }
 
   function buildLinesPayload(): UpsertSalesDocLineActionInput[] {
     return form.lines.map((l) => ({
@@ -327,7 +416,26 @@ export default function SalesDocumentsPanel({
 
       {msg ? <div className={`action-msg ${msg.ok ? "ok" : "err"}`}>{msg.text}</div> : null}
 
+      {/* ★ เพิ่งออกเอกสารจากฟอร์ม — ปุ่มพิมพ์ใหญ่ ๆ ทันที ไม่ต้องไปหาในตาราง */}
+      {justIssued ? (
+        <div className="sd-issued-banner">
+          <span>✓ ออกเอกสารแล้ว เลขที่ <b>{justIssued.docNo || "—"}</b></span>
+          <a
+            href={`/chat-audit/accounting/sales-documents/${justIssued.id}/print`}
+            className="sd-btn sd-live-print on"
+            target="_blank"
+            rel="noopener"
+          >
+            🖨 พิมพ์ / บันทึก PDF
+          </a>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setJustIssued(null)}>
+            ปิด
+          </button>
+        </div>
+      ) : null}
+
       {showForm ? (
+        <div className="sd-live-grid">
         <div className="acc-je-form">
           <div className="acc-je-form-head">
             <span className="strong">{form.editingId ? `แก้ไข${DOC_TYPE_LABELS[type]} (ร่าง)` : `สร้าง${DOC_TYPE_LABELS[type]}ใหม่`}</span>
@@ -500,10 +608,46 @@ export default function SalesDocumentsPanel({
           <div className="sd-form-total">รวมทั้งสิ้น: <strong>{formatMoney(formTotal)}</strong> บาท</div>
 
           <div className="acc-modal-actions">
-            <button type="button" className="btn green" onClick={submit} disabled={pending}>
-              {pending ? "กำลังบันทึก…" : form.editingId ? "บันทึกการแก้ไข" : "บันทึกร่าง"}
+            <button type="button" className="btn" onClick={submit} disabled={pending}>
+              {pending ? "กำลังบันทึก…" : form.editingId ? "บันทึกการแก้ไข (ร่าง)" : "บันทึกร่าง"}
+            </button>
+            {/* ★ 2026-09-03 ยืนยันจบในหน้าเดียว: บันทึก + ออกเลขที่ ในคลิกเดียว */}
+            <button type="button" className="btn green" onClick={saveAndIssue} disabled={pending}>
+              {pending ? "กำลังบันทึก…" : "✓ ออกเอกสาร (ยืนยัน + ได้เลขที่)"}
+            </button>
+            <span className="sd-issue-hint">ออกเอกสารแล้วแก้ไม่ได้ — ผิดต้องยกเลิกแล้วสร้างใหม่</span>
+          </div>
+        </div>
+
+        {/* ---- ขวา: ตัวอย่างเอกสารจริง อัปเดตตามฟอร์มสด ๆ (markup เดียวกับหน้าพิมพ์) ---- */}
+        <div className="sd-live-preview">
+          <div className="sd-live-bar">
+            <span className="sd-live-tag">ตัวอย่างเอกสารจริง</span>
+            <span className="sd-live-dot">● อัปเดตตามที่พิมพ์ทันที</span>
+            <span className="acc-toolbar-spacer" />
+            <button
+              type="button"
+              className="sd-btn sd-live-print"
+              disabled
+              title="กด ✓ ออกเอกสาร ก่อน จึงพิมพ์/บันทึก PDF ได้"
+            >
+              🖨 พิมพ์ / บันทึก PDF
             </button>
           </div>
+          <div className="sd-live-scroll">
+            <SalesDocumentPrintDoc
+              document={previewDoc}
+              issuerName={issuerName}
+              issuerTaxId={issuerTaxId}
+              issuerAddress={issuerAddress}
+              issuerPhone={issuerPhone}
+              logoUrl={logoUrl}
+              stampUrl={stampUrl}
+              backHref=""
+              preview
+            />
+          </div>
+        </div>
         </div>
       ) : null}
 
