@@ -9,6 +9,7 @@ import { formatMoney } from "@/lib/accounting/calc";
 import type { PaymentMethod } from "@/lib/accounting/queries";
 import { quickFixBillAction } from "./quickfix-actions";
 import { applyStatementAccountToBillAction } from "../statement-actions";
+import { confirmEntryDirectAction } from "../actions";
 
 /**
  * กล่องลงบัญชีบนการ์ดบิล (โต๊ะทำงาน · บิลร่าง) — ★ 2026-09-02 ดีไซน์ที่ผู้ใช้อนุมัติ:
@@ -97,6 +98,9 @@ export default function QuickFixBill({
     });
   };
 
+  // ★ 2026-09-03 ผู้ใช้: "หลังจากกดเลขผังบัญชีฝั่งตรงข้ามเสร็จ กดเอ็นเทอร์ เข้ายืนยันอัตโนมัติเลย
+  //   นักบัญชีได้คีย์เร็วขึ้น" — เลือกเลขผัง (Enter/คลิก) = บันทึกบัญชี + ยืนยันบิลจบในจังหวะเดียว
+  //   ยืนยันไม่ผ่าน (เช่น ยังไม่ระบุซื้อ/ขาย) = บัญชีถูกบันทึกแล้ว โชว์เหตุผลบนการ์ดให้แก้ต่อ
   const pickLine = (code: string, name: string) => {
     setAcct({ code, name });
     startTransition(async () => {
@@ -108,8 +112,18 @@ export default function QuickFixBill({
         counterpartyName: cp || counterpartyName,
         amount: lineAmount,
       });
-      setMsg({ ok: r.ok, text: r.ok ? "บันทึกบัญชีแล้ว (ระบบจำของลูกค้ารายนี้)" : r.message ?? "บันทึกไม่สำเร็จ" });
-      if (r.ok) router.refresh();
+      if (!r.ok) {
+        setMsg({ ok: false, text: r.message ?? "บันทึกไม่สำเร็จ" });
+        return;
+      }
+      const conf = await confirmEntryDirectAction(entryId);
+      setMsg({
+        ok: conf.ok,
+        text: conf.ok
+          ? "บันทึกบัญชี + ยืนยันบิลแล้ว ✓"
+          : `บันทึกบัญชีแล้ว แต่ยังยืนยันไม่ได้: ${conf.message}`,
+      });
+      router.refresh();
     });
   };
 
