@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess } from "@/lib/accounting/access";
-import { customerIdsForAccountant, listAccountantsWithCounts, getEmployeeName, type AccountantCard } from "@/lib/accounting/accountant-scope";
+import { customerIdsForAccountant, listAccountantsWithCounts, getEmployeeName, hasRouteBySlipGroup, type AccountantCard } from "@/lib/accounting/accountant-scope";
 import { listTeamAccountantCards, type TeamAccountantCard } from "@/lib/accounting/lead-scope";
 import { listEntries, summarizeEntry, type BillEntry } from "@/lib/accounting/queries";
 import { groupEntriesByCustomer, UNASSIGNED_CUSTOMER } from "@/lib/accounting/group";
@@ -15,6 +15,7 @@ import QuickFixBill from "./QuickFixBill";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import DeleteBillButton from "./DeleteBillButton";
 import ConfirmBillButton from "./ConfirmBillButton";
+import MoveBillButton from "./MoveBillButton";
 import RenameCustomerButton from "./RenameCustomerButton";
 import UploadFileButton from "../UploadFileButton";
 import StatementReconcileButton from "../StatementReconcileButton";
@@ -397,6 +398,11 @@ export default async function AccountingWorkspacePage({
   let accountantOptions: AccountantOption[] = [];
   let currentAccountantId: string | null = null;
   const canReassignCustomer = access.mode === "admin";
+  // ★ ปุ่ม "ย้ายบริษัท" บนการ์ด (2026-09-03): admin หรือผู้ดูแลกลุ่มรวมหลายบริษัท (route_by_slip)
+  //   — หน้าตารางเก่าที่มีปุ่มนี้ถูกโต๊ะทำงานแทนที่แล้ว จึงต้องมีบนการ์ดด้วย (action กันสิทธิ์ซ้ำอีกชั้น)
+  const canMoveBills =
+    access.mode === "admin" ||
+    (access.employeeId ? await hasRouteBySlipGroup(service, access.tenantId, access.employeeId) : false);
   let shareIsFlag = false;
   let shareResolved = false;
   let shareCircleEntries: ShareCircleEntry[] | null = null;
@@ -733,6 +739,8 @@ export default async function AccountingWorkspacePage({
                         {pend ? <ConfirmBillButton entryId={e.id} /> : null}
                         <Link href={editHref(e)} className={`wsp-btn ${pend ? "review" : "primary"}`}>ตรวจ →</Link>
                         <a href={`/chat-audit/accounting/receipt-cert?bill=${e.id}${e.customerId ? `&customer=${e.customerId}` : ""}`} target="_blank" rel="noopener" className="wsp-btn ghost">ใบรับรองฯ</a>
+                        {/* ★ 2026-09-03 ผู้ใช้: "ปุ่มส่งบิลไปบริษัทอื่นอยู่ตรงไหน" — หน้าตารางเก่าเข้าไม่ถึงแล้ว → วางบนการ์ด */}
+                        {canMoveBills && e.customerId ? <MoveBillButton entryId={e.id} customerId={e.customerId} /> : null}
                         {isPending(e) ? <DeleteBillButton entryId={e.id} /> : null}
                       </div>
                     </div>

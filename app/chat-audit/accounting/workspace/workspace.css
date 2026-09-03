@@ -106,6 +106,8 @@
 /* ปุ่ม "ตรวจ →" คู่กับ "✓ ยืนยัน" (2026-09-03 แยกปุ่ม) — เส้นขอบฟ้า แยกจากปุ่มยืนยันเขียว */
 .wsp-btn.review{background:#fff;color:#2563eb;border:1px solid #bfdbfe}
 .wsp-btn.review:hover{background:#eff6ff}
+/* กล่องเลือกบริษัทปลายทาง — ปุ่ม "ย้ายบริษัท" บนการ์ด (2026-09-03) */
+.wsp-move-select{width:100%;max-width:200px;padding:5px 8px;border:1px solid #dbe3ee;border-radius:8px;font-size:12px;font-family:inherit;background:#fff}
 /* แท็บปิดเดือน — เช็กลิสต์ + งบการเงินฝังในหน้า */
 .wsp-close{padding:14px;display:flex;flex-direction:column;gap:12px}
 .wsp-close-banner{padding:12px 16px;border-radius:10px;font-weight:700;font-size:13.5px}
