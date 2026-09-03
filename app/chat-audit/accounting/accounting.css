@@ -603,6 +603,9 @@
   white-space: nowrap; /* รหัส+ชื่อ อยู่บรรทัดเดียว ไม่ตกบรรทัด */
 }
 .nova-dash .acc-acct-opt:hover { background: var(--navy-50, #eef4ff); }
+/* ตัวที่ไฮไลต์ด้วยลูกศร ↑↓ (2026-09-03) — Enter = เลือกตัวนี้ */
+.nova-dash .acc-acct-opt-hi,
+.nova-dash .acc-acct-opt-hi:hover { background: var(--navy-100, #dbe7ff); }
 .nova-dash .acc-acct-opt-code {
   flex: 0 0 52px;
   font-weight: 700;

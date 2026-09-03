@@ -38,10 +38,15 @@ export default function AccountCombobox({
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  // ★ 2026-09-03 ผู้ใช้: "พิมพ์เลขแล้ว Enter ได้เลย และกดเครื่องหมายขึ้นลงได้ด้วย"
+  //   — ไฮไลต์รายการในลิสต์ เลื่อนด้วย ↑↓ · Enter เลือกตัวที่ไฮไลต์ (default = ตัวแรก)
+  const [hi, setHi] = useState(0);
   const boxRef = useRef<HTMLDivElement>(null);
   // ผังกลางจัดกลุ่มตามหมวด (รวมบัญชีเงินฝากธนาคารในหมวด 1 แล้ว)
   //   ★ พิมพ์เลข 1–6 = เด้งทั้งหมวดนั้นมาให้เลื่อนเลือก · อย่างอื่น = ค้น substring ตามเดิม
   const chartGroups = useMemo(() => searchChartNonBankGrouped(chart, q), [chart, q]);
+  // ลิสต์แบน (เรียงตามที่โชว์) — ใช้เดินด้วยลูกศร/Enter
+  const flatOptions = useMemo(() => chartGroups.flatMap((g) => g.accounts), [chartGroups]);
   const selected = !!accountCode;
 
   // ปิด dropdown เมื่อคลิกนอกกล่อง
@@ -104,14 +109,22 @@ export default function AccountCombobox({
         onChange={(e) => {
           setQ(e.target.value);
           setOpen(true);
+          setHi(0); // พิมพ์ใหม่ = ไฮไลต์กลับตัวแรก
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
-            // เลือกรายการแรกในผลค้นด้วย Enter
-            const firstChart = chartGroups[0]?.accounts[0];
-            if (firstChart) pick(firstChart.code, firstChart.name);
+            // Enter = เลือกตัวที่ไฮไลต์อยู่ (default ตัวแรก) — พิมพ์เลขแล้ว Enter ได้เลย
+            const opt = flatOptions[Math.min(hi, flatOptions.length - 1)] ?? flatOptions[0];
+            if (opt) pick(opt.code, opt.name);
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setOpen(true);
+            setHi((h) => Math.min(h + 1, Math.max(flatOptions.length - 1, 0)));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setHi((h) => Math.max(h - 1, 0));
           } else if (e.key === "Escape") {
             setOpen(false);
           }
@@ -133,19 +146,28 @@ export default function AccountCombobox({
                 <div className="acc-acct-group">
                   {grp.digit} {grp.category}
                 </div>
-                {grp.accounts.map((a) => (
-                  <button
-                    key={a.code}
-                    type="button"
-                    role="option"
-                    aria-selected={false}
-                    className="acc-acct-opt"
-                    onClick={() => pick(a.code, a.name)}
-                  >
-                    <span className="acc-acct-opt-code">{a.code}</span>
-                    <span className="acc-acct-opt-name">{a.name}</span>
-                  </button>
-                ))}
+                {grp.accounts.map((a) => {
+                  const isHi = flatOptions[hi]?.code === a.code;
+                  return (
+                    <button
+                      key={a.code}
+                      type="button"
+                      role="option"
+                      aria-selected={isHi}
+                      className={`acc-acct-opt${isHi ? " acc-acct-opt-hi" : ""}`}
+                      // ↑↓ เลื่อนแล้วให้ตัวไฮไลต์อยู่ในสายตาเสมอ
+                      ref={isHi ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}
+                      onMouseEnter={() => {
+                        const i = flatOptions.findIndex((o) => o.code === a.code);
+                        if (i >= 0) setHi(i);
+                      }}
+                      onClick={() => pick(a.code, a.name)}
+                    >
+                      <span className="acc-acct-opt-code">{a.code}</span>
+                      <span className="acc-acct-opt-name">{a.name}</span>
+                    </button>
+                  );
+                })}
               </div>
             ))
           )}
