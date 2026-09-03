@@ -10,6 +10,10 @@ import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { listManualEntries, toJournalPosting } from "@/lib/accounting/manual-journal";
 import { listBillPaymentsForEntries, toJournalPosting as toBillPaymentJournalPosting } from "@/lib/accounting/bill-payments";
 import { listNotesForEntries, toJournalPosting as toNoteJournalPosting } from "@/lib/accounting/credit-debit-notes";
+import { buildJournalEntries, type JournalLine } from "@/lib/accounting/journal";
+import { buildLedger, type LedgerAccount } from "@/lib/accounting/ledger";
+import { listOpeningBalances } from "@/lib/accounting/opening-balance";
+import type { JournalPosting } from "@/lib/accounting/journal-books";
 import JournalBooksDoc from "./JournalBooksDoc";
 import "../vat-report/vat-report.css";
 import "./journal-books.css";
@@ -187,6 +191,7 @@ export default async function JournalBooksPage({
   const companyName = (cust.business_name || cust.name || "กิจการ").trim();
 
   let result;
+  let ledgerAccounts: LedgerAccount[] = [];
   try {
     const startMonth = fromDate.slice(0, 7);
     const endMonth = toDate.slice(0, 7);
@@ -251,7 +256,34 @@ export default async function JournalBooksPage({
       })
       .filter((p): p is NonNullable<typeof p> => p !== null);
 
-    result = buildJournalBooks(entries, chartByCode, [...manualPostings, ...paymentPostings, ...notePostings]);
+    const allPostings = [...manualPostings, ...paymentPostings, ...notePostings];
+    result = buildJournalBooks(entries, chartByCode, allPostings);
+
+    // ★ 2026-09-03 ผู้ใช้: "ทำสมุดบัญชีแยกประเภทด้วย เอารายการด้านเดบิต เครดิต ทุกรายการไปลง
+    //   … ให้ย้ายมาอยู่หน้าเดียวกับสมุดบัญชี (ต่อจากเมนูสมุดรายวันทั่วไป)"
+    //   — สร้างบัญชีแยกประเภทจาก "ทุกบรรทัด" แหล่งเดียวกับ 5 เล่ม: บิล (ทุกขา) + manual JE +
+    //   รับ/จ่ายเงิน + CN/DN + ยอดยกมา → ส่งเข้า JournalBooksDoc เป็นเล่มที่ 6
+    const billLines = buildJournalEntries(entries, chartByCode).lines;
+    const postingToLines = (p: JournalPosting): JournalLine[] => [
+      ...p.debits.map((d) => ({
+        entryId: p.entryId, date: p.date, docNo: p.docNo,
+        accountCode: d.accountCode, accountName: d.accountName,
+        debit: d.amount, credit: 0, side: "debit" as const,
+        customerId, counterparty: p.description || null,
+      })),
+      ...p.credits.map((c) => ({
+        entryId: p.entryId, date: p.date, docNo: p.docNo,
+        accountCode: c.accountCode, accountName: c.accountName,
+        debit: 0, credit: c.amount, side: "credit" as const,
+        customerId, counterparty: p.description || null,
+      })),
+    ];
+    const opening = await listOpeningBalances(service, tenantId, customerId);
+    ledgerAccounts = buildLedger(
+      [...billLines, ...allPostings.flatMap(postingToLines)],
+      opening,
+      chartByCode
+    ).accounts;
   } catch {
     return <ErrorShell message="อ่านข้อมูลไม่สำเร็จ — ตรวจการตั้งค่า SUPABASE_SERVICE_ROLE_KEY และ migration" />;
   }
@@ -271,6 +303,7 @@ export default async function JournalBooksPage({
       initialBook={initialBook}
       printedAt={printedAtThai()}
       books={result.books}
+      ledgerAccounts={ledgerAccounts}
       skipped={result.skipped}
       backHref="/chat-audit/accounting"
     />
