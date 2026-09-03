@@ -477,6 +477,9 @@ export default async function AccountingWorkspacePage({
     if (e.customerId) p.set("open", e.customerId);
     p.set("type", e.entryType === "sale" ? "sale" : e.entryType === "unspecified" ? "unspecified" : "purchase");
     p.set("edit", e.id);
+    // ★ 2026-09-03 "กดปิดแล้วเด้งขึ้นอีก": ส่งมุมมองปัจจุบันไปด้วย → ปิดแล้วกลับมุมมองเดิม
+    //   (เช่น ดูทั้งหมดรวมยืนยันแล้ว) + ตัวปิดจะพา hash กลับมาที่การ์ดใบเดิม
+    if (view !== "review") p.set("view", view);
     return `/chat-audit/accounting?${p.toString()}`;
   };
 
@@ -691,7 +694,8 @@ export default async function AccountingWorkspacePage({
                   //   (เล็กกว่าไฟล์สแกนเต็ม ~10 เท่า + browser cache) — ครอบ OneDrive ที่เซ็น URL ไม่ได้ด้วย
                   const lightboxSrc = `/api/accounting/bill-thumb?entry=${e.id}&w=1300&v=2`;
                   return (
-                    <div key={e.id} className={`wsp-card${pend ? " pend" : " done"}`}>
+                    // id = จุด anchor ให้ปุ่มปิดของหน้าแก้บิลเลื่อนกลับมาที่การ์ดใบเดิม (#card-<id>)
+                    <div key={e.id} id={`card-${e.id}`} className={`wsp-card${pend ? " pend" : " done"}`}>
                       <div className="wsp-thumb">
                         {img && path ? (
                           <a href={`#zoom-${e.id}`} className="wsp-thumb-zoom" aria-label="ขยายดูบิล">

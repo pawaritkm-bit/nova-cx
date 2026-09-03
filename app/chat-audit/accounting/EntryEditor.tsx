@@ -239,9 +239,11 @@ export default function EntryEditor({
   // ---- นำทาง ก่อนหน้า/ถัดไป ในบริบทนี้ ----
   const nav = resolveEntryNav(orderIds, entry.id);
   // href ของบิลอีกใบ = closeHref (คงบริบท open/type/accountant/customer) + edit=<id>
+  //   ★ 2026-09-03: closeHref อาจพ่วง hash (#card-<id> — จุดเลื่อนกลับ) ต้องตัดออกก่อนต่อ query
+  const closePath = closeHref.split("#")[0];
   const editHrefFor = useCallback(
-    (id: string) => `${closeHref}${closeHref.includes("?") ? "&" : "?"}edit=${id}`,
-    [closeHref]
+    (id: string) => `${closePath}${closePath.includes("?") ? "&" : "?"}edit=${id}`,
+    [closePath]
   );
 
   // ---- header state ----
@@ -622,9 +624,9 @@ export default function EntryEditor({
     startTransition(async () => {
       const res = await deleteEntryAction(entry.id);
       if (res.ok) {
-        // เด้งกลับหน้ารายการพร้อม ?undo=<id> → โชว์แถบ "เลิกทำ" ให้กู้คืนได้ทันที
-        const sep = closeHref.includes("?") ? "&" : "?";
-        router.push(`${closeHref}${sep}undo=${entry.id}`);
+        // เด้งกลับหน้ารายการพร้อม ?undo=<id> → โชว์แถบ "เลิกทำ" ให้กู้คืนได้ทันที (ตัด hash ก่อนต่อ query)
+        const sep = closePath.includes("?") ? "&" : "?";
+        router.push(`${closePath}${sep}undo=${entry.id}`);
         router.refresh();
       } else {
         setMsg({ ok: false, text: res.message });

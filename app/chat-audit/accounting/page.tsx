@@ -863,6 +863,8 @@ export default async function AccountingPage({
     uploaded?: string;
     /** ★ 2026-09-02 — path ภายในสำหรับปุ่มปิด (มาจากหน้างบ ฯลฯ) */
     back?: string;
+    /** ★ 2026-09-03 — มุมมองโต๊ะทำงานที่เปิดมา (received=ดูทั้งหมด) → ปิดแล้วกลับมุมมองเดิม */
+    view?: string;
   }>;
 }) {
   const sp = await searchParams;
@@ -1400,13 +1402,19 @@ export default async function AccountingPage({
       backParam.startsWith("/chat-audit/") && !backParam.startsWith("//") && !backParam.includes("://")
         ? backParam
         : null;
-    const wsClose =
-      safeBack ??
+    // ★ 2026-09-03 ผู้ใช้: "กดปิดแล้วเด้งขึ้นอีกแล้ว" — ปิดแล้ว (1) กลับมุมมองเดิม (view=received
+    //   = ดูทั้งหมดรวมยืนยันแล้ว) (2) เลื่อนกลับไปที่การ์ดบิลใบเดิมด้วย hash #card-<id>
+    const viewParam = sp.view === "received" || sp.view === "drafted" ? sp.view : "";
+    const wsBase =
       `/chat-audit/accounting/workspace${buildQuery({
         accountant: accParam,
         month: monthParam,
         open: sp.open && sp.open !== "" ? sp.open : undefined,
       })}`;
+    const wsWithView = viewParam
+      ? `${wsBase}${wsBase.includes("?") ? "&" : "?"}view=${viewParam}`
+      : wsBase;
+    const wsClose = safeBack ?? `${wsWithView}#card-${editEntry.id}`;
     return (
       <ChatAuditFrame active="chat-accounting" role={navRole} authed staffOnly={staffOnly} bare title="ตรวจ/แก้บิล" subtitle="">
         {editInNav && pagerBills.length > 0 ? (
