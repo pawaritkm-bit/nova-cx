@@ -48,21 +48,11 @@ export default function ReportsTabs({
         <a href={exportHrefs[idx]} className="btn">⬇ Export {tabs[idx]?.label} (Excel)</a>
         <a href={allHref} className="btn btn-ghost">⬇ ทั้งหมด</a>
       </div>
-      {/* ★ 2026-09-02 ผู้ใช้: "พิมพ์แก้ตรงนี้ได้เลย เหมือนหน้าสมุดบัญชี" — ตารางทุกแท็บ
-          แก้ข้อความ/ตัวเลขตรงบนจอได้ (contentEditable) ใช้ดู/พิมพ์เท่านั้น ไม่กระทบบิลจริง
-          (Excel export ยังใช้ตัวเลขจริงจากระบบ · แก้ข้อมูลจริงให้ไปที่ ตรวจ/แก้บิล) */}
-      <p className="muted no-print" style={{ fontSize: 12, margin: "0 0 8px" }}>
-        ✏️ คลิกแก้ข้อความ/ตัวเลขบนตารางได้เลย (เฉพาะการแสดง/พิมพ์หน้านี้ — ไม่กระทบข้อมูลบิลจริง)
-      </p>
+      {/* ★ 2026-09-03 ผู้ใช้: "หน้างบการเงิน ปรับให้แก้ไม่ได้เหมือนกัน" — ถอด contentEditable ออก
+          (เดิม 2026-09-02 เปิดแก้บนจอได้) รายงานอ่านอย่างเดียว ตัวเลขตรงบิลจริงเสมอ
+          ต้องการแก้ = ไปแก้ที่บิล/รายการปรับปรุง แล้วรายงานคำนวณใหม่ให้เอง */}
       {items.map((c, i) => (
-        <div
-          key={tabs[i]?.key ?? i}
-          hidden={i !== idx}
-          contentEditable
-          suppressContentEditableWarning
-          spellCheck={false}
-          style={{ outline: "none" }}
-        >
+        <div key={tabs[i]?.key ?? i} hidden={i !== idx}>
           {c}
         </div>
       ))}
