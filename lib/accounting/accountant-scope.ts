@@ -48,6 +48,30 @@ export async function customerIdsForAccountant(
   return [...ids];
 }
 
+/**
+ * นักบัญชีคนนี้เป็นผู้ดูแล "กลุ่มรวมหลายบริษัท" (route_by_slip) อย่างน้อย 1 กลุ่มไหม
+ *
+ * ★ 2026-09-03 ผู้ใช้: "ย้ายบิลไปบริษัทอื่น เปิดสิทธิให้แค่พี่สวยคนเดียว บริษัทอื่นที่ผูก
+ *   1 บริษัทต่อ 1 กลุ่มอยู่แล้วย้ายไม่ได้" — เงื่อนไขเชิงโครงสร้าง ไม่ hardcode ตัวบุคคล:
+ *   สิทธิ์ย้ายบิล = เป็นผู้ดูแลกลุ่ม route_by_slip (AI แยกบิลเข้าหลายบริษัท จึงมีโอกาสแยกผิด)
+ *   นักบัญชีกลุ่มปกติ (1 กลุ่ม 1 บริษัท) บิลไม่มีทางลงผิดบริษัท → ไม่ต้องมีปุ่มย้าย
+ */
+export async function hasRouteBySlipGroup(
+  db: DB,
+  tenantId: string,
+  employeeId: string
+): Promise<boolean> {
+  const { data } = await db
+    .from("chat_groups")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("responsible_employee_id", employeeId)
+    .eq("route_by_slip", true)
+    .is("deleted_at", null)
+    .limit(1);
+  return ((data ?? []) as { id: string }[]).length > 0;
+}
+
 /** ชื่อพนักงานสำหรับหัวข้อ (ชื่อเล่นก่อน ชื่อจริง) — คืน null ถ้าไม่พบ */
 export async function getEmployeeName(
   db: DB,

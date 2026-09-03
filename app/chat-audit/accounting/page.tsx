@@ -9,6 +9,7 @@ import { resolveAccountingAccess } from "@/lib/accounting/access";
 import {
   customerIdsForAccountant,
   getEmployeeName,
+  hasRouteBySlipGroup,
   listAccountantsWithCounts,
   listAccountantEmployees,
   mapCustomersToAccountant,
@@ -520,10 +521,13 @@ function EntryTable({
   entries,
   signed,
   editHrefOf,
+  canMoveBills = false,
 }: {
   entries: BillEntry[];
   signed: Map<string, string>;
   editHrefOf: (entryId: string) => string;
+  /** โชว์ปุ่ม "ย้ายบริษัท" — เฉพาะ admin หรือผู้ดูแลกลุ่มรวมหลายบริษัท (route_by_slip) */
+  canMoveBills?: boolean;
 }) {
   if (entries.length === 0) {
     return <p className="empty">ยังไม่มีรายการในประเภทนี้</p>;
@@ -668,6 +672,7 @@ function EntryTable({
                       status={e.status}
                       editHref={editHref}
                       customerId={e.customerId}
+                      canMoveCustomer={canMoveBills}
                       hasWht={e.lines.some((l) => l.whtAmount > 0)}
                       isCreditEligible={isCreditEligibleForPayment(e)}
                       canSyncStock={e.lines.some((l) => !!l.productId && !!l.quantity && l.quantity > 0)}
@@ -899,6 +904,11 @@ export default async function AccountingPage({
   const navRole = access.navRole;
   // staff (นักบัญชี/หัวหน้า LINE) → เมนูจำกัดเฉพาะบัญชีของตัวเอง
   const staffOnly = access.mode === "accountant" || access.mode === "lead";
+  // ★ ปุ่ม "ย้ายบริษัท" (2026-09-03): admin หรือผู้ดูแลกลุ่มรวมหลายบริษัท (route_by_slip เช่นพี่สวย)
+  //   นักบัญชีกลุ่มปกติ 1 บริษัทต่อ 1 กลุ่ม บิลไม่มีทางลงผิดบริษัท → ไม่โชว์ปุ่ม (server action กันซ้ำอีกชั้น)
+  const canMoveBills =
+    access.mode === "admin" ||
+    (access.employeeId ? await hasRouteBySlipGroup(service, tenantId, access.employeeId) : false);
 
   // ---- โหมด & สโคปลูกค้า ----
   // scopeCustomerIds: undefined = เห็นทุกลูกค้า (admin/lead ที่เลือก "ทั้งสำนักงาน")
@@ -1347,6 +1357,7 @@ export default async function AccountingPage({
         tables={{
           purchase: (
             <EntryTable
+              canMoveBills={canMoveBills}
               entries={entriesOfType(g, "purchase")}
               signed={signed}
               editHrefOf={(id) =>
@@ -1356,6 +1367,7 @@ export default async function AccountingPage({
           ),
           sale: (
             <EntryTable
+              canMoveBills={canMoveBills}
               entries={entriesOfType(g, "sale")}
               signed={signed}
               editHrefOf={(id) =>
@@ -1365,6 +1377,7 @@ export default async function AccountingPage({
           ),
           unspecified: (
             <EntryTable
+              canMoveBills={canMoveBills}
               entries={entriesOfType(g, "unspecified")}
               signed={signed}
               editHrefOf={(id) =>

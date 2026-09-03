@@ -38,6 +38,7 @@ import {
 import type { EntryType, VatType, WhtForm, PaymentMethod } from "@/lib/accounting/queries";
 import { recordAccountRules } from "@/lib/accounting/account-learning";
 import { listScopedCustomers } from "@/lib/accounting/customer-options";
+import { hasRouteBySlipGroup } from "@/lib/accounting/accountant-scope";
 import { detectAnomalies, hasErrorAnomaly } from "@/lib/accounting/anomaly";
 import { chunkIds } from "@/lib/accounting/id-chunk";
 import { asPaymentMethod } from "@/lib/accounting/payment";
@@ -535,6 +536,9 @@ export async function moveEntryTypeAction(
  *
  *   สิทธิ์: นักบัญชีย้ายได้ระหว่างลูกค้า "ในความดูแลตัวเอง" เท่านั้น (ต้นทาง+ปลายทาง
  *   ต้องอยู่ในสโคปทั้งคู่) · lead = ในทีม · admin = ทุกลูกค้า — บังคับ server-side เหมือนเดิม
+ *   ★ 2026-09-03 ผู้ใช้จำกัดเพิ่ม: "เปิดสิทธิให้แค่พี่สวยคนเดียว บริษัทอื่นที่ผูก 1 บริษัท
+ *     ต่อ 1 กลุ่มอยู่แล้วย้ายไม่ได้" — staff ต้องเป็นผู้ดูแลกลุ่ม route_by_slip ด้วย
+ *     (hasRouteBySlipGroup — โครงสร้าง ไม่ hardcode ชื่อ · admin ยังย้ายได้ทุกบิล)
  *
  *   ★ payment_bank_account_id เป็นบัญชีธนาคาร "ของลูกค้าต้นทาง" (FK per-customer)
  *     → ย้ายแล้วล้างทิ้ง (วิธีจ่าย transfer ยังอยู่ — เอนจินใช้ 1020 default ของปลายทาง)
@@ -550,6 +554,17 @@ export async function moveEntryCustomerAction(
     const authed = await createClient();
     const service = createServiceRoleClient();
     const ctx = await requireAccountingAccess(authed, service);
+
+    // ★ staff (นักบัญชี/หัวหน้า) ย้ายได้เฉพาะผู้ดูแลกลุ่มรวมหลายบริษัท (route_by_slip)
+    //   กลุ่มปกติ 1 บริษัทต่อ 1 กลุ่ม บิลไม่มีทางลงผิดบริษัท → ปิดสิทธิ์ย้าย (admin ผ่าน)
+    if (ctx.mode !== "admin") {
+      const allowed = ctx.employeeId
+        ? await hasRouteBySlipGroup(service, ctx.tenantId, ctx.employeeId)
+        : false;
+      if (!allowed) {
+        return { ok: false, message: "การย้ายบิลเปิดเฉพาะผู้ดูแลกลุ่มรวมหลายบริษัท" };
+      }
+    }
 
     const { data: entryRow } = await service
       .from("bill_entries")

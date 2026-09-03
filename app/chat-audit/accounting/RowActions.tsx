@@ -38,6 +38,7 @@ export default function RowActions({
   isCreditEligible,
   canSyncStock,
   stockSync,
+  canMoveCustomer = false,
 }: {
   entryId: string;
   entryType: EntryType;
@@ -53,6 +54,8 @@ export default function RowActions({
   canSyncStock?: boolean;
   /** ผลบันทึกสต็อกล่าสุดของบิลนี้ — ใช้โชว์ป้ายเตือน needsResync (เฟส 8 ส่วน Y, 0.9) */
   stockSync?: StockSyncInfo;
+  /** โชว์ปุ่ม "ย้ายบริษัท" — เฉพาะ admin/ผู้ดูแลกลุ่มรวมหลายบริษัท (server คำนวณ + action กันซ้ำ) */
+  canMoveCustomer?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -211,16 +214,19 @@ export default function RowActions({
               </button>
             ))
           : null}
-        {/* ย้ายบิลไปบริษัทอื่น — นักบัญชีย้ายเองได้ในสโคปตัวเอง (เคส AI แยกบิลผิดบริษัทจากกลุ่มรวม) */}
-        <button
-          type="button"
-          className="acc-mini-btn"
-          onClick={toggleMove}
-          disabled={pending}
-          title="ย้ายบิลนี้ไปบริษัท/ลูกค้าอื่นที่คุณดูแล"
-        >
-          ย้ายบริษัท
-        </button>
+        {/* ย้ายบิลไปบริษัทอื่น — เฉพาะ admin/ผู้ดูแลกลุ่มรวมหลายบริษัท (เคส AI แยกบิลผิดบริษัทจากกลุ่มรวม)
+            ★ 2026-09-03: นักบัญชีกลุ่มปกติ 1 บริษัทต่อ 1 กลุ่ม ไม่โชว์ปุ่มนี้ (server action กันอีกชั้น) */}
+        {canMoveCustomer ? (
+          <button
+            type="button"
+            className="acc-mini-btn"
+            onClick={toggleMove}
+            disabled={pending}
+            title="ย้ายบิลนี้ไปบริษัท/ลูกค้าอื่นที่คุณดูแล"
+          >
+            ย้ายบริษัท
+          </button>
+        ) : null}
         <button
           type="button"
           className="acc-mini-btn danger"

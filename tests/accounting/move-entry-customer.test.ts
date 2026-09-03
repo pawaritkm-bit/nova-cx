@@ -5,6 +5,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * ไม่จำเป็นต้องเป็นสิทธิ์ฝั่งเซิร์ฟเวอร์ (admin)" — ย้ายบิลไปบริษัทอื่นในสโคปตัวเอง
  *
  * บังคับตามสัญญา:
+ *   - ★ 2026-09-03 "เปิดสิทธิให้แค่พี่สวยคนเดียว": staff ต้องเป็นผู้ดูแลกลุ่มรวมหลายบริษัท
+ *     (route_by_slip) จึงย้ายได้ — นักบัญชีกลุ่มปกติ 1 บริษัทต่อ 1 กลุ่ม → ปฏิเสธ (admin ผ่าน)
  *   - นักบัญชีย้ายได้เฉพาะระหว่างลูกค้าในความดูแลตัวเอง (ต้นทาง+ปลายทางต้อง in-scope ทั้งคู่)
  *   - ย้ายแล้วล้าง payment_bank_account_id (FK บัญชีธนาคาร per-customer ของบริษัทเดิม)
  *   - ปลายทาง = ต้นทาง → ปฏิเสธ ไม่แตะ DB
@@ -52,6 +54,8 @@ function accountantCtx(allowed: string[]) {
 type FakeState = {
   entryCustomerId: string | null;
   targetExists: boolean;
+  /** นักบัญชีคนนี้ดูแลกลุ่มรวมหลายบริษัท (route_by_slip) ไหม — เงื่อนไขสิทธิ์ย้าย */
+  hasRouteGroup: boolean;
   updates: Record<string, unknown>[];
 };
 let state: FakeState;
@@ -72,6 +76,11 @@ function makeDb(): unknown {
     b.eq = chain;
     b.is = chain;
     b.not = chain;
+    // chat_groups (hasRouteBySlipGroup) จบด้วย .limit(1) — คืน thenable ตาม state
+    b.limit = () => ({
+      then: (resolve: (v: { data: { id: string }[] }) => void) =>
+        resolve({ data: table === "chat_groups" && state.hasRouteGroup ? [{ id: "g1" }] : [] }),
+    });
     b.maybeSingle = async () => {
       if (table === "bill_entries") {
         return state.entryCustomerId === undefined
@@ -96,13 +105,13 @@ function makeDb(): unknown {
 }
 
 beforeEach(() => {
-  state = { entryCustomerId: SRC, targetExists: true, updates: [] };
+  state = { entryCustomerId: SRC, targetExists: true, hasRouteGroup: true, updates: [] };
   currentDb = makeDb();
   requireAccountingAccessMock.mockReset();
 });
 
 describe("moveEntryCustomerAction", () => {
-  it("นักบัญชีย้ายบิลระหว่างลูกค้าในสโคปตัวเองได้ — เขียน customer_id ใหม่ + ล้างบัญชีธนาคารเดิม", async () => {
+  it("นักบัญชีผู้ดูแลกลุ่มรวม (route_by_slip) ย้ายบิลในสโคปตัวเองได้ — เขียน customer_id ใหม่ + ล้างบัญชีธนาคารเดิม", async () => {
     requireAccountingAccessMock.mockResolvedValue(accountantCtx([SRC, DST]));
     const res = await moveEntryCustomerAction(ENTRY_ID, DST);
     expect(res.ok).toBe(true);
@@ -113,6 +122,30 @@ describe("moveEntryCustomerAction", () => {
       customer_id: DST,
       payment_bank_account_id: null,
     });
+  });
+
+  it("★ นักบัญชีกลุ่มปกติ (1 บริษัทต่อ 1 กลุ่ม ไม่มีกลุ่มรวม) → ปฏิเสธ แม้ทั้งคู่อยู่ในสโคป", async () => {
+    state.hasRouteGroup = false;
+    requireAccountingAccessMock.mockResolvedValue(accountantCtx([SRC, DST]));
+    const res = await moveEntryCustomerAction(ENTRY_ID, DST);
+    expect(res.ok).toBe(false);
+    expect(res.message).toContain("กลุ่มรวมหลายบริษัท");
+    expect(state.updates).toHaveLength(0);
+  });
+
+  it("admin ย้ายได้แม้ไม่มีกลุ่มรวม (allowedCustomerIds=null ผ่านทุกลูกค้า)", async () => {
+    state.hasRouteGroup = false;
+    requireAccountingAccessMock.mockResolvedValue({
+      tenantId: "tenant-1",
+      mode: "admin" as const,
+      employeeId: null,
+      name: null,
+      allowedCustomerIds: null,
+      navRole: "admin" as const,
+    });
+    const res = await moveEntryCustomerAction(ENTRY_ID, DST);
+    expect(res.ok).toBe(true);
+    expect(state.updates).toHaveLength(1);
   });
 
   it("ปลายทางนอกสโคปนักบัญชี → ปฏิเสธ ไม่แตะ DB", async () => {
