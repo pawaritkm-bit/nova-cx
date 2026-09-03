@@ -635,6 +635,17 @@ export default async function AccountingWorkspacePage({
             <>
               <div className="wsp-center-head">
                 <span className="muted">{reviewList.length} ใบ · ค้างตรวจ {reviewList.filter(isPending).length}</span>
+                {/* ★ 2026-09-03 ผู้ใช้: "กดยืนยันไปแล้ว หน้าตรวจเอกสารจะไม่มีบิลโชว์" —
+                    ปุ่มสลับดูทั้งหมด (รวมยืนยันแล้ว เพื่อกลับไปกด ตรวจ → แก้ได้) ↔ เฉพาะค้างตรวจ */}
+                {view === "review" ? (
+                  <a className="wsp-btn ghost wsp-viewtoggle" href={stepHref("received")}>
+                    👁 ดูทั้งหมด (รวมยืนยันแล้ว)
+                  </a>
+                ) : (
+                  <a className="wsp-btn ghost wsp-viewtoggle" href={stepHref("review")}>
+                    📝 ดูเฉพาะค้างตรวจ
+                  </a>
+                )}
                 {(() => {
                   // ★ "เขียว/พร้อมยืนยัน" = draft + ระบุซื้อ/ขาย + มียอด + ไม่ใช่ AI เดา + ไม่มี anomaly ระดับ error
                   const green = reviewList.filter((e) => {
