@@ -24,8 +24,10 @@ export type StaffSession = {
   exp: number;
 };
 
-/** อายุ session เริ่มต้น = 12 ชั่วโมง */
-export const STAFF_SESSION_TTL_SEC = 12 * 60 * 60;
+/** อายุ session + ตัวเช็คต่ออายุ — ★ 2026-09-03 ย้ายไป cookie.ts (edge import ได้) · re-export
+ *  ที่นี่เพื่อ backward-compat (callback route/เทสต์เดิม import จาก session.ts) */
+export { STAFF_SESSION_TTL_SEC, staffSessionNeedsRenewal } from "@/lib/staff/cookie";
+import { STAFF_SESSION_TTL_SEC } from "@/lib/staff/cookie";
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
