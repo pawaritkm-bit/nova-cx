@@ -7,7 +7,8 @@ import { confirmEntryDirectAction } from "../actions";
 /**
  * ปุ่ม "✓ ยืนยัน" บนการ์ดบิล (โต๊ะทำงาน) — ★ 2026-09-03 ผู้ใช้: "ปุ่มตรวจกับปุ่มยืนยัน
  * ให้อยู่แยกกัน คือสามารถยืนยันบิลได้ในหน้านี้เลย หรือกดเข้าไปยืนยันด้านในก็ได้"
- *   ★ ถามยืนยันก่อนเสมอ — ระบบไม่มีปุ่มถอนยืนยัน (กันกดพลาดแล้วแก้ไม่ได้)
+ *   ★ 2026-09-03 (รอบสอง): "กดยืนยันแล้วให้เข้าเลย ถ้าผิดค่อยไปแก้หน้ากระทบบิลกับสเตทเม้นเอา"
+ *     — เอากล่องถามยืนยันออก กดปุ๊บเข้าสมุด/รายงานทันที (นักบัญชีรับผิดชอบตรวจจากหน้ากระทบยอด)
  */
 export default function ConfirmBillButton({ entryId }: { entryId: string }) {
   const router = useRouter();
@@ -19,9 +20,8 @@ export default function ConfirmBillButton({ entryId }: { entryId: string }) {
         type="button"
         className="wsp-btn primary"
         disabled={pending}
-        title="ยืนยันบิลนี้เลย ไม่ต้องเปิดหน้าตรวจด้านใน"
+        title="ยืนยันบิลนี้เลย (เข้าสมุดบัญชี/รายงานภาษีทันที)"
         onClick={() => {
-          if (!window.confirm("ยืนยันบิลนี้? (ยืนยันแล้วเข้าสมุดบัญชี/รายงานภาษีทันที)")) return;
           setErr(null);
           start(async () => {
             const r = await confirmEntryDirectAction(entryId);
