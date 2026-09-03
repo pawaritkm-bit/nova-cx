@@ -4,21 +4,33 @@
  * ★ pure function ล้วน (ไม่แตะ DB/network) — unit test ได้เต็ม
  * ★ กติกาหลัก: ★ ทุก entry ที่ผ่านต้อง "เดบิตรวม = เครดิตรวม" เสมอ ★
  *
- * กติกา double-entry (ต่อ 1 บิล):
+ * ★★ 2026-09-03 ผู้ใช้ยืนยันหลักบัญชีมาตรฐาน ("ตอนนี้ในระบบลงผิดอยู่") — โมเดล 2 ขา:
+ *   ขา 1 "ตั้งหนี้" (invoice — ทุกบิล ไม่ว่าจ่ายแล้วหรือยัง):
+ *     purchase: Dr ค่าใช้จ่าย + Dr ภาษีซื้อ / Cr หัก ณ ที่จ่าย / Cr เจ้าหนี้การค้า (2010) เสมอ
+ *     sale:     Dr ลูกหนี้การค้า (1140) เสมอ / Cr รายได้ + Cr ภาษีขาย (+Dr ภาษีถูกหัก)
+ *   ขา 2 "ตัดชำระ" (settlement — เฉพาะบิลที่รับ/จ่ายเงินแล้ว: เงินสด/โอน/เช็ค):
+ *     purchase: Dr เจ้าหนี้การค้า / Cr เงินสด-ธนาคาร-เช็คจ่าย
+ *     sale:     Dr เงินสด-ธนาคาร-เช็ครับ / Cr ลูกหนี้การค้า
+ *   บิลเชื่อ (credit/ยังไม่ระบุ) = มีแค่ขา 1 — ขาตัดชำระเกิดทีหลังจากหน้า "รับ/จ่ายเงิน"
+ *   (bill-payments.ts ซึ่ง Dr เจ้าหนี้ / Cr เงิน อยู่แล้ว)
+ *
+ * กติกา double-entry ขา 1 (ต่อ 1 บิล):
  *   purchase (ซื้อ):
  *     Dr แต่ละ line.account_code = line.amount
  *     Dr ภาษีซื้อ (1154)            = Σ vat_amount        (ถ้า > 0)
  *     Cr ภาษีหัก ณ ที่จ่าย (2910)    = Σ wht_amount        (ถ้า > 0)
- *     Cr บัญชีคู่ (เงินสด/ธนาคาร/เจ้าหนี้) = Σamount + Σvat − Σwht
+ *     Cr เจ้าหนี้การค้า (2010)       = Σamount + Σvat − Σwht
  *   sale (ขาย):
  *     Cr แต่ละ line.account_code = line.amount
  *     Cr ภาษีขาย (2900)            = Σ vat_amount
  *     Dr ภาษีถูกหัก ณ ที่จ่าย (1216) = Σ wht_amount        (ถ้า > 0)
- *     Dr บัญชีคู่ (เงินสด/ธนาคาร/ลูกหนี้) = Σamount + Σvat − Σwht
+ *     Dr ลูกหนี้การค้า (1140)        = Σamount + Σvat − Σwht
+ * ขา 2 (เฉพาะบิลที่จ่ายแล้ว): ยอดเดียวกับบัญชีคู่ขา 1 (Σamount + Σvat − Σwht)
  *
- * พิสูจน์สมดุล:
- *   purchase: Dr = Σamount + Σvat ; Cr = Σwht + (Σamount+Σvat−Σwht) = Σamount + Σvat  ✓
- *   sale:     Cr = Σamount + Σvat ; Dr = Σwht + (Σamount+Σvat−Σwht) = Σamount + Σvat  ✓
+ * พิสูจน์สมดุล (ต่อขา):
+ *   ขา 1 purchase: Dr = Σamount + Σvat ; Cr = Σwht + (Σamount+Σvat−Σwht) = Σamount + Σvat  ✓
+ *   ขา 1 sale:     Cr = Σamount + Σvat ; Dr = Σwht + (Σamount+Σvat−Σwht) = Σamount + Σvat  ✓
+ *   ขา 2: Dr = Cr = ยอดชำระ  ✓
  *
  * บิลที่ตกหล่น (ไม่เข้าสมุดรายวัน) → เก็บใน skipped[] พร้อมเหตุผล ให้ UI เตือนนักบัญชีไปแก้:
  *   - ยังไม่ระบุประเภท (unspecified)
@@ -42,6 +54,9 @@ import {
 
 export type JournalSide = "debit" | "credit";
 
+/** ขาใบสำคัญ (2026-09-03): invoice = ตั้งหนี้ (เล่มซื้อ/ขาย) · settlement = ตัดชำระ (เล่มจ่าย/รับ) */
+export type JournalLeg = "invoice" | "settlement";
+
 /** บัญชีพักสำหรับบรรทัดที่ยังไม่เลือกบัญชี — เด่นชัดในสมุด/แยกประเภท ให้กลับไปเลือกบัญชีจริง */
 export const SUSPENSE_ACCOUNT_CODE = "0000";
 export const SUSPENSE_ACCOUNT_NAME = "รอเลือกบัญชี (พัก)";
@@ -59,6 +74,9 @@ export type JournalLine = {
   customerId: string | null;
   /** ชื่อคู่ค้า (ผู้ขาย/ผู้ซื้อ) — ใช้เป็นคำอธิบายในบัญชีแยกประเภท */
   counterparty: string | null;
+  /** ขาใบสำคัญ: invoice = ตั้งหนี้ · settlement = ตัดชำระ (บิลจ่ายแล้วมี 2 ขา)
+   *  optional เพื่อ backward-compat กับผู้สร้างบรรทัดอื่น (payments/CN-DN/manual) — ไม่ระบุ = invoice */
+  leg?: JournalLeg;
 };
 
 /** บิลที่ลงบัญชีไม่ได้ (ตกหล่น) + เหตุผล */
@@ -133,15 +151,20 @@ export function buildJournalEntries(entries: BillEntry[], chartByCode: ChartByCo
         : { code: SUSPENSE_ACCOUNT_CODE, name: SUSPENSE_ACCOUNT_NAME };
     };
 
-    // 3) บัญชีคู่ (เครดิต/เดบิต) จากวิธีรับ/จ่ายเงิน
-    //   ★ บิลที่ยังไม่ตั้งวิธีจ่าย/รับ → ถือเป็น "เชื่อ" (ตั้งเจ้าหนี้/ลูกหนี้) เพื่อให้เข้าสมุดรายวันเลย
-    //     (นักบัญชีค่อยแก้วิธีจ่ายจริงทีหลัง) — กันบิลตกหล่นจากสมุดรายวัน
-    const contra = contraAccountFor(chartByCode, e.paymentMethod ?? "credit", e.entryType, e.paymentBankAccountCode);
-    if (!contra) {
-      skip("ยังไม่ระบุวิธีรับ/จ่ายเงิน (คำนวณบัญชีคู่ไม่ได้)");
+    // 3) บัญชีคู่ 2 ขา (★ 2026-09-03 หลักบัญชีมาตรฐาน — ผู้ใช้: "ตอนนี้ในระบบลงผิดอยู่"):
+    //   ขา 1 ตั้งหนี้: บัญชีคู่ = เจ้าหนี้การค้า (ซื้อ) / ลูกหนี้การค้า (ขาย) "เสมอ" ทุกวิธีชำระ
+    //   ขา 2 ตัดชำระ: เฉพาะบิลที่รับ/จ่ายแล้ว (เงินสด/โอน/เช็ค) — Dr/Cr เจ้าหนี้-ลูกหนี้ กับบัญชีเงิน
+    const arap = contraAccountFor(chartByCode, "credit", e.entryType);
+    if (!arap || !arap.code.trim()) {
+      skip("คำนวณบัญชีเจ้าหนี้/ลูกหนี้ไม่ได้");
       continue;
     }
-    if (!contra.code.trim()) {
+    const method = e.paymentMethod ?? "credit";
+    const settled = method === "cash" || method === "transfer" || method === "cheque";
+    const money = settled
+      ? contraAccountFor(chartByCode, method, e.entryType, e.paymentBankAccountCode)
+      : null;
+    if (settled && (!money || !money.code.trim())) {
       skip("โอนแต่ยังไม่เลือกบัญชีธนาคาร");
       continue;
     }
@@ -165,48 +188,70 @@ export function buildJournalEntries(entries: BillEntry[], chartByCode: ChartByCo
       continue;
     }
 
-    // buffer ต่อ 1 บิล (push จริงเมื่อยืนยันสมดุลแล้ว)
+    // buffer ต่อ 1 บิล (push จริงเมื่อยืนยันสมดุลแล้ว) — แยกขาใบสำคัญ
     const buf: JournalLine[] = [];
-    const pushDebit = (code: string, name: string, amount: number) => {
+    const pushDebit = (leg: JournalLeg, code: string, name: string, amount: number) => {
       const v = round2(amount);
       if (!nonZero(v)) return;
-      buf.push({ ...base, accountCode: code, accountName: name, debit: v, credit: 0, side: "debit" });
+      buf.push({ ...base, accountCode: code, accountName: name, debit: v, credit: 0, side: "debit", leg });
     };
-    const pushCredit = (code: string, name: string, amount: number) => {
+    const pushCredit = (leg: JournalLeg, code: string, name: string, amount: number) => {
       const v = round2(amount);
       if (!nonZero(v)) return;
-      buf.push({ ...base, accountCode: code, accountName: name, debit: 0, credit: v, side: "credit" });
+      buf.push({ ...base, accountCode: code, accountName: name, debit: 0, credit: v, side: "credit", leg });
     };
 
+    // ---- ขา 1: ตั้งหนี้ (เข้าสมุดรายวันซื้อ/ขายเสมอ) ----
     if (e.entryType === "purchase") {
       for (const l of e.lines) {
         const a = lineAccount(l);
-        pushDebit(a.code, a.name, l.amount);
+        pushDebit("invoice", a.code, a.name, l.amount);
       }
-      pushDebit(INPUT_VAT, accountName(chartByCode, INPUT_VAT), sumVat);
-      pushCredit(WHT_PAYABLE, accountName(chartByCode, WHT_PAYABLE), sumWht);
-      pushCredit(contra.code, contra.name, contraAmount);
+      pushDebit("invoice", INPUT_VAT, accountName(chartByCode, INPUT_VAT), sumVat);
+      pushCredit("invoice", WHT_PAYABLE, accountName(chartByCode, WHT_PAYABLE), sumWht);
+      pushCredit("invoice", arap.code, arap.name, contraAmount);
     } else {
       for (const l of e.lines) {
         const a = lineAccount(l);
-        pushCredit(a.code, a.name, l.amount);
+        pushCredit("invoice", a.code, a.name, l.amount);
       }
-      pushCredit(OUTPUT_VAT, accountName(chartByCode, OUTPUT_VAT), sumVat);
-      pushDebit(WHT_RECEIVABLE, accountName(chartByCode, WHT_RECEIVABLE), sumWht);
-      pushDebit(contra.code, contra.name, contraAmount);
+      pushCredit("invoice", OUTPUT_VAT, accountName(chartByCode, OUTPUT_VAT), sumVat);
+      pushDebit("invoice", WHT_RECEIVABLE, accountName(chartByCode, WHT_RECEIVABLE), sumWht);
+      pushDebit("invoice", arap.code, arap.name, contraAmount);
     }
 
-    // 5) ยืนยันสมดุลต่อบิล (กันเคสตัวเลขบิลเพี้ยน) — ไม่สมดุลก็ไม่ปล่อยเข้าระบบงบ
-    const d = round2(buf.reduce((s, l) => s + l.debit, 0));
-    const c = round2(buf.reduce((s, l) => s + l.credit, 0));
-    if (Math.abs(d - c) >= EPSILON) {
+    // ---- ขา 2: ตัดชำระ (เฉพาะบิลที่รับ/จ่ายเงินแล้ว — เข้าสมุดรายวันจ่าย/รับ) ----
+    if (money && nonZero(contraAmount)) {
+      if (e.entryType === "purchase") {
+        // จ่ายชำระ: Dr เจ้าหนี้ / Cr เงินสด-ธนาคาร-เช็คจ่าย
+        pushDebit("settlement", arap.code, arap.name, contraAmount);
+        pushCredit("settlement", money.code, money.name, contraAmount);
+      } else {
+        // รับชำระ: Dr เงินสด-ธนาคาร-เช็ครับ / Cr ลูกหนี้
+        pushDebit("settlement", money.code, money.name, contraAmount);
+        pushCredit("settlement", arap.code, arap.name, contraAmount);
+      }
+    }
+
+    // 5) ยืนยันสมดุล "ต่อขา" (กันเคสตัวเลขบิลเพี้ยน) — ขาไหนไม่สมดุลก็ไม่ปล่อยทั้งบิล
+    let balanced = true;
+    for (const leg of ["invoice", "settlement"] as const) {
+      const legLines = buf.filter((l) => l.leg === leg);
+      const d = round2(legLines.reduce((s, l) => s + l.debit, 0));
+      const c = round2(legLines.reduce((s, l) => s + l.credit, 0));
+      if (Math.abs(d - c) >= EPSILON) {
+        balanced = false;
+        break;
+      }
+    }
+    if (!balanced) {
       skip("เดบิต/เครดิตไม่สมดุล (ตรวจตัวเลขบิล)");
       continue;
     }
 
     lines.push(...buf);
-    totalDebit = round2(totalDebit + d);
-    totalCredit = round2(totalCredit + c);
+    totalDebit = round2(totalDebit + buf.reduce((s, l) => s + l.debit, 0));
+    totalCredit = round2(totalCredit + buf.reduce((s, l) => s + l.credit, 0));
   }
 
   return { lines, skipped, totalDebit, totalCredit };

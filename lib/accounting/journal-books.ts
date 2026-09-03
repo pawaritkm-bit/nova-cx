@@ -6,23 +6,21 @@
  *   1) จับกลุ่ม journal lines กลับเป็น "ใบสำคัญ" (posting) ต่อบิล — เพื่อโชว์เดบิต/เครดิตคู่กัน
  *   2) แยกแต่ละใบสำคัญเข้า "เล่ม" ตามกติกา (classifyBook)
  *
- * ★★ สมมติฐานบัญชี (ต้องให้นักบัญชียืนยัน) ★★
- *   A) จัดเล่มตาม "ชนิดเอกสาร" (ผู้ใช้ยืนยัน 2026-08-04): บิลซื้อทุกใบ → สมุดรายวันซื้อ,
- *      บิลขายทุกใบ → สมุดรายวันขาย (ไม่แยกตามวิธีชำระ). 1 บิล → เข้าเล่มเดียว (กัน double count).
- *      ★ เล่มรับเงิน/จ่ายเงิน = เงินสดเข้า-ออกจริง — บิลปกติไม่ post มาที่เล่มนี้ (บิลไม่มีแนวคิด receipt/
- *        payment voucher ของตัวเอง) ★ เฟส 1 ส่วน C (docs/06 หมวด 0.8) แก้ TODO เดิมนี้แล้ว: manual
- *        journal entry (JV/PV/RV, lib/accounting/manual-journal.ts) คือ data source ที่ feed 2 เล่มนี้
- *        — PV (ใบสำคัญจ่ายเงิน) → เล่มจ่ายเงิน, RV (ใบสำคัญรับเงิน) → เล่มรับเงิน, JV → เล่มทั่วไป
- *        ผสมเข้าผ่านพารามิเตอร์ manualPostings ของ buildJournalBooks() ด้านล่าง (ไม่ผ่าน billEntry เลย)
- *   B) #10 "ฝั่งขายไม่วิ่งสมุดรายวัน(ทั่วไป)": บิลขายไม่ตกสมุดรายวันทั่วไป (อยู่เล่มขาย).
+ * ★★ กติกาบัญชี (ผู้ใช้ยืนยันหลักมาตรฐาน 2026-09-03 — "ตอนนี้ในระบบลงผิดอยู่") ★★
+ *   A) โมเดล 2 ขา (ดู journal.ts): ทุกบิลมีขา "ตั้งหนี้" (invoice) เข้าเล่มซื้อ/ขาย —
+ *      ซื้อ: Dr ค่าใช้จ่าย / Cr เจ้าหนี้ · ขาย: Dr ลูกหนี้ / Cr ขาย
+ *      บิลที่รับ/จ่ายเงินแล้ว (สด/โอน/เช็ค) มีขา "ตัดชำระ" (settlement) เข้าเล่มจ่าย/รับ —
+ *      จ่าย: Dr เจ้าหนี้ / Cr เงิน · รับ: Dr เงิน / Cr ลูกหนี้ → บิลจ่ายแล้วเข้า 2 เล่ม (2 ใบสำคัญ)
+ *      ★ บิลเชื่อ: ขาตัดชำระมาจากหน้ารับ/จ่ายเงิน (bill-payments PV/RV) + manual JE (JV/PV/RV)
+ *        ผสมเข้าผ่านพารามิเตอร์ manualPostings ของ buildJournalBooks() (ไม่ผ่าน billEntry เลย)
+ *   B) #10 "ฝั่งขายไม่วิ่งสมุดรายวัน(ทั่วไป)": บิลขายไม่ตกสมุดรายวันทั่วไป (อยู่เล่มขาย/รับ).
  *      classifyBook ไม่มีทางคืน 'general' ให้บิลขาย.
- *   C) การ map บัญชีเดบิต/เครดิต (บัญชีคู่จากวิธีรับ/จ่ายเงิน) ใช้กติกาเดียวกับ journal.ts
- *      (contraAccountFor) — ดูสมมติฐานในไฟล์นั้น.
+ *   C) การ map บัญชีเจ้าหนี้/ลูกหนี้/บัญชีเงิน ใช้กติกาเดียวกับ journal.ts (contraAccountFor).
  *
  * ★ pure ล้วน · PDPA: ไม่ log ชื่อ/เลขภาษี/ตัวเลข
  */
-import { round2, type BillEntry, type PaymentMethod } from "@/lib/accounting/queries";
-import { buildJournalEntries, type SkippedEntry } from "@/lib/accounting/journal";
+import { round2, type BillEntry } from "@/lib/accounting/queries";
+import { buildJournalEntries, type JournalLeg, type SkippedEntry } from "@/lib/accounting/journal";
 import type { ChartByCode } from "@/lib/accounting/chart-of-accounts";
 
 /** เล่มสมุดรายวัน 5 เล่ม */
@@ -53,24 +51,29 @@ export function visibleBooks(selected: string): BookKind[] {
 }
 
 /**
- * จัดบิล 1 ใบเข้าเล่ม — ★ ตามที่ผู้ใช้ยืนยัน: บิลซื้อ/ขาย "ทุกใบ" เข้าเล่มซื้อ/ขายตามชนิดเอกสาร
- *   (สมุดรายวันเฉพาะแบบยึด "ชนิดเอกสาร" — ไม่แยกตามวิธีชำระ)
- *   - บิลซื้อทุกใบ (เงินสด/โอน/เชื่อ) → สมุดรายวันซื้อ
- *   - บิลขายทุกใบ                    → สมุดรายวันขาย   (#10: ไม่ตกเล่มทั่วไป)
- *   - อื่น ๆ (รายการปรับปรุง)          → สมุดรายวันทั่วไป
- *   ★ เล่มรับเงิน/จ่ายเงิน = เงินสดเข้า-ออกจริง (จะมาจากสเตทเมนต์ภายหลัง — ยังไม่ post จากบิล)
+ * จัดใบสำคัญ 1 ขา เข้าเล่ม — ★ 2026-09-03 หลักบัญชีมาตรฐาน (ผู้ใช้ยืนยัน):
+ *   - ขาตั้งหนี้ (invoice):   ซื้อ → เล่มซื้อ · ขาย → เล่มขาย (#10: ไม่ตกเล่มทั่วไป)
+ *   - ขาตัดชำระ (settlement): ซื้อ → เล่มจ่ายเงิน · ขาย → เล่มรับเงิน
+ *   - อื่น ๆ (รายการปรับปรุง)  → สมุดรายวันทั่วไป
  */
 export function classifyBook(
   entryType: BillEntry["entryType"],
-  paymentMethod: PaymentMethod | null
+  leg: JournalLeg
 ): BookKind {
-  // ★ 2026-09-02 ผู้ใช้ยืนยันกติกาบัญชีมาตรฐาน (แทนกติกาเดิม 2026-08-04 ที่จัดตามชนิดเอกสารล้วน):
-  //   บิลที่ "รับ/จ่ายเงินแล้ว" (เงินสด/โอน) → เล่มรับเงิน (ขาย) / เล่มจ่ายเงิน (ซื้อ)
-  //   บิลเชื่อ/ยังไม่ระบุวิธีชำระ (ตั้งลูกหนี้-เจ้าหนี้) → เล่มขาย / เล่มซื้อ ตามเดิม
-  //   ใบละเล่มเดียวเหมือนเดิม (ไม่นับซ้ำ) — ยอดรวมงบไม่เปลี่ยน แค่ย้ายเล่ม
-  const paid = paymentMethod === "cash" || paymentMethod === "transfer";
-  if (entryType === "purchase") return paid ? "payment" : "purchase";
-  if (entryType === "sale") return paid ? "receipt" : "sale";
+  // ★★ 2026-09-03 ผู้ใช้ยืนยันหลักบัญชีมาตรฐาน ("ตอนนี้ในระบบลงผิดอยู่") — แทนกติกา 2026-09-02:
+  //   ขา 1 ตั้งหนี้ (invoice):   บิลซื้อทุกใบ → เล่มซื้อ (Dr ค่าใช้จ่าย/Cr เจ้าหนี้) ·
+  //                              บิลขายทุกใบ → เล่มขาย (Dr ลูกหนี้/Cr ขาย)
+  //   ขา 2 ตัดชำระ (settlement): ซื้อ → เล่มจ่ายเงิน (Dr เจ้าหนี้/Cr เงิน) ·
+  //                              ขาย → เล่มรับเงิน (Dr เงิน/Cr ลูกหนี้)
+  //   บิลจ่ายแล้ว = เข้า 2 เล่ม (ตั้งหนี้+ตัดชำระ) — ยอดงบไม่เพี้ยน (เจ้าหนี้/ลูกหนี้หักล้างกันเอง)
+  //   บิลเชื่อ = เล่มซื้อ/ขายขาเดียว — ขาตัดชำระมาจากหน้ารับ/จ่ายเงิน (bill-payments)
+  if (leg === "settlement") {
+    if (entryType === "purchase") return "payment";
+    if (entryType === "sale") return "receipt";
+    return "general";
+  }
+  if (entryType === "purchase") return "purchase";
+  if (entryType === "sale") return "sale";
   // unspecified/อื่น ๆ → ทั่วไป (ในทางปฏิบัติ journal.ts กรอง unspecified ออกก่อนแล้ว)
   return "general";
 }
@@ -90,6 +93,8 @@ export type JournalPosting = {
   totalDebit: number;
   totalCredit: number;
   book: BookKind;
+  /** ขาใบสำคัญ (บิลจ่ายแล้วมี 2 ใบ: invoice/settlement) — manual JE/payments ไม่ต้องระบุ */
+  leg?: JournalLeg;
 };
 
 /** 1 เล่ม = ชุดใบสำคัญ + ยอดรวมเดบิต/เครดิต (ต้องเท่ากัน) */
@@ -142,24 +147,33 @@ export function buildJournalBooks(
   const entryById = new Map<string, BillEntry>();
   for (const e of entries) entryById.set(e.id, e);
 
-  // จับกลุ่ม journal lines → posting ต่อ entryId (คงลำดับที่ journal.ts push มา: เดบิตก่อนเครดิต)
+  // จับกลุ่ม journal lines → posting ต่อ entryId+ขา (บิลจ่ายแล้วมี 2 ใบสำคัญ: ตั้งหนี้ + ตัดชำระ)
   const postingByEntry = new Map<string, JournalPosting>();
   for (const l of lines) {
-    let p = postingByEntry.get(l.entryId);
+    const leg: JournalLeg = l.leg ?? "invoice";
+    const key = `${l.entryId}|${leg}`;
+    let p = postingByEntry.get(key);
     if (!p) {
       const e = entryById.get(l.entryId);
+      const cp = (l.counterparty ?? "").trim();
+      const et = e?.entryType ?? "unspecified";
       p = {
         entryId: l.entryId,
         date: l.date,
         docNo: l.docNo,
-        description: (l.counterparty ?? "").trim(),
+        // ขาตัดชำระใส่คำนำหน้าให้อ่านออกในเล่มจ่าย/รับ ว่าเป็นการชำระของบิลใบไหน
+        description:
+          leg === "settlement"
+            ? `${et === "sale" ? "รับชำระ" : "จ่ายชำระ"}${cp ? " — " + cp : ""}`
+            : cp,
         debits: [],
         credits: [],
         totalDebit: 0,
         totalCredit: 0,
-        book: classifyBook(e?.entryType ?? "unspecified", e?.paymentMethod ?? null),
+        book: classifyBook(et, leg),
+        leg,
       };
-      postingByEntry.set(l.entryId, p);
+      postingByEntry.set(key, p);
     }
     if (l.side === "debit") {
       p.debits.push({ accountCode: l.accountCode, accountName: l.accountName, amount: l.debit });

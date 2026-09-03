@@ -92,18 +92,27 @@ describe("journal — ซื้อ เงินสด มี VAT + หัก ณ
   });
   const r = buildJournalEntries([entry]);
 
-  it("สมดุล: เดบิตรวม = เครดิตรวม = 1070", () => {
-    expect(r.totalDebit).toBe(1070);
-    expect(r.totalCredit).toBe(1070);
+  // ★ 2026-09-03 โมเดล 2 ขา: ตั้งหนี้ 1070 (Dr ค่าใช้จ่าย+VAT / Cr WHT+เจ้าหนี้)
+  //   + ตัดชำระ 1040 (Dr เจ้าหนี้ / Cr เงินสด) = เคลื่อนไหวรวม 2110
+  it("สมดุล: เดบิตรวม = เครดิตรวม = 2110 (ตั้งหนี้ 1070 + ตัดชำระ 1040)", () => {
+    expect(r.totalDebit).toBe(2110);
+    expect(r.totalCredit).toBe(2110);
     expect(sumDebit(r.lines)).toBe(sumCredit(r.lines));
   });
 
-  it("ตั้งบัญชีถูกต้อง (Dr 5010=1000, Dr 1154=70, Cr 2910=30, Cr 1010=1040)", () => {
-    const find = (code: string) => r.lines.find((l) => l.accountCode === code);
+  it("ขาตั้งหนี้: Dr 5010=1000, Dr 1154=70, Cr 2910=30, Cr 2010 เจ้าหนี้=1040", () => {
+    const inv = r.lines.filter((l) => l.leg === "invoice");
+    const find = (code: string) => inv.find((l) => l.accountCode === code);
     expect(find("5010")?.debit).toBe(1000);
     expect(find("1154")?.debit).toBe(70); // ภาษีซื้อ
     expect(find("2910")?.credit).toBe(30); // หัก ณ ที่จ่าย ค้างจ่าย
-    expect(find("1010")?.credit).toBe(1040); // เงินสด = 1000+70-30
+    expect(find("2010")?.credit).toBe(1040); // เจ้าหนี้การค้า = 1000+70-30 (ไม่ใช่เงินสดแล้ว)
+  });
+
+  it("ขาตัดชำระ: Dr 2010 เจ้าหนี้=1040 / Cr 1010 เงินสด=1040", () => {
+    const st = r.lines.filter((l) => l.leg === "settlement");
+    expect(st.find((l) => l.accountCode === "2010")?.debit).toBe(1040);
+    expect(st.find((l) => l.accountCode === "1010")?.credit).toBe(1040);
   });
 });
 
@@ -143,13 +152,14 @@ describe("journal — ซื้อ โอน บิลผสม VAT + noVAT ไ�
   });
   const r = buildJournalEntries([entry]);
 
-  it("สมดุล = 835", () => {
-    expect(r.totalDebit).toBe(835);
-    expect(r.totalCredit).toBe(835);
+  it("สมดุล = 1670 (ตั้งหนี้ 835 + ตัดชำระ 835)", () => {
+    expect(r.totalDebit).toBe(1670);
+    expect(r.totalCredit).toBe(1670);
   });
 
-  it("Cr เข้าบัญชีธนาคารที่เลือก (1020) = 800+35 = 835", () => {
+  it("ขาตัดชำระ Cr เข้าบัญชีธนาคารที่เลือก (1020) = 800+35 = 835 · ขาตั้งหนี้ Cr เจ้าหนี้ 835", () => {
     expect(r.lines.find((l) => l.accountCode === "1020")?.credit).toBe(835);
+    expect(r.lines.find((l) => l.leg === "invoice" && l.accountCode === "2010")?.credit).toBe(835);
   });
 });
 
@@ -197,9 +207,9 @@ describe("journal — บิลที่ตกหล่น (skipped) พร้�
     const suspense = r.lines.find((l) => l.accountCode === "0000");
     expect(suspense?.debit).toBe(500);
     expect(suspense?.accountName).toContain("รอเลือกบัญชี");
-    // ยังสมดุล: Dr 0000 500 / Cr เงินสด 500
+    // ยังสมดุล (2 ขา): ตั้งหนี้ Dr 0000/Cr เจ้าหนี้ 500 + ตัดชำระ Dr เจ้าหนี้/Cr เงินสด 500 = 1000
     expect(r.totalDebit).toBe(r.totalCredit);
-    expect(r.totalDebit).toBe(500);
+    expect(r.totalDebit).toBe(1000);
   });
 
   it("★ โอนแต่ไม่ผูกบัญชีธนาคาร → ใช้ default 1020 (ไม่ตกหล่น)", () => {
@@ -289,10 +299,15 @@ describe("full book — ledger + trial balance + งบการเงิน (�
     expect(cash.txns[0].balance).toBe(3960);
   });
 
-  it("งบทดลอง: เดบิตเคลื่อนไหวรวม = เครดิตเคลื่อนไหวรวม = 3210", () => {
-    expect(tb.totalDebit).toBe(3210);
-    expect(tb.totalCredit).toBe(3210);
+  it("งบทดลอง: เดบิตเคลื่อนไหวรวม = เครดิตเคลื่อนไหวรวม = 4250 (รวมขาตัดชำระผ่านเจ้าหนี้)", () => {
+    // ซื้อเงินสด: ตั้งหนี้ 1070 + ตัดชำระ 1040 = 2110 · ขายเชื่อ: 2140 → รวม 4250
+    expect(tb.totalDebit).toBe(4250);
+    expect(tb.totalCredit).toBe(4250);
     expect(tb.movementBalanced).toBe(true);
+  });
+
+  it("★ เจ้าหนี้การค้า (2010) เดินผ่านทั้งสองฝั่งแล้วหักล้างเป็นศูนย์ (บิลจ่ายเงินสดแล้ว)", () => {
+    expect(ledger.byCode.get("2010")?.balance).toBe(0);
   });
 
   it("งบทดลอง: ยอดปลายงวดสองฝั่งเท่ากัน = 7170 (ยกมาสมดุล)", () => {
@@ -388,9 +403,9 @@ describe("buildStatements — manualJournalLines concat ก่อน buildLedger
 
   it("★ งบทดลอง: manual JE รวมเข้าสมดุลรวมทั้งระบบ (เดบิตรวม = เครดิตรวม)", () => {
     const s = buildStatements(billEntries, opening, {}, manualLines);
-    // เดิม (ไม่มี manual): 1070 (จากบิลซื้อ) — บวก manual 500/500 เข้าไปอีก
-    expect(s.trialBalance.totalDebit).toBe(1070 + 500);
-    expect(s.trialBalance.totalCredit).toBe(1070 + 500);
+    // บิลซื้อเงินสด (2 ขา) = 2110 — บวก manual 500/500 เข้าไปอีก
+    expect(s.trialBalance.totalDebit).toBe(2110 + 500);
+    expect(s.trialBalance.totalCredit).toBe(2110 + 500);
     expect(s.trialBalance.movementBalanced).toBe(true);
   });
 
