@@ -35,6 +35,7 @@ export default function SalesDocumentPrintDoc({
   issuerAddress,
   issuerPhone = "",
   logoUrl = "",
+  stampUrl = "",
   backHref,
 }: {
   document: SalesDocument;
@@ -45,6 +46,9 @@ export default function SalesDocumentPrintDoc({
   issuerPhone?: string;
   /** โลโก้บริษัท (signed URL) — ว่าง = กล่องอักษรย่อ */
   logoUrl?: string;
+  /** ★ 2026-09-03 ตราตรงกลางท้ายกระดาษ (ตามฟอร์มตัวอย่าง PAMEE มีโลโก้ 2 จุด:
+   *  ป้ายหัวกระดาษ + ตราตาชั่งกลางแถวลายเซ็น) — ว่าง = ไม่แสดง (และใช้ watermark แบบเดิมแทน) */
+  stampUrl?: string;
   backHref: string;
 }) {
   const total = lineTotal(doc.lines);
@@ -170,14 +174,15 @@ export default function SalesDocumentPrintDoc({
           </div>
         ) : null}
 
-        {logoUrl ? (
+        {/* watermark กลางหน้า — เฉพาะตอนไม่มีตราท้ายกระดาษ (ฟอร์มตัวอย่างจริงไม่มี watermark) */}
+        {logoUrl && !stampUrl ? (
           <div className="sd-watermark" aria-hidden="true">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={logoUrl} alt="" />
           </div>
         ) : null}
 
-        {/* ---- ท้ายเอกสาร: ในนามสองฝั่ง + ช่องเซ็น (ตามฟอร์มตัวอย่าง) ---- */}
+        {/* ---- ท้ายเอกสาร: ในนามสองฝั่ง + ตรากลาง + ช่องเซ็น (ตามฟอร์มตัวอย่าง) ---- */}
         <div className="sd-foot">
           <div className="sd-foot-side">
             <div className="sd-foot-inname">ในนาม {doc.counterpartyName || "—"}</div>
@@ -186,6 +191,12 @@ export default function SalesDocumentPrintDoc({
               <div className="sd-sign-box"><div className="sd-sign-line" /><div className="sd-sign-label">วันที่</div></div>
             </div>
           </div>
+          {stampUrl ? (
+            <div className="sd-foot-stamp" aria-hidden="true">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={stampUrl} alt="" />
+            </div>
+          ) : null}
           <div className="sd-foot-side sd-foot-right">
             <div className="sd-foot-inname">ในนาม {issuerName || "—"}</div>
             <div className="sd-foot-signs">

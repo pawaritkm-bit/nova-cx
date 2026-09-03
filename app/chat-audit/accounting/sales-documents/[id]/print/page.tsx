@@ -89,6 +89,16 @@ export default async function SalesDocumentPrintPage({ params }: { params: Promi
   } catch {
     // ไม่มีโลโก้ — ใช้กล่องอักษรย่อ
   }
+  // ★ 2026-09-03 — ตรากลางท้ายกระดาษ (ฟอร์มตัวอย่าง PAMEE มีโลโก้ 2 จุด) — best-effort: ไม่มี = ไม่แสดง
+  let stampUrl = "";
+  try {
+    const { data: signedStamp } = await service.storage
+      .from("bills")
+      .createSignedUrl(`${access.tenantId}/customer-logos/${doc.customerId}.stamp`, 3600);
+    stampUrl = signedStamp?.signedUrl ?? "";
+  } catch {
+    // ไม่มีตรา — ข้าม
+  }
 
   return (
     <SalesDocumentPrintDoc
@@ -98,6 +108,7 @@ export default async function SalesDocumentPrintPage({ params }: { params: Promi
       issuerAddress={businessAddress}
       issuerPhone={businessPhone}
       logoUrl={logoUrl}
+      stampUrl={stampUrl}
       backHref="/chat-audit/accounting/sales-documents"
     />
   );

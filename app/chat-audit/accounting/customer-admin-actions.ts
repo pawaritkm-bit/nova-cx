@@ -482,7 +482,9 @@ export async function removeCustomerLogoAction(customerId: string): Promise<Save
       return { ok: false, message: "ไม่พบลูกค้าในสำนักงานนี้" };
     }
     assertCustomerInScope(ctx, customerId);
-    const { error } = await service.storage.from("bills").remove([customerLogoPath(ctx.tenantId, customerId)]);
+    // ★ 2026-09-03: ลบทั้งโลโก้หัวกระดาษ + ตราท้ายกระดาษ (.stamp — ฟอร์ม PAMEE มีโลโก้ 2 จุด)
+    const base = customerLogoPath(ctx.tenantId, customerId);
+    const { error } = await service.storage.from("bills").remove([base, `${base}.stamp`]);
     if (error) return { ok: false, message: "ลบโลโก้ไม่สำเร็จ กรุณาลองใหม่" };
     return { ok: true, message: "ลบโลโก้แล้ว — เอกสารกลับไปใช้กล่องอักษรย่อ" };
   } catch (e) {
