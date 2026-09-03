@@ -563,7 +563,19 @@ export default function EntryEditor({
     startTransition(async () => {
       const res = await saveEntryAction(buildInput(confirm));
       if (res.ok) {
-        close();
+        // ★ 2026-09-03 ผู้ใช้: "กดยืนยันหน้าลงบิลแล้วมันเด้งออก" — เดิมยืนยันเสร็จปิดหน้า
+        //   เด้งกลับโต๊ะทำงานทุกครั้ง (ไล่ยืนยันทีละใบ = เด้งทุกใบ) → ยืนยันแล้ว "ไปบิลถัดไป"
+        //   ต่อเลย ใบสุดท้ายค่อยปิดกลับ (บันทึกร่างเฉย ๆ ยังปิดกลับเหมือนเดิม)
+        if (confirm && nav.nextId) {
+          if (onNavigate) {
+            onNavigate(nav.nextId);
+          } else {
+            router.push(editHrefFor(nav.nextId));
+            router.refresh();
+          }
+        } else {
+          close();
+        }
       } else {
         setMsg({ ok: false, text: res.message });
         router.refresh(); // ให้ list ตรง (เผื่อ save สำเร็จบางส่วน)
