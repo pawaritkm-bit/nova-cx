@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   createDraftAction,
   updateDraftAction,
-  deleteDraftAction,
+  deleteDocumentAction,
   issueDocumentAction,
   voidDocumentAction,
   type UpsertSalesDocLineActionInput,
@@ -358,11 +358,16 @@ export default function SalesDocumentsPanel({
     });
   }
 
-  function onDelete(id: string) {
-    if (!window.confirm("ลบเอกสารร่างนี้? (ยังไม่ออกเลขที่ — ลบแล้วไม่เสียเลข)")) return;
+  // ★ 2026-09-03 ผู้ใช้: "ตั้งให้ใบวางบิลที่ออกแล้วสามารถกดลบได้" — ลบได้ทุกสถานะ
+  function onDelete(doc: SalesDocument) {
+    const warn =
+      doc.status === "draft"
+        ? "ลบเอกสารร่างนี้? (ยังไม่ออกเลขที่ — ลบแล้วไม่เสียเลข)"
+        : `ลบเอกสารเลขที่ ${doc.docNo ?? "—"}?\nเอกสารจะหายจากรายการ และเลขที่นี้จะไม่ถูกนำกลับมาใช้ซ้ำ (เกิดช่องว่างของเลขเอกสาร)`;
+    if (!window.confirm(warn)) return;
     setMsg(null);
     startTransition(async () => {
-      const res = await deleteDraftAction(id);
+      const res = await deleteDocumentAction(doc.id);
       setMsg({ ok: res.ok, text: res.ok ? "ลบแล้ว" : res.message });
       if (res.ok) router.refresh();
     });
@@ -685,9 +690,6 @@ export default function SalesDocumentsPanel({
                         <button type="button" className="btn btn-sm green" onClick={() => onIssue(doc.id)} disabled={pending}>
                           ออกเอกสาร
                         </button>
-                        <button type="button" className="btn btn-sm danger" onClick={() => onDelete(doc.id)} disabled={pending}>
-                          ลบ
-                        </button>
                       </>
                     ) : null}
                     {doc.status !== "draft" ? (
@@ -705,6 +707,10 @@ export default function SalesDocumentsPanel({
                         ยกเลิก
                       </button>
                     ) : null}
+                    {/* ★ 2026-09-03 ลบได้ทุกสถานะ (ร่าง/ออกแล้ว/ยกเลิกแล้ว) — ออกแล้วลบ = เลขนั้นเป็นช่องว่าง */}
+                    <button type="button" className="btn btn-sm danger" onClick={() => onDelete(doc)} disabled={pending}>
+                      ลบ
+                    </button>
                   </td>
                 </tr>
               ))

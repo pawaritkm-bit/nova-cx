@@ -46,6 +46,7 @@ import {
   createDraftDocument,
   updateDraftDocument,
   softDeleteDraft,
+  softDeleteDocument,
   issueDocument,
   voidDocument,
   type SalesDocumentInput,
@@ -459,6 +460,29 @@ describe("updateDraftDocument / softDeleteDraft", () => {
     await issueDocument(db, "t1", id, "quotation");
     const deleted = await softDeleteDraft(db, "t1", id);
     expect(deleted.ok).toBe(false);
+  });
+
+  // ★ 2026-09-03 ผู้ใช้: "ตั้งให้ใบวางบิลที่ออกแล้วสามารถกดลบได้" — softDeleteDocument ลบได้ทุกสถานะ
+  it("softDeleteDocument — ลบเอกสารที่ issued แล้วได้ (soft delete, เลขที่ไม่ถูกนำกลับมาใช้)", async () => {
+    const { db, docs } = makeFakeDb();
+    const created = await createDraftDocument(db, "t1", "c1", validDocInput);
+    const id = created.ok ? created.id : "";
+    const issued = await issueDocument(db, "t1", id, "quotation");
+    expect(issued.ok).toBe(true);
+    const deleted = await softDeleteDocument(db, "t1", id);
+    expect(deleted.ok).toBe(true);
+    expect(docs.find((d) => d.id === id)?.deleted_at).toBeTruthy();
+  });
+
+  it("softDeleteDocument — ลบ draft ได้เหมือนกัน · เอกสารที่ไม่มี/ลบไปแล้ว → ปฏิเสธ", async () => {
+    const { db, docs } = makeFakeDb();
+    const created = await createDraftDocument(db, "t1", "c1", validDocInput);
+    const id = created.ok ? created.id : "";
+    expect((await softDeleteDocument(db, "t1", id)).ok).toBe(true);
+    expect(docs.find((d) => d.id === id)?.deleted_at).toBeTruthy();
+    // ลบซ้ำ = ไม่พบแล้ว (deleted_at กรองใน getDocumentScope)
+    expect((await softDeleteDocument(db, "t1", id)).ok).toBe(false);
+    expect((await softDeleteDocument(db, "t1", "missing")).ok).toBe(false);
   });
 
   // ---------------------------------------------------------------------

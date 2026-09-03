@@ -642,6 +642,28 @@ export async function softDeleteDraft(db: DB, tenantId: string, id: string): Pro
   return { ok: true, id };
 }
 
+/**
+ * ลบเอกสาร "ทุกสถานะ" (soft delete) — ★ 2026-09-03 ผู้ใช้: "ตั้งให้ใบวางบิลที่ออกแล้วสามารถกดลบได้"
+ *   ต่างจาก softDeleteDraft ตรงไม่จำกัด status: ร่าง/ออกเลขแล้ว/ยกเลิกแล้ว ลบได้หมด
+ *   ★ เลขที่เอกสารที่ออกไปแล้วจะ "ไม่ถูกนำกลับมาใช้ซ้ำ" (ลำดับเลขเดินหน้าอย่างเดียว — เลขนั้นหายเป็นช่องว่าง)
+ *   ★ soft delete (deleted_at) — ข้อมูลยังอยู่ใน DB กู้คืนได้โดยผู้ดูแลระบบ
+ */
+export async function softDeleteDocument(db: DB, tenantId: string, id: string): Promise<SalesDocActionResult> {
+  const head = await getDocumentScope(db, tenantId, id);
+  if (!head) return { ok: false, message: "ไม่พบเอกสาร (อาจถูกลบไปแล้ว)" };
+  const { data: deleted, error } = await db
+    .from("sales_documents")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null) // atomic guard — กันลบซ้ำซ้อนพร้อมกัน
+    .select("id")
+    .maybeSingle();
+  if (error) return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
+  if (!deleted) return { ok: false, message: "ไม่พบเอกสาร (อาจถูกลบไปแล้ว)" };
+  return { ok: true, id };
+}
+
 // ---------------------------------------------------------------------
 // ออกเอกสาร / ยกเลิก — 0.12/0.16
 // ---------------------------------------------------------------------

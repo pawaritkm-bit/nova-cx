@@ -21,6 +21,7 @@ import {
   createDraftDocument,
   updateDraftDocument,
   softDeleteDraft,
+  softDeleteDocument,
   issueDocument,
   voidDocument,
   getDocumentScope,
@@ -136,6 +137,31 @@ export async function deleteDraftAction(id: string): Promise<SalesDocSaveResult>
     if (!res.ok) return { ok: false, message: res.message };
     revalidatePath(PATH);
     return { ok: true, message: "ลบร่างแล้ว" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * ลบเอกสาร "ทุกสถานะ" — ★ 2026-09-03 ผู้ใช้: "ตั้งให้ใบวางบิลที่ออกแล้วสามารถกดลบได้"
+ *   ร่าง/ออกเลขแล้ว/ยกเลิกแล้ว ลบได้หมด (soft delete) — เลขที่ที่ออกไปแล้วไม่ถูกนำกลับมาใช้ซ้ำ
+ */
+export async function deleteDocumentAction(id: string): Promise<SalesDocSaveResult> {
+  if (!isUuid(id)) return { ok: false, message: "ไม่พบเอกสาร" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    const scope = await getDocumentScope(service, ctx.tenantId, id);
+    if (!scope) return { ok: false, message: "ไม่พบเอกสาร (อาจถูกลบไปแล้ว)" };
+    assertCustomerInScope(ctx, scope.customerId);
+
+    const res = await softDeleteDocument(service, ctx.tenantId, id);
+    if (!res.ok) return { ok: false, message: res.message };
+    revalidatePath(PATH);
+    return { ok: true, message: "ลบเอกสารแล้ว" };
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "ลบไม่สำเร็จ กรุณาลองใหม่" };
