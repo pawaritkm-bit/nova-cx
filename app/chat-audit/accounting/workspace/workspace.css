@@ -108,6 +108,23 @@
 .wsp-btn.review:hover{background:#eff6ff}
 /* กล่องเลือกบริษัทปลายทาง — ปุ่ม "ย้ายบริษัท" บนการ์ด (2026-09-03) */
 .wsp-move-select{width:100%;max-width:200px;padding:5px 8px;border:1px solid #dbe3ee;border-radius:8px;font-size:12px;font-family:inherit;background:#fff}
+
+/* ---- การ์ดบิลหลายรายการ (2026-09-03 "โอเคทำเลย") — ตารางบรรทัดละช่องเลขผัง + ยอดครบ ---- */
+.wsp-wht{color:#b91c1c}
+.wsp-mlbox{flex-basis:100%;border:1px solid #e2e8f0;border-radius:10px;background:#fff;overflow:hidden}
+.wsp-mltable{width:100%;border-collapse:collapse;font-size:12.5px}
+.wsp-mltable th{font-size:10.5px;color:#64748b;background:#f8fafc;padding:5px 8px;text-align:right;border-bottom:1px solid #eef2f7;white-space:nowrap}
+.wsp-mltable th.t-desc,.wsp-mltable td.t-desc{text-align:left;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155}
+.wsp-mltable th.t-acct,.wsp-mltable td.t-acct{text-align:left;min-width:210px}
+.wsp-mltable td{padding:4px 8px;border-bottom:1px solid #f5f7fa;text-align:right;white-space:nowrap}
+.wsp-mltable tfoot td{background:#f8fafc;font-weight:700;border-top:1px solid #e2e8f0}
+.wsp-mltable td.t-wht{color:#b91c1c}
+.wsp-ml-num{width:92px;padding:4px 6px;border:1px solid #eef2f7;border-radius:6px;font-size:12.5px;text-align:right;font-family:inherit;background:#fff}
+.wsp-ml-num.sm{width:64px}
+.wsp-ml-num:focus{outline:2px solid #93c5fd;border-color:#93c5fd}
+.wsp-ml-money{display:flex;align-items:center;gap:8px;padding:6px 10px;background:#f0fdf4;border-top:1px solid #dcfce7}
+.wsp-ml-money .wsp-jacct{flex:1;min-width:0}
+.wsp-ml-hint{font-size:11px;color:#94a3b8;flex-basis:100%}
 /* แท็บปิดเดือน — เช็กลิสต์ + งบการเงินฝังในหน้า */
 .wsp-close{padding:14px;display:flex;flex-direction:column;gap:12px}
 .wsp-close-banner{padding:12px 16px;border-radius:10px;font-weight:700;font-size:13.5px}

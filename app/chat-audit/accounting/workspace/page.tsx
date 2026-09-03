@@ -16,6 +16,15 @@ import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import DeleteBillButton from "./DeleteBillButton";
 import ConfirmBillButton from "./ConfirmBillButton";
 import MoveBillButton from "./MoveBillButton";
+import MultiLineQuickFix from "./MultiLineQuickFix";
+
+/** ป้ายอัตราหัก ณ ที่จ่ายของบิล — อัตราเดียว = "3%" · หลายอัตรา = "หลายอัตรา" · ไม่มี = "—" */
+function whtRateLabel(lines: { whtRate: number }[]): string {
+  const rates = [...new Set(lines.map((l) => l.whtRate).filter((r) => r > 0))];
+  if (rates.length === 0) return "—";
+  if (rates.length === 1) return `${rates[0]}%`;
+  return "หลายอัตรา";
+}
 import RenameCustomerButton from "./RenameCustomerButton";
 import UploadFileButton from "../UploadFileButton";
 import StatementReconcileButton from "../StatementReconcileButton";
@@ -710,15 +719,40 @@ export default async function AccountingWorkspacePage({
                           <span className="party">{e.counterpartyName || e.sellerName || e.buyerName || "—"}</span>
                           <span className={`st ${pend ? "draft" : "ok"}`}>{pend ? "ร่าง — รอตรวจ" : "ยืนยันแล้ว"}</span>
                         </div>
+                        {/* ★ 2026-09-03 ผู้ใช้ ("ดึงมูลค่า VAT อัตราหัก% หัก ณ ที่จ่าย รวมจ่ายจริง มาการ์ดหน้า") */}
                         <div className="wsp-row2">
                           <span>เลขที่ <b>{e.docNo || "—"}</b></span>
                           <span>วันที่ <b>{formatDate(e.docDate)}</b></span>
                           <span>มูลค่า <b>฿{formatMoney(s.amount)}</b></span>
                           <span>VAT <b>฿{formatMoney(s.vat)}</b></span>
-                          <span>รวมจ่าย <b className="net">฿{formatMoney(s.net)}</b></span>
+                          <span>อัตราหัก <b>{whtRateLabel(e.lines)}</b></span>
+                          <span>หัก ณ ที่จ่าย <b className="wsp-wht">{s.wht ? `−${formatMoney(s.wht)}` : "0.00"}</b></span>
+                          <span>รวมจ่ายจริง <b className="net">฿{formatMoney(s.net)}</b></span>
                         </div>
-                        {/* ★ 2026-09-02 ผู้ใช้: แก้ด่วนบนการ์ด — คู่ค้า / ⇄ สลับเดบิต-เครดิต / บัญชี (เฉพาะร่าง) */}
-                        {pend && e.customerId ? (
+                        {/* ★ 2026-09-02 ผู้ใช้: แก้ด่วนบนการ์ด — คู่ค้า / ⇄ สลับเดบิต-เครดิต / บัญชี (เฉพาะร่าง)
+                            ★ 2026-09-03: บิลหลายรายการใช้ตารางบรรทัดละช่องเลขผัง (ดีไซน์อนุมัติ "โอเคทำเลย") */}
+                        {pend && e.customerId && e.lines.length > 1 ? (
+                          <MultiLineQuickFix
+                            customerId={e.customerId}
+                            entryId={e.id}
+                            entryType={e.entryType}
+                            counterpartyName={e.counterpartyName}
+                            lines={e.lines.map((l) => ({
+                              id: l.id,
+                              description: l.description,
+                              accountCode: l.accountCode,
+                              accountName: l.accountName,
+                              amount: l.amount,
+                              vatAmount: l.vatAmount,
+                              whtRate: l.whtRate,
+                              whtAmount: l.whtAmount,
+                            }))}
+                            netAmount={s.net}
+                            paymentMethod={e.paymentMethod}
+                            paymentBankAccountCode={e.paymentBankAccountCode}
+                            chart={chart}
+                          />
+                        ) : pend && e.customerId ? (
                           <QuickFixBill
                             customerId={e.customerId}
                             entryId={e.id}
