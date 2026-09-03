@@ -14,6 +14,7 @@ import ChatAuditFrame from "../../_Frame";
 import QuickFixBill from "./QuickFixBill";
 import { listChartOfAccounts } from "@/lib/accounting/chart-accounts-data";
 import DeleteBillButton from "./DeleteBillButton";
+import ConfirmBillButton from "./ConfirmBillButton";
 import RenameCustomerButton from "./RenameCustomerButton";
 import UploadFileButton from "../UploadFileButton";
 import StatementReconcileButton from "../StatementReconcileButton";
@@ -728,7 +729,9 @@ export default async function AccountingWorkspacePage({
                         ) : null}
                       </div>
                       <div className="wsp-act">
-                        <Link href={editHref(e)} className="wsp-btn primary">ตรวจ / ยืนยัน →</Link>
+                        {/* ★ 2026-09-03 ผู้ใช้: แยกปุ่มตรวจ/ยืนยัน — ยืนยันได้จากการ์ดเลย หรือเข้าไปตรวจด้านในก็ได้ */}
+                        {pend ? <ConfirmBillButton entryId={e.id} /> : null}
+                        <Link href={editHref(e)} className={`wsp-btn ${pend ? "review" : "primary"}`}>ตรวจ →</Link>
                         <a href={`/chat-audit/accounting/receipt-cert?bill=${e.id}${e.customerId ? `&customer=${e.customerId}` : ""}`} target="_blank" rel="noopener" className="wsp-btn ghost">ใบรับรองฯ</a>
                         {isPending(e) ? <DeleteBillButton entryId={e.id} /> : null}
                       </div>

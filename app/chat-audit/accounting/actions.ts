@@ -619,6 +619,44 @@ export async function moveEntryCustomerAction(
 }
 
 /**
+ * ยืนยันบิลใบเดียวจากการ์ดโต๊ะทำงาน — ★ 2026-09-03 ผู้ใช้: "ปุ่มตรวจกับปุ่มยืนยันให้อยู่แยกกัน
+ * คือสามารถยืนยันบิลได้ในหน้านี้เลย หรือกดเข้าไปยืนยันด้านในก็ได้"
+ *
+ *   validate อยู่ใน confirmEntry (ต้องระบุซื้อ/ขาย + มีบรรทัดมียอด + race-guard draft เท่านั้น)
+ *   ★ นักบัญชีกดยืนยันเอง = ตัดสินฝั่งซื้อ/ขายแล้ว → ล้างธง side_guessed (🤖 เดา) ให้ด้วย
+ */
+export async function confirmEntryDirectAction(entryId: string): Promise<SaveResult> {
+  if (!isUuid(entryId)) return { ok: false, message: "ไม่พบรายการที่เลือก" };
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+
+    const customerId = await loadEntryCustomerId(service, ctx.tenantId, entryId);
+    if (customerId === undefined) return { ok: false, message: "ไม่พบรายการ (อาจถูกลบไปแล้ว)" };
+    // ★ สโคปนักบัญชี: ยืนยันได้เฉพาะลูกค้าที่ตัวเองดูแล (admin/lead ผ่าน)
+    assertCustomerInScope(ctx, customerId);
+
+    const res = await confirmEntry(service, ctx.tenantId, entryId);
+    if (!res.ok) return { ok: false, message: friendlyError(res.error) };
+
+    // ล้างธง AI เดา (best-effort — ไม่กระทบผลยืนยัน)
+    await service
+      .from("bill_entries")
+      .update({ side_guessed: false })
+      .eq("id", entryId)
+      .eq("tenant_id", ctx.tenantId);
+
+    revalidatePath(PATH);
+    revalidatePath("/chat-audit/accounting/workspace");
+    return { ok: true, message: "ยืนยันบิลแล้ว", id: entryId };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "ยืนยันไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
  * ลบ entry — ★ soft-delete เท่านั้น (กู้คืนได้ด้วย restoreEntryAction/ปุ่ม "เลิกทำ")
  *
  *   เดิมลบแบบทำลาย (ลบไฟล์จาก storage + มาร์ค attachment ว่าไม่ใช่บิล) → กู้ไม่ได้
