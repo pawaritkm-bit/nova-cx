@@ -395,9 +395,39 @@ export default async function AccountingWorkspacePage({
   const sortedGroups = [...groups].sort((a, b) => pendingOf(b) - pendingOf(a) || b.entries.length - a.entries.length);
   const openKey = sp.open && groups.some((g) => groupKey(g) === sp.open) ? sp.open : sortedGroups[0] ? groupKey(sortedGroups[0]) : "";
   const openGroup = groups.find((g) => groupKey(g) === openKey) ?? null;
-  const reviewList = openGroup
+  const reviewListRaw = openGroup
     ? openGroup.entries.filter(matchView).sort((a, b) => (isPending(b) ? 1 : 0) - (isPending(a) ? 1 : 0))
     : [];
+  // ★ 2026-09-04 ผู้ใช้: "ลูกค้าส่งใบวางบิลกับสลิปคู่กัน อยากให้กองใกล้ ๆ กัน ง่ายต่อการดู" —
+  //   จัดคู่การ์ดยอดสุทธิเท่ากันฝั่งเดียวกันให้ติดกัน: ใบวางบิล/บิลเชื่อ (credit/ยังไม่ระบุ)
+  //   ตามด้วยสลิป (โอน/สด) ยอดเดียวกันทันที · ที่เหลือคงลำดับเดิม (ค้างตรวจก่อน)
+  const reviewList: BillEntry[] = (() => {
+    const used = new Set<string>();
+    const isSlipLike = (e: BillEntry) => e.paymentMethod === "transfer" || e.paymentMethod === "cash";
+    const isBillLike = (e: BillEntry) => !isSlipLike(e); // เชื่อ/เช็ค/ยังไม่ระบุ = ฝั่งตั้งหนี้
+    const netOf = (e: BillEntry) => summarizeEntry(e.lines).net;
+    const out: BillEntry[] = [];
+    for (const e of reviewListRaw) {
+      if (used.has(e.id)) continue;
+      used.add(e.id);
+      out.push(e);
+      // ใบวางบิล/บิลเชื่อ → หา "สลิปยอดเท่ากัน ฝั่งเดียวกัน" มาวางติดกัน (และกลับกัน)
+      const net = netOf(e);
+      if (net <= 0 || (e.entryType !== "sale" && e.entryType !== "purchase")) continue;
+      const partner = reviewListRaw.find(
+        (x) =>
+          !used.has(x.id) &&
+          x.entryType === e.entryType &&
+          Math.abs(netOf(x) - net) < 0.005 &&
+          (isBillLike(e) ? isSlipLike(x) : isBillLike(x))
+      );
+      if (partner) {
+        used.add(partner.id);
+        out.push(partner);
+      }
+    }
+    return out;
+  })();
 
   // ★ perf: ยิง query ที่ไม่ขึ้นต่อกัน พร้อมกัน (รหัสลูกค้า + sign รูป + ผังบัญชีสำหรับแผงแก้ด่วน)
   const [codeMap, signed, chart] = await Promise.all([

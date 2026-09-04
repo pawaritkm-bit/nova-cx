@@ -52,7 +52,13 @@ export default function SettleMatchBox({
       <div className="wsp-match-h">
         🔗 จับคู่บิลเชื่อค้างได้: <b>{best.docNo || "—"}</b> · {best.counterpartyName || "—"} ·
         ค้าง {formatMoney(best.outstanding)} ({thaiDate(best.docDate)})
-        {best.amountExact ? <span className="wsp-match-exact">ยอดตรงพอดี</span> : null}
+        {best.nameMatch && best.amountExact ? (
+          <span className="wsp-match-exact">ชื่อ + ยอดตรงพอดี</span>
+        ) : best.amountExact ? (
+          <span className="wsp-match-exact warn">ยอดตรงพอดี — ชื่อผู้โอนไม่ตรง (อาจโอนบัญชีส่วนตัว)</span>
+        ) : (
+          <span className="wsp-match-exact name">ชื่อตรง (ยอดไม่เท่ายอดค้าง)</span>
+        )}
       </div>
       <div className="wsp-match-act">
         <button type="button" className="wsp-btn primary" onClick={settle} disabled={pending || !targetId}>
@@ -68,7 +74,8 @@ export default function SettleMatchBox({
           >
             {matches.map((m) => (
               <option key={m.entryId} value={m.entryId}>
-                {m.docNo || "—"} · ค้าง {formatMoney(m.outstanding)}{m.amountExact ? " ✓ยอดตรง" : ""}
+                {m.docNo || "—"} · ค้าง {formatMoney(m.outstanding)}
+                {m.nameMatch && m.amountExact ? " ✓ชื่อ+ยอดตรง" : m.amountExact ? " ✓ยอดตรง" : " ✓ชื่อตรง"}
               </option>
             ))}
           </select>

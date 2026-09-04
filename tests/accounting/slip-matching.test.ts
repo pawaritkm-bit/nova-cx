@@ -47,11 +47,13 @@ describe("matchSlipToOutstanding", () => {
     bill({ entryId: "c", docNo: "BL-3", docDate: "2026-09-01", counterpartyName: "นาย สมชาย ใจดี", outstanding: 1070 }),
   ];
 
-  it("ชื่อตรง + ยอดตรง → ใบยอดตรงขึ้นก่อน แม้ใบอื่นเก่ากว่า", () => {
+  it("เรียงความมั่นใจ: ชื่อ+ยอดตรง → ยอดตรง (ชื่อไม่ตรง) → ชื่อตรงอย่างเดียว", () => {
     const m = matchSlipToOutstanding("นีเวียโคขุน", 1070, candidates);
-    expect(m.map((x) => x.entryId)).toEqual(["b", "a"]);
-    expect(m[0].amountExact).toBe(true);
-    expect(m[1].amountExact).toBe(false);
+    // b = ชื่อ+ยอดตรง · c = ยอดตรง (คนละชื่อ — เผื่อโอนบัญชีส่วนตัว) · a = ชื่อตรงแต่ยอดไม่เท่า
+    expect(m.map((x) => x.entryId)).toEqual(["b", "c", "a"]);
+    expect(m[0].nameMatch && m[0].amountExact).toBe(true);
+    expect(m[1].amountExact && !m[1].nameMatch).toBe(true);
+    expect(m[2].nameMatch && !m[2].amountExact).toBe(true);
   });
 
   it("ยอดไม่ตรงสักใบ → เรียงใบเก่าก่อน (FIFO)", () => {
@@ -59,8 +61,22 @@ describe("matchSlipToOutstanding", () => {
     expect(m.map((x) => x.entryId)).toEqual(["a", "b"]);
   });
 
-  it("ชื่อไม่ตรงใครเลย → [] (การ์ดลงรายได้/ค่าใช้จ่ายตามปกติ)", () => {
-    expect(matchSlipToOutstanding("บจก. อื่นไกล", 1070, candidates)).toEqual([]);
+  it("★ ชื่อไม่ตรงแต่ยอดตรงเป๊ะ → จับคู่ให้ (ลูกค้าโอนบัญชีส่วนตัว) พร้อมธง nameMatch=false", () => {
+    const m = matchSlipToOutstanding("นาย ส่วนตัว โอนแทน", 1070, candidates);
+    // ยอด 1070 ตรงทั้งใบ b (นีเวียโคขุน) และ c (สมชาย) — เสนอทั้งคู่ เรียงใบเก่าก่อน
+    expect(m.map((x) => x.entryId)).toEqual(["c", "b"]);
+    expect(m[0].amountExact).toBe(true);
+    expect(m[0].nameMatch).toBe(false);
+  });
+
+  it("ชื่อ+ยอดตรง ชนะ ยอดตรงอย่างเดียว", () => {
+    const m = matchSlipToOutstanding("สมชาย", 1070, candidates);
+    expect(m[0].entryId).toBe("c"); // ชื่อ+ยอดตรง
+    expect(m[0].nameMatch && m[0].amountExact).toBe(true);
+  });
+
+  it("ชื่อไม่ตรง + ยอดไม่ตรง → [] (การ์ดลงรายได้/ค่าใช้จ่ายตามปกติ)", () => {
+    expect(matchSlipToOutstanding("บจก. อื่นไกล", 999, candidates)).toEqual([]);
   });
 
   it("ใบที่ค้าง 0 ไม่ติดมา", () => {

@@ -23,6 +23,9 @@ export type OutstandingBillLite = {
 export type SlipMatch = OutstandingBillLite & {
   /** ยอดสลิปตรงกับยอดค้างพอดี (มั่นใจสูงสุด) */
   amountExact: boolean;
+  /** ชื่อผู้โอน/ผู้รับโอนตรงกับคู่ค้าในบิล — ★ 2026-09-04 ผู้ใช้: "จับยอดความน่าจะเป็นด้วย
+   *  เพราะลูกค้าบางคนไม่ได้ใช้บัญชีบริษัทโอน" → ชื่อไม่ตรงแต่ยอดตรงเป๊ะก็เสนอคู่ให้ */
+  nameMatch: boolean;
 };
 
 /** คำนำหน้า/รูปแบบนิติบุคคล/คำนำหน้าชื่อ ที่ตัดทิ้งก่อนเทียบชื่อ */
@@ -63,7 +66,9 @@ export function namesLooselyMatch(a: string | null | undefined, b: string | null
 }
 
 /**
- * หาใบเชื่อค้างที่เข้าคู่กับสลิป — กรองด้วยชื่อก่อน แล้วเรียง: ยอดตรงเป๊ะก่อน → ใบเก่าก่อน (FIFO)
+ * หาใบเชื่อค้างที่เข้าคู่กับสลิป — เข้าคู่เมื่อ "ชื่อตรง" หรือ "ยอดตรงเป๊ะ" (★ 2026-09-04:
+ *   ลูกค้าบางคนโอนจากบัญชีส่วนตัว ชื่อผู้โอนไม่ตรงบริษัท → ใช้ยอดเงินเป็นตัวจับความน่าจะเป็น)
+ *   เรียงความมั่นใจ: ชื่อ+ยอดตรง → ยอดตรงอย่างเดียว → ชื่อตรงอย่างเดียว → ใบเก่าก่อน (FIFO)
  *   คืน [] = ไม่มีคู่ (การ์ดจะลงรายได้/ค่าใช้จ่ายตามปกติ)
  */
 export function matchSlipToOutstanding(
@@ -72,11 +77,19 @@ export function matchSlipToOutstanding(
   candidates: OutstandingBillLite[]
 ): SlipMatch[] {
   const net = round2(slipNet);
-  const hits = candidates
-    .filter((c) => c.outstanding > EPSILON && namesLooselyMatch(slipCounterpartyName, c.counterpartyName))
-    .map((c) => ({ ...c, amountExact: Math.abs(round2(c.outstanding) - net) < EPSILON }));
+  const hits: SlipMatch[] = [];
+  for (const c of candidates) {
+    if (c.outstanding <= EPSILON) continue;
+    const nameMatch = namesLooselyMatch(slipCounterpartyName, c.counterpartyName);
+    const amountExact = net > EPSILON && Math.abs(round2(c.outstanding) - net) < EPSILON;
+    // ชื่อไม่ตรง + ยอดไม่ตรง = ไม่เกี่ยวกัน (ยอดอย่างเดียวต้อง "ตรงเป๊ะ" เท่านั้น กันจับมั่ว)
+    if (!nameMatch && !amountExact) continue;
+    hits.push({ ...c, amountExact, nameMatch });
+  }
+  const score = (m: SlipMatch) => (m.nameMatch && m.amountExact ? 3 : m.amountExact ? 2 : 1);
   hits.sort((x, y) => {
-    if (x.amountExact !== y.amountExact) return x.amountExact ? -1 : 1;
+    const d = score(y) - score(x);
+    if (d !== 0) return d;
     return (x.docDate ?? "9999").localeCompare(y.docDate ?? "9999"); // ใบเก่าก่อน
   });
   return hits;
