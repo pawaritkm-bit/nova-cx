@@ -17,6 +17,7 @@ import DeleteBillButton from "./DeleteBillButton";
 import ConfirmBillButton from "./ConfirmBillButton";
 import MoveBillButton from "./MoveBillButton";
 import MultiLineQuickFix from "./MultiLineQuickFix";
+import AutoCloseDetails from "../AutoCloseDetails";
 import SettleMatchBox from "./SettleMatchBox";
 import { matchSlipToOutstanding, type OutstandingBillLite } from "@/lib/accounting/slip-matching";
 import { isCreditEligibleForPayment, listBillPaymentsForEntries, billOutstanding } from "@/lib/accounting/bill-payments";
@@ -639,7 +640,8 @@ export default async function AccountingWorkspacePage({
                 accountant={accountantParam || null}
                 customerType={custIsCompany ? "company" : adminFields?.customerType ?? null}
               />
-              <details className="cust-tools" name="cust-menu">
+              {/* ★ 2026-09-04 คลิกนอกกรอบ = เมนูปิดเอง (AutoCloseDetails) */}
+              <AutoCloseDetails className="cust-tools" name="cust-menu">
                 <summary className="btn">⚙️ จัดการลูกค้า</summary>
                 <div className="cust-tools-pop" style={{ width: "min(90vw, 380px)" }}>
                   {showShareToggle ? (
@@ -661,7 +663,7 @@ export default async function AccountingWorkspacePage({
                     initialPhone={adminFields?.phone ?? null}
                   />
                 </div>
-              </details>
+              </AutoCloseDetails>
             </div>
           ) : null}
           <div className="wsp-tabs">

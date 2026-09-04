@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   canUseAccountingTool,
   type AccountingToolScope,
@@ -32,6 +32,18 @@ export default function CustomerToolsMenu({
 }) {
   const [openUrl, setOpenUrl] = useState<string | null>(null);
   const [openLabel, setOpenLabel] = useState<string>("");
+
+  // ★ 2026-09-04 ผู้ใช้: "กดตรงนอกกรอบให้เลื่อนขึ้นเลย ไม่ต้องกดปุ่มเมนู" —
+  //   <details> ไม่ปิดเองเมื่อคลิกข้างนอก → ฟัง mousedown ทั้งเอกสาร คลิกนอกกรอบ = ปิดเมนู
+  const menuRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      const el = menuRef.current;
+      if (el && el.open && !el.contains(e.target as Node)) el.open = false;
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
 
   const cid = encodeURIComponent(customerId);
   const m = month ? `&month=${encodeURIComponent(month)}` : "";
@@ -112,7 +124,7 @@ export default function CustomerToolsMenu({
 
   return (
     <>
-      <details className="cust-tools" name="cust-menu">
+      <details className="cust-tools" name="cust-menu" ref={menuRef}>
         <summary className="btn">🧰 เครื่องมือบัญชีทั้งหมด</summary>
         <div className="cust-tools-pop">
           {groups.map((grp) => {
