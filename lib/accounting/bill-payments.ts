@@ -149,9 +149,12 @@ export function billOutstanding(
 export function isCreditEligibleForPayment(
   entry: Pick<PaymentEntryInfo, "entryType" | "paymentMethod" | "status">
 ): boolean {
+  // ★ 2026-09-04 ผู้ใช้เจอ (หน้า aging ว่างทั้งที่แยกประเภทมีลูกหนี้ค้าง): บิลที่ "ยังไม่ระบุ
+  //   วิธีชำระ" (null) สมุดรายวันถือเป็นเชื่อ (ตั้งลูกหนี้/เจ้าหนี้ — journal.ts ใช้ method ?? 'credit')
+  //   → aging/รับจ่ายเงิน ต้องนับเป็นเชื่อเหมือนกัน ไม่งั้นลูกหนี้ในแยกประเภทกับรายงานค้างชำระไม่ตรงกัน
   return (
     (entry.entryType === "sale" || entry.entryType === "purchase") &&
-    entry.paymentMethod === "credit" &&
+    (entry.paymentMethod === "credit" || entry.paymentMethod == null) &&
     entry.status === "confirmed"
   );
 }

@@ -148,9 +148,12 @@ describe("isCreditEligibleForPayment", () => {
   it("unspecified → false", () => {
     expect(isCreditEligibleForPayment(entryInfo({ entryType: "unspecified" }))).toBe(false);
   });
-  it("payment_method ไม่ใช่ credit → false", () => {
+  it("payment_method จ่ายแล้ว (cash/โอน) → false · ★ null (ยังไม่ระบุ) = เชื่อ → true (2026-09-04)", () => {
     expect(isCreditEligibleForPayment(entryInfo({ paymentMethod: "cash" }))).toBe(false);
-    expect(isCreditEligibleForPayment(entryInfo({ paymentMethod: null }))).toBe(false);
+    expect(isCreditEligibleForPayment(entryInfo({ paymentMethod: "transfer" }))).toBe(false);
+    // ★ null = สมุดรายวันตั้งลูกหนี้/เจ้าหนี้ (method ?? 'credit') → aging/รับจ่ายเงินต้องนับเป็นเชื่อด้วย
+    //   (ผู้ใช้เจอ: หน้า aging ว่างทั้งที่แยกประเภทมีลูกหนี้ค้าง — บิล method=null หลุดรายงาน)
+    expect(isCreditEligibleForPayment(entryInfo({ paymentMethod: null }))).toBe(true);
   });
   it("ยังไม่ confirmed (draft) → false", () => {
     expect(isCreditEligibleForPayment(entryInfo({ status: "draft" }))).toBe(false);
