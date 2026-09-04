@@ -90,12 +90,17 @@ export default function SettleMatchBox({
   if (settled) {
     return (
       <div className="wsp-match">
-        <div className="wsp-match-h">✓ {settled.text}</div>
         <div className="wsp-match-act">
-          <button type="button" className="wsp-btn ghost" onClick={undo} disabled={pending}>
-            {pending ? "กำลังเลิกทำ…" : "↩ เลิกทำ (จับคู่ผิดใบ)"}
+          <span className="wsp-match-h">✓ {settled.text}</span>
+          <button
+            type="button"
+            className="wsp-btn ghost"
+            onClick={undo}
+            disabled={pending}
+            title={`เข้าสมุดรายวัน${entryType === "sale" ? "รับเงิน" : "จ่ายเงิน"}แล้ว · ยอดค้างถูกตัดแล้ว — กดเพื่อย้อนกลับ`}
+          >
+            {pending ? "กำลังเลิกทำ…" : "↩ เลิกทำ"}
           </button>
-          <span className="wsp-match-hint">เข้าสมุดรายวัน{entryType === "sale" ? "รับเงิน" : "จ่ายเงิน"}แล้ว · ยอดค้างถูกตัดแล้ว</span>
         </div>
         {msg && !msg.ok ? <span style={{ fontSize: 11, color: "#b91c1c" }}>⚠ {msg.text}</span> : null}
       </div>
@@ -107,51 +112,44 @@ export default function SettleMatchBox({
       isAi ? (m.nameMatch && m.amountExact ? " ✓ชื่อ+ยอดตรง" : m.amountExact ? " ✓ยอดตรง" : " ✓ชื่อตรง") : ""
     }`;
 
+  // ★ 2026-09-04 "มีคำอธิบายมันดูรก" — เหลือ 2 บรรทัด (สรุป + ปุ่ม)
+  //   ป้ายสั้น · เหตุผลเต็ม/เดบิตเครดิต/ข้อยกเว้น ย้ายไป tooltip (ชี้เมาส์ค้าง)
+  const badge = !best ? null : best.nameMatch && best.amountExact ? (
+    <span className="wsp-match-exact" title="ชื่อผู้โอนและยอดเงินตรงกับใบเชื่อค้างพอดี">ชื่อ+ยอดตรง</span>
+  ) : best.amountExact ? (
+    <span className="wsp-match-exact warn" title="ยอดตรงพอดี แต่ชื่อผู้โอนไม่ตรง (ลูกค้าอาจโอนจากบัญชีส่วนตัว)">ยอดตรง</span>
+  ) : best.nameMatch ? (
+    <span className="wsp-match-exact name" title="ชื่อตรง แต่ยอดสลิปไม่เท่ายอดค้าง — จะตัดเท่าที่จ่ายจริง">ชื่อตรง</span>
+  ) : (
+    <span className="wsp-match-exact name">เลือกเอง</span>
+  );
+  const drcrTitle = entryType === "sale"
+    ? `เดบิต ${moneyCode} ${moneyName} / เครดิต ${arapCode} ${arapName} = ${formatMoney(payAmount)} → เข้าสมุดรายวันรับเงิน`
+    : `เดบิต ${arapCode} ${arapName} / เครดิต ${moneyCode} ${moneyName} = ${formatMoney(payAmount)} → เข้าสมุดรายวันจ่ายเงิน`;
+
   return (
     <div className="wsp-match">
       <div className="wsp-match-h">
         {manualOnly ? (
-          <>🔗 จับคู่เอง — เลือกใบเชื่อค้างของบริษัทนี้ ({all.length.toLocaleString("th-TH")} ใบ)</>
+          <>🔗 จับคู่เอง — เลือกใบเชื่อค้าง ({all.length.toLocaleString("th-TH")} ใบ)</>
         ) : best ? (
-          <>
-            🔗 จับคู่บิลเชื่อค้างได้: <b>{best.docNo || "—"}</b> · {best.counterpartyName || "—"} ·
-            ค้าง {formatMoney(best.outstanding)} ({thaiDate(best.docDate)})
-            {best.nameMatch && best.amountExact ? (
-              <span className="wsp-match-exact">ชื่อ + ยอดตรงพอดี</span>
-            ) : best.amountExact ? (
-              <span className="wsp-match-exact warn">ยอดตรงพอดี — ชื่อผู้โอนไม่ตรง (อาจโอนบัญชีส่วนตัว)</span>
-            ) : best.nameMatch ? (
-              <span className="wsp-match-exact name">ชื่อตรง (ยอดไม่เท่ายอดค้าง)</span>
-            ) : (
-              <span className="wsp-match-exact name">เลือกเอง</span>
-            )}
-            {best.isDraft ? (
-              <span className="wsp-match-exact name">ใบวางบิลยังเป็นร่าง — ระบบจะยืนยันให้อัตโนมัติ</span>
-            ) : null}
-          </>
+          <span title={`${best.counterpartyName || "—"} · วันที่ ${thaiDate(best.docDate)}${best.isDraft ? " · ใบวางบิลยังเป็นร่าง — ระบบจะยืนยันให้อัตโนมัติ" : ""}`}>
+            🔗 <b>{best.docNo || "—"}</b> · ค้าง {formatMoney(best.outstanding)}
+            {badge}
+            {best.isDraft ? <span className="wsp-match-exact name" title="ระบบจะยืนยันใบวางบิลให้อัตโนมัติตอนตัดยอด">ร่าง</span> : null}
+          </span>
         ) : (
           <>🔗 เลือกใบเชื่อค้างที่จะตัด…</>
         )}
       </div>
-      {/* ★ 2026-09-04: "ai ใส่เดบิตเครดิตให้ด้วย" — คู่บัญชีที่จะลงจริงเมื่อกดปุ่ม */}
-      {best ? (
-        <div className="wsp-match-post">
-          {entryType === "sale" ? (
-            <>
-              <span><b className="dr">เดบิต</b> {moneyCode} {moneyName} <b>{formatMoney(payAmount)}</b></span>
-              <span><b className="cr">เครดิต</b> {arapCode} {arapName} <b>{formatMoney(payAmount)}</b></span>
-            </>
-          ) : (
-            <>
-              <span><b className="dr">เดบิต</b> {arapCode} {arapName} <b>{formatMoney(payAmount)}</b></span>
-              <span><b className="cr">เครดิต</b> {moneyCode} {moneyName} <b>{formatMoney(payAmount)}</b></span>
-            </>
-          )}
-          <span className="wsp-match-hint">→ สมุดรายวัน{entryType === "sale" ? "รับเงิน" : "จ่ายเงิน"}</span>
-        </div>
-      ) : null}
       <div className="wsp-match-act">
-        <button type="button" className="wsp-btn primary" onClick={settle} disabled={pending || !targetId}>
+        <button
+          type="button"
+          className="wsp-btn primary"
+          onClick={settle}
+          disabled={pending || !targetId}
+          title={`${drcrTitle} — ถ้าไม่ใช่การชำระ ใช้ปุ่ม ✓ ยืนยัน ปกติ (ลง${entryType === "sale" ? "รายได้" : "ค่าใช้จ่าย"})`}
+        >
           {pending ? "กำลังบันทึก…" : `✓ ${verb}`}
         </button>
         {/* ★ "ถ้าจะจับเอง" — dropdown มีทุกใบค้างเสมอ: ใบที่ AI เสนอ (ติดป้ายเหตุผล) + ใบอื่นทั้งหมด */}
@@ -176,7 +174,17 @@ export default function SettleMatchBox({
             ) : null}
           </select>
         ) : null}
-        <span className="wsp-match-hint">ไม่ใช่การชำระ → ใช้ปุ่ม ✓ ยืนยัน ปกติ (ลง{entryType === "sale" ? "รายได้" : "ค่าใช้จ่าย"})</span>
+        {/* ★ "ai ใส่เดบิตเครดิตให้ด้วย" — ย่อเป็นบรรทัดเล็ก (รายละเอียดเต็มอยู่ใน tooltip ปุ่ม) */}
+        {best ? (
+          <span className="wsp-match-drcr" title={drcrTitle}>
+            {entryType === "sale" ? (
+              <><b className="dr">Dr</b> {moneyCode} · <b className="cr">Cr</b> {arapCode}</>
+            ) : (
+              <><b className="dr">Dr</b> {arapCode} · <b className="cr">Cr</b> {moneyCode}</>
+            )}{" "}
+            {formatMoney(payAmount)}
+          </span>
+        ) : null}
       </div>
       {msg ? (
         <span style={{ fontSize: 11, color: msg.ok ? "#166534" : "#b91c1c" }}>

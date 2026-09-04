@@ -261,7 +261,7 @@
 .wsp-match-hint{font-size:11px;color:#94a3b8}
 .wsp-match-exact.warn{background:#fef3c7;color:#92400e}
 .wsp-match-exact.name{background:#e0f2fe;color:#0369a1}
-/* แถวเดบิต/เครดิตในกล่องจับคู่ (2026-09-04 "ai ใส่เดบิตเครดิตให้ด้วย") */
-.wsp-match-post{display:flex;gap:16px;flex-wrap:wrap;align-items:center;background:#fff;border:1px solid #dcfce7;border-radius:8px;padding:6px 10px;font-size:12px}
-.wsp-match-post .dr{color:#166534}
-.wsp-match-post .cr{color:#b91c1c}
+/* เดบิต/เครดิตแบบย่อท้ายแถวปุ่ม (2026-09-04 "มีคำอธิบายมันดูรก" — รายละเอียดเต็มอยู่ tooltip) */
+.wsp-match-drcr{font-size:11.5px;color:#475569;font-variant-numeric:tabular-nums;white-space:nowrap;cursor:help}
+.wsp-match-drcr .dr{color:#166534}
+.wsp-match-drcr .cr{color:#b91c1c}
