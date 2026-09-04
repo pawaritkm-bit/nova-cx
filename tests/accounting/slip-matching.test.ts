@@ -47,16 +47,16 @@ describe("matchSlipToOutstanding", () => {
     bill({ entryId: "c", docNo: "BL-3", docDate: "2026-09-01", counterpartyName: "นาย สมชาย ใจดี", outstanding: 1070 }),
   ];
 
-  it("เรียงความมั่นใจ: ชื่อ+ยอดตรง → ยอดตรง (ชื่อไม่ตรง) → ชื่อตรงอย่างเดียว", () => {
+  it("★ เรียงความมั่นใจ (ชื่อเป็นหลักก่อน): ชื่อ+ยอดตรง → ชื่อตรง → ยอดตรง (เดาตัวเลข) ", () => {
     const m = matchSlipToOutstanding("นีเวียโคขุน", 1070, candidates);
-    // b = ชื่อ+ยอดตรง · c = ยอดตรง (คนละชื่อ — เผื่อโอนบัญชีส่วนตัว) · a = ชื่อตรงแต่ยอดไม่เท่า
-    expect(m.map((x) => x.entryId)).toEqual(["b", "c", "a"]);
+    // b = ชื่อ+ยอดตรง · a = ชื่อตรง (ยอดไม่เท่า) · c = ยอดตรงแต่คนละชื่อ (เดาตัวเลข — ท้ายสุด)
+    expect(m.map((x) => x.entryId)).toEqual(["b", "a", "c"]);
     expect(m[0].nameMatch && m[0].amountExact).toBe(true);
-    expect(m[1].amountExact && !m[1].nameMatch).toBe(true);
-    expect(m[2].nameMatch && !m[2].amountExact).toBe(true);
+    expect(m[1].nameMatch && !m[1].amountExact).toBe(true);
+    expect(m[2].amountExact && !m[2].nameMatch).toBe(true);
   });
 
-  it("ยอดไม่ตรงสักใบ → เรียงใบเก่าก่อน (FIFO)", () => {
+  it("ชื่อตรงหลายใบ ยอดไม่ตรงสักใบ → เรียงใบเก่าก่อน (FIFO)", () => {
     const m = matchSlipToOutstanding("นีเวียโคขุน", 500, candidates);
     expect(m.map((x) => x.entryId)).toEqual(["a", "b"]);
   });

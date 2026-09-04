@@ -66,9 +66,10 @@ export function namesLooselyMatch(a: string | null | undefined, b: string | null
 }
 
 /**
- * หาใบเชื่อค้างที่เข้าคู่กับสลิป — เข้าคู่เมื่อ "ชื่อตรง" หรือ "ยอดตรงเป๊ะ" (★ 2026-09-04:
- *   ลูกค้าบางคนโอนจากบัญชีส่วนตัว ชื่อผู้โอนไม่ตรงบริษัท → ใช้ยอดเงินเป็นตัวจับความน่าจะเป็น)
- *   เรียงความมั่นใจ: ชื่อ+ยอดตรง → ยอดตรงอย่างเดียว → ชื่อตรงอย่างเดียว → ใบเก่าก่อน (FIFO)
+ * หาใบเชื่อค้างที่เข้าคู่กับสลิป — เข้าคู่เมื่อ "ชื่อตรง" หรือ "ยอดตรงเป๊ะ"
+ *   ★ 2026-09-04 (รอบสอง) ผู้ใช้: "จับชื่อเป็นหลักก่อนอันดับแรก ถ้าหาชื่อไม่เจอ ค่อยจับจาก
+ *     การเดาตัวเลข" — เรียงความมั่นใจ: ชื่อ+ยอดตรง → ชื่อตรง → ยอดตรงอย่างเดียว (เดาตัวเลข
+ *     เผื่อลูกค้าโอนบัญชีส่วนตัว) → ใบเก่าก่อน (FIFO)
  *   คืน [] = ไม่มีคู่ (การ์ดจะลงรายได้/ค่าใช้จ่ายตามปกติ)
  */
 export function matchSlipToOutstanding(
@@ -86,7 +87,8 @@ export function matchSlipToOutstanding(
     if (!nameMatch && !amountExact) continue;
     hits.push({ ...c, amountExact, nameMatch });
   }
-  const score = (m: SlipMatch) => (m.nameMatch && m.amountExact ? 3 : m.amountExact ? 2 : 1);
+  // ★ ชื่อเป็นหลักก่อน — ยอดอย่างเดียว (เดาตัวเลข) มาท้ายสุด
+  const score = (m: SlipMatch) => (m.nameMatch && m.amountExact ? 3 : m.nameMatch ? 2 : 1);
   hits.sort((x, y) => {
     const d = score(y) - score(x);
     if (d !== 0) return d;

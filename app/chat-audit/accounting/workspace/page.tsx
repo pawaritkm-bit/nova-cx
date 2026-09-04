@@ -19,7 +19,7 @@ import MoveBillButton from "./MoveBillButton";
 import MultiLineQuickFix from "./MultiLineQuickFix";
 import AutoCloseDetails from "../AutoCloseDetails";
 import SettleMatchBox from "./SettleMatchBox";
-import { matchSlipToOutstanding, type OutstandingBillLite } from "@/lib/accounting/slip-matching";
+import { matchSlipToOutstanding, namesLooselyMatch, type OutstandingBillLite } from "@/lib/accounting/slip-matching";
 import { isCreditEligibleForPayment, listBillPaymentsForEntries, billOutstanding } from "@/lib/accounting/bill-payments";
 import { listNotesForEntries, netAdjustmentByEntry } from "@/lib/accounting/credit-debit-notes";
 
@@ -395,32 +395,40 @@ export default async function AccountingWorkspacePage({
   const sortedGroups = [...groups].sort((a, b) => pendingOf(b) - pendingOf(a) || b.entries.length - a.entries.length);
   const openKey = sp.open && groups.some((g) => groupKey(g) === sp.open) ? sp.open : sortedGroups[0] ? groupKey(sortedGroups[0]) : "";
   const openGroup = groups.find((g) => groupKey(g) === openKey) ?? null;
+  // ★ 2026-09-04 (รอบสอง) ผู้ใช้: "วางมั่วมาก จับชื่อเป็นหลักก่อนอันดับแรก หรือจับจากลำดับ
+  //   การดึงบิลในกลุ่มไลน์ เพราะลูกค้าส่งเป็นคู่ ๆ อยู่แล้ว ถ้าหาชื่อไม่เจอค่อยจับจากการเดาตัวเลข"
+  //   1) ฐานเรียงตาม "ลำดับที่ดึงเข้าจากไลน์" (createdAt ใหม่→เก่า) — คู่ที่ลูกค้าส่งติดกันจะติดกันเอง
+  //   2) จับคู่ด้วย "ชื่อคู่ค้า" ก่อน → ดึงมาวางติดกัน · 3) ชื่อไม่เจอค่อยเดาจากยอดเท่ากันเป๊ะ
   const reviewListRaw = openGroup
-    ? openGroup.entries.filter(matchView).sort((a, b) => (isPending(b) ? 1 : 0) - (isPending(a) ? 1 : 0))
+    ? openGroup.entries
+        .filter(matchView)
+        .sort(
+          (a, b) =>
+            (isPending(b) ? 1 : 0) - (isPending(a) ? 1 : 0) ||
+            (b.createdAt ?? "").localeCompare(a.createdAt ?? "")
+        )
     : [];
-  // ★ 2026-09-04 ผู้ใช้: "ลูกค้าส่งใบวางบิลกับสลิปคู่กัน อยากให้กองใกล้ ๆ กัน ง่ายต่อการดู" —
-  //   จัดคู่การ์ดยอดสุทธิเท่ากันฝั่งเดียวกันให้ติดกัน: ใบวางบิล/บิลเชื่อ (credit/ยังไม่ระบุ)
-  //   ตามด้วยสลิป (โอน/สด) ยอดเดียวกันทันที · ที่เหลือคงลำดับเดิม (ค้างตรวจก่อน)
   const reviewList: BillEntry[] = (() => {
     const used = new Set<string>();
     const isSlipLike = (e: BillEntry) => e.paymentMethod === "transfer" || e.paymentMethod === "cash";
     const isBillLike = (e: BillEntry) => !isSlipLike(e); // เชื่อ/เช็ค/ยังไม่ระบุ = ฝั่งตั้งหนี้
+    const cpOf = (e: BillEntry) => e.counterpartyName || e.sellerName || e.buyerName;
     const netOf = (e: BillEntry) => summarizeEntry(e.lines).net;
     const out: BillEntry[] = [];
     for (const e of reviewListRaw) {
       if (used.has(e.id)) continue;
       used.add(e.id);
       out.push(e);
-      // ใบวางบิล/บิลเชื่อ → หา "สลิปยอดเท่ากัน ฝั่งเดียวกัน" มาวางติดกัน (และกลับกัน)
-      const net = netOf(e);
-      if (net <= 0 || (e.entryType !== "sale" && e.entryType !== "purchase")) continue;
-      const partner = reviewListRaw.find(
-        (x) =>
-          !used.has(x.id) &&
-          x.entryType === e.entryType &&
-          Math.abs(netOf(x) - net) < 0.005 &&
-          (isBillLike(e) ? isSlipLike(x) : isBillLike(x))
-      );
+      if (e.entryType !== "sale" && e.entryType !== "purchase") continue;
+      const opposite = (x: BillEntry) =>
+        !used.has(x.id) && x.entryType === e.entryType && (isBillLike(e) ? isSlipLike(x) : isBillLike(x));
+      // ① ชื่อคู่ค้าตรงกันก่อน (ใกล้ตามลำดับไลน์อยู่แล้ว — find เจอตัวที่ใกล้ที่สุดก่อน)
+      let partner = reviewListRaw.find((x) => opposite(x) && namesLooselyMatch(cpOf(e), cpOf(x)));
+      // ② ชื่อไม่เจอ → เดาจากยอดสุทธิเท่ากันเป๊ะ
+      if (!partner) {
+        const net = netOf(e);
+        if (net > 0) partner = reviewListRaw.find((x) => opposite(x) && Math.abs(netOf(x) - net) < 0.005);
+      }
       if (partner) {
         used.add(partner.id);
         out.push(partner);
