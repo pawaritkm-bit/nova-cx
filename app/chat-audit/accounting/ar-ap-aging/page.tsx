@@ -24,6 +24,28 @@ function todayThai(): string {
   return `${y}-${m}-${d}`;
 }
 
+/** ตัวเลือกเดือนย้อนหลัง (ใหม่→เก่า) — ★ 2026-09-04 ผู้ใช้: "ตรงเลือกเดือนเลือกวัน
+ *  อยากให้แท็บเลือกเหมือนหน้าสมุดรายวัน" (mirror recentMonthOptions ของ journal-books) */
+const THAI_MONTHS = [
+  "", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+];
+function recentMonthOptions(count: number): { value: string; label: string }[] {
+  const cur = todayThai().slice(0, 7);
+  let y = Number(cur.slice(0, 4));
+  let mi = Number(cur.slice(5, 7));
+  const out: { value: string; label: string }[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push({ value: `${y}-${String(mi).padStart(2, "0")}`, label: `${THAI_MONTHS[mi]} ${y + 543}` });
+    mi -= 1;
+    if (mi < 1) {
+      mi = 12;
+      y -= 1;
+    }
+  }
+  return out;
+}
+
 /** ISO → dd/mm/พ.ศ. (คืน "" ถ้าพัง) */
 function thaiDateShort(iso: string): string {
   if (!DATE_RE.test(iso)) return "";
@@ -106,6 +128,7 @@ export default async function ArApAgingPage({
       companyName={companyName}
       asOfDate={asOfDate}
       asOfLabel={thaiDateShort(asOfDate)}
+      monthOptions={recentMonthOptions(24)}
       printedAt={printedAtThai()}
       report={report}
       excelHref={excelHref}

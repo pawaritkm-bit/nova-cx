@@ -64,6 +64,7 @@ export default function AgingReportDoc({
   companyName,
   asOfDate,
   asOfLabel,
+  monthOptions = [],
   printedAt,
   report,
   excelHref,
@@ -75,6 +76,8 @@ export default function AgingReportDoc({
   asOfDate: string;
   /** ป้ายไทย dd/mm/พ.ศ. ของ asOfDate */
   asOfLabel: string;
+  /** ตัวเลือกเดือน (เหมือนหน้าสมุดรายวัน) — เลือกเดือน = ตั้งยอด ณ สิ้นเดือนนั้น */
+  monthOptions?: { value: string; label: string }[];
   printedAt: string;
   report: AgingReport;
   excelHref: string;
@@ -88,13 +91,38 @@ export default function AgingReportDoc({
     router.push(`/chat-audit/accounting/ar-ap-aging?${params.toString()}`);
   }
 
+  // ★ 2026-09-04 ผู้ใช้: "เลือกเดือนเลือกวัน อยากให้แท็บเลือกเหมือนหน้าสมุดรายวัน"
+  //   เลือกเดือน = ตั้งยอดค้าง ณ วันสิ้นเดือนนั้น (เลือกวันเจาะจงยังได้ที่ช่องวันที่เหมือนเดิม)
+  function lastDayOf(month: string): string {
+    const [y, m] = month.split("-").map(Number);
+    const last = new Date(Date.UTC(y ?? 0, m ?? 0, 0)).getUTCDate();
+    return `${month}-${String(last).padStart(2, "0")}`;
+  }
+  const selectedMonth = asOfDate.slice(0, 7);
+
   return (
     <div className="vr-shell">
       {/* ---- แถบเครื่องมือ (ซ่อนตอนพิมพ์) ---- */}
       <div className="vr-toolbar no-print">
         <a href={backHref} className="vr-btn vr-btn-ghost">← กลับ</a>
+        {monthOptions.length > 0 ? (
+          <label className="vr-month-picker">
+            <span>ณ สิ้นเดือน</span>
+            <select
+              className="vr-select"
+              value={monthOptions.some((o) => o.value === selectedMonth) ? selectedMonth : ""}
+              onChange={(e) => e.target.value && onChangeAsOf(lastDayOf(e.target.value))}
+              aria-label="เลือกเดือน (ยอดค้าง ณ สิ้นเดือน)"
+            >
+              <option value="" disabled>เลือกเดือน…</option>
+              {monthOptions.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <label className="vr-month-picker">
-          <span>ณ วันที่</span>
+          <span>หรือ ณ วันที่</span>
           <input
             type="date"
             className="vr-select vr-date-in"
