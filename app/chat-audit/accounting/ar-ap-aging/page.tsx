@@ -74,7 +74,7 @@ function printedAtThai(): string {
 export default async function ArApAgingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ customer?: string; asOf?: string }>;
+  searchParams: Promise<{ customer?: string; asOf?: string; from?: string; to?: string }>;
 }) {
   const sp = await searchParams;
 
@@ -96,8 +96,14 @@ export default async function ArApAgingPage({
     return <ErrorShell message="ลูกค้ารายนี้ไม่ได้อยู่ในความดูแลของคุณ" />;
   }
 
+  // ★ 2026-09-04 ผู้ใช้: "หน้าสมุดบัญชีเลือกเดือนถึงเดือน และวันที่ถึงวันที่ได้" —
+  //   ช่วงวันที่แบบเดียวกัน: from/to (to = วันวัดยอดค้าง) · asOf เดิมยังใช้ได้ (= to)
   const asOfParam = (sp.asOf ?? "").trim();
-  const asOfDate = DATE_RE.test(asOfParam) ? asOfParam : todayThai();
+  const toParam = (sp.to ?? "").trim();
+  const fromParam = (sp.from ?? "").trim();
+  const asOfDate = DATE_RE.test(toParam) ? toParam : DATE_RE.test(asOfParam) ? asOfParam : todayThai();
+  let fromDate = DATE_RE.test(fromParam) ? fromParam : "";
+  if (fromDate && fromDate > asOfDate) fromDate = "";
 
   const { data: custRow } = await service
     .from("customers")
@@ -110,7 +116,11 @@ export default async function ArApAgingPage({
 
   let report;
   try {
-    const { entries } = await listEntries(service, tenantId, { customerId });
+    const { entries } = await listEntries(service, tenantId, {
+      customerId,
+      dateFrom: fromDate || undefined,
+      dateTo: asOfDate,
+    });
     const paymentsByEntry = await listBillPaymentsForEntries(service, tenantId, entries.map((e) => e.id));
     // เฟส 3 ส่วน J (0.6): CN/DN "confirmed" ของบิลในสโคปนี้ → ปรับยอดค้าง/bucket ให้ถูกต้อง
     const notesByEntry = await listNotesForEntries(service, tenantId, entries.map((e) => e.id));
@@ -120,7 +130,7 @@ export default async function ArApAgingPage({
     return <ErrorShell message="อ่านข้อมูลไม่สำเร็จ — ตรวจการตั้งค่า SUPABASE_SERVICE_ROLE_KEY และ migration" />;
   }
 
-  const excelHref = `/chat-audit/accounting/ar-ap-aging/export?customer=${customerId}&asOf=${asOfDate}`;
+  const excelHref = `/chat-audit/accounting/ar-ap-aging/export?customer=${customerId}&asOf=${asOfDate}${fromDate ? `&from=${fromDate}` : ""}`;
 
   return (
     <AgingReportDoc
@@ -128,6 +138,8 @@ export default async function ArApAgingPage({
       companyName={companyName}
       asOfDate={asOfDate}
       asOfLabel={thaiDateShort(asOfDate)}
+      fromDate={fromDate}
+      fromLabel={fromDate ? thaiDateShort(fromDate) : ""}
       monthOptions={recentMonthOptions(24)}
       printedAt={printedAtThai()}
       report={report}

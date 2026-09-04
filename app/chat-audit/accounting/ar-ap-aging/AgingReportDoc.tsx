@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatMoney } from "@/lib/accounting/calc";
 import { AGING_BUCKET_LABELS, AGING_BUCKET_ORDER, type AgingReport, type AgingRow } from "@/lib/accounting/aging";
@@ -64,6 +65,8 @@ export default function AgingReportDoc({
   companyName,
   asOfDate,
   asOfLabel,
+  fromDate = "",
+  fromLabel = "",
   monthOptions = [],
   printedAt,
   report,
@@ -76,7 +79,10 @@ export default function AgingReportDoc({
   asOfDate: string;
   /** ป้ายไทย dd/mm/พ.ศ. ของ asOfDate */
   asOfLabel: string;
-  /** ตัวเลือกเดือน (เหมือนหน้าสมุดรายวัน) — เลือกเดือน = ตั้งยอด ณ สิ้นเดือนนั้น */
+  /** ★ 2026-09-04 (รอบสอง) ช่วงวันที่แบบสมุดรายวัน: จากวันที่ ("" = ไม่จำกัด — บิลทั้งหมดถึงวันวัด) */
+  fromDate?: string;
+  fromLabel?: string;
+  /** ตัวเลือกเดือน (เหมือนหน้าสมุดรายวัน) */
   monthOptions?: { value: string; label: string }[];
   printedAt: string;
   report: AgingReport;
@@ -85,52 +91,98 @@ export default function AgingReportDoc({
 }) {
   const router = useRouter();
 
-  function onChangeAsOf(v: string) {
-    if (!v) return;
-    const params = new URLSearchParams({ customer: customerId, asOf: v });
+  // ★ 2026-09-04 (รอบสอง) ผู้ใช้: "หน้าสมุดบัญชีเลือกเดือนถึงเดือน และวันที่ถึงวันที่ได้"
+  //   — ชุดควบคุมเดียวกับ journal-books: ตั้งแต่/ถึง (วันที่) + ช่วงเดือน/ถึงเดือน + 📥 ดึงข้อมูล
+  //   ความหมาย: กรอง "บิลที่ออกในช่วง" · ยอดค้างวัด ณ วันสิ้นช่วง (ถึง)
+  function pushRange(from: string, to: string) {
+    if (!to) return;
+    const params = new URLSearchParams({ customer: customerId, to });
+    if (from) params.set("from", from);
     router.push(`/chat-audit/accounting/ar-ap-aging?${params.toString()}`);
   }
-
-  // ★ 2026-09-04 ผู้ใช้: "เลือกเดือนเลือกวัน อยากให้แท็บเลือกเหมือนหน้าสมุดรายวัน"
-  //   เลือกเดือน = ตั้งยอดค้าง ณ วันสิ้นเดือนนั้น (เลือกวันเจาะจงยังได้ที่ช่องวันที่เหมือนเดิม)
   function lastDayOf(month: string): string {
     const [y, m] = month.split("-").map(Number);
     const last = new Date(Date.UTC(y ?? 0, m ?? 0, 0)).getUTCDate();
     return `${month}-${String(last).padStart(2, "0")}`;
   }
   const selectedMonth = asOfDate.slice(0, 7);
+  const [rangeStart, setRangeStart] = useState(fromDate ? fromDate.slice(0, 7) : selectedMonth);
+  const [rangeEnd, setRangeEnd] = useState(selectedMonth);
+  function applyMonthRange() {
+    const [a, b] = rangeStart <= rangeEnd ? [rangeStart, rangeEnd] : [rangeEnd, rangeStart];
+    if (!/^\d{4}-\d{2}$/.test(a) || !/^\d{4}-\d{2}$/.test(b)) return;
+    pushRange(`${a}-01`, lastDayOf(b));
+  }
 
   return (
     <div className="vr-shell">
-      {/* ---- แถบเครื่องมือ (ซ่อนตอนพิมพ์) ---- */}
+      {/* ---- แถบเครื่องมือ (ซ่อนตอนพิมพ์) — โครงเดียวกับหน้าสมุดรายวัน ---- */}
       <div className="vr-toolbar no-print">
         <a href={backHref} className="vr-btn vr-btn-ghost">← กลับ</a>
-        {monthOptions.length > 0 ? (
-          <label className="vr-month-picker">
-            <span>ณ สิ้นเดือน</span>
-            <select
-              className="vr-select"
-              value={monthOptions.some((o) => o.value === selectedMonth) ? selectedMonth : ""}
-              onChange={(e) => e.target.value && onChangeAsOf(lastDayOf(e.target.value))}
-              aria-label="เลือกเดือน (ยอดค้าง ณ สิ้นเดือน)"
-            >
-              <option value="" disabled>เลือกเดือน…</option>
-              {monthOptions.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
         <label className="vr-month-picker">
-          <span>หรือ ณ วันที่</span>
+          <span>ตั้งแต่</span>
+          <input
+            type="date"
+            className="vr-select vr-date-in"
+            value={fromDate}
+            max={asOfDate || undefined}
+            onChange={(e) => pushRange(e.target.value, asOfDate)}
+            aria-label="วันเริ่มต้น (เว้นว่าง = บิลทั้งหมด)"
+          />
+        </label>
+        <label className="vr-month-picker">
+          <span>ถึง</span>
           <input
             type="date"
             className="vr-select vr-date-in"
             value={asOfDate}
-            onChange={(e) => onChangeAsOf(e.target.value)}
-            aria-label="วันที่ตั้งรายงาน"
+            min={fromDate || undefined}
+            onChange={(e) => e.target.value && pushRange(fromDate, e.target.value)}
+            aria-label="วันสิ้นสุด (วันวัดยอดค้าง)"
           />
         </label>
+        <label className="vr-month-picker">
+          <span>ช่วงเดือน</span>
+          <select
+            className="vr-select"
+            value={rangeStart}
+            onChange={(e) => {
+              const v = e.target.value;
+              setRangeStart(v);
+              if (rangeEnd < v) setRangeEnd(v);
+            }}
+            aria-label="เดือนเริ่มต้น"
+          >
+            {monthOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="vr-month-picker">
+          <span>ถึงเดือน</span>
+          <select
+            className="vr-select"
+            value={rangeEnd}
+            onChange={(e) => {
+              const v = e.target.value;
+              setRangeEnd(v);
+              if (rangeStart > v) setRangeStart(v);
+            }}
+            aria-label="เดือนสิ้นสุด"
+          >
+            {monthOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="vr-btn"
+          onClick={applyMonthRange}
+          title="ดึงบิลของช่วงเดือนที่เลือก (ยอดค้างวัด ณ สิ้นช่วง)"
+        >
+          📥 ดึงข้อมูล
+        </button>
         <span className="vr-toolbar-hint">
           แสดงเฉพาะบิลเชื่อ (ลูกหนี้/เจ้าหนี้) ที่ยังค้างชำระ ณ วันที่ตั้งรายงาน — บิลที่จ่ายครบแล้วจะไม่แสดง
         </span>
@@ -149,7 +201,9 @@ export default function AgingReportDoc({
           <div className="vr-head-center">
             <div className="vr-title">- รายงานลูกหนี้/เจ้าหนี้ค้างชำระตามอายุหนี้ -</div>
             <div className="vr-company-in strong">{companyName}</div>
-            <div className="vr-month">ณ วันที่ {asOfLabel}</div>
+            <div className="vr-month">
+              {fromDate ? <>บิลตั้งแต่ {fromLabel} ถึง {asOfLabel} · ยอดค้าง ณ วันที่ {asOfLabel}</> : <>ณ วันที่ {asOfLabel}</>}
+            </div>
           </div>
           <div className="vr-head-right">
             <div>Page 1</div>

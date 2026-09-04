@@ -5,6 +5,7 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveAccountingAccess, customerInScope } from "@/lib/accounting/access";
 import { listEntries, round2 } from "@/lib/accounting/queries";
 import { listBillPaymentsForEntries } from "@/lib/accounting/bill-payments";
+import { listNotesForEntries, netAdjustmentByEntry } from "@/lib/accounting/credit-debit-notes";
 import { buildAgingReport, AGING_BUCKET_LABELS, AGING_BUCKET_ORDER, type AgingRow } from "@/lib/accounting/aging";
 
 export const dynamic = "force-dynamic";
@@ -79,6 +80,10 @@ export async function GET(req: Request) {
   const customerId = url.searchParams.get("customer") ?? "";
   const asOfParam = url.searchParams.get("asOf") ?? "";
   const asOfDate = DATE_RE.test(asOfParam) ? asOfParam : todayThai();
+  // ★ 2026-09-04 ช่วงวันที่แบบสมุดรายวัน — Excel ต้องกรองเหมือนหน้าจอ (from = วันเริ่มบิล)
+  const fromParam = url.searchParams.get("from") ?? "";
+  let fromDate = DATE_RE.test(fromParam) ? fromParam : "";
+  if (fromDate && fromDate > asOfDate) fromDate = "";
 
   if (!getSupabaseEnv()) {
     return NextResponse.json({ error: "db_unavailable", message: "ยังไม่ได้ตั้งค่าฐานข้อมูล" }, { status: 503 });
@@ -109,14 +114,22 @@ export async function GET(req: Request) {
     const c = (cust as { customer_code: string | null; name: string | null; business_name: string | null } | null) ?? null;
     const companyName = (c?.business_name || c?.name || "กิจการ").trim();
 
-    const { entries } = await listEntries(service, tenantId, { customerId });
+    const { entries } = await listEntries(service, tenantId, {
+      customerId,
+      dateFrom: fromDate || undefined,
+      dateTo: asOfDate,
+    });
     const paymentsByEntry = await listBillPaymentsForEntries(service, tenantId, entries.map((e) => e.id));
-    const report = buildAgingReport(entries, paymentsByEntry, asOfDate);
+    // CN/DN เหมือนหน้าจอ — ยอดค้างใน Excel ต้องเท่ากับที่เห็นบนเว็บ
+    const notesByEntry = await listNotesForEntries(service, tenantId, entries.map((e) => e.id));
+    const report = buildAgingReport(entries, paymentsByEntry, asOfDate, netAdjustmentByEntry(notesByEntry));
 
     const wb = new ExcelJS.Workbook();
     wb.creator = "NOVA-CX";
     wb.created = new Date();
-    const headerLine = `${companyName}   ณ วันที่ ${thaiDateShort(asOfDate)}`;
+    const headerLine = fromDate
+      ? `${companyName}   บิลตั้งแต่ ${thaiDateShort(fromDate)} ถึง ${thaiDateShort(asOfDate)} · ยอดค้าง ณ ${thaiDateShort(asOfDate)}`
+      : `${companyName}   ณ วันที่ ${thaiDateShort(asOfDate)}`;
     addAgingSheet(wb, "ลูกหนี้การค้า (AR)", headerLine, report.ar, report.totalsByBucket.ar);
     addAgingSheet(wb, "เจ้าหนี้การค้า (AP)", headerLine, report.ap, report.totalsByBucket.ap);
 
