@@ -17,6 +17,10 @@ import DeleteBillButton from "./DeleteBillButton";
 import ConfirmBillButton from "./ConfirmBillButton";
 import MoveBillButton from "./MoveBillButton";
 import MultiLineQuickFix from "./MultiLineQuickFix";
+import SettleMatchBox from "./SettleMatchBox";
+import { matchSlipToOutstanding, type OutstandingBillLite } from "@/lib/accounting/slip-matching";
+import { isCreditEligibleForPayment, listBillPaymentsForEntries, billOutstanding } from "@/lib/accounting/bill-payments";
+import { listNotesForEntries, netAdjustmentByEntry } from "@/lib/accounting/credit-debit-notes";
 
 /** ป้ายอัตราหัก ณ ที่จ่ายของบิล — อัตราเดียว = "3%" · หลายอัตรา = "หลายอัตรา" · ไม่มี = "—" */
 function whtRateLabel(lines: { whtRate: number }[]): string {
@@ -401,6 +405,46 @@ export default async function AccountingWorkspacePage({
     listChartOfAccounts(service, tenantId),
   ]);
 
+  // ★★ 2026-09-04 ผู้ใช้ ("ทำจริง"): "ลูกหนี้/เจ้าหนี้ คือบิลที่ไม่มีสลิปมาจับคู่" —
+  //   โหลดบิลเชื่อค้างชำระของลูกค้าที่กางอยู่ (ทุกเดือน) ไว้จับคู่กับการ์ดสลิปด้านล่าง
+  //   sale ค้าง = ลูกหนี้ (สลิปเงินเข้าจับคู่ → รับชำระ) · purchase ค้าง = เจ้าหนี้ (สลิปเงินออก → จ่ายชำระ)
+  const outstandingByType: Record<"sale" | "purchase", OutstandingBillLite[]> = { sale: [], purchase: [] };
+  if (openGroup?.customerId) {
+    try {
+      const { entries: allOfCustomer } = await listEntries(service, tenantId, { customerId: openGroup.customerId });
+      const creditBills = allOfCustomer.filter(
+        (e) =>
+          isCreditEligibleForPayment({ entryType: e.entryType, paymentMethod: e.paymentMethod, status: e.status }) &&
+          (e.entryType === "sale" || e.entryType === "purchase")
+      );
+      if (creditBills.length > 0) {
+        const [payByEntry, notesByEntry] = await Promise.all([
+          listBillPaymentsForEntries(service, tenantId, creditBills.map((e) => e.id)),
+          listNotesForEntries(service, tenantId, creditBills.map((e) => e.id)),
+        ]);
+        const adjByEntry = netAdjustmentByEntry(notesByEntry);
+        for (const e of creditBills) {
+          const out = billOutstanding(
+            { lines: e.lines },
+            payByEntry.get(e.id) ?? [],
+            adjByEntry.get(e.id) ?? 0
+          );
+          if (out > 0) {
+            outstandingByType[e.entryType as "sale" | "purchase"].push({
+              entryId: e.id,
+              docNo: e.docNo,
+              docDate: e.docDate,
+              counterpartyName: e.counterpartyName || e.sellerName || e.buyerName,
+              outstanding: out,
+            });
+          }
+        }
+      }
+    } catch {
+      // best-effort — จับคู่ไม่ได้ก็แค่ไม่โชว์กล่อง (การ์ดยังยืนยันปกติได้)
+    }
+  }
+
   // ---- จัดการลูกค้า + ประเภทลูกค้า + วงแชร์ (เฉพาะลูกค้าที่กางอยู่ = perf) ----
   const openCustomerId = openGroup?.customerId ?? null;
   let adminFields: CustomerAdminFields | null = null;
@@ -744,6 +788,24 @@ export default async function AccountingWorkspacePage({
                           <span>หัก ณ ที่จ่าย <b className="wsp-wht">{s.wht ? `−${formatMoney(s.wht)}` : "0.00"}</b></span>
                           <span>รวมจ่ายจริง <b className="net">฿{formatMoney(s.net)}</b></span>
                         </div>
+                        {/* ★ 2026-09-04 ("ทำจริง"): สลิปที่จับคู่บิลเชื่อค้างได้ (ชื่อผู้โอน↔คู่ค้า) →
+                            กล่องรับ/จ่ายชำระตัดลูกหนี้-เจ้าหนี้ ปุ่มเดียวจบ (ไม่ลงรายได้/ค่าใช้จ่ายซ้ำ) */}
+                        {(() => {
+                          if (!pend || !e.customerId) return null;
+                          const paidSlip = e.paymentMethod === "transfer" || e.paymentMethod === "cash";
+                          if (!paidSlip || (e.entryType !== "sale" && e.entryType !== "purchase")) return null;
+                          const slipName = e.counterpartyName || e.sellerName || e.buyerName;
+                          const matches = matchSlipToOutstanding(slipName, s.net, outstandingByType[e.entryType]);
+                          if (matches.length === 0) return null;
+                          return (
+                            <SettleMatchBox
+                              customerId={e.customerId}
+                              slipEntryId={e.id}
+                              entryType={e.entryType}
+                              matches={matches.slice(0, 5)}
+                            />
+                          );
+                        })()}
                         {/* ★ 2026-09-02 ผู้ใช้: แก้ด่วนบนการ์ด — คู่ค้า / ⇄ สลับเดบิต-เครดิต / บัญชี (เฉพาะร่าง)
                             ★ 2026-09-03: บิลหลายรายการใช้ตารางบรรทัดละช่องเลขผัง (ดีไซน์อนุมัติ "โอเคทำเลย") */}
                         {pend && e.customerId && e.lines.length > 1 ? (
