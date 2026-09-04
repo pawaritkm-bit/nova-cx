@@ -18,6 +18,8 @@ export type OutstandingBillLite = {
   docDate: string | null;
   counterpartyName: string | null;
   outstanding: number;
+  /** ★ 2026-09-04: ใบวางบิลยัง "ร่าง" ก็จับคู่ได้ — กดรับชำระ = ยืนยันใบนั้นให้อัตโนมัติก่อนตัด */
+  isDraft?: boolean;
 };
 
 export type SlipMatch = OutstandingBillLite & {

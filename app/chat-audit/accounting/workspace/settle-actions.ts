@@ -17,7 +17,7 @@ import {
 } from "@/lib/accounting/access";
 import { recordBillPayment, listBillPayments, billOutstanding, voidBillPayment, getPaymentScope } from "@/lib/accounting/bill-payments";
 import { listNotes, netAdjustmentByEntry } from "@/lib/accounting/credit-debit-notes";
-import { deleteEntry } from "@/lib/accounting/actions-lib";
+import { deleteEntry, confirmEntry } from "@/lib/accounting/actions-lib";
 import { round2 } from "@/lib/accounting/queries";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -67,16 +67,33 @@ export async function settleSlipAgainstBillAction(input: {
     // ---- เป้าหมายต้องเป็นบิลของลูกค้ารายนี้ ฝั่งเดียวกับสลิป ----
     const { data: t } = await service
       .from("bill_entries")
-      .select("id, entry_type, doc_no")
+      .select("id, entry_type, doc_no, status")
       .eq("id", input.targetEntryId)
       .eq("tenant_id", ctx.tenantId)
       .eq("customer_id", input.customerId)
       .is("deleted_at", null)
       .maybeSingle();
-    const target = t as { id: string; entry_type: string; doc_no: string | null } | null;
+    const target = t as { id: string; entry_type: string; doc_no: string | null; status: string } | null;
     if (!target) return { ok: false, message: "ไม่พบบิลเชื่อเป้าหมาย" };
     if (target.entry_type !== slip.entry_type) {
       return { ok: false, message: "ฝั่งสลิปกับบิลเป้าหมายไม่ตรงกัน (เงินเข้า↔ขาย · เงินออก↔ซื้อ)" };
+    }
+
+    // ★ 2026-09-04 (รอบสอง): ใบวางบิลเป้าหมายยัง "ร่าง" → ยืนยันให้ก่อนอัตโนมัติ (ตั้งลูกหนี้/
+    //   เจ้าหนี้) แล้วค่อยตัด — ผู้ใช้เจอกล่องไม่ขึ้นเพราะใบวางบิลยังไม่ได้กดยืนยันแยกก่อน
+    let autoConfirmed = false;
+    if (target.status !== "confirmed") {
+      const conf = await confirmEntry(service, ctx.tenantId, target.id);
+      if (!conf.ok) {
+        return {
+          ok: false,
+          message:
+            conf.error === "entry_type_unspecified"
+              ? "ใบวางบิลเป้าหมายยังไม่ระบุซื้อ/ขาย — แก้ที่ใบนั้นก่อน"
+              : "ยืนยันใบวางบิลเป้าหมายไม่สำเร็จ — ตรวจใบนั้นก่อน",
+        };
+      }
+      autoConfirmed = true;
     }
 
     // ---- ยอดสลิป (สุทธิ) + ยอดค้างของเป้าหมาย → จ่ายจริง = ก้อนเล็กกว่า (รับชำระบางส่วนได้) ----
@@ -128,7 +145,8 @@ export async function settleSlipAgainstBillAction(input: {
     revalidatePath("/chat-audit/accounting/workspace");
     const verb = slip.entry_type === "sale" ? "รับชำระ + ตัดลูกหนี้" : "จ่ายชำระ + ตัดเจ้าหนี้";
     const partial = amount < slipNet ? ` (บางส่วน ${amount.toLocaleString("th-TH")})` : "";
-    return { ok: true, message: `${verb}บิล ${target.doc_no ?? ""} แล้ว${partial}`, paymentId: rec.id };
+    const auto = autoConfirmed ? " (ยืนยันใบวางบิลให้แล้ว)" : "";
+    return { ok: true, message: `${verb}บิล ${target.doc_no ?? ""} แล้ว${partial}${auto}`, paymentId: rec.id };
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "จับคู่ไม่สำเร็จ กรุณาลองใหม่" };

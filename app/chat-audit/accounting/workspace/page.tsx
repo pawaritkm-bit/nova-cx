@@ -21,6 +21,8 @@ import AutoCloseDetails from "../AutoCloseDetails";
 import SettleMatchBox from "./SettleMatchBox";
 import { matchSlipToOutstanding, namesLooselyMatch, type OutstandingBillLite } from "@/lib/accounting/slip-matching";
 import { isCreditEligibleForPayment, listBillPaymentsForEntries, billOutstanding } from "@/lib/accounting/bill-payments";
+import { contraAccountFor } from "@/lib/accounting/payment";
+import { buildChartByCode } from "@/lib/accounting/chart-of-accounts";
 import { listNotesForEntries, netAdjustmentByEntry } from "@/lib/accounting/credit-debit-notes";
 
 /** ป้ายอัตราหัก ณ ที่จ่ายของบิล — อัตราเดียว = "3%" · หลายอัตรา = "หลายอัตรา" · ไม่มี = "—" */
@@ -451,15 +453,20 @@ export default async function AccountingWorkspacePage({
   if (openGroup?.customerId) {
     try {
       const { entries: allOfCustomer } = await listEntries(service, tenantId, { customerId: openGroup.customerId });
-      const creditBills = allOfCustomer.filter(
-        (e) =>
-          isCreditEligibleForPayment({ entryType: e.entryType, paymentMethod: e.paymentMethod, status: e.status }) &&
-          (e.entryType === "sale" || e.entryType === "purchase")
-      );
+      // ★ 2026-09-04 (รอบสอง): ใบวางบิลที่ยัง "ร่าง" ก็เป็น candidate — ผู้ใช้เจอกล่องไม่ขึ้นเพราะ
+      //   ใบวางบิลยังไม่ได้กดยืนยัน · กดรับชำระที่สลิป = ยืนยันใบวางบิลให้อัตโนมัติก่อนตัด
+      const isBillCandidate = (e: BillEntry) =>
+        (e.entryType === "sale" || e.entryType === "purchase") &&
+        (e.paymentMethod === "credit" || e.paymentMethod == null) &&
+        (e.status === "confirmed" ||
+          isCreditEligibleForPayment({ entryType: e.entryType, paymentMethod: e.paymentMethod, status: e.status }) ||
+          e.status === "draft");
+      const creditBills = allOfCustomer.filter(isBillCandidate);
       if (creditBills.length > 0) {
+        const confirmedIds = creditBills.filter((e) => e.status === "confirmed").map((e) => e.id);
         const [payByEntry, notesByEntry] = await Promise.all([
-          listBillPaymentsForEntries(service, tenantId, creditBills.map((e) => e.id)),
-          listNotesForEntries(service, tenantId, creditBills.map((e) => e.id)),
+          listBillPaymentsForEntries(service, tenantId, confirmedIds),
+          listNotesForEntries(service, tenantId, confirmedIds),
         ]);
         const adjByEntry = netAdjustmentByEntry(notesByEntry);
         for (const e of creditBills) {
@@ -475,6 +482,7 @@ export default async function AccountingWorkspacePage({
               docDate: e.docDate,
               counterpartyName: e.counterpartyName || e.sellerName || e.buyerName,
               outstanding: out,
+              isDraft: e.status !== "confirmed",
             });
           }
         }
@@ -837,12 +845,17 @@ export default async function AccountingWorkspacePage({
                           const slipName = e.counterpartyName || e.sellerName || e.buyerName;
                           const matches = matchSlipToOutstanding(slipName, s.net, outstandingByType[e.entryType]);
                           if (matches.length === 0) return null;
+                          // ★ 2026-09-04: "ai ใส่เดบิตเครดิตให้ด้วย" — ส่งบัญชีฝั่งเงิน + ยอด ให้กล่องโชว์ Dr/Cr
+                          const money = contraAccountFor(buildChartByCode(chart), e.paymentMethod ?? "transfer", e.entryType, e.paymentBankAccountCode);
                           return (
                             <SettleMatchBox
                               customerId={e.customerId}
                               slipEntryId={e.id}
                               entryType={e.entryType}
                               matches={matches.slice(0, 5)}
+                              slipNet={s.net}
+                              moneyCode={money?.code ?? "1020"}
+                              moneyName={money?.name ?? "เงินฝากธนาคาร"}
                             />
                           );
                         })()}

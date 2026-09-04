@@ -24,11 +24,19 @@ export default function SettleMatchBox({
   slipEntryId,
   entryType,
   matches,
+  slipNet,
+  moneyCode,
+  moneyName,
 }: {
   customerId: string;
   slipEntryId: string;
   entryType: "purchase" | "sale";
   matches: SlipMatch[];
+  /** ยอดสุทธิของสลิป — ใช้โชว์แถวเดบิต/เครดิต (จ่ายจริง = min(ยอดสลิป, ยอดค้าง)) */
+  slipNet: number;
+  /** บัญชีฝั่งเงินของสลิป (เช่น 1020 เงินฝากธนาคาร) */
+  moneyCode: string;
+  moneyName: string;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -39,6 +47,10 @@ export default function SettleMatchBox({
   if (matches.length === 0) return null;
   const best = matches.find((m) => m.entryId === targetId) ?? matches[0];
   const verb = entryType === "sale" ? "รับชำระ + ตัดลูกหนี้" : "จ่ายชำระ + ตัดเจ้าหนี้";
+  // ★ 2026-09-04: "ai ใส่เดบิตเครดิตให้ด้วย" — โชว์คู่บัญชีที่จะลงจริงเมื่อกด
+  const payAmount = Math.min(slipNet, best.outstanding);
+  const arapCode = entryType === "sale" ? "1140" : "2010";
+  const arapName = entryType === "sale" ? "ลูกหนี้การค้า" : "เจ้าหนี้การค้า";
 
   const settle = () => {
     setMsg(null);
@@ -95,6 +107,24 @@ export default function SettleMatchBox({
         ) : (
           <span className="wsp-match-exact name">ชื่อตรง (ยอดไม่เท่ายอดค้าง)</span>
         )}
+        {best.isDraft ? (
+          <span className="wsp-match-exact name">ใบวางบิลยังเป็นร่าง — ระบบจะยืนยันให้อัตโนมัติ</span>
+        ) : null}
+      </div>
+      {/* ★ 2026-09-04: "ai ใส่เดบิตเครดิตให้ด้วย" — คู่บัญชีที่จะลงจริงเมื่อกดปุ่ม */}
+      <div className="wsp-match-post">
+        {entryType === "sale" ? (
+          <>
+            <span><b className="dr">เดบิต</b> {moneyCode} {moneyName} <b>{formatMoney(payAmount)}</b></span>
+            <span><b className="cr">เครดิต</b> {arapCode} {arapName} <b>{formatMoney(payAmount)}</b></span>
+          </>
+        ) : (
+          <>
+            <span><b className="dr">เดบิต</b> {arapCode} {arapName} <b>{formatMoney(payAmount)}</b></span>
+            <span><b className="cr">เครดิต</b> {moneyCode} {moneyName} <b>{formatMoney(payAmount)}</b></span>
+          </>
+        )}
+        <span className="wsp-match-hint">→ สมุดรายวัน{entryType === "sale" ? "รับเงิน" : "จ่ายเงิน"}</span>
       </div>
       <div className="wsp-match-act">
         <button type="button" className="wsp-btn primary" onClick={settle} disabled={pending || !targetId}>
