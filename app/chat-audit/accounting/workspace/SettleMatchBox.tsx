@@ -24,6 +24,7 @@ export default function SettleMatchBox({
   slipEntryId,
   entryType,
   matches,
+  others = [],
   slipNet,
   moneyCode,
   moneyName,
@@ -32,6 +33,9 @@ export default function SettleMatchBox({
   slipEntryId: string;
   entryType: "purchase" | "sale";
   matches: SlipMatch[];
+  /** ★ 2026-09-04 "ถ้าจะจับเองต้องกดตรงไหน" — ใบเชื่อค้างทั้งหมดของลูกค้า (ฝั่งเดียวกัน)
+   *  ที่ AI ไม่ได้เสนอ → โผล่ท้าย dropdown ให้เลือกจับเองได้เสมอ */
+  others?: SlipMatch[];
   /** ยอดสุทธิของสลิป — ใช้โชว์แถวเดบิต/เครดิต (จ่ายจริง = min(ยอดสลิป, ยอดค้าง)) */
   slipNet: number;
   /** บัญชีฝั่งเงินของสลิป (เช่น 1020 เงินฝากธนาคาร) */
@@ -44,11 +48,14 @@ export default function SettleMatchBox({
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // ★ 2026-09-04: หลังจับคู่สำเร็จ ค้างสถานะไว้พร้อมปุ่ม "เลิกทำ" (กด AI จับผิดยังย้อนได้ทันที)
   const [settled, setSettled] = useState<{ paymentId: string; text: string } | null>(null);
-  if (matches.length === 0) return null;
-  const best = matches.find((m) => m.entryId === targetId) ?? matches[0];
+  const othersList = others ?? [];
+  const all = [...matches, ...othersList];
+  if (all.length === 0) return null;
+  const manualOnly = matches.length === 0; // AI จับไม่ได้ — โหมดจับเองล้วน
+  const best = all.find((m) => m.entryId === targetId) ?? null;
   const verb = entryType === "sale" ? "รับชำระ + ตัดลูกหนี้" : "จ่ายชำระ + ตัดเจ้าหนี้";
   // ★ 2026-09-04: "ai ใส่เดบิตเครดิตให้ด้วย" — โชว์คู่บัญชีที่จะลงจริงเมื่อกด
-  const payAmount = Math.min(slipNet, best.outstanding);
+  const payAmount = best ? Math.min(slipNet, best.outstanding) : slipNet;
   const arapCode = entryType === "sale" ? "1140" : "2010";
   const arapName = entryType === "sale" ? "ลูกหนี้การค้า" : "เจ้าหนี้การค้า";
 
@@ -95,42 +102,60 @@ export default function SettleMatchBox({
     );
   }
 
+  const optionLabel = (m: SlipMatch, isAi: boolean) =>
+    `${m.docNo || "—"} · ${m.counterpartyName || "—"} · ค้าง ${formatMoney(m.outstanding)}${
+      isAi ? (m.nameMatch && m.amountExact ? " ✓ชื่อ+ยอดตรง" : m.amountExact ? " ✓ยอดตรง" : " ✓ชื่อตรง") : ""
+    }`;
+
   return (
     <div className="wsp-match">
       <div className="wsp-match-h">
-        🔗 จับคู่บิลเชื่อค้างได้: <b>{best.docNo || "—"}</b> · {best.counterpartyName || "—"} ·
-        ค้าง {formatMoney(best.outstanding)} ({thaiDate(best.docDate)})
-        {best.nameMatch && best.amountExact ? (
-          <span className="wsp-match-exact">ชื่อ + ยอดตรงพอดี</span>
-        ) : best.amountExact ? (
-          <span className="wsp-match-exact warn">ยอดตรงพอดี — ชื่อผู้โอนไม่ตรง (อาจโอนบัญชีส่วนตัว)</span>
+        {manualOnly ? (
+          <>🔗 จับคู่เอง — เลือกใบเชื่อค้างของบริษัทนี้ ({all.length.toLocaleString("th-TH")} ใบ)</>
+        ) : best ? (
+          <>
+            🔗 จับคู่บิลเชื่อค้างได้: <b>{best.docNo || "—"}</b> · {best.counterpartyName || "—"} ·
+            ค้าง {formatMoney(best.outstanding)} ({thaiDate(best.docDate)})
+            {best.nameMatch && best.amountExact ? (
+              <span className="wsp-match-exact">ชื่อ + ยอดตรงพอดี</span>
+            ) : best.amountExact ? (
+              <span className="wsp-match-exact warn">ยอดตรงพอดี — ชื่อผู้โอนไม่ตรง (อาจโอนบัญชีส่วนตัว)</span>
+            ) : best.nameMatch ? (
+              <span className="wsp-match-exact name">ชื่อตรง (ยอดไม่เท่ายอดค้าง)</span>
+            ) : (
+              <span className="wsp-match-exact name">เลือกเอง</span>
+            )}
+            {best.isDraft ? (
+              <span className="wsp-match-exact name">ใบวางบิลยังเป็นร่าง — ระบบจะยืนยันให้อัตโนมัติ</span>
+            ) : null}
+          </>
         ) : (
-          <span className="wsp-match-exact name">ชื่อตรง (ยอดไม่เท่ายอดค้าง)</span>
+          <>🔗 เลือกใบเชื่อค้างที่จะตัด…</>
         )}
-        {best.isDraft ? (
-          <span className="wsp-match-exact name">ใบวางบิลยังเป็นร่าง — ระบบจะยืนยันให้อัตโนมัติ</span>
-        ) : null}
       </div>
       {/* ★ 2026-09-04: "ai ใส่เดบิตเครดิตให้ด้วย" — คู่บัญชีที่จะลงจริงเมื่อกดปุ่ม */}
-      <div className="wsp-match-post">
-        {entryType === "sale" ? (
-          <>
-            <span><b className="dr">เดบิต</b> {moneyCode} {moneyName} <b>{formatMoney(payAmount)}</b></span>
-            <span><b className="cr">เครดิต</b> {arapCode} {arapName} <b>{formatMoney(payAmount)}</b></span>
-          </>
-        ) : (
-          <>
-            <span><b className="dr">เดบิต</b> {arapCode} {arapName} <b>{formatMoney(payAmount)}</b></span>
-            <span><b className="cr">เครดิต</b> {moneyCode} {moneyName} <b>{formatMoney(payAmount)}</b></span>
-          </>
-        )}
-        <span className="wsp-match-hint">→ สมุดรายวัน{entryType === "sale" ? "รับเงิน" : "จ่ายเงิน"}</span>
-      </div>
+      {best ? (
+        <div className="wsp-match-post">
+          {entryType === "sale" ? (
+            <>
+              <span><b className="dr">เดบิต</b> {moneyCode} {moneyName} <b>{formatMoney(payAmount)}</b></span>
+              <span><b className="cr">เครดิต</b> {arapCode} {arapName} <b>{formatMoney(payAmount)}</b></span>
+            </>
+          ) : (
+            <>
+              <span><b className="dr">เดบิต</b> {arapCode} {arapName} <b>{formatMoney(payAmount)}</b></span>
+              <span><b className="cr">เครดิต</b> {moneyCode} {moneyName} <b>{formatMoney(payAmount)}</b></span>
+            </>
+          )}
+          <span className="wsp-match-hint">→ สมุดรายวัน{entryType === "sale" ? "รับเงิน" : "จ่ายเงิน"}</span>
+        </div>
+      ) : null}
       <div className="wsp-match-act">
         <button type="button" className="wsp-btn primary" onClick={settle} disabled={pending || !targetId}>
           {pending ? "กำลังบันทึก…" : `✓ ${verb}`}
         </button>
-        {matches.length > 1 ? (
+        {/* ★ "ถ้าจะจับเอง" — dropdown มีทุกใบค้างเสมอ: ใบที่ AI เสนอ (ติดป้ายเหตุผล) + ใบอื่นทั้งหมด */}
+        {all.length > 1 || manualOnly ? (
           <select
             className="wsp-move-select"
             value={targetId}
@@ -138,12 +163,17 @@ export default function SettleMatchBox({
             disabled={pending}
             aria-label="เลือกบิลเชื่อที่จะตัด"
           >
+            {manualOnly ? <option value="">— เลือกใบเชื่อค้าง —</option> : null}
             {matches.map((m) => (
-              <option key={m.entryId} value={m.entryId}>
-                {m.docNo || "—"} · ค้าง {formatMoney(m.outstanding)}
-                {m.nameMatch && m.amountExact ? " ✓ชื่อ+ยอดตรง" : m.amountExact ? " ✓ยอดตรง" : " ✓ชื่อตรง"}
-              </option>
+              <option key={m.entryId} value={m.entryId}>{optionLabel(m, true)}</option>
             ))}
+            {othersList.length > 0 ? (
+              <optgroup label="ใบเชื่อค้างอื่น ๆ (จับเอง)">
+                {othersList.map((m) => (
+                  <option key={m.entryId} value={m.entryId}>{optionLabel(m, false)}</option>
+                ))}
+              </optgroup>
+            ) : null}
           </select>
         ) : null}
         <span className="wsp-match-hint">ไม่ใช่การชำระ → ใช้ปุ่ม ✓ ยืนยัน ปกติ (ลง{entryType === "sale" ? "รายได้" : "ค่าใช้จ่าย"})</span>

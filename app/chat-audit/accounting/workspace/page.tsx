@@ -843,8 +843,15 @@ export default async function AccountingWorkspacePage({
                           const paidSlip = e.paymentMethod === "transfer" || e.paymentMethod === "cash";
                           if (!paidSlip || (e.entryType !== "sale" && e.entryType !== "purchase")) return null;
                           const slipName = e.counterpartyName || e.sellerName || e.buyerName;
-                          const matches = matchSlipToOutstanding(slipName, s.net, outstandingByType[e.entryType]);
-                          if (matches.length === 0) return null;
+                          const candidates = outstandingByType[e.entryType];
+                          if (candidates.length === 0) return null;
+                          const matches = matchSlipToOutstanding(slipName, s.net, candidates).slice(0, 5);
+                          // ★ 2026-09-04 "ถ้าจะจับเอง": ใบค้างที่ AI ไม่ได้เสนอ → เข้า dropdown ท้าย (จับเองได้เสมอ)
+                          const matchedIds = new Set(matches.map((m) => m.entryId));
+                          const others = candidates
+                            .filter((c) => !matchedIds.has(c.entryId))
+                            .slice(0, 30)
+                            .map((c) => ({ ...c, amountExact: false, nameMatch: false }));
                           // ★ 2026-09-04: "ai ใส่เดบิตเครดิตให้ด้วย" — ส่งบัญชีฝั่งเงิน + ยอด ให้กล่องโชว์ Dr/Cr
                           const money = contraAccountFor(buildChartByCode(chart), e.paymentMethod ?? "transfer", e.entryType, e.paymentBankAccountCode);
                           return (
@@ -852,7 +859,8 @@ export default async function AccountingWorkspacePage({
                               customerId={e.customerId}
                               slipEntryId={e.id}
                               entryType={e.entryType}
-                              matches={matches.slice(0, 5)}
+                              matches={matches}
+                              others={others}
                               slipNet={s.net}
                               moneyCode={money?.code ?? "1020"}
                               moneyName={money?.name ?? "เงินฝากธนาคาร"}
