@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { formatMoney } from "@/lib/accounting/calc";
 import type { SlipMatch } from "@/lib/accounting/slip-matching";
-import { settleSlipAgainstBillAction } from "./settle-actions";
+import { settleSlipAgainstBillAction, undoSettleSlipAction } from "./settle-actions";
 
 /** วันที่ ISO → วว/ดด/พ.ศ. สั้น ๆ */
 function thaiDate(iso: string | null): string {
@@ -34,6 +34,8 @@ export default function SettleMatchBox({
   const [pending, start] = useTransition();
   const [targetId, setTargetId] = useState(matches[0]?.entryId ?? "");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // ★ 2026-09-04: หลังจับคู่สำเร็จ ค้างสถานะไว้พร้อมปุ่ม "เลิกทำ" (กด AI จับผิดยังย้อนได้ทันที)
+  const [settled, setSettled] = useState<{ paymentId: string; text: string } | null>(null);
   if (matches.length === 0) return null;
   const best = matches.find((m) => m.entryId === targetId) ?? matches[0];
   const verb = entryType === "sale" ? "รับชำระ + ตัดลูกหนี้" : "จ่ายชำระ + ตัดเจ้าหนี้";
@@ -42,10 +44,44 @@ export default function SettleMatchBox({
     setMsg(null);
     start(async () => {
       const r = await settleSlipAgainstBillAction({ customerId, slipEntryId, targetEntryId: targetId });
-      setMsg({ ok: r.ok, text: r.message });
-      if (r.ok) router.refresh();
+      if (r.ok && r.paymentId) {
+        setSettled({ paymentId: r.paymentId, text: r.message });
+      } else {
+        setMsg({ ok: r.ok, text: r.message });
+        if (r.ok) router.refresh();
+      }
     });
   };
+
+  const undo = () => {
+    if (!settled) return;
+    start(async () => {
+      const r = await undoSettleSlipAction({ customerId, paymentId: settled.paymentId, slipEntryId });
+      if (r.ok) {
+        setSettled(null);
+        setMsg({ ok: true, text: r.message });
+        router.refresh();
+      } else {
+        setMsg({ ok: false, text: r.message });
+      }
+    });
+  };
+
+  // จับคู่สำเร็จแล้ว → แถบเขียวสรุป + ปุ่มเลิกทำ (การ์ดจะหายไปเองเมื่อรีเฟรช/เลื่อนหน้า)
+  if (settled) {
+    return (
+      <div className="wsp-match">
+        <div className="wsp-match-h">✓ {settled.text}</div>
+        <div className="wsp-match-act">
+          <button type="button" className="wsp-btn ghost" onClick={undo} disabled={pending}>
+            {pending ? "กำลังเลิกทำ…" : "↩ เลิกทำ (จับคู่ผิดใบ)"}
+          </button>
+          <span className="wsp-match-hint">เข้าสมุดรายวัน{entryType === "sale" ? "รับเงิน" : "จ่ายเงิน"}แล้ว · ยอดค้างถูกตัดแล้ว</span>
+        </div>
+        {msg && !msg.ok ? <span style={{ fontSize: 11, color: "#b91c1c" }}>⚠ {msg.text}</span> : null}
+      </div>
+    );
+  }
 
   return (
     <div className="wsp-match">

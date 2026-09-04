@@ -15,7 +15,7 @@ import {
   customerInScope,
   AccountingAuthError,
 } from "@/lib/accounting/access";
-import { recordBillPayment, listBillPayments, billOutstanding } from "@/lib/accounting/bill-payments";
+import { recordBillPayment, listBillPayments, billOutstanding, voidBillPayment, getPaymentScope } from "@/lib/accounting/bill-payments";
 import { listNotes, netAdjustmentByEntry } from "@/lib/accounting/credit-debit-notes";
 import { deleteEntry } from "@/lib/accounting/actions-lib";
 import { round2 } from "@/lib/accounting/queries";
@@ -28,7 +28,7 @@ export async function settleSlipAgainstBillAction(input: {
   slipEntryId: string;
   /** บิลเชื่อค้างชำระที่จะตัด */
   targetEntryId: string;
-}): Promise<{ ok: boolean; message: string }> {
+}): Promise<{ ok: boolean; message: string; paymentId?: string }> {
   try {
     const authed = await createClient();
     const service = createServiceRoleClient();
@@ -128,9 +128,57 @@ export async function settleSlipAgainstBillAction(input: {
     revalidatePath("/chat-audit/accounting/workspace");
     const verb = slip.entry_type === "sale" ? "รับชำระ + ตัดลูกหนี้" : "จ่ายชำระ + ตัดเจ้าหนี้";
     const partial = amount < slipNet ? ` (บางส่วน ${amount.toLocaleString("th-TH")})` : "";
-    return { ok: true, message: `${verb}บิล ${target.doc_no ?? ""} แล้ว${partial}` };
+    return { ok: true, message: `${verb}บิล ${target.doc_no ?? ""} แล้ว${partial}`, paymentId: rec.id };
   } catch (e) {
     if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
     return { ok: false, message: "จับคู่ไม่สำเร็จ กรุณาลองใหม่" };
+  }
+}
+
+/**
+ * เลิกทำการจับคู่ (กดผิดใบ) — ★ 2026-09-04 ผู้ใช้: "ถ้า AI จับผิด นักบัญชีแก้ได้ใช่มั้ย"
+ *   ย้อนทั้งสองขา: (1) ยกเลิกการชำระ (void bill_payment) → ยอดค้างกลับมา
+ *                  (2) กู้บิลสลิปคืน (deleted_at → null) → การ์ดกลับมาให้จับคู่ใหม่/ลงรายได้
+ */
+export async function undoSettleSlipAction(input: {
+  customerId: string;
+  paymentId: string;
+  slipEntryId: string;
+}): Promise<{ ok: boolean; message: string }> {
+  try {
+    const authed = await createClient();
+    const service = createServiceRoleClient();
+    const ctx = await requireAccountingAccess(authed, service);
+    if (!UUID_RE.test(input.customerId) || !customerInScope(ctx, input.customerId)) {
+      return { ok: false, message: "ลูกค้าไม่ถูกต้อง" };
+    }
+    if (!UUID_RE.test(input.paymentId) || !UUID_RE.test(input.slipEntryId)) {
+      return { ok: false, message: "รายการไม่ถูกต้อง" };
+    }
+
+    // สโคปการชำระต้อง derive จาก paymentId ตรง ๆ (กัน IDOR) — บิลต้นทางต้องเป็นของลูกค้ารายนี้
+    const scope = await getPaymentScope(service, ctx.tenantId, input.paymentId);
+    if (!scope || scope.customerId !== input.customerId) {
+      return { ok: false, message: "ไม่พบการชำระ (อาจถูกยกเลิกไปแล้ว)" };
+    }
+
+    const v = await voidBillPayment(service, ctx.tenantId, input.paymentId);
+    if (!v.ok) return { ok: false, message: v.message ?? "ยกเลิกการชำระไม่สำเร็จ" };
+
+    // กู้บิลสลิปคืน (เฉพาะที่ถูกลบอยู่ + เป็นของลูกค้ารายนี้)
+    await service
+      .from("bill_entries")
+      .update({ deleted_at: null })
+      .eq("id", input.slipEntryId)
+      .eq("tenant_id", ctx.tenantId)
+      .eq("customer_id", input.customerId)
+      .not("deleted_at", "is", null);
+
+    revalidatePath("/chat-audit/accounting");
+    revalidatePath("/chat-audit/accounting/workspace");
+    return { ok: true, message: "เลิกทำแล้ว — ยอดค้างกลับมา และการ์ดสลิปกลับมาให้จับคู่ใหม่" };
+  } catch (e) {
+    if (e instanceof AccountingAuthError) return { ok: false, message: e.message };
+    return { ok: false, message: "เลิกทำไม่สำเร็จ กรุณาลองใหม่" };
   }
 }
